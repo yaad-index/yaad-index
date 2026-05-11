@@ -271,6 +271,60 @@ export interface KindsResponse {
 }
 
 /**
+ * PluginKindEntry mirrors yaad-index's per-plugin entity-kind row on
+ * `GET /v1/plugins` (`internal/api/plugins.go::pluginKindEntry`).
+ * Scoped to one plugin, so there's no `source_plugins` cross-ref —
+ * the plugin's identity is the enclosing PluginEntry.
+ */
+export interface PluginKindEntry {
+ name: string;
+ description?: string;
+}
+
+/**
+ * PluginEdgeEntry mirrors `internal/api/plugins.go::pluginEdgeEntry` —
+ * the per-plugin edge-kind row with from_kind / to_kind endpoints.
+ */
+export interface PluginEdgeEntry {
+ name: string;
+ description?: string;
+ from_kind?: string;
+ to_kind?: string;
+}
+
+/**
+ * PluginEntry mirrors `internal/api/plugins.go::pluginEntry` — the
+ * per-plugin slice of Capabilities surfaced on `GET /v1/plugins`:
+ * `name + version + url_patterns + commands + entity_kinds +
+ * edge_kinds + source_namespace`. Inverse of `EntityKindEntry`:
+ * KindsResponse is "kind → plugins"; PluginEntry is "plugin → kinds
+ * + everything else."
+ *
+ * Per yaad-index #13, `url_patterns` and `commands` always marshal
+ * as `[]` (not absent) so the consumer doesn't have to nil-guard.
+ */
+export interface PluginEntry {
+ name: string;
+ version?: string;
+ url_patterns: string[];
+ commands: string[];
+ entity_kinds: PluginKindEntry[];
+ edge_kinds: PluginEdgeEntry[];
+ source_namespace?: string;
+}
+
+/**
+ * PluginsResponse mirrors `GET /v1/plugins` (per yaad-index #13).
+ * Plugins are listed in registry order (matching the first-match-
+ * wins dispatch order /v1/ingest walks); within each plugin,
+ * `entity_kinds` + `edge_kinds` sort alphabetically by name.
+ */
+export interface PluginsResponse {
+ ok: boolean;
+ plugins: PluginEntry[];
+}
+
+/**
  * EntityContextEdge is the full edge triple {type, from, to} carried
  * by every neighbor entry in a context-stitch response. Distinct
  * from EdgeRef (the inline single-hop body shape) because at depth

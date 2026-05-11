@@ -17,6 +17,7 @@ import type {
  KindsResponse,
  ListEntitiesResponse,
  NeedsFillResponse,
+ PluginsResponse,
  ReindexResponse,
  SearchLocalResponse,
  StructureResponse,
@@ -296,6 +297,22 @@ export class YaadIndexClient {
  */
  async getKinds(): Promise<KindsResponse> {
  return this.request<KindsResponse>("GET", "/v1/kinds");
+ }
+
+ /**
+ * Per-plugin capability view (per yaad-index #13). Returns each
+ * registered plugin's --init capabilities subset: `name + version
+ * + url_patterns + commands + entity_kinds + edge_kinds +
+ * source_namespace`. Inverse of `getKinds()`: `getKinds()`
+ * aggregates kind → plugins, `getPlugins()` enumerates plugin →
+ * kinds + URL patterns + commands.
+ *
+ * Used by the `plugins` tool to give the agent a live view of
+ * what plugins are loaded + what each one accepts, so SKILL.md
+ * doesn't have to carry per-plugin tables.
+ */
+ async getPlugins(): Promise<PluginsResponse> {
+ return this.request<PluginsResponse>("GET", "/v1/plugins");
  }
 
  /**

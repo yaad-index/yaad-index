@@ -10,7 +10,7 @@ Read this before calling any tool. The pattern is small enough that one read car
 
 ## What yaad-mcp is
 
-An MCP surface over yaad-index — a knowledge index that turns URLs into structured entities. Twenty-five tools, all active: `ingest`, `get_entity`, `get_entity_with_context`, `edges`, `get_entities_batch`, `fill`, `set_operator_fill`, `defer_gap`, `add_comment`, `list_entities`, `search_local`, `structure`, `cv_status`, `reindex`, `kinds`, `needs_fill`, `archive_entity`, `restore_entity`, `delete_entity`, plus the user-content (UGC) read trio `get_user_content`, `list_user_content_sections`, `get_user_content_section` and write trio `create_user_content`, `edit_user_content_section`, `delete_user_content`. Outbox channels (Discord / email / etc.) will land via a separate yaad-outbox surface when that repo ships; they're not part of this MCP today.
+An MCP surface over yaad-index — a knowledge index that turns URLs into structured entities. Twenty-six tools, all active: `ingest`, `get_entity`, `get_entity_with_context`, `edges`, `get_entities_batch`, `fill`, `set_operator_fill`, `defer_gap`, `add_comment`, `list_entities`, `search_local`, `structure`, `cv_status`, `reindex`, `kinds`, `plugins`, `needs_fill`, `archive_entity`, `restore_entity`, `delete_entity`, plus the user-content (UGC) read trio `get_user_content`, `list_user_content_sections`, `get_user_content_section` and write trio `create_user_content`, `edit_user_content_section`, `delete_user_content`. Outbox channels (Discord / email / etc.) will land via a separate yaad-outbox surface when that repo ships; they're not part of this MCP today.
 
 ## Mental model — the graph yaad-index builds
 
@@ -138,6 +138,19 @@ Distinct from the other introspection tools:
 The `name?` param filters both arrays client-side to entries whose `name` matches. The daemon endpoint itself doesn't accept a `name=` filter; the tool fetches the full registry and narrows on the response. Empty / non-matching name yields `{ok: true, entity_kinds: [], edge_kinds: []}` (the `ok` flag from the upstream is preserved).
 
 **When to use.** Reach for `kinds()` when you need to know "which plugin declares it emits this kind" or "what edge-types does the daemon know about across all plugins" — without needing to know operator-config layout (`structure()`) or current-state drift (`cv_status()`). Useful when bootstrapping an integration or surfacing a list of available source-shape kinds to a downstream consumer.
+
+### `plugins()`
+
+Per-plugin capability discovery. Wraps `GET /v1/plugins`. Returns `{ok, plugins: [{name, version, url_patterns, commands, entity_kinds, edge_kinds, source_namespace}, ...]}` — the per-plugin view of each registered plugin's `--init` Capabilities. Inverse shape of `kinds()`:
+
+- `kinds()` aggregates **kind → plugins** (deduped by kind name, with `source_plugins` cross-references).
+- `plugins()` enumerates **plugin → kinds + URL patterns + commands + namespace** (one entry per registered plugin, in dispatch order).
+
+Plugins are listed in **registry order** (matching the first-match-wins precedence at `/v1/ingest`); within each plugin, `entity_kinds` + `edge_kinds` sort alphabetically. Empty list fields (e.g. `url_patterns` on a poll-driven plugin like yaad-gmail; `commands` on URL-shape-only plugins like yaad-wikipedia / yaad-bgg) marshal as `[]`, not `null`.
+
+**Call at session start** to load a live view of what plugins are loaded + what each one accepts. This replaces what pre-#13 SKILL.md would have carried as per-plugin sections — see the "Bundled plugins" stubs below for an offline-readable fallback when the daemon isn't reachable.
+
+**When to use.** Reach for `plugins()` to discover what URL shorthands the current daemon accepts (e.g. is `yaad-bgg` loaded? does this daemon have `yaad-gmail` for `gmail: !fetch`?), what commands each plugin advertises per ADR-0022, or what `source_namespace` each emits entities under. Use `kinds()` instead when the question is "which plugin emits this kind."
 
 ### `needs_fill(limit?, cursor?)`
 
@@ -301,6 +314,16 @@ List entities of a given kind — the kind-driven discovery surface above. The `
 Full-text search across the **local** yaad-index — entities yaad-index has already ingested. `query` is required; `kind` filters to a specific kind; `limit` defaults to 20. Returns the same `{results, total, limit, offset}` shape as `list_entities` — each result is `{id, kind, snippet, score}`, call `get_entity(id)` to load full state.
 
 **Local vs upstream.** `search_local` searches what's already in yaad-index — it's the "find an entity by keyword across what we know" tool. It does NOT reach Wikipedia / external sources. To FETCH new content from upstream, use `ingest(url)` (which runs the plugin against the upstream API). A separate upstream-search tool will land later when that pattern is needed.
+
+## Bundled plugins (abbreviated reference)
+
+The authoritative live view is `plugins()` against the running daemon — call it at session start to learn what's actually loaded. The stubs below are an **offline-readable fallback** for the no-daemon case (e.g. when authoring a tool that will run against a future daemon). They cover what each plugin in the canonical docker image accepts; an operator's actual deployment may load a different subset or third-party plugins.
+
+- **yaad-wikipedia** — URL-shape. Accepts canonical Wikipedia URLs (`https://<lang>.wikipedia.org/wiki/<title>`) and the shorthand `wikipedia: <title>` (e.g. `wikipedia: Tehran`). Emits source-shape entities under namespace `wikipedia` plus `is_about` edges to canonical entities (person, place, etc.) when the Wikidata Q-id resolves. No commands.
+- **yaad-bgg** — URL-shape. Accepts canonical BoardGameGeek URLs (`https://boardgamegeek.com/boardgame/<id>` and `boardgame/<id>` form) and the shorthand `bgg: <name-or-id>` (e.g. `bgg: 224517` or `bgg: brass birmingham`). Emits source-shape entities under namespace `bgg` plus `designed_by` / `artist_by` / `published_by` edges to `person` canonical entities. Requires `BGG_API_KEY` env on the daemon. No commands.
+- **yaad-gmail** — **Command-shape, no URL form.** Declares `commands: ["fetch"]`; invoke via `gmail: !fetch` (or `yaad-index command gmail fetch` from the CLI with an operator-only-claim token per ADR-0022 §6). One invocation runs one IMAP poll cycle and emits NDJSON envelopes per un-ingested message. Requires `YAAD_GMAIL_ACCOUNT` + `YAAD_GMAIL_APP_PASSWORD` env on the daemon. Emits source-shape entities under namespace `gmail` plus `from` / `to` / `cc` / `bcc` edges to `email-address` canonical entities and `tagged_as` edges to `label` canonical entities.
+
+When the stubs above conflict with `plugins()` output, **prefer `plugins()`** — it's live, the stubs are point-in-time.
 
 ## Conventions
 

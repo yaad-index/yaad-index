@@ -51,6 +51,7 @@ import {
  runListUserContentSections,
 } from "./tools/list_user_content_sections.js";
 import { needsFillTool, runNeedsFill } from "./tools/needs_fill.js";
+import { pluginsTool, runPlugins } from "./tools/plugins.js";
 import { reindexTool, runReindex } from "./tools/reindex.js";
 import { runSearchLocal, searchLocalTool } from "./tools/search_local.js";
 import { restoreEntityTool, runRestoreEntity } from "./tools/restore_entity.js";
@@ -72,6 +73,7 @@ const TOOLS = [
  structureTool,
  cvStatusTool,
  kindsTool,
+ pluginsTool,
  getUserContentTool,
  listUserContentSectionsTool,
  getUserContentSectionTool,
@@ -152,6 +154,8 @@ async function dispatch(
  return runCVStatus(client, args);
  case "kinds":
  return runKinds(client, args);
+ case "plugins":
+ return runPlugins(client, args);
  case "get_user_content":
  return runGetUserContent(client, args);
  case "list_user_content_sections":
