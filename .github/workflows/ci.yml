@@ -1,0 +1,115 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'mcp/**'
+      - 'docs/**'
+      - 'adr/**'
+      - '*.md'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'mcp/**'
+      - 'docs/**'
+      - 'adr/**'
+      - '*.md'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    name: test
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go test (race + coverage profile)
+        run: go test -race -count=1 -timeout 2m -coverprofile=coverage.out -covermode=atomic ./...
+      - name: Upload coverage profile
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-profile
+          path: coverage.out
+          retention-days: 1
+
+  lint:
+    name: lint
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.4
+
+  build:
+    name: build
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: make build
+        run: make build
+
+  coverage:
+    name: coverage
+    needs: test
+    if: github.event_name == 'pull_request'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Download coverage profile
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-profile
+      - name: Compute coverage
+        id: cov
+        run: |
+          report=$(go tool cover -func=coverage.out)
+          pct=$(printf '%s\n' "$report" | tail -1 | awk '{print $3}')
+          {
+            echo "pct=$pct"
+            echo 'report<<EOF'
+            printf '%s\n' "$report"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Coverage report"
+            echo
+            echo "**Total: $pct**"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Sticky coverage comment
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: coverage
+          message: |
+            ## Coverage report
+
+            **Total: ${{ steps.cov.outputs.pct }}**
+
+            <details><summary>Per-function breakdown</summary>
+
+            ```
+            ${{ steps.cov.outputs.report }}
+            ```
+
+            </details>

@@ -1,0 +1,24 @@
+-- gap_call_done_at flags whether the AI has submitted a successful
+-- fill (any 2xx on POST /v1/entities/{id}/fill, full or partial) for
+-- the current fetch-cycle of an entity (per ADR-0013 §4 + §5).
+--
+-- NULL → the AI has NOT yet been gap-called for this fetch-cycle;
+--        a subsequent ingest cache-hit returning needs_fill is
+--        expected to fire the gap-call payload.
+-- Non-NULL → the AI has been gap-called this fetch-cycle; the
+--           cache-hit needs_fill branch suppresses the payload
+--           regardless of whether all gaps got filled. The next
+--           refetch (force_refetch=true OR TTL-driven) clears
+--           the flag.
+--
+-- **DB-only flag, intentionally.** Vault stores authoritative
+-- content; this column is purely DB-derived state. Reindex
+-- re-derives from vault alone — wiping the DB and re-running
+-- reindex restores the entity's data + relationships but does
+-- NOT restore this flag. That's a feature, not a bug: per ADR-
+-- 0013 §5, gap-call replay against unchanged content is acceptable
+-- so the regen invariant holds. Implementors must NOT add
+-- content-hash-based or other persistent attempt-tracking — that
+-- defeats the regen invariant.
+
+ALTER TABLE entities ADD COLUMN gap_call_done_at TEXT;

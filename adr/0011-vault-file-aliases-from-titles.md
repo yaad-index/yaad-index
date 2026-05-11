@@ -1,0 +1,134 @@
+# ADR-0011: Vault file `aliases:` synthesized from entity titles
+
+**Status:** Accepted (2026-05-03). Initial title-synthesized aliases shipped; generalization (multi-valued, typed-prefix, plugin-emittable, search-indexed) tracked in.
+
+## Context
+
+Vault files materialized by yaad-index follow ADR-0008's slug-based filename convention: `<plugin-or-kind>:<slug>.md`. The slug is stable across upstream renames (Wikipedia retitles articles regularly; the entity id stays put), and the plugin namespace prefix prevents collisions across plugins (`wikipedia:caverna.md` vs `bgg:caverna.md`).
+
+That's good for plugin authors and for git — every entity has a deterministic, stable on-disk identity.
+
+It's bad for **vault navigation**. Obsidian (and most markdown-aware editors) resolve wikilinks like `[[Martin Wallace]]` against the **filename** of the target. With slug-based filenames, the natural human-readable wikilink doesn't resolve:
+
+- File on disk: `wikipedia:martin-wallace-designer.md`
+- Wikilink the agent or human would write: `[[Martin Wallace (designer)]]`
+- Result in Obsidian: broken link.
+
+The author has to know the slug to make a wikilink work — a bad user experience for both human authors and the AI agents we want using the vault as a graph.
+
+Surfaced concretely during the yaad-mcp end-to-end test (2026-05-02) when the operator noticed Obsidian wasn't resolving cross-entity references in the test vault.
+
+## Decision
+
+**yaad-index synthesizes an `aliases:` frontmatter field on every vault file at write time, populated from the entity's human-readable title field.**
+
+For each entity yaad-index materializes:
+
+- **Source-shape entities** (id `<plugin>:<slug>`): `aliases` includes `data.title` if present and non-empty and not equal to the slug.
+- **Canonical-shape entities** (id `<kind>:<slug>`): `aliases` includes `data.name` if present and non-empty and not equal to the slug.
+- If the alias would equal the slug exactly, omit it (no signal).
+- If neither field is present, omit `aliases:` entirely (don't write an empty list).
+
+The frontmatter shape becomes:
+
+```yaml
+---
+id: wikipedia:martin-wallace-designer
+kind: wikipedia-article
+plugin: wikipedia
+data:
+ title: Martin Wallace (designer)
+ lang: en
+ url: https://en.wikipedia.org/wiki/Martin_Wallace_(designer)
+aliases:
+ - "Martin Wallace (designer)"
+provenance: [...]
+---
+```
+
+In Obsidian, `[[Martin Wallace (designer)]]` now resolves to this file via the alias. The slug-based filename still wins for git, for stability, and for plugin namespacing — aliases are purely a **navigation overlay**.
+
+## Where the change lives
+
+`internal/vault/format.go`'s frontmatter writer is the right place. Plugins emit `data.title` / `data.name` per their existing contracts (yaad-wikipedia already sets these); yaad-index reads those fields when building the YAML frontmatter and synthesizes `aliases:` from them.
+
+Plugin authors don't need to change anything. Plugins remain opaque-text producers per ADR-0008.
+
+## Consequences
+
+### Positive
+
+- Obsidian wikilinks via human-readable names work without filename gymnastics.
+- Filenames stay slug-based: stable across upstream renames, plugin-namespaced, no cross-plugin collisions.
+- Title changes (Wikipedia renames an article) re-synthesize aliases on next reindex per ADR-0008's vault-canonical write path — automatic.
+- AI agents reading the vault can author wikilinks naturally without knowing slugs.
+
+### Negative / open questions
+
+1. **Alias collisions across entities.** Both `wikipedia:martin-wallace-designer.md` (source) and `person:martin-wallace-designer.md` (canonical, if it lands) carry the alias "Martin Wallace (designer)". Obsidian's link disambiguation picks one — typically the lexically-first match in the alias resolution path. The wrong target may surface for `[[Martin Wallace (designer)]]`.
+
+ **v1 acceptance:** acceptable. Slug-based ids are the canonical reference for any precise lookup; aliases are a UX nicety. When the user clicks a wikilink and lands on the source-shape entity instead of the canonical one (or vice versa), they can navigate from there.
+
+ **Future refinement (out of scope here):** a "primary" entity strategy where canonical-shape entities take precedence — yaad-index could write source-shape aliases as `<kind>: <title>` (e.g. "wikipedia: Martin Wallace (designer)") to make them deterministically distinct from canonical-shape aliases. Defer until the collision becomes a real friction point.
+
+2. **No multi-alias support in v1.** Wikipedia articles often have redirects (e.g. "MWal" → "Martin Wallace (designer)"). Those are additional natural names that could become aliases. v1 emits exactly one alias (the title); multi-alias extension is a follow-up if it becomes useful.
+
+3. **Reindex semantics.** Per ADR-0008, the vault file is canonical. When yaad-index re-derives the file (reindex from the entity row), the alias re-synthesizes from `data.title`. If the user has hand-edited the `aliases:` block to add a custom alias, that edit is **lost** on the next reindex.
+
+ **v1 acceptance:** consistent with ADR-0008's frontmatter-derived-from-DB model. The `aliases:` field is a write-only output of yaad-index, not an input. Documented in this ADR + the frontmatter-format docs.
+
+ **Future refinement:** a separate `user_aliases:` field that yaad-index never touches, OR detect and preserve unknown aliases on reindex. Defer.
+
+4. **One more frontmatter field.** Tiny cost; YAML parsers handle it transparently.
+
+## Alternatives considered
+
+### A. Rename files to titles (no aliases)
+
+`wikipedia:martin-wallace-designer.md` becomes `Martin Wallace (designer).md`. Wikilinks work directly.
+
+**Rejected because:**
+
+- Cross-plugin collisions: `wikipedia:caverna.md` and `bgg:caverna.md` both want `Caverna.md`. The plugin-namespacing in the filename is load-bearing.
+- Title instability: when Wikipedia renames an article, the file gets renamed, breaking any historical references that used the old filename. Slug-based filenames anchor to the entity id; aliases handle title changes for free.
+- Filesystem-unfriendly characters: titles can contain `/`, `:`, `?`, etc., which require sanitization. Slugs are pre-sanitized.
+
+### B. Symlinks / shadow files
+
+Create a sibling `Martin Wallace (designer).md` that contains only a wikilink to the slug-based file.
+
+**Rejected because:**
+
+- Two files for one entity violates the canonical-source model.
+- Maintenance burden when titles change.
+- Git diff noise on every title rename.
+
+### C. Folder structure with title-named files inside
+
+`wikipedia/Martin Wallace (designer).md` instead of `wikipedia:martin-wallace-designer.md`.
+
+**Rejected because:**
+
+- Doesn't help — Obsidian still uses filename for resolution, regardless of folder.
+- Reorganizes the on-disk layout for no navigation benefit.
+
+### D. No aliases (status quo)
+
+Accept that wikilinks need the slug.
+
+**Rejected because:**
+
+- Hostile to humans navigating the vault.
+- Hostile to AI agents writing natural-language wikilinks.
+- Defeats one of Obsidian's main features (wikilink graph navigation).
+
+## Action items if approved
+
+- Implementation lands as a follow-up issue/PR against `internal/vault/format.go`'s frontmatter writer.
+- Documentation note in the frontmatter-format section: `aliases:` is a yaad-index synthesized field; user edits are not preserved on reindex.
+
+## References
+
+- [ADR-0008](./0008-vault-as-source-of-truth.md) — vault as source of truth; yaad-index re-derives frontmatter from entity state on every write.
+- yaad-mcp test session 2026-05-02 — surfaced the wikilink-resolution gap during the operator's manual end-to-end test.
+- Obsidian aliases documentation: aliases are a recognized property in Obsidian's link-resolution algorithm. https://help.obsidian.md/Linking+notes+and+files/Aliases

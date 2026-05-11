@@ -1,0 +1,24 @@
+-- Per-row attachment manifest for ADR-0014 (plugin attachment contract).
+--
+-- When a plugin emits FetchResult.Attachments and the daemon
+-- successfully writes any of them to vault, the (role, uri) pairs
+-- land here as a JSON array. The next ingest's re-fetch comparison
+-- (per ADR-0014 §4) reads the freshest provenance entry's column,
+-- string-compares each (role, uri) against the new emission, and
+-- skips fetches whose pair is unchanged.
+--
+-- Column shape: JSON-encoded `[{"role":"thumb","uri":"..."}]`.
+-- NULL / empty-array are equivalent and mean "no attachments
+-- recorded for this fetch" — backward-compatible with every
+-- pre-ADR-0014 row, which gets NULL on read and triggers an
+-- unconditional fetch on every emitted attachment (correct: the
+-- daemon doesn't know what's actually on disk for those rows).
+--
+-- Vault is the source of truth (per ADR-0008): the same
+-- `fetch_attachments:` field rides on the provenance entry's
+-- frontmatter, and reindex re-derives this column from there.
+-- Storing as opaque JSON means the schema doesn't have to model
+-- attachment shape; only the application code (read + write paths)
+-- knows the {role, uri} object structure.
+
+ALTER TABLE provenance ADD COLUMN fetch_attachments TEXT;

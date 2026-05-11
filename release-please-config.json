@@ -1,0 +1,34 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "go",
+  "include-component-in-tag": true,
+  "separate-pull-requests": true,
+  "bootstrap-sha": "",
+  "packages": {
+    ".": {
+      "release-type": "go",
+      "component": "yaad-index",
+      "package-name": "yaad-index"
+    },
+    "cmd/yaad-wikipedia": {
+      "release-type": "go",
+      "component": "yaad-wikipedia",
+      "package-name": "yaad-wikipedia"
+    },
+    "cmd/yaad-bgg": {
+      "release-type": "go",
+      "component": "yaad-bgg",
+      "package-name": "yaad-bgg"
+    },
+    "cmd/yaad-gmail": {
+      "release-type": "go",
+      "component": "yaad-gmail",
+      "package-name": "yaad-gmail"
+    },
+    "mcp": {
+      "release-type": "node",
+      "component": "yaad-mcp",
+      "package-name": "@yaad-index/mcp"
+    }
+  }
+}

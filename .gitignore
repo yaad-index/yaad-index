@@ -1,0 +1,20 @@
+# Build artifacts
+/yaad-index
+/plugins/
+*.test
+/coverage.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies (Go uses go.sum; bun uses bun.lock — both committed)
+mcp/node_modules/
+
+# Build-time temp
+*.tsbuildinfo

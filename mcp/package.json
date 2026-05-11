@@ -1,0 +1,35 @@
+{
+  "name": "yaad-mcp",
+  "version": "0.1.0",
+  "description": "MCP server wrapping yaad-index — the agent's door to the yaad platform (in-side: ingest / get / fill / list; out-side: stub for yaad-outbox).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "yaad-mcp": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "bun": ">=1.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yaad-index/yaad-mcp.git"
+  }
+}

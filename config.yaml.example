@@ -1,0 +1,85 @@
+# yaad-index — operator config example.
+#
+# Container-image users: copy this file to your host, edit, and mount
+# over /etc/yaad-index/config.yaml at runtime:
+#
+#   cp config.yaml.example yaad-index.yaml
+#   $EDITOR yaad-index.yaml
+#   docker run -v ./yaad-index.yaml:/etc/yaad-index/config.yaml ...
+#
+# Local-binary users: pass via --config (default ~/.config/yaad-index/config.yaml).
+
+# Plugin allowlist (per ADR-0006). Order matters: first-match-wins on
+# URL dispatch. Paths must be absolute. The container bakes plugins at
+# /usr/local/lib/yaad-index/plugins/<name>.
+plugins:
+  - name: wikipedia
+    path: /usr/local/lib/yaad-index/plugins/yaad-wikipedia
+  - name: bgg
+    path: /usr/local/lib/yaad-index/plugins/yaad-bgg
+    # The bgg plugin reads its BoardGameGeek API key from the
+    # BGG_API_KEY environment variable (per yaad-bgg#1 / PR-3 fail-
+    # closed contract). Operator seeds via env at the daemon level
+    # (e.g. `docker run -e BGG_API_KEY=<key> ...`) and the plugin
+    # subprocess inherits it through yaad-index's pluginEnv path.
+    #
+    # The `config:` sub-block below is forward-looking — the daemon
+    # currently passes through env vars from os.Environ() rather
+    # than reading per-plugin config. A future PR may wire the
+    # block into a plugin-config-to-env translation; until then,
+    # this is documentation of the expected shape.
+    config:
+      bgg_api_key: ""    # required; operator sets via env or direct
+  - name: gmail
+    path: /usr/local/lib/yaad-index/plugins/yaad-gmail
+    # The gmail plugin reads its IMAP credentials from environment
+    # variables (per yaad-gmail PR-6 / ADR-0022 §6 command-shape
+    # contract). Required env vars at the daemon level — the plugin
+    # subprocess inherits them via pluginEnv:
+    #
+    #   YAAD_GMAIL_ACCOUNT       — Gmail address (e.g. user@example.com)
+    #   YAAD_GMAIL_APP_PASSWORD  — Gmail app password (NOT the account
+    #                              password; generated under Gmail's
+    #                              "App passwords" settings with 2FA
+    #                              enabled).
+    #
+    # Optional env vars (defaults shown):
+    #
+    #   YAAD_GMAIL_INGESTED_LABEL=yaad-ingested
+    #   YAAD_GMAIL_SKIP_LABEL=yaad-skip
+    #   YAAD_GMAIL_IMAP_HOST=imap.gmail.com
+    #   YAAD_GMAIL_IMAP_PORT=993
+    #
+    # Operator seeds via env at the daemon level (e.g.
+    # `docker run -e YAAD_GMAIL_ACCOUNT=... -e YAAD_GMAIL_APP_PASSWORD=... ...`).
+    #
+    # yaad-gmail is poll-driven, not URL-dispatched (URLPatterns is
+    # empty in its --init capabilities). Invocation is via the CLI
+    # command-shape surface: `yaad-index command gmail fetch` runs
+    # one IMAP poll cycle. External cron handles the cadence.
+    # Operator-only-claim tokens required per yaad-index #321
+    # (issue with `yaad-index issue-token --operator-only --operator <name>`).
+    #
+    # Same forward-looking note as the bgg config block: the
+    # config sub-block is documentation; current daemon reads env.
+    config:
+      account_email: ""    # required; operator sets via YAAD_GMAIL_ACCOUNT env
+      app_password: ""     # required; operator sets via YAAD_GMAIL_APP_PASSWORD env
+
+# Markdown vault root (per ADR-0008). Absolute path that exists and
+# is a directory at server start. The container expects /data/vault
+# (mount your host vault directory there).
+vault:
+  path: /data/vault
+
+# Optional: enabled canonical entity / edge kinds (per ADR-0008).
+# Plugins MAY emit canonical-shape stubs for cross-source identity;
+# stubs only materialize when their kind is in this allowlist.
+# canonical_kinds:
+#   - person
+#   - place
+# canonical_edge_types:
+#   - is_about
+
+# Optional: log threshold (debug | info | warn | error). Default info.
+# log_level: info

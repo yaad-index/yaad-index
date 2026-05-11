@@ -1,0 +1,16 @@
+# Keep the build context lean. Anything not needed for `go build` or
+# the COPY of config.yaml.example / docker-entrypoint.sh stays out.
+.git
+.githooks
+.github
+.idea
+.vscode
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+yaad-index
+node_modules
+vault
+adr/drafts
+docs/scratch

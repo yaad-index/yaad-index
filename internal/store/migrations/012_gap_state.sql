@@ -1,0 +1,34 @@
+-- ADR-0019 step 1: gap_state metadata column on entities.
+--
+-- gap_state stores per-field metadata for the operator-fill state
+-- machine: who filled the field (agent vs. operator), when it was
+-- filled, and whether the operator deferred it (mark-as-ignored).
+-- Field VALUES continue to live under `data`; this column carries
+-- only the metadata about how each gap moved through the
+-- agent-or-operator fill path.
+--
+-- JSON shape (one entry per field with metadata; missing entries
+-- mean "untouched / no metadata"):
+--
+--   {
+--     "rating":  {"source": "operator", "filled_at":   "2026-05-08T16:30:00Z"},
+--     "summary": {"source": "agent",    "filled_at":   "2026-05-07T12:00:00Z"},
+--     "played":  {"deferred": true,     "deferred_at": "2026-05-08T16:30:00Z"}
+--   }
+--
+-- Pre-v1 there's no data migration: NULL across the board on
+-- existing rows. Reads degrade to "no metadata for any field"
+-- which is the expected starting state for ADR-0019 §Storage.
+--
+-- TEXT (not JSON / JSONB) per this repo's SQLite-wide convention —
+-- ADR-0019's prose names a JSON column abstractly, the daemon stores
+-- it as a TEXT-encoded JSON document via json.Marshal at write time
+-- and json.Unmarshal at read time. SQLite has no first-class JSON
+-- type; the convention matches `entities.data` next door.
+--
+-- No index in this PR. Defer-filtering on `/v1/needs-fill` is step 6;
+-- that PR adds the index it needs (likely a generated column on the
+-- `deferred` flag, or a JSON-extract index — design call deferred to
+-- the step-6 author).
+
+ALTER TABLE entities ADD COLUMN gap_state TEXT;

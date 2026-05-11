@@ -1,0 +1,474 @@
+// Package store is the persistence boundary for alice2-index.
+//
+// Handlers depend only on the Store interface; SQL strings, drivers, and
+// schema details live behind it (per the architectural decision in step 8's
+// dispatch — no SQL strings outside this package, ever). The default
+// implementation uses modernc.org/sqlite, but the interface is shaped so a
+// future Postgres / other backend swap requires no handler changes.
+package store
+
+import (
+	"context"
+	"errors"
+	"time"
+)
+
+// Entity is the canonical entity record. Edges, when populated, come from
+// the optional with-edges expansion (see GetEntity / GetEntities; later
+// PRs wire the param plumbing).
+//
+// GapCallDoneAt tracks whether the AI has been gap-called for the
+// entity's current fetch-cycle (per ADR-0013 §4 + §5 / alice2-index).
+// Set on a successful fill (any 2xx response from
+// `POST /v1/entities/{id}/fill`, full or partial); cleared by an
+// upstream refetch (`force_refetch=true` or TTL-driven). nil when
+// the AI has NOT yet been gap-called this fetch-cycle. Read-side
+// suppression on cache-hit `needs_fill` checks this flag.
+//
+// **DB-only** — the vault is unaware of this column. Wipe DB + reindex
+// re-derives the entity from vault but leaves this flag NULL, by
+// design (ADR-0013 §5: regen invariant; gap-call replay against
+// unchanged content is acceptable).
+type Entity struct {
+	ID string
+	Kind string
+	Data map[string]any
+	Provenance []ProvenanceEntry
+	Edges []EdgeRef
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	GapCallDoneAt *time.Time
+	// ArchivedAt marks when ArchiveEntity moved this row to the
+	// archived state per ADR-0018. nil = active (default); non-nil
+	// = archived at that moment. Cleared by RestoreEntity. Default
+	// list/search surfaces filter `archived_at IS NULL`; lookup-by-
+	// id (GetEntity) returns archived rows normally so an operator
+	// can still read the row.
+	ArchivedAt *time.Time
+
+	// GapState carries per-field metadata for the operator-fill
+	// state machine per ADR-0019 §Storage. Field VALUES live under
+	// `Data`; this map carries metadata about how each field moved
+	// through the agent-or-operator fill path. Keyed by field name
+	// (the same key under `Data`).
+	//
+	// Empty map / nil → no metadata for any field (the default
+	// state on existing rows pre-ADR-0019). The DB column is NULL
+	// in that case; readers degrade cleanly.
+	GapState map[string]GapStateEntry
+}
+
+// GapStateEntry is one entry in Entity.GapState per ADR-0019
+// §Storage. Records who filled a gap (agent vs. operator), when it
+// was filled, and whether the operator deferred it.
+//
+// Two semantically-distinct shapes coexist in this struct:
+//
+// - Filled entries set Source + FilledAt (Deferred=false,
+// DeferredAt=nil). Source is the load-bearing field —
+// downstream UI / endpoint surfaces branch on it to attribute
+// the value.
+// - Deferred entries set Deferred=true + DeferredAt (Source="",
+// FilledAt=nil). A deferred field can later be filled — the
+// deferred flag goes back to false and Source/FilledAt land.
+//
+// JSON wire shape (vault frontmatter mirror; same shape as the DB
+// column):
+//
+//	{"source": "operator", "filled_at": "2026-05-08T16:30:00Z"}
+//	{"deferred": true, "deferred_at": "2026-05-08T16:30:00Z"}
+type GapStateEntry struct {
+	Source string `json:"source,omitempty"`
+	FilledAt *time.Time `json:"filled_at,omitempty"`
+	Deferred bool `json:"deferred,omitempty"`
+	DeferredAt *time.Time `json:"deferred_at,omitempty"`
+}
+
+// ArchivedFilter selects which archive-state subset of entities a
+// listing surface returns per ADR-0018 step 2.
+type ArchivedFilter int
+
+const (
+	// ArchivedExclude is the default-filter — only `archived_at IS
+	// NULL` rows. Hides archived entities from list/search.
+	ArchivedExclude ArchivedFilter = iota
+	// ArchivedInclude returns active + archived rows together —
+	// callers passing `?include_archived=true`.
+	ArchivedInclude
+	// ArchivedOnly returns ONLY rows whose `archived_at IS NOT
+	// NULL` — callers passing `?archived_only=true`.
+	ArchivedOnly
+)
+
+// Edge is a typed relationship between two entities. Metadata is opaque
+// JSON; provenance records who/what/when created or last touched the row.
+type Edge struct {
+	Type string
+	From string
+	To string
+	Metadata map[string]any
+	Provenance []ProvenanceEntry
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// EdgeRef is the abbreviated edge form embedded inside Entity.Edges.
+type EdgeRef struct {
+	Type string
+	To string
+}
+
+// ProvenanceEntry records a single fetch or fill attempt against an entity
+// or edge. Plugin-fetch entries set FetchedAt and leave FilledAt nil;
+// agent-fill entries set FilledAt and leave FetchedAt nil. Each entry has
+// exactly one of the two date fields populated.
+type ProvenanceEntry struct {
+	Source string
+	FetchedAt *time.Time
+	FilledAt *time.Time
+	OK bool
+	Error string
+	ErrorMessage string
+
+	// FetchAttachments records the (role, uri) pairs that landed on
+	// disk for this fetch attempt (per ADR-0014 §4). Optional;
+	// populated only on plugin-fetch entries that emitted attachments.
+	// Read-side compares this against the next fetch's Attachments
+	// to short-circuit re-fetches when the URI hasn't changed.
+	//
+	// Wire shape on the vault YAML side:
+	//
+	//	fetch_attachments:
+	//	 - role: thumb
+	//	 uri: "https://cf.geekdo-images.com/.../thumb.jpg"
+	//
+	// Pre-ADR-0014 entries have FetchAttachments nil; the next
+	// ingest's comparison treats nil as "no prior attachments" and
+	// performs every fetch. Backward-compatible with existing rows.
+	FetchAttachments []FetchAttachmentRef
+}
+
+// FetchAttachmentRef is one (role, uri) pair stamped on a
+// ProvenanceEntry's FetchAttachments. Mirrors the FetchResult.
+// Attachments wire shape minus the Extension (which is preserved on
+// disk via the filename). Per ADR-0014 §4: re-fetch comparison is a
+// pure string compare on (role, uri) against the freshest provenance.
+type FetchAttachmentRef struct {
+	Role string
+	URI string
+}
+
+// DroppedCanonicalKindCount records how many times a plugin's
+// emitted canonical-kind stub was dropped at the orchestrator's
+// config-filter (per ADR-0013 §3 / alice2-index). The count
+// accumulates across the daemon's lifetime; it persists in the
+// `dropped_canonical_kinds` table so a restart doesn't reset the
+// drift signal. `/v1/cv-status` reads this for the
+// `kinds_emitted_not_enabled[].would_materialize_count` field.
+type DroppedCanonicalKindCount struct {
+	Plugin string
+	Kind string
+	Count int64
+	FirstSeenAt time.Time
+	LastSeenAt time.Time
+}
+
+// DroppedCanonicalEdgeCount is the edge-type counterpart of
+// DroppedCanonicalKindCount — same shape, but keyed by
+// (plugin, edge_type) for canonical edge-type emissions the
+// operator's `canonical_edge_types:` config didn't enable.
+type DroppedCanonicalEdgeCount struct {
+	Plugin string
+	EdgeType string
+	Count int64
+	FirstSeenAt time.Time
+	LastSeenAt time.Time
+}
+
+// Hit is one search result. Snippet and Score are populated by the search
+// backend (FTS5 today, possibly external later — see ADR-0002 line 467).
+// Data is the entity's deserialised data column — included on every hit
+// so the API layer can derive snippets from per-kind data fields without
+// a second roundtrip per result.
+type Hit struct {
+	ID string
+	Kind string
+	Data map[string]any
+	Snippet string
+	Score float64
+}
+
+// ContextNeighbor is one entry in a context-traversal result (per
+// alice2-index the source issue / `GET /v1/entities/{id}/context`). Carries the
+// edge that introduced the neighbor, the neighbor entity itself, and
+// the BFS depth at which it was first reached. Entities are visited
+// at most once across a traversal — back-edges that would re-introduce
+// an already-visited entity are dropped (the entity is already in the
+// result set under its earlier depth).
+type ContextNeighbor struct {
+	Edge Edge
+	Entity Entity
+	Depth int
+}
+
+// ReindexFile is one row of reindex bookkeeping — per-vault-file state
+// the incremental reindexer reads to decide whether a file has changed
+// since the last walk. Path is the absolute file path (the primary key).
+// Mtime + ContentHash are the change-detection signal; LastIndexedAt is
+// the wall-clock at which this row was written. EntityID + EntityKind
+// record the entity that the file produced — needed when a file is
+// removed from disk and the bookkeeping row drives the entity delete.
+type ReindexFile struct {
+	Path string
+	Mtime time.Time
+	ContentHash string
+	LastIndexedAt time.Time
+	EntityID string
+	EntityKind string
+}
+
+// CachedPluginCapabilities is one row from the plugin_capabilities
+// table — the cached --init document for a single plugin. Version is
+// the plugin-emitted version string (per the capabilities document);
+// CapabilitiesJSON is the verbatim JSON the plugin wrote to stdout on
+// --init, opaque to the store. Callers compare Version against a
+// freshly probed version to decide cache validity.
+type CachedPluginCapabilities struct {
+	Version string
+	CapabilitiesJSON []byte
+	CachedAt time.Time
+}
+
+// Notation maps an input form (URL, `<plugin>: <id>` shorthand,
+// future input shapes) to the canonical entity slug it resolves to.
+// The orchestrator will use this in a prior PR to short-circuit the plugin
+// Fetch when an inbound URL/shorthand is already known. Vault
+// frontmatter persists the same list per entity (a prior PR) so reindex
+// can re-derive the table.
+//
+// - Notation — exact input string the caller passed.
+// - EntityID — slug the notation resolves to (FK on entities).
+// - Kind — discriminator (`url`, `shorthand`, …) — drives
+// reindex re-formatting back into frontmatter.
+type Notation struct {
+	Notation string
+	EntityID string
+	Kind string
+}
+
+// NotationKind* are the canonical discriminator values that
+// notation_kind uses today. Plugins MAY emit kinds outside this set
+// — the schema doesn't constrain — but the orchestrator + reindex
+// only know about these.
+const (
+	NotationKindURL = "url"
+	NotationKindShorthand = "shorthand"
+)
+
+// Store is the persistence interface used by the API handlers.
+//
+// Implementations must be safe for concurrent use. Methods take a context
+// so cancellation propagates from the HTTP layer down into the driver.
+//
+// SaveEntity vs. UpsertEntity + AppendProvenance vs. ReplaceProvenance:
+// - SaveEntity is "this is the current full state" — it upserts the
+// entity row and replaces (wipe + reinsert) the entity's
+// provenance entries. Used by tests / admin paths.
+// - UpsertEntity upserts the entity row only and leaves existing
+// provenance untouched. AppendProvenance adds new entries.
+// Together they form the ingest semantic: re-ingest of the same
+// URL updates `data` while accumulating one new provenance row
+// per fetch attempt (ADR-0002 line 281).
+// - ReplaceProvenance overwrites an entity's provenance with the
+// given list (transactional DELETE + INSERTs). Used by reindex
+// to re-derive DB provenance from vault frontmatter per ADR-0009.
+// The vault list is canonical; ReplaceProvenance enforces the
+// DB-mirrors-vault contract.
+type Store interface {
+	GetEntity(ctx context.Context, id string) (*Entity, error)
+	GetEntities(ctx context.Context, ids []string) (matched []Entity, missing []string, err error)
+	SaveEntity(ctx context.Context, e *Entity) error
+	UpsertEntity(ctx context.Context, e *Entity) error
+	AppendProvenance(ctx context.Context, entityID string, entries []ProvenanceEntry) error
+	ReplaceProvenance(ctx context.Context, entityID string, entries []ProvenanceEntry) error
+
+	// MarkGapCallDone stamps `gap_call_done_at = NOW()` on the
+	// entity (per ADR-0013 §4 + §5). Idempotent — re-stamps with
+	// current timestamp on subsequent calls. ErrNotFound returned
+	// when the entity doesn't exist.
+	MarkGapCallDone(ctx context.Context, entityID string) error
+	// ClearGapCallDone resets the flag to NULL (per ADR-0013 §4):
+	// called on `force_refetch=true` and TTL-driven refetch when
+	// the upstream produces a fresh fetch. Idempotent — clearing
+	// an already-NULL flag is a no-op success. ErrNotFound returned
+	// when the entity doesn't exist.
+	ClearGapCallDone(ctx context.Context, entityID string) error
+	// IncDroppedCanonicalKind bumps the per-(plugin, kind) drop
+	// counter (per ADR-0013 §3 / alice2-index a prior PR). Called by
+	// the ingest orchestrator at the moment a plugin-emitted
+	// canonical stub is filtered out by the operator's
+	// `canonical_kinds:` config — the same site that fires the
+	// existing startup WARN. Idempotent at the row level: the
+	// first call inserts with count=1; subsequent calls increment
+	// and refresh `last_seen_at`. `/v1/cv-status` (a prior PR) reads
+	// these via ListDroppedCanonicalKinds.
+	IncDroppedCanonicalKind(ctx context.Context, plugin, kind string) error
+	// IncDroppedCanonicalEdge is the edge-type counterpart —
+	// bumps `(plugin, edge_type)` for canonical edge-type
+	// emissions the operator's `canonical_edge_types:` config
+	// didn't enable.
+	IncDroppedCanonicalEdge(ctx context.Context, plugin, edgeType string) error
+	// ListDroppedCanonicalKinds returns every (plugin, kind) row
+	// in the counter table, ordered by (plugin, kind) for
+	// deterministic output. Used by `/v1/cv-status` (a prior PR) to
+	// surface the drift signal — `would_materialize_count` per
+	// row maps to the persisted Count.
+	ListDroppedCanonicalKinds(ctx context.Context) ([]DroppedCanonicalKindCount, error)
+	// ListDroppedCanonicalEdges is the edge-type counterpart.
+	ListDroppedCanonicalEdges(ctx context.Context) ([]DroppedCanonicalEdgeCount, error)
+
+	// ListGapCallableCandidates returns entities whose gap-call-done
+	// flag is NULL (per ADR-0013 §4 + §6 / alice2-index),
+	// ordered by `id ASC` for deterministic pagination. afterID,
+	// when non-empty, filters to ids strictly greater (cursor
+	// resume). limit caps the returned slice. The "actually has
+	// unfilled gaps" predicate is NOT enforced here — vault is the
+	// canonical source for that and the handler vault-reads each
+	// candidate. Provenance is NOT loaded (the caller drops it
+	// before serializing).
+	ListGapCallableCandidates(ctx context.Context, afterID string, limit int) ([]Entity, error)
+	GetEdgesFor(ctx context.Context, entityID string, types []string) ([]Edge, error)
+	// GetEdgesTo is the inbound mirror of GetEdgesFor — edges whose
+	// to_id matches the supplied id. Per alice2-index; the new
+	// GET /v1/edges?direction=in path reads through this helper.
+	GetEdgesTo(ctx context.Context, entityID string, types []string) ([]Edge, error)
+	// GetEdgesForMany is GetEdgesFor over a frontier of source ids in
+	// a single SQL query. Used by the BFS context traversal (per
+	// alice2-index the source issue) so a depth-3 walk doesn't fan out into
+	// N round-trips on each frontier. Empty fromIDs → empty result
+	// (not an error). Empty types → no type filter.
+	GetEdgesForMany(ctx context.Context, fromIDs []string, types []string) ([]Edge, error)
+	CreateEdge(ctx context.Context, e *Edge) error
+
+	// DeleteEdgesByTypeFrom removes every edge of the given type
+	// originating at fromID. Used by the canonical_type fill path
+	// (alice2-index) to implement idempotent re-fill semantics:
+	// before creating new edges from a re-filled canonical_type
+	// gap, the prior fill's edges are deleted so the post-fill
+	// edge set is exactly the new fill's labels. Returns the
+	// number of rows removed (purely informational).
+	DeleteEdgesByTypeFrom(ctx context.Context, fromID, edgeType string) (int64, error)
+
+	// GetContextNeighbors walks outbound edges from rootID up to
+	// maxDepth hops in BFS order (per alice2-index the source issue). The
+	// returned root is the canonical store.Entity for rootID;
+	// neighbors are flattened (depth-major; arbitrary within a
+	// depth) and capped at maxResults — when capped, truncated is
+	// true and the prefix that fit is returned.
+	//
+	// edgeTypes filters traversal: only edges of the named types are
+	// walked AND only those edges appear in neighbors. Empty
+	// edgeTypes → walk all edge types.
+	//
+	// Cycle handling: each entity appears at most once across root +
+	// neighbors. Back-edges that would re-introduce an already-
+	// visited entity are dropped — the entity is already present
+	// under its earlier-depth visit.
+	//
+	// Returns ErrNotFound (wrapped) when rootID resolves to nothing.
+	GetContextNeighbors(ctx context.Context, rootID string, maxDepth int, edgeTypes []string, maxResults int) (root *Entity, neighbors []ContextNeighbor, truncated bool, err error)
+	Search(ctx context.Context, q, kind string, limit, offset int, archived ArchivedFilter) (results []Hit, total int, err error)
+
+	// ArchiveEntity flips an entity into the archived state per
+	// ADR-0018: sets `archived_at = now` and bumps `updated_at`.
+	// Idempotent on already-archived rows (no-op when archived_at
+	// is already non-NULL — same row stays at the original archive
+	// timestamp). Returns ErrNotFound when no entity with the given
+	// id exists.
+	ArchiveEntity(ctx context.Context, id string) error
+
+	// RestoreEntity is the inverse: clears `archived_at = NULL` and
+	// bumps `updated_at`. Idempotent on already-active rows.
+	// Returns ErrNotFound when no entity with the given id exists.
+	RestoreEntity(ctx context.Context, id string) error
+
+	// Reindex bookkeeping (per ADR-0008 /). Operator-only — the
+	// reindexer (CLI + POST /v1/reindex) uses these to compare vault
+	// state against last-walk state. ListReindexFiles returns every
+	// row; UpsertReindexFile is idempotent on Path; DeleteReindexFile
+	// returns true if a row was dropped, false if absent.
+	// DeleteEntityCascade removes an entity along with its inbound +
+	// outbound edges and provenance — used when a vault file's
+	// disappearance prompts an entity removal in incremental mode.
+	// WipeDerivedState is the --full reset: drops every entity, edge,
+	// provenance row, and reindex_files row in a single transaction.
+	// (Plugin capabilities cache, fill tokens, and schema_migrations
+	// are preserved — those aren't derived from the vault.)
+	//
+	// LastReindexAt returns the most recent reindex timestamp —
+	// `MAX(last_indexed_at)` across the reindex_files table. The
+	// second return is `false` when no reindex has ever run (the
+	// table is empty). Used by `/v1/cv-status` per ADR-0013 §3 /
+	// alice2-index a prior PR to surface "when was the last full
+	// re-derive?" alongside the drift counters.
+	LastReindexAt(ctx context.Context) (time.Time, bool, error)
+	ListReindexFiles(ctx context.Context) ([]ReindexFile, error)
+	UpsertReindexFile(ctx context.Context, f ReindexFile) error
+	DeleteReindexFile(ctx context.Context, path string) (bool, error)
+	DeleteEntityCascade(ctx context.Context, id string) error
+	WipeDerivedState(ctx context.Context) error
+
+	// Notation lookup (per the source issue a prior PR). entity_notations is
+	// the input-form → entity-slug index used by the lookup-first
+	// ingest path (a prior PR) and reindex (a prior PR). Methods are operator-
+	// adjacent — invoked from the ingest handler and the reindex
+	// helper, not from agent-facing surfaces.
+	//
+	// - GetNotation: one-shot lookup; returns ErrNotFound if absent.
+	// - UpsertNotation: insert-or-replace. Same notation string is
+	// allowed to point at a different entity_id only via explicit
+	// overwrite — the PRIMARY KEY on notation enforces the
+	// uniqueness; this method is the supported path for moving
+	// a notation between entities.
+	// - DeleteNotationsForEntity: drop every row for one entity.
+	// Used by reindex re-derive (DELETE-then-INSERT). Cascade
+	// from entity deletion is handled at the schema layer.
+	// - ReplaceNotations: transactional DELETE+INSERTs for one
+	// entity, mirroring ReplaceProvenance's contract (per ADR-
+	// 0009 re-derive pattern). Empty entries permitted — clears
+	// the entity's notations.
+	GetNotation(ctx context.Context, notation string) (Notation, error)
+	UpsertNotation(ctx context.Context, n Notation) error
+	DeleteNotationsForEntity(ctx context.Context, entityID string) (int, error)
+	ReplaceNotations(ctx context.Context, entityID string, entries []Notation) error
+
+	// Plugin capabilities cache . Operator-only — these
+	// methods aren't reachable from the agent-facing /v1 API surface;
+	// they're called by the server-startup registration path
+	// (cmd/alice2-index/main.go) and the `alice2-index plugins clear-cache`
+	// CLI subcommand. Version-driven invalidation: a freshly probed
+	// version mismatch on registration triggers an Upsert; the CLI
+	// path force-drops the row regardless.
+	GetPluginCapabilities(ctx context.Context, name string) (CachedPluginCapabilities, bool, error)
+	UpsertPluginCapabilities(ctx context.Context, name, version string, capabilitiesJSON []byte) error
+	DeletePluginCapabilities(ctx context.Context, name string) (bool, error)
+	ClearAllPluginCapabilities(ctx context.Context) (int, error)
+
+	Close() error
+}
+
+// ErrNotFound is returned by GetEntity when no row matches the requested id.
+var ErrNotFound = errors.New("not found")
+
+// ErrMissingEntity is returned by CreateEdge when from or to references an
+// entity id that doesn't exist in the entities table. Handlers use
+// errors.Is to detect this and translate it into the canonical
+// 422 missing_entity envelope per ADR-0002 (POST /v1/edges; RFC 9110
+// §15.5.21 unprocessable content — request well-formed, can't be
+// processed because of a referential-integrity gap).
+var ErrMissingEntity = errors.New("missing entity")
+
+// ErrNotImplemented is returned by stub methods until a follow-up PR
+// implements them. Tests in this package assert against it to lock the
+// staged-rollout contract.
+var ErrNotImplemented = errors.New("not implemented")
