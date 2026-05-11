@@ -182,7 +182,7 @@ func TestMarshal_AliasesEmittedInFrontmatter(t *testing.T) {
 		b, err := Marshal(e, []string{"person"})
 		require.NoError(t, err)
 		out := string(b)
-		assert.Contains(t, out, "aliases:\n - Martin Wallace (designer)\n")
+		assert.Contains(t, out, "aliases:\n  - Martin Wallace (designer)\n")
 	})
 
 	t.Run("canonical-shape with name emits aliases", func(t *testing.T) {
@@ -196,7 +196,7 @@ func TestMarshal_AliasesEmittedInFrontmatter(t *testing.T) {
 		b, err := Marshal(e, []string{"person", "city"})
 		require.NoError(t, err)
 		out := string(b)
-		assert.Contains(t, out, "aliases:\n - Martin Wallace\n")
+		assert.Contains(t, out, "aliases:\n  - Martin Wallace\n")
 	})
 
 	t.Run("title equals slug → omitempty drops the key", func(t *testing.T) {

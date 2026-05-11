@@ -45,14 +45,14 @@ func TestMergeCanonicalRegistry_FourLayerOrder(t *testing.T) {
 	// Layer 2: plugin extras for kind=person.
 	pluginGaps := map[string]map[string]GapSpec{
 		"person": {
-			"summary": {Type: "string", Description: "PLUGIN summary"},
+			"summary":   {Type: "string", Description: "PLUGIN summary"},
 			"birthdate": {Type: "date", Description: "Birth date"},
 		},
 	}
 	// Layer 3: operator-defaults (root, applies to every kind).
 	opDefaults := CanonicalKindConfig{
 		Gaps: map[string]GapSpec{
-			"summary": {Type: "string", Description: "ROOT summary"},
+			"summary":      {Type: "string", Description: "ROOT summary"},
 			"external_url": {Type: "string", Description: "Authoritative URL"},
 		},
 	}
@@ -101,8 +101,8 @@ func TestMergeCanonicalRegistry_PluginAutoActivation(t *testing.T) {
 	merged := MergeCanonicalRegistry(
 		nil,
 		[]string{"boardgame", "person"}, // plugins emit these
-		CanonicalKindConfig{}, // no operator-defaults
-		nil, // no operator-per-kind
+		CanonicalKindConfig{},           // no operator-defaults
+		nil,                             // no operator-per-kind
 		logger,
 	)
 
@@ -218,12 +218,12 @@ func TestGapSpec_UnmarshalYAML(t *testing.T) {
 	body := []byte(`
 plugins: []
 canonical_kinds:
- person:
- gaps:
- birthdate:
- type: date
- description: "Birth date in YYYY-MM-DD."
- occupation: "Job title or role."
+  person:
+    gaps:
+      birthdate:
+        type: date
+        description: "Birth date in YYYY-MM-DD."
+      occupation: "Job title or role."
 `)
 	cfg, err := Load(writeConfig(t, string(body)))
 	require.NoError(t, err)
@@ -247,12 +247,12 @@ func TestInstructionSpec_UnmarshalYAML(t *testing.T) {
 	body := []byte(`
 plugins: []
 canonical_kinds:
- shorthand_kind:
- instruction: "Skip if absent."
- long_form_kind:
- instruction:
- enabled: false
- text: "Plugin-disabled fill."
+  shorthand_kind:
+    instruction: "Skip if absent."
+  long_form_kind:
+    instruction:
+      enabled: false
+      text: "Plugin-disabled fill."
 `)
 	cfg, err := Load(writeConfig(t, string(body)))
 	require.NoError(t, err)
@@ -279,15 +279,15 @@ func TestLoad_CanonicalKindsDefaults(t *testing.T) {
 	body := []byte(`
 plugins: []
 canonical_kinds_defaults:
- instruction:
- enabled: true
- text: "Fill carefully."
- gaps:
- external_url:
- type: string
- description: "Authoritative URL."
+  instruction:
+    enabled: true
+    text: "Fill carefully."
+  gaps:
+    external_url:
+      type: string
+      description: "Authoritative URL."
 canonical_kinds:
- person: {}
+  person: {}
 `)
 	cfg, err := Load(writeConfig(t, string(body)))
 	require.NoError(t, err)
@@ -308,7 +308,7 @@ func TestLegacyRegistryWireShape(t *testing.T) {
 	reg := map[string]CanonicalKindConfig{
 		"person": {
 			Gaps: map[string]GapSpec{
-				"name": {Type: "string", Description: "Full name."},
+				"name":      {Type: "string", Description: "Full name."},
 				"birthdate": {Type: "date", Description: "Birth date."},
 			},
 			Instruction: &InstructionSpec{Enabled: true, Text: "Cite sources."},
@@ -340,24 +340,24 @@ func TestGapSpec_FillStrategyParsing(t *testing.T) {
 	body := `
 plugins: []
 canonical_kinds:
- boardgame:
- gaps:
- summary:
- prompt: "Short summary"
- fill_strategy: agent
- rating:
- prompt: "How do you rate this?"
- type: int
- range: [1, 10]
- fill_strategy: operator
- played:
- type: bool
- description: "Have you played it?"
- fill_strategy: operator
- region:
- type: enum
- values: ["us", "eu", "asia"]
- description: "Operator region."
+  boardgame:
+    gaps:
+      summary:
+        prompt: "Short summary"
+        fill_strategy: agent
+      rating:
+        prompt: "How do you rate this?"
+        type: int
+        range: [1, 10]
+        fill_strategy: operator
+      played:
+        type: bool
+        description: "Have you played it?"
+        fill_strategy: operator
+      region:
+        type: enum
+        values: ["us", "eu", "asia"]
+        description: "Operator region."
 `
 	cfg, err := Load(writeConfig(t, body))
 	require.NoError(t, err)
@@ -390,10 +390,10 @@ func TestGapSpec_StringShorthandPreserved(t *testing.T) {
 	body := `
 plugins: []
 canonical_kinds:
- person:
- gaps:
- name: "Full name"
- birthdate: "Birth date in YYYY-MM-DD"
+  person:
+    gaps:
+      name: "Full name"
+      birthdate: "Birth date in YYYY-MM-DD"
 `
 	cfg, err := Load(writeConfig(t, body))
 	require.NoError(t, err)
@@ -411,12 +411,12 @@ func TestGapSpec_RejectInvalidFillStrategy(t *testing.T) {
 	body := `
 plugins: []
 canonical_kinds:
- boardgame:
- gaps:
- rating:
- type: int
- description: "rating"
- fill_strategy: humans # typo, must be agent|operator|both
+  boardgame:
+    gaps:
+      rating:
+        type: int
+        description: "rating"
+        fill_strategy: humans   # typo, must be agent|operator|both
 `
 	_, err := Load(writeConfig(t, body))
 	require.Error(t, err)
@@ -438,9 +438,9 @@ func TestGapSpec_RejectIntRangeShape(t *testing.T) {
 			yaml: `
 plugins: []
 canonical_kinds:
- bg:
- gaps:
- rating: { type: int, description: r, range: [5] }
+  bg:
+    gaps:
+      rating: { type: int, description: r, range: [5] }
 `,
 			hint: "must be [min, max]",
 		},
@@ -449,9 +449,9 @@ canonical_kinds:
 			yaml: `
 plugins: []
 canonical_kinds:
- bg:
- gaps:
- rating: { type: int, description: r, range: [10, 1] }
+  bg:
+    gaps:
+      rating: { type: int, description: r, range: [10, 1] }
 `,
 			hint: "min 10 > max 1",
 		},
@@ -475,11 +475,11 @@ func TestGapSpec_RejectEnumWithoutValues(t *testing.T) {
 	body := `
 plugins: []
 canonical_kinds:
- bg:
- gaps:
- region:
- type: enum
- description: "operator region"
+  bg:
+    gaps:
+      region:
+        type: enum
+        description: "operator region"
 `
 	_, err := Load(writeConfig(t, body))
 	require.Error(t, err)
@@ -495,11 +495,11 @@ func TestGapSpec_LegacyTypeDatePassesThrough(t *testing.T) {
 	body := `
 plugins: []
 canonical_kinds:
- person:
- gaps:
- birthdate:
- type: date
- description: "Birth date."
+  person:
+    gaps:
+      birthdate:
+        type: date
+        description: "Birth date."
 `
 	cfg, err := Load(writeConfig(t, body))
 	require.NoError(t, err, "legacy type=date must keep loading")
@@ -520,9 +520,9 @@ func TestGapSpec_RejectMixedTypeFields(t *testing.T) {
 			yaml: `
 plugins: []
 canonical_kinds:
- bg:
- gaps:
- rating: { type: string, description: r, range: [1, 10] }
+  bg:
+    gaps:
+      rating: { type: string, description: r, range: [1, 10] }
 `,
 			hint: "type=string does not accept range",
 		},
@@ -531,9 +531,9 @@ canonical_kinds:
 			yaml: `
 plugins: []
 canonical_kinds:
- bg:
- gaps:
- rating: { type: int, description: r, values: ["a", "b"] }
+  bg:
+    gaps:
+      rating: { type: int, description: r, values: ["a", "b"] }
 `,
 			hint: "type=int does not accept",
 		},
@@ -542,9 +542,9 @@ canonical_kinds:
 			yaml: `
 plugins: []
 canonical_kinds:
- bg:
- gaps:
- played: { type: bool, description: p, max_length: 4 }
+  bg:
+    gaps:
+      played: { type: bool, description: p, max_length: 4 }
 `,
 			hint: "type=bool",
 		},
@@ -608,8 +608,8 @@ func TestMergeCanonicalRegistry_OperatorOverridesBuiltinKindGap(t *testing.T) {
 			"boardgame": {
 				Gaps: map[string]GapSpec{
 					"rating": {
-						Type: "string",
-						Description: "operator's custom rating prompt",
+						Type:         "string",
+						Description:  "operator's custom rating prompt",
 						FillStrategy: "agent",
 					},
 				},
@@ -636,9 +636,9 @@ func TestMergeCanonicalRegistry_PluginExtraOverridesBuiltinKindGap(t *testing.T)
 		map[string]map[string]GapSpec{
 			"boardgame": {
 				"rating": {
-					Type: "int",
-					Description: "plugin's rating prompt",
-					Range: []int{1, 5},
+					Type:         "int",
+					Description:  "plugin's rating prompt",
+					Range:        []int{1, 5},
 					FillStrategy: "agent",
 				},
 			},

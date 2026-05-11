@@ -39,10 +39,10 @@ func TestLoad_HappyPath(t *testing.T) {
 
 	cfgPath := writeConfig(t, `
 plugins:
- - name: wikipedia
- path: `+wikipediaPath+`
- - name: bgg
- path: `+bggPath+`
+  - name: wikipedia
+    path: `+wikipediaPath+`
+  - name: bgg
+    path: `+bggPath+`
 `)
 
 	cfg, err := Load(cfgPath)
@@ -60,8 +60,8 @@ plugins:
 func TestLoad_PreservesYAMLOrder(t *testing.T) {
 	t.Parallel()
 
-	// Regression guard for the slice-vs-map fix (the cold-reviewer's a prior PR
-	// finding): if Plugins ever reverts to a map, Go's randomized
+	// Regression guard for the slice-vs-map fix (the cold-reviewer's PR #28
+	// finding #4): if Plugins ever reverts to a map, Go's randomized
 	// map iteration would scramble first-match-wins dispatch priority
 	// across server restarts. The assertion below is intentionally
 	// strict on positional order, not just set membership.
@@ -72,12 +72,12 @@ func TestLoad_PreservesYAMLOrder(t *testing.T) {
 
 	cfgPath := writeConfig(t, `
 plugins:
- - name: c
- path: `+c+`
- - name: a
- path: `+a+`
- - name: b
- path: `+b+`
+  - name: c
+    path: `+c+`
+  - name: a
+    path: `+a+`
+  - name: b
+    path: `+b+`
 `)
 	cfg, err := Load(cfgPath)
 	require.NoError(t, err)
@@ -89,14 +89,14 @@ func TestLoad_RejectsDuplicateNames(t *testing.T) {
 	t.Parallel()
 
 	tmp := t.TempDir()
-	bin := makeExecutable(t, tmp, "alice2-thing")
+	bin := makeExecutable(t, tmp, "yaad-thing")
 
 	cfgPath := writeConfig(t, `
 plugins:
- - name: wikipedia
- path: `+bin+`
- - name: wikipedia
- path: `+bin+`
+  - name: wikipedia
+    path: `+bin+`
+  - name: wikipedia
+    path: `+bin+`
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)
@@ -115,8 +115,8 @@ func TestLoad_RejectsRelativePaths(t *testing.T) {
 
 	cfgPath := writeConfig(t, `
 plugins:
- - name: wikipedia
- path: ./yaad-wikipedia
+  - name: wikipedia
+    path: ./yaad-wikipedia
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err, "Load with relative path")
@@ -128,8 +128,8 @@ func TestLoad_RejectsBareNamePath(t *testing.T) {
 
 	cfgPath := writeConfig(t, `
 plugins:
- - name: wikipedia
- path: yaad-wikipedia
+  - name: wikipedia
+    path: yaad-wikipedia
 `)
 	_, err := Load(cfgPath)
 	assert.Error(t, err, "Load with bare name (no PATH search per ADR-0006)")
@@ -140,8 +140,8 @@ func TestLoad_RejectsTildePathsAsNotAbsolute(t *testing.T) {
 
 	cfgPath := writeConfig(t, `
 plugins:
- - name: wikipedia
- path: ~/.local/bin/yaad-wikipedia
+  - name: wikipedia
+    path: ~/.local/bin/yaad-wikipedia
 `)
 	_, err := Load(cfgPath)
 	assert.Error(t, err, "Load with `~/` path (no shell expansion per ADR-0006)")
@@ -152,8 +152,8 @@ func TestLoad_RejectsMissingBinary(t *testing.T) {
 
 	cfgPath := writeConfig(t, `
 plugins:
- - name: wikipedia
- path: /this/path/definitely/does/not/exist/yaad-wikipedia
+  - name: wikipedia
+    path: /this/path/definitely/does/not/exist/yaad-wikipedia
 `)
 	_, err := Load(cfgPath)
 	assert.Error(t, err, "Load with missing binary")
@@ -168,8 +168,8 @@ func TestLoad_RejectsNonExecutable(t *testing.T) {
 
 	cfgPath := writeConfig(t, `
 plugins:
- - name: wikipedia
- path: `+notExec+`
+  - name: wikipedia
+    path: `+notExec+`
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err, "Load with non-executable")
@@ -182,8 +182,8 @@ func TestLoad_RejectsDirectoryAsPath(t *testing.T) {
 	tmp := t.TempDir()
 	cfgPath := writeConfig(t, `
 plugins:
- - name: wikipedia
- path: `+tmp+`
+  - name: wikipedia
+    path: `+tmp+`
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err, "Load with directory path")
@@ -216,7 +216,7 @@ func TestLoad_MalformedYAMLReturnsError(t *testing.T) {
 
 	cfgPath := writeConfig(t, `
 plugins:
- wikipedia: [this, is, not, a, string
+  wikipedia: [this, is, not, a, string
 `)
 	_, err := Load(cfgPath)
 	assert.Error(t, err, "malformed YAML")
@@ -238,7 +238,7 @@ func TestLoad_VaultPathHappyPath(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 vault:
- path: `+tmp+`
+  path: `+tmp+`
 `)
 	cfg, err := Load(cfgPath)
 	require.NoError(t, err)
@@ -251,7 +251,7 @@ func TestLoad_VaultPathRejectsRelative(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 vault:
- path: relative/vault
+  path: relative/vault
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)
@@ -264,7 +264,7 @@ func TestLoad_VaultPathRejectsMissing(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 vault:
- path: /this/does/not/exist/test-vault
+  path: /this/does/not/exist/test-vault
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)
@@ -280,7 +280,7 @@ func TestLoad_VaultPathRejectsFileAsRoot(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 vault:
- path: `+notDir+`
+  path: `+notDir+`
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)
@@ -290,24 +290,24 @@ vault:
 func TestLoad_CanonicalKindsParsed(t *testing.T) {
 	t.Parallel()
 
-	// Migrated to ADR-0013 §1's map shape (alice2-index a prior PR):
+	// Migrated to ADR-0013 §1's map shape (yaad-index #163 PR-2):
 	// each enabled kind owns a per-kind config block carrying its
 	// gap-set vocabulary + optional fill instruction. Map keys are
 	// the enabled-kinds set.
 	cfgPath := writeConfig(t, `
 plugins: []
 canonical_kinds:
- person:
- gaps:
- name: "Full name."
- summary: "One-paragraph summary."
- instruction: "Skip if absent."
- city:
- gaps:
- name: "City name."
+  person:
+    gaps:
+      name: "Full name."
+      summary: "One-paragraph summary."
+    instruction: "Skip if absent."
+  city:
+    gaps:
+      name: "City name."
 canonical_edge_types:
- - is_about
- - lives_in
+  - is_about
+  - lives_in
 `)
 	cfg, err := Load(cfgPath)
 	require.NoError(t, err)
@@ -368,7 +368,7 @@ canonical_edge_types: []
 	assert.False(t, g.AllowEdgeType("is_about"))
 }
 
-// canonicalKindNamesForTest matches cmd/alice2-index/main.go's helper
+// canonicalKindNamesForTest matches cmd/yaad-index/main.go's helper
 // behavior — including the nil-return on empty/nil input — so guard
 // construction in this test exercises the same code path the
 // production wiring uses. Tests don't share package boundaries
@@ -395,9 +395,9 @@ func TestLoad_CanonicalKinds_RejectsInvalidKindName(t *testing.T) {
 			cfgPath := writeConfig(t, fmt.Sprintf(`
 plugins: []
 canonical_kinds:
- %q:
- gaps:
- name: "x"
+  %q:
+    gaps:
+      name: "x"
 `, badName))
 			_, err := Load(cfgPath)
 			require.Error(t, err)
@@ -418,9 +418,9 @@ func TestLoad_CanonicalKinds_AcceptsEmptyGaps(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 canonical_kinds:
- person:
- gaps: {}
- instruction: "x"
+  person:
+    gaps: {}
+    instruction: "x"
 `)
 	cfg, err := Load(cfgPath)
 	require.NoError(t, err, "empty gaps block is valid post-ADR-0016 (layered defaults supply name/tags/summary)")
@@ -437,9 +437,9 @@ func TestLoad_CanonicalKinds_RejectsInvalidGapFieldName(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 canonical_kinds:
- person:
- gaps:
- "Bad-Name": "prompt"
+  person:
+    gaps:
+      "Bad-Name": "prompt"
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)
@@ -455,9 +455,9 @@ func TestLoad_CanonicalKinds_RejectsEmptyGapPrompt(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 canonical_kinds:
- person:
- gaps:
- name: ""
+  person:
+    gaps:
+      name: ""
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)
@@ -468,15 +468,15 @@ canonical_kinds:
 // Validation: whitespace-only gap prompt is a false-signal forwarded
 // verbatim to the AI — same problem as a whitespace-only instruction.
 // Mirrors TestLoad_CanonicalKinds_RejectsWhitespaceInstruction (the cold-reviewer's
-// a prior PR catch).
+// PR-164 catch).
 func TestLoad_CanonicalKinds_RejectsWhitespaceGapPrompt(t *testing.T) {
 	t.Parallel()
 	cfgPath := writeConfig(t, `
 plugins: []
 canonical_kinds:
- person:
- gaps:
- name: " \t \n "
+  person:
+    gaps:
+      name: "   \t  \n  "
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)
@@ -490,10 +490,10 @@ func TestLoad_CanonicalKinds_RejectsWhitespaceInstruction(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 canonical_kinds:
- person:
- gaps:
- name: "x"
- instruction: " \t \n "
+  person:
+    gaps:
+      name: "x"
+    instruction: "   \t  \n  "
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)
@@ -503,17 +503,17 @@ canonical_kinds:
 
 // Per-kind instruction + global fill_instruction co-exist at the
 // config layer; their interaction (per-kind override semantics) is
-// a prior PR's concern. a prior PR just verifies they parse together.
+// PR-3's concern. PR-2 just verifies they parse together.
 func TestLoad_CanonicalKinds_CoexistsWithFillInstruction(t *testing.T) {
 	t.Parallel()
 	cfgPath := writeConfig(t, `
 plugins: []
 fill_instruction: "Skip absent gaps."
 canonical_kinds:
- person:
- gaps:
- name: "Full name."
- instruction: "Override for person."
+  person:
+    gaps:
+      name: "Full name."
+    instruction: "Override for person."
 `)
 	cfg, err := Load(cfgPath)
 	require.NoError(t, err)
@@ -545,7 +545,7 @@ func TestLoad_LogLevelDefaultsToEmpty(t *testing.T) {
 		"absent log_level → empty string; ParseLogLevel maps that to info")
 }
 
-// Per alice2-index: operator-configured timezone parses via
+// Per yaad-index #195: operator-configured timezone parses via
 // time.LoadLocation at Validate time. Empty defaults to UTC.
 func TestLoad_TimezoneParsedFromConfig(t *testing.T) {
 	t.Parallel()
@@ -601,8 +601,8 @@ func TestLoad_VaultAutoCommitTrueRequiresGitDir(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 vault:
- path: `+tmp+`
- auto_commit: true
+  path: `+tmp+`
+  auto_commit: true
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)
@@ -617,8 +617,8 @@ func TestLoad_VaultAutoCommitTrueAcceptsWhenGitDirExists(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 vault:
- path: `+tmp+`
- auto_commit: true
+  path: `+tmp+`
+  auto_commit: true
 `)
 	cfg, err := Load(cfgPath)
 	require.NoError(t, err)
@@ -633,8 +633,8 @@ func TestLoad_VaultAutoCommitFalseDoesNotRequireGitDir(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 vault:
- path: `+tmp+`
- auto_commit: false
+  path: `+tmp+`
+  auto_commit: false
 `)
 	cfg, err := Load(cfgPath)
 	require.NoError(t, err)
@@ -649,7 +649,7 @@ func TestLoad_VaultAutoCommitNilAutoDetects(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 vault:
- path: `+tmp+`
+  path: `+tmp+`
 `)
 	cfg, err := Load(cfgPath)
 	require.NoError(t, err)
@@ -663,8 +663,8 @@ func TestLoad_VaultAutoCommitDebounceRejectsNegative(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 vault:
- path: `+tmp+`
- auto_commit_debounce_seconds: -3
+  path: `+tmp+`
+  auto_commit_debounce_seconds: -3
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)
@@ -678,9 +678,9 @@ func TestLoad_VaultAutoPushRequiresAutoCommit(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 vault:
- path: `+tmp+`
- auto_commit: false
- auto_push: true
+  path: `+tmp+`
+  auto_commit: false
+  auto_push: true
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)
@@ -694,7 +694,7 @@ func TestLoad_VaultAutoCommitFieldsRequireVaultPath(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 vault:
- auto_commit: true
+  auto_commit: true
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)
@@ -706,12 +706,12 @@ func TestLoad_AuthFieldsParse(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 auth:
- keys_dir: /etc/alice2-index/keys
- default_ttl: 720h
+  keys_dir: /etc/yaad-index/keys
+  default_ttl: 720h
 `)
 	cfg, err := Load(cfgPath)
 	require.NoError(t, err)
-	assert.Equal(t, "/etc/alice2-index/keys", cfg.Auth.KeysDir)
+	assert.Equal(t, "/etc/yaad-index/keys", cfg.Auth.KeysDir)
 	assert.Equal(t, "720h", cfg.Auth.DefaultTTL)
 }
 
@@ -730,7 +730,7 @@ func TestLoad_AuthAbsent_LeavesEmptyEntry(t *testing.T) {
 // auth.required: absent → nil (CLI/env/default takes over), explicit
 // `true` → *true (operator opts in), explicit `false` → *false
 // (operator opts out for dev mode). The precedence chain in
-// cmd/alice2-index/main.go relies on the absent-vs-explicit-false
+// cmd/yaad-index/main.go relies on the absent-vs-explicit-false
 // distinction; collapsing this to a plain bool would silently break it.
 func TestLoad_AuthRequired_TriState(t *testing.T) {
 	t.Parallel()
@@ -739,8 +739,8 @@ func TestLoad_AuthRequired_TriState(t *testing.T) {
 		yaml string
 		want *bool
 	}{
-		{"explicit_true", "auth:\n required: true\n", boolPtr(true)},
-		{"explicit_false", "auth:\n required: false\n", boolPtr(false)},
+		{"explicit_true", "auth:\n  required: true\n", boolPtr(true)},
+		{"explicit_false", "auth:\n  required: false\n", boolPtr(false)},
 		{"absent", "", nil},
 	}
 	for _, tc := range cases {
@@ -763,22 +763,22 @@ func TestLoad_AuthRequired_TriState(t *testing.T) {
 func boolPtr(b bool) *bool { return &b }
 
 // TestLoad_UserContentFrontmatterEdges_HappyPath pins the parse +
-// validation of the per- operator-side mapping field. Mirrors
+// validation of the per-#238 operator-side mapping field. Mirrors
 // the plugin-side `frontmatter_edges:` Capabilities shape.
 func TestLoad_UserContentFrontmatterEdges_HappyPath(t *testing.T) {
 	t.Parallel()
 	cfgPath := writeConfig(t, `
 plugins: []
 user_content_frontmatter_edges:
- about:
- edge_type: is_about
- target_kind: boardgame
- mentions:
- edge_type: mentions
- target_kind: person
- designed_by:
- edge_type: designed_by
- target_kind: person
+  about:
+    edge_type: is_about
+    target_kind: boardgame
+  mentions:
+    edge_type: mentions
+    target_kind: person
+  designed_by:
+    edge_type: designed_by
+    target_kind: person
 `)
 	cfg, err := Load(cfgPath)
 	require.NoError(t, err)
@@ -791,7 +791,7 @@ user_content_frontmatter_edges:
 }
 
 // TestLoad_UserContentFrontmatterEdges_AbsentIsNil pins the
-// absent-section-is-zero-value contract: legacy configs (no
+// absent-section-is-zero-value contract: pre-#238 configs (no
 // `user_content_frontmatter_edges:` block) must continue to parse
 // cleanly, with the field nil so the UGC create/edit handlers'
 // derivation step is a no-op.
@@ -812,9 +812,9 @@ func TestLoad_UserContentFrontmatterEdges_EmptyEdgeType(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 user_content_frontmatter_edges:
- mentions:
- edge_type: ""
- target_kind: person
+  mentions:
+    edge_type: ""
+    target_kind: person
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)
@@ -829,9 +829,9 @@ func TestLoad_UserContentFrontmatterEdges_EmptyTargetKind(t *testing.T) {
 	cfgPath := writeConfig(t, `
 plugins: []
 user_content_frontmatter_edges:
- about:
- edge_type: is_about
- target_kind: ""
+  about:
+    edge_type: is_about
+    target_kind: ""
 `)
 	_, err := Load(cfgPath)
 	require.Error(t, err)

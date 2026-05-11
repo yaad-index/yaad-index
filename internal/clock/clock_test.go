@@ -86,7 +86,7 @@ func TestLogTimeAttr_RewritesToOperatorTimezone(t *testing.T) {
 	// — that's the load-bearing claim.
 	assert.NotContains(t, gotTime, "Z",
 		"LogTimeAttr must rewrite away from UTC; got %s", gotTime)
-	assert.True(t, strings.Contains(gotTime, "+01:") || strings.Contains(gotTime, "+02:"),
+	assert.True(t, strings.Contains(gotTime, "-08:") || strings.Contains(gotTime, "-07:"),
 		"want Pacific offset (-08:00 or -07:00 depending on DST); got %s", gotTime)
 }
 
