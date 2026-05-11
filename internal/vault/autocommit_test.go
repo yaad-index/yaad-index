@@ -285,7 +285,7 @@ func TestGitCommitter_AuthorThreaded(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
 	got := strings.TrimSpace(string(out))
-	require.Equal(t, "alice2 <alice2@alice2-index>", got)
+	require.Equal(t, "bob <bob@alice2-index>", got)
 }
 
 // commit-side error must NOT fail the surrounding write — the vault

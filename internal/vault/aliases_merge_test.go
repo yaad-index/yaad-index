@@ -31,7 +31,7 @@ func TestMarshal_AliasesMergesPluginEmittedWithSynthesized(t *testing.T) {
 	out := string(b)
 
 	// Order: synthesized first, then plugin-emitted in input order.
-	assert.Contains(t, out, "aliases:\n - Susanna Clarke\n - S. Clarke\n - 'author_of: Jonathan Strange & Mr Norrell'\n",
+	assert.Contains(t, out, "aliases:\n  - Susanna Clarke\n  - S. Clarke\n  - 'author_of: Jonathan Strange & Mr Norrell'\n",
 		"merged order must be synthesized first, then plugin entries in input order")
 
 	got, err := Unmarshal(b)

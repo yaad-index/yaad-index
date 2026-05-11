@@ -207,9 +207,9 @@ func TestUnmarshal_CommentsIgnoresLegacyFrontmatterField(t *testing.T) {
 		"plugin: wikipedia",
 		// Legacy shape — must NOT surface on the parsed entity.
 		"comments:",
-		" - date: 2026-04-15T08:30:00Z",
-		" text: Legacy frontmatter comment.",
-		" author: alice",
+		"  - date: 2026-04-15T08:30:00Z",
+		"    text: Legacy frontmatter comment.",
+		"    author: alice",
 		"---",
 		"",
 	}, "\n")
