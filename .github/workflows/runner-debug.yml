@@ -2,12 +2,17 @@ name: runner-debug
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/runner-debug.yml'
 
 permissions:
   contents: read
 
 jobs:
-  probe:
+  probe-direct:
+    name: probe-direct (no checkout action)
     runs-on: self-hosted
     steps:
       - name: token + repo probe
@@ -15,26 +20,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -x
-          echo "::group::env"
-          env | grep -iE "github_|runner_" | grep -v TOKEN | sort
-          echo "::endgroup::"
-
-          echo "::group::token header roundtrip"
-          # what github thinks of this token
-          curl -sS -o /tmp/whoami.json -w "HTTP %{http_code}\n" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}
-          cat /tmp/whoami.json | head -20 || true
-          echo "::endgroup::"
-
           echo "::group::token-aware git ls-remote"
           git ls-remote https://x-access-token:$GH_TOKEN@github.com/${{ github.repository }} 2>&1 | head -5 || true
           echo "::endgroup::"
 
-          echo "::group::token-aware checkout dry-run"
+          echo "::group::token-aware fetch of github.sha"
           mkdir -p /tmp/co && cd /tmp/co && rm -rf .git
           git init -q
           git remote add origin https://x-access-token:$GH_TOKEN@github.com/${{ github.repository }}
           git fetch --depth 1 origin "${{ github.sha }}" 2>&1 | head -10 || true
           echo "::endgroup::"
+
+  probe-with-checkout:
+    name: probe-with-checkout (actions/checkout@v6)
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v6
+      - run: echo "checkout succeeded"
+
+  probe-with-checkout-v4:
+    name: probe-with-checkout-v4
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "checkout v4 succeeded"
