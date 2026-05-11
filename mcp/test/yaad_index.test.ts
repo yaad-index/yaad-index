@@ -371,6 +371,56 @@ describe("YaadIndexClient", () => {
  expect(got.edge_kinds[0]?.from_kind).toBe("wikipedia-article");
  });
 
+ test("getPlugins GETs /v1/plugins and returns per-plugin Capabilities subset verbatim", async () => {
+ let seenUrl = "";
+ let seenMethod = "";
+ const client = new YaadIndexClient({
+ baseUrl: "http://yaad-index.test",
+ fetchImpl: fakeFetch((u, init) => {
+ seenUrl = u;
+ seenMethod = init.method ?? "GET";
+ return new Response(
+ JSON.stringify({
+ ok: true,
+ plugins: [
+ {
+ name: "wikipedia",
+ version: "0.6.0",
+ url_patterns: ["^https?://[a-z]{2,3}\\.wikipedia\\.org/wiki/.+"],
+ commands: [],
+ entity_kinds: [{ name: "source", description: "wikipedia source" }],
+ edge_kinds: [],
+ source_namespace: "wikipedia",
+ },
+ {
+ name: "gmail",
+ version: "0.4.0",
+ url_patterns: [],
+ commands: ["fetch"],
+ entity_kinds: [{ name: "source" }],
+ edge_kinds: [],
+ source_namespace: "gmail",
+ },
+ ],
+ }),
+ { headers: { "Content-Type": "application/json" } },
+ );
+ }),
+ });
+ const got = await client.getPlugins();
+ expect(seenUrl).toBe("http://yaad-index.test/v1/plugins");
+ expect(seenMethod).toBe("GET");
+ expect(got.ok).toBe(true);
+ expect(got.plugins).toHaveLength(2);
+ expect(got.plugins[0]?.name).toBe("wikipedia");
+ expect(got.plugins[0]?.url_patterns).toHaveLength(1);
+ expect(got.plugins[0]?.commands).toEqual([]);
+ expect(got.plugins[1]?.name).toBe("gmail");
+ expect(got.plugins[1]?.commands).toEqual(["fetch"]);
+ expect(got.plugins[1]?.url_patterns).toEqual([]);
+ expect(got.plugins[1]?.source_namespace).toBe("gmail");
+ });
+
  test("archiveEntity POSTs /v1/entities/<id>/archive and returns the archive envelope", async () => {
  let seenUrl = "";
  let seenMethod = "";
