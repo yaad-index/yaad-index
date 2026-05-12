@@ -111,6 +111,7 @@ When the same entity gets re-fetched (e.g., PR-foo updated three times), whether
 - **Workflow-to-workflow chaining** — ergonomic but adds engine complexity.
 - **LLM-involved decisions** — last v1 step at earliest, not first.
 - **External direct plugins** (github / jira / calendar direct) — gmail-via-notifications covers the first-tier workflows. Direct integration is v2.
+- **Emit-notification output type** — listed in the output surface above; deferred unless concrete need surfaces in v1.
 - **Push notifications on fill-gaps needing answer** — operator polls `/v1/needs-fill` in v1.
 
 ## Agent surface
