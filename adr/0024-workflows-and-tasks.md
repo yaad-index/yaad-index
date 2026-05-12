@@ -90,7 +90,7 @@ A workflow's output is one of:
 - **Silent log** — process inline, no task created (Amazon-receipt-shape: the workflow knows what it is, files it, done).
 - **Emit notification** — out-of-v1 unless concrete need surfaces.
 
-**Concurrent writes.** Two workflows may produce output that touches the same on-disk artifact at the same time (a task file, an entity file). v1 protects against file corruption / overwrite via a daemon-internal **global write lock**: only one workflow output materializes to disk at a time. Simple, prevents accidental break / overwrite, defers per-entity correctness logic to a later iteration when concrete patterns demand it.
+**Concurrent writes.** Two workflows — or any two writers (workflow output, UGC mutation, comment addition, edge addition, plugin emit, operator manual write) — may touch the same on-disk artifact at the same time. v1 protects against file corruption / overwrite via a daemon-internal **global write lock** that serializes ALL daemon-side writes, not just workflow outputs. Per-entity concurrency and conflict resolution are deferred to a follow-up iteration tracked separately.
 
 Workflow-to-workflow chaining is **out of v1** (decision deferred from the May 9 trio brainstorm; ergonomic but adds engine complexity).
 
