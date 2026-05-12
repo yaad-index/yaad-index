@@ -37,9 +37,17 @@ A **task** is a workflow's instance — a first-class entity created when a work
 
 - Each task is its own entity with its own ID, frontmatter, and edges.
 - Edges to: the spawning workflow, the source entities the workflow loaded (PR, jira, project, email, etc.).
-- Properties: priority (operator-modifiable), snooze (gmail-style, load-bearing), comments (operator notes, agent-readable on load).
+- Properties: priority (operator-modifiable), snooze (see below), comments (operator notes, agent-readable on load).
 - Close: either operator-marks-done (default) or condition-based per workflow pattern (e.g., PR-merged → auto-close).
 - Auto-archive on done (per ADR-0018 archive lifecycle).
+
+#### Snooze semantics
+
+Operator can snooze a task with an until-time (snooze until tomorrow, until next Monday, until a specific date, etc.). Snoozed tasks are **hidden from normal `task.list`** until the snooze expires. An operator who wants to see them explicitly fetches with an include-snoozed flag.
+
+A snoozed task is **still live** — it continues to accept updates. If new material surfaces while the task is snoozed (a re-trigger that the workflow's de-dup rule routes to the existing task), the task is updated with the new state, but the task stays hidden until the snooze expires. The operator chose to defer the surface, not to disconnect the task from incoming data.
+
+Snooze is operator-controlled, not workflow-controlled — the workflow doesn't get to auto-snooze its own tasks. (A future operator-config knob could permit per-workflow default-snooze for patterns where deferred-by-default makes sense; out of v1.)
 
 Tasks outlive the workflow that spawned them — if a workflow pattern is deleted, its tasks orphan (listable + closable, no re-trigger). This is intentional: the operator's commitment to a task ("I'll review this PR") is independent of the workflow rule that surfaced it.
 
