@@ -39,7 +39,7 @@ A **task** is a workflow's instance — a first-class entity created when a work
 - Edges to: the spawning workflow, the source entities the workflow loaded (PR, jira, project, email, etc.).
 - Properties: priority (operator-modifiable), snooze (see below), comments (operator notes, agent-readable on load).
 - Close: either operator-marks-done (default) or condition-based per workflow pattern (e.g., PR-merged → auto-close).
-- Auto-archive on done (per ADR-0018 archive lifecycle).
+- Auto-archive on done (per ADR-0018 archive lifecycle). Workflow can opt out per-pattern via `auto_archive_on_done: false` for cases where the operator wants the audit trail of completed tasks to stick around.
 
 #### Snooze semantics
 
@@ -180,19 +180,6 @@ The pain point this ADR addresses (context-bundle assembly) is resolved by combi
 - No data migration required. Existing entities are unchanged.
 - Existing implicit operator flows (e.g., Amazon receipt classification, GitHub notification triage) can be formalized as workflows incrementally — first three workflows to ship are Amazon, GitHub, Wolt, drawn from the highest-frequency existing patterns.
 - Vikunja-style external task managers can be deprecated once `task.list` + `task.resolve` cover the operator's daily surface.
-
-## Implementation order (post-ADR)
-
-1. Task entity model — kind name, frontmatter shape, edges-to-source.
-2. Internal event bus — entity-created, edge-added, fill-completed emit + subscribe.
-3. Workflow file parser — frontmatter schema + DSL pick + decision evaluation.
-4. Trigger types — event-bus subscribers + manual + time-based scheduler.
-5. Output dispatchers — task-create, entity-mutate, edge-add, silent-log.
-6. Fill-gap integration — workflow injects gaps, pipeline answers, workflow re-evaluates.
-7. Agent surface tools — `workflow.list/discover/trigger`, `task.list/load/resolve`.
-8. First three concrete workflows — Amazon, GitHub-notifications, Wolt.
-
-Each piece dispatches as its own PR.
 
 ## References
 
