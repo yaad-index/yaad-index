@@ -12,10 +12,10 @@ func TestAssembleEdges_HappyPath(t *testing.T) {
 		From: "from@example.com",
 		To: []string{"to1@example.com", "to2@example.com"},
 		Cc: []string{"cc1@example.com"},
-		Labels: []string{"INBOX", "Job Search/Active", "alice2-ingested", "alice2-skip"},
+		Labels: []string{"INBOX", "Job Search/Active", "yaad-ingested", "yaad-skip"},
 		IsSentFolder: false,
 	}
-	edges := AssembleEdges(pm, "alice2-ingested", "alice2-skip")
+	edges := AssembleEdges(pm, "yaad-ingested", "yaad-skip")
 
 	// Expected:
 	// - 1 is_about → email:gmail-msg-001-example-com
@@ -23,7 +23,7 @@ func TestAssembleEdges_HappyPath(t *testing.T) {
 	// - 2 to
 	// - 1 cc
 	// - 0 bcc (not sent folder)
-	// - 2 tagged_as (INBOX + Job Search/Active; alice2-ingested + alice2-skip filtered)
+	// - 2 tagged_as (INBOX + Job Search/Active; yaad-ingested + yaad-skip filtered)
 	// Total: 7
 	if len(edges) != 7 {
 		t.Errorf("edge count: got %d, want 7; edges=%+v", len(edges), edges)
@@ -97,14 +97,14 @@ func TestAssembleEdges_LabelControlPlaneFilter(t *testing.T) {
 
 	pm := &ParsedMessage{
 		MessageID: "labels@example.com",
-		Labels: []string{"alice2-ingested", "alice2-skip", "INBOX", "Personal"},
+		Labels: []string{"yaad-ingested", "yaad-skip", "INBOX", "Personal"},
 	}
-	edges := AssembleEdges(pm, "alice2-ingested", "alice2-skip")
+	edges := AssembleEdges(pm, "yaad-ingested", "yaad-skip")
 	for _, e := range edges {
 		if e.Type != EdgeTypeTaggedAs {
 			continue
 		}
-		if e.Name == "alice2-ingested" || e.Name == "alice2-skip" {
+		if e.Name == "yaad-ingested" || e.Name == "yaad-skip" {
 			t.Errorf("control-plane label leaked to tagged_as: %+v", e)
 		}
 	}
@@ -128,7 +128,7 @@ func TestAssembleEdges_EmptyControlLabels_DontFilterAnything(t *testing.T) {
 
 	pm := &ParsedMessage{
 		MessageID: "x@example.com",
-		Labels: []string{"alice2-ingested", "alice2-skip", "INBOX"},
+		Labels: []string{"yaad-ingested", "yaad-skip", "INBOX"},
 	}
 	edges := AssembleEdges(pm, "", "")
 	count := 0
@@ -145,7 +145,7 @@ func TestAssembleEdges_EmptyControlLabels_DontFilterAnything(t *testing.T) {
 // TestAssembleEdges_NilMessage returns nil rather than panicking.
 func TestAssembleEdges_NilMessage(t *testing.T) {
 	t.Parallel()
-	edges := AssembleEdges(nil, "alice2-ingested", "alice2-skip")
+	edges := AssembleEdges(nil, "yaad-ingested", "yaad-skip")
 	if edges != nil {
 		t.Errorf("nil message: got %v, want nil", edges)
 	}

@@ -335,7 +335,7 @@ var commentHeadingRow = regexp.MustCompile(`^(\S+)(?:\s+(?:—|-)\s+([^@]+?)(?:\
 //	|----------|
 //	| 2026-05-03 — operator |
 //	| First comment text. |
-//	| 2026-05-03 — alice2 |
+//	| 2026-05-03 — yaad |
 //	| Second comment, may use <br><br> for paragraph breaks. |
 //
 // The first non-separator row is the table's column header (`Comments`)

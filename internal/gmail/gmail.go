@@ -116,8 +116,8 @@ var KnownCanonicalEdgeTypes = []string{
 // + label-flow filter).
 const (
 	DefaultPollingInterval = "5m"
-	DefaultIngestedLabel = "alice2-ingested"
-	DefaultSkipLabel = "alice2-skip"
+	DefaultIngestedLabel = "yaad-ingested"
+	DefaultSkipLabel = "yaad-skip"
 	DefaultIMAPHost = "imap.gmail.com"
 	DefaultIMAPPort = 993
 )

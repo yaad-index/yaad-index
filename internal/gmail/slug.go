@@ -68,8 +68,8 @@ func SourceSlug(subject, rawMessageID string) string {
 
 // EmailCanonicalSlug builds `gmail-<message-id-slug>` for the
 // `email` canonical kind. Provider-prefix + sanitized RFC-822
-// Message-ID per the spec — provider-prefix lets a future alice2-fastmail
-// or alice2-outlook plugin emit non-colliding `email:` ids on the
+// Message-ID per the spec — provider-prefix lets a future yaad-fastmail
+// or yaad-outlook plugin emit non-colliding `email:` ids on the
 // same canonical-graph axis.
 func EmailCanonicalSlug(rawMessageID string) string {
 	mid := MessageIDSlug(rawMessageID)

@@ -282,7 +282,7 @@ type fetchResponse struct {
 
 	// RawContent is the markdown body the daemon writes under the
 	// frontmatter. Per ADR-0015 the daemon wraps it in
-	// `<!-- alice2:plugin start/end -->` markers automatically — this
+	// `<!-- yaad:plugin start/end -->` markers automatically — this
 	// plugin emits plain markdown (title H1 + image embed +
 	// description prose; see renderBody).
 	RawContent string `json:"raw_content,omitempty"`
@@ -511,7 +511,7 @@ func marshalEdges(edges map[string][]bgg.EdgeTarget) map[string][]edgeTargetJSON
 // - description prose only when bg.Data["description"] is non-
 // empty (BGG occasionally has games without description).
 //
-// Per ADR-0015 the daemon wraps this output in `<!-- alice2:plugin
+// Per ADR-0015 the daemon wraps this output in `<!-- yaad:plugin
 // start/end -->` markers on write; the plugin emits PLAIN markdown
 // without the markers. Operator hand-edits to the body (e.g.
 // `## My playthrough notes` appended below the description)

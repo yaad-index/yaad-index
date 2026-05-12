@@ -349,7 +349,7 @@ func Test_Fill_DurableCallback_AcrossStoreReopen(t *testing.T) {
 
 	// Use a real on-disk SQLite file so we can close + re-open it.
 	// In-memory stores wipe on close, which would test the wrong thing.
-	dbPath := t.TempDir() + "/alice2.db"
+	dbPath := t.TempDir() + "/yaad.db"
 
 	// First "session": seed entity + initial vault file.
 	{

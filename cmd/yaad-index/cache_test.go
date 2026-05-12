@@ -368,7 +368,7 @@ func TestCachePurgeCmd_PluginFilter(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	dbPath := filepath.Join(t.TempDir(), "alice2.db")
+	dbPath := filepath.Join(t.TempDir(), "yaad.db")
 	w, err := vault.NewWriter(root)
 	require.NoError(t, err)
 
@@ -408,7 +408,7 @@ func TestCachePurgeCmd_OlderThanOverride(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	dbPath := filepath.Join(t.TempDir(), "alice2.db")
+	dbPath := filepath.Join(t.TempDir(), "yaad.db")
 	w, err := vault.NewWriter(root)
 	require.NoError(t, err)
 
@@ -459,7 +459,7 @@ func TestCachePurgeCmd_OlderThanInvalidDuration(t *testing.T) {
 func writePurgeFixture(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()
-	dbPath := filepath.Join(t.TempDir(), "alice2.db")
+	dbPath := filepath.Join(t.TempDir(), "yaad.db")
 	w, err := vault.NewWriter(root)
 	require.NoError(t, err)
 

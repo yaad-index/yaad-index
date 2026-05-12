@@ -245,7 +245,7 @@ func TestComments_HandEditPicksUpInBodyThenAPIAppendKeepsBoth(t *testing.T) {
 	assert.Equal(t, "alice", got.Comments[1].Author)
 }
 
-// TestComments_StaleWriterOverwritesBodyHandEdit pins alice2's review-
+// TestComments_StaleWriterOverwritesBodyHandEdit pins yaad's review-
 // note property: an API-appended comment surviving a subsequent
 // vault.Writer.Write that doesn't first read is the staleness window
 // the vault package documents (see internal/vault/entity.go). A

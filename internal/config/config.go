@@ -154,7 +154,7 @@ type Config struct {
 	// emitted fetched_at after PR-D) per yaad-index.
 	// Examples: "America/Los_Angeles", "Asia/Tokyo", "America/New_York".
 	//
-	// Empty / missing → "UTC" (preserves legacy behavior). alice2-
+	// Empty / missing → "UTC" (preserves legacy behavior). yaad-
 	// index is a single-operator system so the configured TZ
 	// applies everywhere — there is no per-request / per-route
 	// override.

@@ -24,7 +24,7 @@ func TestMarshal_CommentCountFrontmatterAndBodyTable(t *testing.T) {
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
 				Text: "First comment text.",
-				Author: "alice2",
+				Author: "yaad",
 			},
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
@@ -48,7 +48,7 @@ func TestMarshal_CommentCountFrontmatterAndBodyTable(t *testing.T) {
 		"",
 		"| Comments |",
 		"|----------|",
-		"| 2026-05-03 — alice2 |",
+		"| 2026-05-03 — yaad |",
 		"| First comment text. |",
 		"| 2026-05-03 — operator |",
 		"| Second comment. |",
@@ -58,7 +58,7 @@ func TestMarshal_CommentCountFrontmatterAndBodyTable(t *testing.T) {
 	}
 	// Strict ordering: the heading row for entry 1 comes before the
 	// body row for entry 1, which comes before entry 2's heading.
-	idx1Head := strings.Index(out, "| 2026-05-03 — alice2 |")
+	idx1Head := strings.Index(out, "| 2026-05-03 — yaad |")
 	idx1Body := strings.Index(out, "| First comment text. |")
 	idx2Head := strings.Index(out, "| 2026-05-03 — operator |")
 	idx2Body := strings.Index(out, "| Second comment. |")
@@ -103,7 +103,7 @@ func TestMarshal_CommentsRoundTrip(t *testing.T) {
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
 				Text: "First comment.",
-				Author: "alice2",
+				Author: "yaad",
 			},
 			{
 				Date: mustParseTime(t, "2026-05-04T00:00:00Z"),
@@ -142,7 +142,7 @@ func TestMarshal_CommentsMultiParagraphRoundTrip(t *testing.T) {
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
 				Text: "First paragraph.\n\nSecond paragraph after a blank line.\n\nThird paragraph.",
-				Author: "alice2",
+				Author: "yaad",
 			},
 		},
 	}
@@ -177,7 +177,7 @@ func TestMarshal_CommentsPipeEscape(t *testing.T) {
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
 				Text: "Has a | pipe inside the cell text.",
-				Author: "alice2",
+				Author: "yaad",
 			},
 		},
 	}
@@ -235,9 +235,9 @@ func TestMarshal_CommentsHeadingRowFormat(t *testing.T) {
 			comment: Comment{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
 				Text: "x",
-				Author: "alice2",
+				Author: "yaad",
 			},
-			wantRow: "| 2026-05-03 — alice2 |",
+			wantRow: "| 2026-05-03 — yaad |",
 		},
 		{
 			name: "no author",
@@ -292,7 +292,7 @@ func TestUnmarshal_CommentsOrphanedHeadingRowFlushesAsEmptyBody(t *testing.T) {
 				"",
 				"| Comments |",
 				"|----------|",
-				"| 2026-05-03 — alice2 |",
+				"| 2026-05-03 — yaad |",
 				// no body row; section ends here.
 			}, "\n"),
 		},
@@ -310,7 +310,7 @@ func TestUnmarshal_CommentsOrphanedHeadingRowFlushesAsEmptyBody(t *testing.T) {
 				"",
 				"| Comments |",
 				"|----------|",
-				"| 2026-05-03 — alice2 |",
+				"| 2026-05-03 — yaad |",
 				"",
 				"## Notes", // unknown heading flips back to clean
 				"",
@@ -325,7 +325,7 @@ func TestUnmarshal_CommentsOrphanedHeadingRowFlushesAsEmptyBody(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, got.Comments, 1,
 				"orphaned heading must land as a comment with empty Text, not be dropped")
-			assert.Equal(t, "alice2", got.Comments[0].Author)
+			assert.Equal(t, "yaad", got.Comments[0].Author)
 			assert.Empty(t, got.Comments[0].Text,
 				"empty Text is the signal that the heading was authored without a paired body")
 			assert.Equal(t, "2026-05-03", got.Comments[0].Date.UTC().Format("2006-01-02"))

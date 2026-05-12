@@ -82,7 +82,7 @@ func In(t time.Time) time.Time {
 }
 
 // LogTimeAttr is the slog ReplaceAttr that rewrites the built-in
-// `time` attribute to the operator-configured location (per alice2-
+// `time` attribute to the operator-configured location (per yaad-
 // index PR-C). Pass it on slog.HandlerOptions.ReplaceAttr so
 // every log line carries the operator-TZ timestamp instead of
 // slog's default Local-or-UTC.

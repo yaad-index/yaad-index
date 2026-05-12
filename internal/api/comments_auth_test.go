@@ -143,8 +143,8 @@ func TestCommentsAuth_MismatchedAuthor_403(t *testing.T) {
 	tok := mintToken(t, signer, "bob", "alice")
 
 	rec := postAuthedComment(t, h, commentsAuthTestEntityID, tok, map[string]any{
-		"text": "alice2 trying to post as bob",
-		"author": "alice2", // disagrees with the JWT sub
+		"text": "yaad trying to post as bob",
+		"author": "yaad", // disagrees with the JWT sub
 	})
 	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
 	var er errorResponse

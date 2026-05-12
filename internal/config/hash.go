@@ -77,7 +77,7 @@ func ConfigHash(canonicalKinds map[string]CanonicalKindConfig, canonicalEdgeType
 	// Sort a defensive copy so the caller's slice ordering is
 	// preserved upstream; only the hashed view sees the canonical
 	// (sorted) order. Matches `/v1/structure`'s pre-hash sort
-	// (alice2's a prior PR review note + a prior PR contract).
+	// (yaad's a prior PR review note + a prior PR contract).
 	sortedEdges := make([]string, len(canonicalEdgeTypes))
 	copy(sortedEdges, canonicalEdgeTypes)
 	sort.Strings(sortedEdges)

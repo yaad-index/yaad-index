@@ -98,9 +98,9 @@ func TestBuildSearchPredicate(t *testing.T) {
 	cases := []struct {
 		name, ingested, skip, want string
 	}{
-		{"both populated", "alice2-ingested", "alice2-skip", "-label:alice2-ingested -label:alice2-skip"},
-		{"only ingested", "alice2-ingested", "", "-label:alice2-ingested"},
-		{"only skip", "", "alice2-skip", "-label:alice2-skip"},
+		{"both populated", "yaad-ingested", "yaad-skip", "-label:yaad-ingested -label:yaad-skip"},
+		{"only ingested", "yaad-ingested", "", "-label:yaad-ingested"},
+		{"only skip", "", "yaad-skip", "-label:yaad-skip"},
 		{"both empty (operator opted out)", "", "", ""},
 	}
 	for _, tc := range cases {

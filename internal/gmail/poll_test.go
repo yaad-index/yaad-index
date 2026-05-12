@@ -203,7 +203,7 @@ func TestPoller_Tick_HappyPath_IngestsAllUningested(t *testing.T) {
 		&fakeMessage{UID: 2, MessageID: "b@x", Subject: "second", From: "bob@x.com", Folder: InboxFolderName},
 	)
 	rec := &recordingEmit{}
-	p := NewPoller(fc, "alice2-ingested", "alice2-skip", rec.emit, nil)
+	p := NewPoller(fc, "yaad-ingested", "yaad-skip", rec.emit, nil)
 
 	count, errs := p.Tick(context.Background())
 	require.Empty(t, errs, "no per-cycle errors on happy path")
@@ -215,8 +215,8 @@ func TestPoller_Tick_HappyPath_IngestsAllUningested(t *testing.T) {
 
 	// Both messages got the ingested label written.
 	assert.ElementsMatch(t, []uint32{1, 2}, fc.markIngestedLog)
-	assert.Contains(t, fc.messages[0].Labels, "alice2-ingested")
-	assert.Contains(t, fc.messages[1].Labels, "alice2-ingested")
+	assert.Contains(t, fc.messages[0].Labels, "yaad-ingested")
+	assert.Contains(t, fc.messages[1].Labels, "yaad-ingested")
 }
 
 // TestPoller_Tick_SkipLabel_BlocksIngest: messages carrying
@@ -227,12 +227,12 @@ func TestPoller_Tick_SkipLabel_BlocksIngest(t *testing.T) {
 	skipped := &fakeMessage{
 		UID: 1, MessageID: "skip@x", Subject: "skipped", From: "x@y.com",
 		Folder: InboxFolderName,
-		Labels: map[string]struct{}{"alice2-skip": {}},
+		Labels: map[string]struct{}{"yaad-skip": {}},
 	}
 	allowed := &fakeMessage{UID: 2, MessageID: "ok@x", Subject: "allowed", From: "x@y.com", Folder: InboxFolderName}
 	fc := newFakeClient(skipped, allowed)
 	rec := &recordingEmit{}
-	p := NewPoller(fc, "alice2-ingested", "alice2-skip", rec.emit, nil)
+	p := NewPoller(fc, "yaad-ingested", "yaad-skip", rec.emit, nil)
 
 	count, errs := p.Tick(context.Background())
 	require.Empty(t, errs)
@@ -250,13 +250,13 @@ func TestPoller_Tick_RefetchOnLabelRemoval(t *testing.T) {
 	m := &fakeMessage{UID: 1, MessageID: "refetch@x", Subject: "subject", From: "x@y.com", Folder: InboxFolderName}
 	fc := newFakeClient(m)
 	rec := &recordingEmit{}
-	p := NewPoller(fc, "alice2-ingested", "alice2-skip", rec.emit, nil)
+	p := NewPoller(fc, "yaad-ingested", "yaad-skip", rec.emit, nil)
 
 	// Cycle 1: ingest + mark.
 	count1, errs := p.Tick(context.Background())
 	require.Empty(t, errs)
 	assert.Equal(t, 1, count1, "cycle 1 ingests")
-	assert.Contains(t, m.Labels, "alice2-ingested", "cycle 1 marks")
+	assert.Contains(t, m.Labels, "yaad-ingested", "cycle 1 marks")
 
 	// Cycle 2 (no label removal): nothing to do.
 	count2, errs := p.Tick(context.Background())
@@ -264,7 +264,7 @@ func TestPoller_Tick_RefetchOnLabelRemoval(t *testing.T) {
 	assert.Equal(t, 0, count2, "cycle 2 no-op when label still present")
 
 	// Operator removes the label on Gmail-side (test simulation).
-	delete(m.Labels, "alice2-ingested")
+	delete(m.Labels, "yaad-ingested")
 
 	// Cycle 3: refetch re-runs the same search predicate, finds the
 	// message in the fetch set, re-ingests.
@@ -286,13 +286,13 @@ func TestPoller_Tick_RestartSafe_NoClientStateNeeded(t *testing.T) {
 		&fakeMessage{UID: 2, MessageID: "b@x", Subject: "second", From: "x@y.com", Folder: InboxFolderName},
 	)
 	rec1 := &recordingEmit{}
-	p1 := NewPoller(fc, "alice2-ingested", "alice2-skip", rec1.emit, nil)
+	p1 := NewPoller(fc, "yaad-ingested", "yaad-skip", rec1.emit, nil)
 	count1, _ := p1.Tick(context.Background())
 	assert.Equal(t, 2, count1, "poller-1 ingests both")
 
 	// Simulate restart: brand new poller against the same client.
 	rec2 := &recordingEmit{}
-	p2 := NewPoller(fc, "alice2-ingested", "alice2-skip", rec2.emit, nil)
+	p2 := NewPoller(fc, "yaad-ingested", "yaad-skip", rec2.emit, nil)
 	count2, _ := p2.Tick(context.Background())
 	assert.Equal(t, 0, count2, "poller-2 finds nothing (state on Gmail)")
 	assert.Empty(t, rec2.envelopes, "poller-2 emits zero envelopes — restart-safe")
@@ -312,7 +312,7 @@ func TestPoller_Tick_BccOnSentFolderOnly(t *testing.T) {
 		},
 	)
 	rec := &recordingEmit{}
-	p := NewPoller(fc, "alice2-ingested", "alice2-skip", rec.emit, nil)
+	p := NewPoller(fc, "yaad-ingested", "yaad-skip", rec.emit, nil)
 	count, errs := p.Tick(context.Background())
 	require.Empty(t, errs)
 	assert.Equal(t, 1, count)
@@ -338,7 +338,7 @@ func TestPoller_Tick_MarkIngestedFailure_DoesNotLoseMessage(t *testing.T) {
 	)
 	fc.failMarkIngested = true
 	rec := &recordingEmit{}
-	p := NewPoller(fc, "alice2-ingested", "alice2-skip", rec.emit, nil)
+	p := NewPoller(fc, "yaad-ingested", "yaad-skip", rec.emit, nil)
 
 	count, errs := p.Tick(context.Background())
 	assert.Equal(t, 0, count, "ingest count excludes mark-failed messages")
@@ -363,7 +363,7 @@ func TestPoller_Tick_EmptyIngestedLabel_DisablesAutoWrite(t *testing.T) {
 		&fakeMessage{UID: 1, MessageID: "a@x", Subject: "first", From: "x@y.com", Folder: InboxFolderName},
 	)
 	rec := &recordingEmit{}
-	p := NewPoller(fc, "", "alice2-skip", rec.emit, nil)
+	p := NewPoller(fc, "", "yaad-skip", rec.emit, nil)
 
 	count1, _ := p.Tick(context.Background())
 	count2, _ := p.Tick(context.Background())

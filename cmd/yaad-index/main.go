@@ -37,7 +37,7 @@ import (
 // ServeCmd implements `yaad-index serve`.
 type ServeCmd struct {
 	Bind string `name:"bind" env:"YAAD_INDEX_BIND" default:"localhost:7433" help:"host:port to bind the HTTP server to."`
-	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/alice2.db" help:"path to the SQLite database file (auto-created on first run)."`
+	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/yaad.db" help:"path to the SQLite database file (auto-created on first run)."`
 	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file (per ADR-0006). Missing file → no plugins; broken file → fail-fast."`
 	AuthRequired *bool `name:"auth-required" env:"YAAD_INDEX_AUTH_REQUIRED" help:"require Bearer JWT on protected routes (per yaad-index). Default true; pass --auth-required=false (or set YAAD_INDEX_AUTH_REQUIRED=false) for dev mode. Lowest priority is auth.required in the config file."`
 	KeysDir string `name:"keys-dir" env:"YAAD_INDEX_KEYS_DIR" help:"override auth.keys_dir from the config file. Public-key (public.pem) is loaded from here at startup to verify Bearer JWTs. Default /etc/yaad-index/keys/."`
@@ -320,7 +320,7 @@ type CLI struct {
 // (mtime + content hash per file); --full forces a complete drop +
 // rebuild. Mirrors POST /v1/reindex.
 type ReindexCmd struct {
-	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/alice2.db" help:"path to the SQLite database file (matches the serve subcommand)."`
+	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/yaad.db" help:"path to the SQLite database file (matches the serve subcommand)."`
 	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file. vault.path is read from here unless --vault-path overrides."`
 	VaultPath string `name:"vault-path" env:"YAAD_INDEX_VAULT_PATH" help:"override vault root (otherwise read from config.vault.path). Must be absolute."`
 	Full bool `name:"full" help:"drop every entity, edge, and provenance row before rebuilding (default: incremental)."`
@@ -429,7 +429,7 @@ type PluginsCmd struct {
 // drops the single named row. The next server start re-inits each
 // plugin from scratch and re-populates the cache.
 type PluginsClearCacheCmd struct {
-	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/alice2.db" help:"path to the SQLite database file (matches the serve subcommand)."`
+	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/yaad.db" help:"path to the SQLite database file (matches the serve subcommand)."`
 	Name string `name:"name" help:"clear only the named plugin's cache row; omit to clear all."`
 }
 
@@ -469,7 +469,7 @@ func (c *PluginsClearCacheCmd) Run() error {
 // to load the new Capabilities into the running registry. Hot-
 // reload via an admin route is out of scope for v1 Per the prior design,.
 type PluginsReprobeCmd struct {
-	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/alice2.db" help:"path to the SQLite database file (matches the serve subcommand)."`
+	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/yaad.db" help:"path to the SQLite database file (matches the serve subcommand)."`
 	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file. Required — reprobe needs to know each plugin's binary path."`
 	Name string `name:"name" help:"reprobe only the named plugin; omit to reprobe all configured plugins."`
 }
@@ -833,7 +833,7 @@ func buildPluginRegistry(logger *slog.Logger, st store.Store, cfg *config.Config
 //
 // Per the log-level map agreed the operators 07:25Z, plus the
 // probe-failure path added Per the prior design, (the seventh implicit path
-// alice2's a prior PR review flagged):
+// yaad's a prior PR review flagged):
 //
 // - INFO cache hit — `plugin registered` line at
 // INFO already emitted by the caller; no extra line here.
@@ -903,7 +903,7 @@ func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, na
 		// with first-start (the cache wasn't consultable). The INFO
 		// breadcrumb lets operators distinguish "no cache row" from
 		// "probe broken" when tailing logs — closes the seventh
-		// implicit path alice2's a prior PR review flagged.
+		// implicit path yaad's a prior PR review flagged.
 		logger.Info("plugin version probe failed; falling through to --init",
 			"name", name,
 			"err", probeErr,
@@ -938,7 +938,7 @@ func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, na
 // operator can decide whether to enable it or accept the silent
 // drop.
 //
-// Per alice2's review on the plan: skip the positive-confirmation
+// Per yaad's review on the plan: skip the positive-confirmation
 // case (plugin declares X, operator has X enabled) — operators
 // don't need the noise. Only emit on gaps.
 func warnCanonicalEmissionGaps(logger *slog.Logger, registry *plugins.Registry, guard *config.CanonicalGuard) {
@@ -966,7 +966,7 @@ func warnCanonicalEmissionGaps(logger *slog.Logger, registry *plugins.Registry, 
 // expandPath resolves a leading "~/" against the current user's home
 // directory. kong's default tag is a literal string and does not expand
 // shell variables; doing the expansion here keeps the default ergonomic
-// (`~/.local/share/yaad-index/alice2.db`) without pulling kong into a
+// (`~/.local/share/yaad-index/yaad.db`) without pulling kong into a
 // custom mapper.
 func expandPath(p string) (string, error) {
 	if !strings.HasPrefix(p, "~/") && p != "~" {

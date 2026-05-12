@@ -348,7 +348,7 @@ type Boardgame struct {
 	// specific annotations (year-suffix, parens-disambig, mid-name
 	// `: ` series-separator → single space) per the plugin-side
 	// canonical-name-production responsibility split. Both feed
-	// daemon's slug.Slug; cross-plugin convergence with alice2-
+	// daemon's slug.Slug; cross-plugin convergence with yaad-
 	// wikipedia's `is_about` edge target on the same boardgame /
 	// person works because both sides emit the same descriptive
 	// canonical name.
