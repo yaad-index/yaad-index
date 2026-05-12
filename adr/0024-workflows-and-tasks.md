@@ -53,11 +53,13 @@ Tasks outlive the workflow that spawned them — if a workflow pattern is delete
 
 The daemon emits internal events that workflows can subscribe to:
 
-- `entity.created` — new entity added by any plugin.
-- `entity.edge_added` — new edge attached to an entity.
-- `fill.completed` — a gap-fill landed on an entity.
+- `entity.created` — new entity added by any plugin (fresh-ingest only; not re-fetch of an already-known entity).
+- `entity.edge_added` — new edge attached to an entity. Fires on every ingest that produces a new connection — including cache-hit re-fetches of a known entity that surface new edges, and operator-side manual edge adds.
+- `fill.completed` — a gap-fill landed on an entity. Fires on every fill, including workflow-injected gap-fills evaluating during re-fetch.
 
 This is the load-bearing piece. Without an internal event bus, workflows can only react to "new external thing came in via ingest" and the fill-gap integration described below collapses. With it, workflows become reactive to the index itself, not just external input — which is what differentiates a workflow from a glorified gmail rule.
+
+**Cache-hit re-fetch semantics.** Re-fetch of a known entity does NOT re-fire `entity.created` (the entity already exists). Workflows that need to react to changes from re-fetch subscribe to `entity.edge_added` instead — a re-fetch surfacing a new connection (a news article gaining a topic-link, a PR gaining a new reviewer) fires `entity.edge_added` and the workflow re-evaluates from there. A workflow watching a topic entity for incoming `is_about` edges sees every new article tagged to that topic without needing a sibling "fetched" event.
 
 ### Fill-gap injection (third filler-source)
 
@@ -103,7 +105,18 @@ Non-blocking: the task still surfaces, the operator sees the incomplete-context 
 
 ### Per-pattern de-duplication
 
-When the same entity gets re-fetched (e.g., PR-foo updated three times), whether the workflow spawns three tasks or updates one is **declared per workflow**. Each pattern owns its de-dup rule.
+When the same entity gets re-triggered (e.g., PR-foo gets 3 review-request emails over 2 days), the workflow should not spawn 3 separate tasks. De-dup is declared per workflow as a key that scopes "same situation."
+
+The default key is `workflow + entity_id`: one task per workflow per source entity. A PR-review workflow keyed on `entity_id` produces one task for PR-123 — subsequent ingest events touching PR-123 update that existing task rather than creating new ones. Concrete example: an operator gets the initial PR-review-request email, then a ping-reminder a day later; the second email's workflow fire updates the existing task (with the latest PR state from the cache) instead of creating a duplicate.
+
+For workflows whose "same situation" is time-windowed rather than entity-keyed (a daily morning-brief, a weekly summary), the key extends to include the window: `workflow + entity_id + day` or `workflow + week`.
+
+Policy when a duplicate key fires:
+- `update` (default) — modify the existing task with the new data; useful when the task surfaces a live entity that's getting refreshed.
+- `skip` — no-op; useful when subsequent triggers are noise.
+- `replace` — close the old task, create a new one; useful when each fire is a distinct moment to surface.
+
+Workflows declare both the key and the policy. Implementation may extend the key vocabulary as patterns surface.
 
 ## Out of v1 (explicit)
 
