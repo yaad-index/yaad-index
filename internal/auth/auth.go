@@ -1,7 +1,7 @@
-// Package auth scaffolds alice2-index's pair-claim JWT authentication
-// (per alice2-index a prior PR of the auth series). RS256 signing /
+// Package auth scaffolds yaad-index's pair-claim JWT authentication
+// (per yaad-index a prior PR of the auth series). RS256 signing /
 // verification + RS256 keypair generation + helpers used by the
-// `alice2-index keygen` and `alice2-index issue-token` CLI subcommands.
+// `yaad-index keygen` and `yaad-index issue-token` CLI subcommands.
 //
 // Pair-claim model (designed with the operator 2026-05-05): every token
 // carries a `sub` (the agent — the actor that called the API)
@@ -16,7 +16,7 @@
 // lands the building blocks; the wire-side integration follows.
 //
 // **Security note**: the private key MUST live alongside
-// operational config (default `/etc/alice2-index/keys/`), never
+// operational config (default `/etc/yaad-index/keys/`), never
 // inside the vault. Per The operator: "the key should not be in vault.
 // Then an agent can trick index to return it and then it is bad."
 
@@ -40,12 +40,12 @@ import (
 // Default key id for v1 — single shared kid per ADR-0013-style
 // "default to a single shared kid in v1; rotation is a future
 // follow-up." Per-pair kids land in a later PR.
-const defaultKeyID = "alice2-index-default"
+const defaultKeyID = "yaad-index-default"
 
 // Issuer is the `iss` claim stamped on every token. Constant
 // across the cluster; verification rejects tokens carrying any
 // other issuer.
-const tokenIssuer = "alice2-index"
+const tokenIssuer = "yaad-index"
 
 // Filenames within the configured keys directory. Locked so
 // keygen + LoadSigner + LoadVerifier agree without a separate
@@ -58,10 +58,10 @@ const (
 // rsaKeySize is the RS256 modulus bits. 2048 is the OpenSSL
 // default and meets current cryptographic guidance through 2030+.
 // 4096 is overkill for v1; if a future operator needs it, lift
-// this to a flag on `alice2-index keygen`.
+// this to a flag on `yaad-index keygen`.
 const rsaKeySize = 2048
 
-// Claim is the pair-claim payload (per alice2-index). A
+// Claim is the pair-claim payload (per yaad-index). A
 // signed JWT carries this verbatim; verification returns it
 // after signature + issuer + expiry checks pass.
 type Claim struct {
@@ -73,7 +73,7 @@ type Claim struct {
 }
 
 // IsOperatorOnly reports whether this claim represents an operator
-// acting directly (not via an agent). Per alice2-index, CLI
+// acting directly (not via an agent). Per yaad-index, CLI
 // dispatch endpoints (command-shape input on /v1/ingest) require
 // operator-only authority — the operator's command-issue surface
 // is too privileged to delegate to an agent.
@@ -319,7 +319,7 @@ func LoadVerifier(keysDir string) (Verifier, error) {
 //	<keysDir>/public.pem (PKIX PEM, mode 0644)
 //
 // Mode 0600 on the private key is load-bearing — the file should
-// be readable only by the alice2-index process. The directory is
+// be readable only by the yaad-index process. The directory is
 // expected to exist; GenerateKeypair does not create it (the
 // operator's deployment manifest mounts it).
 func GenerateKeypair(keysDir string, force bool) error {

@@ -18,7 +18,7 @@
 // **Re-fetch hygiene.** The Dispatcher is given the previous fetch's
 // `(role, uri)` set. A `(role, uri)` that matches a prior emission
 // short-circuits the fetch and leaves the existing on-disk file
-// untouched (per ADR-0014 §4). force-refetch (per alice2-index)
+// untouched (per ADR-0014 §4). force-refetch (per yaad-index)
 // bypasses this comparison and unconditionally refetches.
 //
 // **UGC preservation.** When a plugin emits no attachments on a

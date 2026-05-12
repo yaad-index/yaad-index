@@ -49,7 +49,7 @@ func NewReader(vaultRoot string) (*Reader, error) {
 // three layouts:
 //
 // - active source-shape: `<root>/<kind>/<slug>.md`
-// - canonical-label (per ADR-0021 amendment / alice2-index
+// - canonical-label (per ADR-0021 amendment / yaad-index
 // phase D): `<root>/ct/<kind>/<slug>.md`
 // - archived (per ADR-0018 step 2): `<root>/_archive/<kind>/<slug>.md`
 //
@@ -123,7 +123,7 @@ func (r *Reader) pathFor(kind, id string) (string, error) {
 
 // canonicalLabelPathFor mirrors pathFor for the
 // `ct/<kind>/<slug>.md` layout introduced by ADR-0021's
-// amendment (alice2-index phase D): operator-fill auto-
+// amendment (yaad-index phase D): operator-fill auto-
 // materialize against a canonical-label entity writes to this
 // path rather than the per-kind default. Used by ReadByID's
 // chained fallback so subsequent reads find the file regardless

@@ -53,7 +53,7 @@ func Test_Health_Returns200WithOK(t *testing.T) {
 // Test_Health_NoStoreOrRegistryDependency proves the handler is a
 // pure liveness probe — works without any store or plugin wiring. A
 // /v1/health that requires a healthy store would force operators
-// using alice2-index in degraded modes (e.g. read-only filesystem)
+// using yaad-index in degraded modes (e.g. read-only filesystem)
 // into false-negative alerts.
 func Test_Health_NoStoreOrRegistryDependency(t *testing.T) {
 	t.Parallel()

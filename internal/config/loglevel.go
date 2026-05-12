@@ -8,7 +8,7 @@ import (
 
 // DefaultLogLevel is the level applied when `log_level:` is omitted
 // from the config (or the config file itself is missing). Matches
-// the historical hardcoded value in cmd/alice2-index, so adding the
+// the historical hardcoded value in cmd/yaad-index, so adding the
 // new key with no value is observationally equivalent to the
 // legacy behavior.
 const DefaultLogLevel = slog.LevelInfo

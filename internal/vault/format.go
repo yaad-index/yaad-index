@@ -14,7 +14,7 @@ import (
 
 // ErrMalformedFrontmatter is returned by the reader when the file does
 // not begin with a `---`-delimited YAML frontmatter block. The reader
-// requires frontmatter; a vault file without it is not a alice2-index
+// requires frontmatter; a vault file without it is not a yaad-index
 // entity and is rejected at the boundary.
 var ErrMalformedFrontmatter = errors.New("malformed frontmatter")
 
@@ -58,7 +58,7 @@ type frontmatter struct {
 // otherwise from `data.title`. Empty/nil set falls back to data.title
 // only — useful for tests and source-shape-only deployments.
 //
-// Per alice2-index the source issue a prior PR, plugin-emitted aliases on
+// Per yaad-index the source issue a prior PR, plugin-emitted aliases on
 // `e.Aliases` merge with the title-synthesized one — synthesized
 // first (deterministic), plugin entries appended in input order,
 // duplicates dropped. Empty plugin set leaves only the synthesized
@@ -203,7 +203,7 @@ func synthesizeAliases(e *Entity, canonicalKinds []string) []string {
 
 // mergeAliases interleaves the ADR-0011 title-synthesized alias
 // list (`synth`, typically zero or one element in v1) with the
-// plugin-emitted aliases from `e.Aliases` (per alice2-index issue
+// plugin-emitted aliases from `e.Aliases` (per yaad-index issue
 // a prior PR). Synthesized entries land first for deterministic
 // ordering; duplicate strings (case-sensitive exact match) are
 // dropped. nil/empty inputs yield nil — the frontmatter then
@@ -314,7 +314,7 @@ var commentTableSeparator = regexp.MustCompile(`^\|\s*-+\s*\|\s*$`)
 // `<date> — <author> @ <operator>` from a comment-table heading row's
 // cell content. Date is a single non-whitespace token (RFC3339 or
 // YYYY-MM-DD; both are dash-only safe). Operator is optional and
-// trailing — pre-alice2-index vault files end at the author and
+// trailing — pre-yaad-index vault files end at the author and
 // the parser must round-trip those without inventing an operator.
 //
 // Group 1: date. Group 2: author (may be empty when only date present;
@@ -585,7 +585,7 @@ func writeCommentsSection(w *bytes.Buffer, comments []Comment) {
 		// is YYYY-MM-DD (not RFC3339) — the table is operator-readable
 		// shorthand; the underlying time.Time keeps the precision the
 		// API layer needs. Operator suffix is omitted when empty so
-		// pre-alice2-index comments render unchanged (backward-
+		// pre-yaad-index comments render unchanged (backward-
 		// compat); without an author, the operator suffix is also
 		// omitted (operator-without-agent is a parse anomaly).
 		w.WriteString("| ")

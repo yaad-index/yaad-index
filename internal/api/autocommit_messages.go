@@ -1,4 +1,4 @@
-// Per alice2-index the source issue — commit-message templates the auto-commit
+// Per yaad-index the source issue — commit-message templates the auto-commit
 // pipeline stamps onto vault writes. Each handler builds a message
 // from per-operation context and hands it to vault.Writer.WriteWithCommit.
 
@@ -50,7 +50,7 @@ func fillCommitMessage(entityID string, fields map[string]any) string {
 }
 
 // userContentCreateCommitMessage produces the audit line for a UGC
-// create write per alice2-index.
+// create write per yaad-index.
 //
 // Template: create: <entity-id> by <author>
 func userContentCreateCommitMessage(entityID, author string) string {
@@ -61,7 +61,7 @@ func userContentCreateCommitMessage(entityID, author string) string {
 }
 
 // userContentEditCommitMessage produces the audit line for a UGC
-// section-replace write per alice2-index.
+// section-replace write per yaad-index.
 //
 // Template: edit: <entity-id> [section <sec-addr>] by <author>
 func userContentEditCommitMessage(entityID, secAddr, author string) string {
@@ -72,7 +72,7 @@ func userContentEditCommitMessage(entityID, secAddr, author string) string {
 }
 
 // userContentFrontmatterEditCommitMessage produces the audit line
-// for a UGC frontmatter-replace write per alice2-index. Distinct
+// for a UGC frontmatter-replace write per yaad-index. Distinct
 // prefix `edit-frontmatter:` so a `git log` scan distinguishes
 // frontmatter edits (data-map + canonical-edge re-derivation) from
 // section-body edits.

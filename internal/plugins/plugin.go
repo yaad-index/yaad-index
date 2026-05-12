@@ -46,7 +46,7 @@ type Plugin interface {
 	// Options non-empty → disambiguation; Entity set with non-empty
 	// Gaps → needs_fill; Entity alone → complete. Plugins do not know
 	// about protocol state names — the contract is "emit data, let
-	// alice2-index label." When Entity is set it must have stable ID +
+	// yaad-index label." When Entity is set it must have stable ID +
 	// Kind; Provenance is recommended (the tracker synthesizes a
 	// fallback if a plugin omits it).
 	//
@@ -109,7 +109,7 @@ type Capabilities struct {
 	// CanonicalKindsEmitted names the canonical-shape entity kinds
 	// this plugin MAY emit alongside its source-shape entities (per
 	// ADR-0008 + the cold-reviewer's a prior PR review note 2). Plugins declare these
-	// at --init time so alice2-index startup can warn operators when
+	// at --init time so yaad-index startup can warn operators when
 	// a plugin proposes a canonical kind that isn't enabled in the
 	// operator's `canonical_kinds:` config — surfacing the
 	// discoverability gap that's otherwise silent.
@@ -125,7 +125,7 @@ type Capabilities struct {
 	CanonicalEdgeTypesEmitted []string `json:"canonical_edge_types_emitted,omitempty"`
 
 	// SupportsSearch declares that the plugin opts in to the
-	// upstream-search dispatch surface (per alice2-index the source issue
+	// upstream-search dispatch surface (per yaad-index the source issue
 	// a prior PR). When `POST /v1/search/upstream` fans a query out
 	// across registered plugins (a prior PR), only plugins with this
 	// flag set are invoked. Plugins not opting in are silently
@@ -157,7 +157,7 @@ type Capabilities struct {
 	CanonicalKindsExtras map[string]CanonicalKindExtras `json:"canonical_kinds_extras,omitempty"`
 
 	// CacheTTLSeconds is the plugin-level TTL declaration in the
-	// three-level resolution chain (per alice2-index). Used when
+	// three-level resolution chain (per yaad-index). Used when
 	// no per-entry override exists in the entity's frontmatter and
 	// the operator's global `cache_ttl_seconds` config is also 0.
 	// Sentinel rules — identical at every level:
@@ -229,7 +229,7 @@ type CanonicalKindExtras struct {
 //
 // ADR-0019 step 3 extends the JSON wire shape with the typed-gap
 // fields the operator-config side already accepts (per ADR-0019
-// step 2 / alice2-index):
+// step 2 / yaad-index):
 //
 // - FillStrategy: "agent" | "operator" | "both" (default "both")
 // - Range: [min, max] for type=int
@@ -248,7 +248,7 @@ type GapSpec struct {
 	MaxLength int `json:"max_length,omitempty"`
 	Values []string `json:"values,omitempty"`
 	// Kinds is the canonical-kind allowlist for the
-	// `type: "canonical_type"` gap shape per alice2-index.
+	// `type: "canonical_type"` gap shape per yaad-index.
 	// Two wire shapes (resolved by UnmarshalJSON):
 	//
 	// - Bare string `"*"`: wildcard — any canonical kind in the
@@ -278,7 +278,7 @@ type gapSpecJSON struct {
 }
 
 // UnmarshalJSON accepts the bare-string shorthand AND the typed
-// long form. Mirrors config.GapSpec.UnmarshalYAML (alice2-index)
+// long form. Mirrors config.GapSpec.UnmarshalYAML (yaad-index)
 // so a plugin's Capabilities document and the operator's YAML
 // config decode through the same value-shape rules.
 //
@@ -327,7 +327,7 @@ func (g *GapSpec) UnmarshalJSON(b []byte) error {
 }
 
 // decodeKindsJSON resolves the polymorphic `kinds:` field per
-// alice2-index: scalar `"*"` decodes to []string{"*"}; list
+// yaad-index: scalar `"*"` decodes to []string{"*"}; list
 // `["person", "boardgame"]` decodes verbatim. Absent / null
 // returns nil; any other shape rejects loudly so plugin
 // capability typos surface at server start.
@@ -366,7 +366,7 @@ var validGapFillStrategies = map[string]struct{}{
 }
 
 // Validate enforces the ADR-0019 typed-gap rules for plugin-side
-// declarations. Mirrors config.GapSpec.Validate (alice2-index)
+// declarations. Mirrors config.GapSpec.Validate (yaad-index)
 // so a plugin's Capabilities document fails the same shape rules
 // as an operator yaml that declared the same gap.
 //
@@ -514,7 +514,7 @@ type ControlFunc func(ControlPacket) error
 //
 // A plugin author never types the literal strings "complete",
 // "needs_fill", or "disambiguation" — they populate the right field
-// and alice2-index labels the response.
+// and yaad-index labels the response.
 // SourceEdgeTarget is one edge target in an ADR-0021 source-shape
 // emission's `edges` block. Plugins emit `{name, kind}` only — the
 // daemon's slug.Slug derives the canonical-label slug at ingest
@@ -609,7 +609,7 @@ type FetchResult struct {
 	// Notations is the list of every input form the plugin knows
 	// resolves to this entity — canonical URL, shorthand
 	// `<plugin>: <id>`, with/without underscore in the title,
-	// mobile subdomain URL, etc. The orchestrator (per alice2-index
+	// mobile subdomain URL, etc. The orchestrator (per yaad-index
 	// the source issue a prior PR) writes these to the `entity_notations`
 	// lookup table after a successful Fetch so subsequent ingests
 	// of any equivalent form short-circuit on the cache without
@@ -627,7 +627,7 @@ type FetchResult struct {
 	Notations []string
 
 	// Aliases is the list of alternative labels the plugin knows
-	// for this entity (per alice2-index the source issue). Used by Obsidian
+	// for this entity (per yaad-index the source issue). Used by Obsidian
 	// wikilink resolution + agent reverse-lookup.
 	//
 	// Two shapes coexist in the same flat slice:
@@ -652,7 +652,7 @@ type FetchResult struct {
 	Aliases []string
 
 	// CacheTTLSeconds is an OPTIONAL per-fetch override for this
-	// entity's cache-freshness contract (per alice2-index). Pointer
+	// entity's cache-freshness contract (per yaad-index). Pointer
 	// shape distinguishes absent (nil = no override; resolver falls
 	// through to plugin-level / global-level) from explicit-zero
 	// (*=0 = same as nil; explicit "no opinion") from a positive or
@@ -776,7 +776,7 @@ func (r *Registry) Lookup(rawURL string) (Plugin, bool) {
 
 // LookupByName returns the registered plugin whose Name() equals
 // name, or (nil, false) if no plugin with that name is registered.
-// Used by routing-time validation (alice2-index) to target a
+// Used by routing-time validation (yaad-index) to target a
 // specific plugin's url_patterns / commands list when the input
 // carries a `<plugin>:` namespace prefix.
 func (r *Registry) LookupByName(name string) (Plugin, bool) {

@@ -357,7 +357,7 @@ func TestIngest_ForceRefetchPreservesUserContent(t *testing.T) {
 		"force_refetch appends a fresh provenance entry alongside the existing one")
 }
 
-// TestIngest_StampsProvenanceInOperatorTimezone pins alice2-index
+// TestIngest_StampsProvenanceInOperatorTimezone pins yaad-index
 // PR-B: provenance fetched_at is stamped via clock.Now() so the
 // operator-configured timezone propagates through the vault write
 // path. Default (clock unset) → UTC; SetLocation(Europe/Berlin) →

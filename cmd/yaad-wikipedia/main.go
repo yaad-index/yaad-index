@@ -1,22 +1,22 @@
 // Command yaad-wikipedia is the standalone Wikipedia extractor binary
-// for alice2-index, implementing the subprocess plugin protocol from
+// for yaad-index, implementing the subprocess plugin protocol from
 // ADR-0006.
 //
 // Two CLI modes:
 //
 // - `yaad-wikipedia --init` — write the capabilities document
 // (name, version, url_patterns, entity_kinds) as JSON to stdout
-// and exit 0. alice2-index calls this once at server startup.
+// and exit 0. yaad-index calls this once at server startup.
 //
 // - `yaad-wikipedia` (no args) — read a JSON request
 // (`{"operation": "ingest", "url": "..."}`) from stdin, fetch the
 // article, write the response document (`{"ok": true,
 // "structured": {...}}`) to stdout, and exit 0. On failure: write
-// a human-readable message to stderr and exit non-zero. alice2-index
+// a human-readable message to stderr and exit non-zero. yaad-index
 // calls this once per /v1/ingest request that matches the
 // url_patterns from --init.
 //
-// The wire shapes mirror alice2-index's
+// The wire shapes mirror yaad-index's
 // internal/plugins/subprocess/subprocess.go (Capabilities,
 // fetchRequest, fetchResponse). Keeping the marshalling here — and the
 // parser in internal/wikipedia/ — means the parser stays
@@ -38,7 +38,7 @@ import (
 )
 
 // EnvUserAgent is the env var operators set to override the default
-// User-Agent header. alice2-index spawns this binary subprocess-per-
+// User-Agent header. yaad-index spawns this binary subprocess-per-
 // request and inherits its environment, so an env var is the natural
 // integration point — the index's config allowlist takes a path only,
 // not args (per ADR-0006).
@@ -47,14 +47,14 @@ const EnvUserAgent = "YAAD_WIKIPEDIA_USER_AGENT"
 // EnvLang is the env var operators set to override the Wikipedia
 // language code used when resolving the shorthand input form
 // (`wikipedia: <topic>`). Same env-passthrough rationale as
-// EnvUserAgent — alice2-index inherits the env into the subprocess.
+// EnvUserAgent — yaad-index inherits the env into the subprocess.
 const EnvLang = "YAAD_WIKIPEDIA_LANG"
 
 // requestTimeout caps the wall-clock budget for a single fetch
 // invocation, including reading the request from stdin and the
 // upstream HTTP call. The internal upstream timeout
 // (DefaultUpstreamTimeout) is the dominant component; this outer
-// budget exists to make stuck stdin reads (e.g. alice2-index pipe
+// budget exists to make stuck stdin reads (e.g. yaad-index pipe
 // went away) not hang the binary forever.
 const requestTimeout = 10 * time.Second
 
@@ -70,13 +70,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("yaad-wikipedia", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	initMode := fs.Bool("init", false,
-		"emit the capabilities document on stdout and exit (called by alice2-index at startup)")
+		"emit the capabilities document on stdout and exit (called by yaad-index at startup)")
 	versionMode := fs.Bool("version", false,
-		"print the plugin version and exit (called by alice2-index's cache-key probe)")
+		"print the plugin version and exit (called by yaad-index's cache-key probe)")
 	userAgent := fs.String("user-agent", os.Getenv(EnvUserAgent),
 		"override the User-Agent header sent on upstream Wikipedia requests. "+
 			"Also settable via the "+EnvUserAgent+" env var (the env var is the "+
-			"natural integration point under alice2-index, whose config takes a path only). "+
+			"natural integration point under yaad-index, whose config takes a path only). "+
 			"Default identifies yaad-wikipedia + a contact URL per Wikimedia's User-Agent policy.")
 	lang := fs.String("lang", os.Getenv(EnvLang),
 		"Wikipedia language code used to resolve shorthand input (`wikipedia: <topic>`) into "+
@@ -87,9 +87,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	if *versionMode {
-		// Bare version string + newline. Matches alice2-index's
+		// Bare version string + newline. Matches yaad-index's
 		// subprocess.RunVersion bare-string parse path. The probe is
-		// the cache-key check that runs on every alice2-index startup
+		// the cache-key check that runs on every yaad-index startup
 		// (Per the prior design,'s INFO breadcrumb on this exact path); answering
 		// it cleanly skips the full --init handshake when the cached
 		// capabilities row's version matches.
@@ -136,8 +136,8 @@ type capabilitiesDoc struct {
 	// "source"`.
 	SourceNamespace string `json:"source_namespace,omitempty"`
 	// CacheTTLSeconds is the plugin-level TTL declaration that
-	// participates in alice2-index's three-level cache resolution
-	//. 31536000s = 365d. omitempty so older alice2-index
+	// participates in yaad-index's three-level cache resolution
+	//. 31536000s = 365d. omitempty so older yaad-index
 	// builds that don't know the field decode cleanly (default 0
 	// → "no opinion" → falls through to global config).
 	CacheTTLSeconds int `json:"cache_ttl_seconds,omitempty"`
@@ -152,7 +152,7 @@ func runInit(stdout io.Writer) error {
 	doc := capabilitiesDoc{
 		Name: wikipedia.PluginName,
 		Version: wikipedia.PluginVersion,
-		// URLPatterns is ordered: alice2-index dispatches first-match
+		// URLPatterns is ordered: yaad-index dispatches first-match
 		// across plugins (ADR-0006), but within one plugin's own
 		// patterns the order is informational. Listing the canonical
 		// URL form first matches operator intuition (URLs are the
@@ -182,10 +182,10 @@ func runInit(stdout io.Writer) error {
 			wikipedia.CanonicalEdgeType,
 			wikipedia.SourceTypeEdgeType,
 		},
-		// Plugin-level cache TTL declaration per alice2-index (and
+		// Plugin-level cache TTL declaration per yaad-index (and
 		//: 365 days. Wikipedia article cadence is
 		// slow enough that a yearly default is the right hands-off
-		// contract. Surfaces in alice2-index's resolveCacheTTL chain at
+		// contract. Surfaces in yaad-index's resolveCacheTTL chain at
 		// the plugin level; operators with tighter freshness needs
 		// override per-entry or globally.
 		CacheTTLSeconds: wikipedia.DefaultCacheTTLSeconds,
@@ -207,7 +207,7 @@ type fetchResponse struct {
 	Structured *structuredResponse `json:"structured,omitempty"`
 
 	// RawContent is the article body in plaintext (per ADR-0008's
-	// FetchResult shape). alice2-index's subprocess wrapper reads this
+	// FetchResult shape). yaad-index's subprocess wrapper reads this
 	// at the top level (sibling of `structured`), translates it onto
 	// FetchResult.RawContent, and the orchestrator persists it as
 	// the vault file's body.
@@ -223,14 +223,14 @@ type fetchResponse struct {
 
 	// Options is the disambiguation-candidate map per ADR-0006.
 	// Mutually exclusive with Structured: a single Fetch call emits
-	// one or the other, never both. alice2-index's subprocess wrapper
+	// one or the other, never both. yaad-index's subprocess wrapper
 	// reads this into FetchResult.Options and translates to
 	// `state: disambiguation` on the API surface.
 	Options map[string]optionJSON `json:"options,omitempty"`
 
 	// Notations is every input form yaad-wikipedia knows resolves to
-	// the entity in `structured` (per alice2-index the source issue a prior PRv2).
-	// alice2-index's subprocess wrapper reads this into
+	// the entity in `structured` (per yaad-index the source issue a prior PRv2).
+	// yaad-index's subprocess wrapper reads this into
 	// FetchResult.Notations; the orchestrator writes them to the
 	// entity_notations cache after a successful Fetch (a prior PR) so
 	// subsequent ingests of any equivalent form short-circuit on
@@ -239,19 +239,19 @@ type fetchResponse struct {
 	// shorthand).
 	Notations []string `json:"notations,omitempty"`
 
-	// Aliases is the alternative-label list (per alice2-index issue
-	// a prior PR). alice2-index's subprocess wrapper reads this into
+	// Aliases is the alternative-label list (per yaad-index issue
+	// a prior PR). yaad-index's subprocess wrapper reads this into
 	// FetchResult.Aliases; Marshal there merges with the ADR-0011
 	// title-synthesized alias and dedupes. Today this is just the
 	// article title; future PRs may add multi-language aliases.
 	Aliases []string `json:"aliases,omitempty"`
 
 	// CacheTTLSeconds is the optional per-fetch cache TTL override
-	// (per alice2-index +. Pointer-shape on
+	// (per yaad-index +. Pointer-shape on
 	// the wire so absent / explicit-zero / positive / negative are
 	// all distinguishable. Defaults to wikipedia.DefaultCacheTTLSeconds
 	// (365d) on every successful fetch — same value as the plugin-
-	// level Capabilities default. The dual-emission lets alice2-index's
+	// level Capabilities default. The dual-emission lets yaad-index's
 	// resolveCacheExpires read the per-fetch value at the entry
 	// level of the three-level chain without re-reading capabilities.
 	CacheTTLSeconds *int `json:"cache_ttl_seconds,omitempty"`
@@ -262,7 +262,7 @@ type optionJSON struct {
 	Summary string `json:"summary,omitempty"`
 }
 
-// structuredResponse mirrors alice2-index's subprocess.structuredResponse
+// structuredResponse mirrors yaad-index's subprocess.structuredResponse
 // under the ADR-0021 universal-source-shape contract: `kind:
 // "source"` + descriptive `name` + `data` + `edges` block. Daemon
 // derives the source-node ID from `<source_namespace>:<slug.Slug(name)>`
@@ -313,7 +313,7 @@ func runFetch(ctx context.Context, p *wikipedia.Plugin, stdin io.Reader, stdout 
 	if err != nil {
 		// ErrNotFoundUpstream is wrapped with the URL so operators
 		// can grep for the offending request in stderr-tagged logs;
-		// alice2-index's subprocess wrapper surfaces this as
+		// yaad-index's subprocess wrapper surfaces this as
 		// fetch_failed.
 		if errors.Is(err, wikipedia.ErrNotFoundUpstream) {
 			return fmt.Errorf("%w: %s", err, req.URL)
@@ -325,7 +325,7 @@ func runFetch(ctx context.Context, p *wikipedia.Plugin, stdin io.Reader, stdout 
 
 	// Disambiguation path: search returned multi-match (or the URL
 	// resolved to a disambiguation page that triggered the search-
-	// fallback). Emit options-only — alice2-index's subprocess wrapper
+	// fallback). Emit options-only — yaad-index's subprocess wrapper
 	// translates this into `state: disambiguation`.
 	if outcome.Article == nil {
 		resp.Options = make(map[string]optionJSON, len(outcome.Options))

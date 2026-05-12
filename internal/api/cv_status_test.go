@@ -19,7 +19,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/store"
 )
 
-// Per ADR-0013 §3 / alice2-index a prior PR: `/v1/cv-status` surfaces
+// Per ADR-0013 §3 / yaad-index a prior PR: `/v1/cv-status` surfaces
 // canonical-vocabulary drift — counters of plugin emissions the
 // operator's config dropped, plus the config_hash for change
 // detection and last_reindex_at for the operator-prompted reindex
@@ -72,7 +72,7 @@ func TestCVStatus_EmptyStore_EmptyDrift(t *testing.T) {
 	assert.Nil(t, got.LastReindexAt, "no reindex run yet → null on wire")
 	assert.Equal(t, cvStatusReindexHint, got.ReindexHint)
 
-	// Raw-JSON pin per alice2-index a prior PR / yaad-mcp a prior PR/14
+	// Raw-JSON pin per yaad-index a prior PR / yaad-mcp a prior PR/14
 	// pattern: empty arrays serialize as `[]`, not `null`.
 	body := rec.Body.String()
 	assert.Contains(t, body, `"kinds_emitted_not_enabled":[]`)

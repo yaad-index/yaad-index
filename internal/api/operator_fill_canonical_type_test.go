@@ -108,7 +108,7 @@ func seedSourceForCanonicalTypeFill(t *testing.T, st store.Store, root, id strin
 }
 
 // TestOperatorFill_CanonicalType_HappyPath_ObjectForm covers the
-// primary canonical_type path per alice2-index: the operator
+// primary canonical_type path per yaad-index: the operator
 // submits a list of `{name, kind}` objects, the daemon slugifies
 // each via slug.Slug, edges land from the source entity to the
 // derived canonical-label endpoints.

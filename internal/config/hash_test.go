@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Per ADR-0013 §3 / alice2-index a prior PR: ConfigHash() produces a
+// Per ADR-0013 §3 / yaad-index a prior PR: ConfigHash() produces a
 // deterministic SHA over the canonical_kinds + canonical_edge_types
 // subset, surfaced as `config_hash` on /v1/cv-status. Tests pin
 // determinism + change-detection invariants.
@@ -96,7 +96,7 @@ func TestConfigHash_BumpsOnInstructionChanged(t *testing.T) {
 }
 
 // Edge-type slice is sorted before hashing — same contract as
-// `/v1/structure`'s `version` field from a prior PR (alice2-index).
+// `/v1/structure`'s `version` field from a prior PR (yaad-index).
 // Operator reorder of the YAML list does NOT bump the hash; both
 // observability surfaces agree on what counts as a canonical-
 // vocabulary config change. Pinned per alice2's a prior PR review note

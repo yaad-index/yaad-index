@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// resolveCacheTTL — the three-level resolution table per alice2-index
+// resolveCacheTTL — the three-level resolution table per yaad-index
 //. Sentinel rules at each level: 0 = no opinion (fall through),
 // positive = N seconds, negative = infinite. All-zero → 0 (caller
 // stamps nothing, lookup treats as infinite).

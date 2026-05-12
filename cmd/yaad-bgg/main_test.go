@@ -113,8 +113,8 @@ func TestRenderBody_ImageEmbedFilenameMatchesADR0018(t *testing.T) {
 
 // TestRunInit_EmitsCapabilities exercises the `--init` mode end-to-end:
 // the JSON written to stdout must conform to the capabilities document
-// shape alice2-index's subprocess.New consumes (per
-// internal/plugins/subprocess/subprocess.go in alice2-index). If this
+// shape yaad-index's subprocess.New consumes (per
+// internal/plugins/subprocess/subprocess.go in yaad-index). If this
 // test drifts from the index's expectations, the loop breaks at
 // startup — not at first /v1/ingest — so it stays a sharp regression
 // signal.
@@ -140,7 +140,7 @@ func TestRunInit_EmitsCapabilities(t *testing.T) {
 	if len(got.URLPatterns) < 2 {
 		t.Fatalf("url_patterns: want at least two (canonical URL + shorthand), got %d", len(got.URLPatterns))
 	}
-	// Compile each pattern — alice2-index will compile these at startup
+	// Compile each pattern — yaad-index will compile these at startup
 	// and a malformed regex would fail-fast there. Catching it here
 	// keeps the surprise local.
 	for _, pat := range got.URLPatterns {
@@ -191,8 +191,8 @@ func TestRunInit_EmitsCapabilities(t *testing.T) {
 		t.Errorf("edge_kinds: want empty for v1, got %+v", got.EdgeKinds)
 	}
 
-	// Per alice2-index/yaad-bgg: top-level cache_ttl_seconds = 365 days
-	// participates in alice2-index's three-level cache resolution
+	// Per yaad-index/yaad-bgg: top-level cache_ttl_seconds = 365 days
+	// participates in yaad-index's three-level cache resolution
 	// at the plugin level. Same contract as.
 	if got.CacheTTLSeconds != bgg.DefaultCacheTTLSeconds {
 		t.Errorf("cache_ttl_seconds: want %d (DefaultCacheTTLSeconds = 365d), got %d",
@@ -313,10 +313,10 @@ func equalIntSlice(a, b []int) bool {
 	return true
 }
 
-// TestRunVersion exercises the `--version` mode: alice2-index calls this
+// TestRunVersion exercises the `--version` mode: yaad-index calls this
 // on every startup as a cache-key probe (cheaper than a full --init
 // re-handshake when the cached capabilities row's version matches).
-// Output must be a bare version string + newline — matches alice2-index's
+// Output must be a bare version string + newline — matches yaad-index's
 // subprocess.RunVersion parse path.
 func TestRunVersion(t *testing.T) {
 	t.Parallel()
@@ -407,10 +407,10 @@ func TestRunFetch_RejectsMalformed(t *testing.T) {
 
 // TestWriteFetchResponse_NDJSONShape pins the ADR-0023 wire shape
 // for runFetch's response emission: single-line JSON terminated by
-// exactly one `\n`. alice2-index a prior PR's daemon-side reader uses
+// exactly one `\n`. yaad-index a prior PR's daemon-side reader uses
 // json.Decoder so it parses both pretty-printed AND single-line
 // shapes today; this test pins the post-migration shape so the
-// future N-line consumer (alice2-index) sees the canonical wire
+// future N-line consumer (yaad-index) sees the canonical wire
 // format.
 //
 // The test exercises writeFetchResponse directly rather than driving

@@ -1,9 +1,9 @@
 // Package clock provides operator-timezone-aware time helpers per
-// alice2-index. alice2-index is a single-operator system; UTC is
+// yaad-index. yaad-index is a single-operator system; UTC is
 // best-practice for multi-operator setups but creates per-line
 // cognitive load when the operator works in a single non-UTC zone
 // and has to mentally translate every value. The operator
-// configures `timezone:` in the alice2-index config YAML; main.go
+// configures `timezone:` in the yaad-index config YAML; main.go
 // resolves it via time.LoadLocation at boot and calls SetLocation
 // here so every subsystem can pick up the operator-chosen zone
 // without threading the location through its own constructor.

@@ -62,7 +62,7 @@ func TestWriter_WriteCreatesFolderPerKindFile(t *testing.T) {
 }
 
 // TestWriter_WriteCanonicalLabelLandsUnderCT pins the
-// auto-materialize layout per ADR-0021's amendment (alice2-index
+// auto-materialize layout per ADR-0021's amendment (yaad-index
 // phase D): a canonical-label entity's vault file lands at
 // `<root>/ct/<kind>/<slug>.md` rather than the per-kind default.
 // Reader.ReadByID's chained fallback (active → canonical-label →

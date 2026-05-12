@@ -1,10 +1,10 @@
-// Dispatch CLI subcommands (per alice2-index + ADR-0022 §6):
+// Dispatch CLI subcommands (per yaad-index + ADR-0022 §6):
 //
-// - `alice2-index command <plugin> <cmd>` — dispatches a command-shape
+// - `yaad-index command <plugin> <cmd>` — dispatches a command-shape
 // invocation. Concatenates args into `<plugin>: !<cmd>` and POSTs
 // to the running daemon's /v1/ingest endpoint as the `url` field.
 //
-// - `alice2-index fetch <plugin> <pattern>` — dispatches a URL-shape
+// - `yaad-index fetch <plugin> <pattern>` — dispatches a URL-shape
 // invocation. Concatenates args into `<plugin>: <pattern>` and
 // POSTs to /v1/ingest.
 //
@@ -41,7 +41,7 @@ import (
 // belt-and-suspenders to bound a hung daemon.
 const dispatchHTTPTimeout = 6 * time.Minute
 
-// CommandCmd implements `alice2-index command <plugin> <cmd>`.
+// CommandCmd implements `yaad-index command <plugin> <cmd>`.
 //
 // Concatenates positional args into `<plugin>: !<cmd>` and POSTs to
 // the daemon. Per ADR-0022 §6 and the post- parser contract, the
@@ -49,12 +49,12 @@ const dispatchHTTPTimeout = 6 * time.Minute
 // path (validation today via; full job system Per the prior design,).
 //
 // External cron uses this shape to schedule polling commands like
-// `alice2-index command gmail fetch`.
+// `yaad-index command gmail fetch`.
 type CommandCmd struct {
 	Plugin string `arg:"" help:"plugin name (must match the plugin's --init Capabilities.Name and be allowlisted in config)."`
 	Command string `arg:"" help:"command name (must match an entry in the plugin's Capabilities.Commands list)."`
-	DaemonURL string `name:"daemon" env:"YAAD_INDEX_DAEMON_URL" default:"http://localhost:7433" help:"base URL of the running alice2-index daemon."`
-	Token string `name:"token" env:"YAAD_INDEX_TOKEN" help:"Bearer JWT for the daemon's auth gate. MUST be an operator-only token (Subject == Operator) per alice2-index / ADR-0022 §6 — issue with 'alice2-index issue-token --operator-only --operator <name>'. Pair-claim tokens reject 403."`
+	DaemonURL string `name:"daemon" env:"YAAD_INDEX_DAEMON_URL" default:"http://localhost:7433" help:"base URL of the running yaad-index daemon."`
+	Token string `name:"token" env:"YAAD_INDEX_TOKEN" help:"Bearer JWT for the daemon's auth gate. MUST be an operator-only token (Subject == Operator) per yaad-index / ADR-0022 §6 — issue with 'yaad-index issue-token --operator-only --operator <name>'. Pair-claim tokens reject 403."`
 	Wait int `name:"wait" default:"60" help:"long-poll wait_seconds; matches the daemon's /v1/ingest field. 0 → async-only mode; the call returns the queued shape immediately."`
 }
 
@@ -70,7 +70,7 @@ func (c *CommandCmd) Run() error {
 	return runDispatch(c.DaemonURL, c.Token, input, c.Wait, os.Stdout)
 }
 
-// FetchCmd implements `alice2-index fetch <plugin> <pattern>`.
+// FetchCmd implements `yaad-index fetch <plugin> <pattern>`.
 //
 // Concatenates positional args into `<plugin>: <pattern>` and POSTs
 // to the daemon. URL-shape ingest — same shape an agent would POST
@@ -83,7 +83,7 @@ func (c *CommandCmd) Run() error {
 type FetchCmd struct {
 	Plugin string `arg:"" help:"plugin name (must match a registered plugin's Capabilities.Name)."`
 	Pattern string `arg:"" help:"URL or shorthand pattern the plugin's url_patterns accept. Quote multi-token patterns at the shell."`
-	DaemonURL string `name:"daemon" env:"YAAD_INDEX_DAEMON_URL" default:"http://localhost:7433" help:"base URL of the running alice2-index daemon."`
+	DaemonURL string `name:"daemon" env:"YAAD_INDEX_DAEMON_URL" default:"http://localhost:7433" help:"base URL of the running yaad-index daemon."`
 	Token string `name:"token" env:"YAAD_INDEX_TOKEN" help:"Bearer JWT for the daemon's auth gate (see command's --token; same deferral)."`
 	Wait int `name:"wait" default:"60" help:"long-poll wait_seconds. 0 → async-only mode."`
 }

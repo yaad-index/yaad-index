@@ -635,7 +635,7 @@ func Test_resolveURL(t *testing.T) {
 	// `wikipedia: ` (whitespace-only topic) doesn't match the
 	// shorthand regex (the `\S` anchor requires a non-whitespace
 	// character). resolveURL returns it unchanged, and Match() rejects
-	// it — so alice2-index never dispatches such an input here. Asserted
+	// it — so yaad-index never dispatches such an input here. Asserted
 	// in TestPlugin_MatchAcceptsWikipediaURLsAndShorthand alongside
 	// the rest of the negative cases.
 }
@@ -997,7 +997,7 @@ func TestPlugin_FetchEmitsCanonicalStub_TableDriven(t *testing.T) {
 	// `is_about` canonical-edge with a descriptive Name (parens-
 	// disambig stripped) + Kind. Daemon's slug.Slug derives the
 	// canonical-label slug (`person:martin-wallace` etc.) — the
-	// daemon-side derivation is pinned in alice2-index's
+	// daemon-side derivation is pinned in yaad-index's
 	// internal/slug tests, not here.
 	cases := []struct {
 		name string

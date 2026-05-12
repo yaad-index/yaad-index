@@ -16,7 +16,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// Per alice2-index a prior PR: the auth scaffold is the building
+// Per yaad-index a prior PR: the auth scaffold is the building
 // blocks for a prior PR's HTTP middleware. Tests cover keypair
 // generation + Sign-then-Verify round trip + the failure modes
 // reviewers will reasonably ask about (expiry rejection,
@@ -187,7 +187,7 @@ func TestVerify_RejectsTokenWithWrongIssuer(t *testing.T) {
 	verifier, err := LoadVerifier(d)
 	require.NoError(t, err)
 
-	// Hand-roll a token with iss != "alice2-index" using the same
+	// Hand-roll a token with iss != "yaad-index" using the same
 	// private key — the verifier must reject on the issuer check
 	// even though the signature is valid.
 	priv := loadRawPrivateKey(t, d)
@@ -196,7 +196,7 @@ func TestVerify_RejectsTokenWithWrongIssuer(t *testing.T) {
 		"operator": "alice",
 		"iat": time.Now().Unix(),
 		"exp": time.Now().Add(time.Hour).Unix(),
-		"iss": "definitely-not-alice2-index",
+		"iss": "definitely-not-yaad-index",
 	})
 	bad.Header["kid"] = "test"
 	tok, err := bad.SignedString(priv)

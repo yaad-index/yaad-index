@@ -74,7 +74,7 @@ func handleEntityOperatorFill(
 				"auth claim missing on request — server misconfiguration")
 			return
 		}
-		// Operator-authority gate per alice2-index: accept any
+		// Operator-authority gate per yaad-index: accept any
 		// pair-claim that names a real operator — direct (Subject ==
 		// Operator) OR agent-on-behalf (Subject is an agent + Operator
 		// names a human). Anonymous + agent-only (no Operator) tokens
@@ -106,7 +106,7 @@ func handleEntityOperatorFill(
 		// autoMaterialize is set when either the entity row OR the
 		// vault file is missing AND the id resolves to a canonical-
 		// label kind. The fill then auto-creates whichever piece is
-		// missing per ADR-0021's amendment (alice2-index phase D):
+		// missing per ADR-0021's amendment (yaad-index phase D):
 		// - vault file at `<vault_root>/ct/<kind>/<slug>.md` (always
 		// on the auto-materialize path, since the vault file's
 		// absence is what triggers the path).
@@ -254,7 +254,7 @@ func handleEntityOperatorFill(
 			return
 		}
 
-		// Canonical_type edge create/replace per alice2-index.
+		// Canonical_type edge create/replace per yaad-index.
 		// Walks `ops` (not `applied` — applied is just field
 		// names) and for each canonical_type set, deletes prior
 		// edges of type=field originating from this source, then
@@ -401,7 +401,7 @@ func parseSingleOp(field string, raw json.RawMessage, spec config.GapSpec, opera
 			}
 		}
 	}
-	// Canonical_type list (per alice2-index). Validates each
+	// Canonical_type list (per yaad-index). Validates each
 	// element's kind against the gap's resolution set, slugifies
 	// {name, kind} entries via slug.Slug, and accepts pre-formed
 	// labels as-is (operator-fill path only). Stored as a

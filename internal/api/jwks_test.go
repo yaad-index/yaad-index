@@ -19,7 +19,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/store"
 )
 
-// /v1/jwks wire-level tests (per alice2-index a prior PR). Auth-package
+// /v1/jwks wire-level tests (per yaad-index a prior PR). Auth-package
 // tests in internal/auth/jwks_test.go cover the JWK construction +
 // RSA round-trip; these tests pin the HTTP wire shape (status code,
 // Cache-Control header, JSON envelope, route is unauthenticated).
@@ -54,7 +54,7 @@ func TestJWKS_Returns200WithRFC7517Shape(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 	assert.Equal(t, "public, max-age=3600", rec.Header().Get("Cache-Control"),
-		"Cache-Control header bounds peer-side caching to 1h per alice2-index")
+		"Cache-Control header bounds peer-side caching to 1h per yaad-index")
 
 	var got struct {
 		Keys []auth.JWK `json:"keys"`

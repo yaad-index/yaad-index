@@ -17,7 +17,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/store"
 )
 
-// Per ADR-0013 §7 / alice2-index: the introspection endpoint
+// Per ADR-0013 §7 / yaad-index: the introspection endpoint
 // surfaces the structural signature — kinds (with gaps + per-kind
 // instructions), canonical edge-types, plugin metadata, and a
 // version hash that bumps on rebuild / config-change /

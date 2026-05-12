@@ -126,7 +126,7 @@ func TestRun_BadFlagsExitTwo(t *testing.T) {
 
 // TestRun_InitDeclaresFetchCommand pins the post- capabilities
 // surface: --init's `commands` field includes "fetch" so
-// alice2-index's routing-time validation accepts
+// yaad-index's routing-time validation accepts
 // `gmail: !fetch` as a legal command-shape input.
 func TestRun_InitDeclaresFetchCommand(t *testing.T) {
 	t.Parallel()
@@ -146,7 +146,7 @@ func TestRun_InitDeclaresFetchCommand(t *testing.T) {
 }
 
 // TestRun_UnknownCommandExitsTwo pins that an unknown --command
-// value rejects with exit code 2 (bad-flag class). alice2-index
+// value rejects with exit code 2 (bad-flag class). yaad-index
 // routing-time validation should catch most of these before the
 // daemon spawns the subprocess; this test pins the binary-side
 // defense.

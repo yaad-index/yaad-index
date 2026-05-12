@@ -10,7 +10,7 @@ import (
 
 // LastReindexAt returns MAX(last_indexed_at) across the
 // reindex_files table — the most-recent moment any file was
-// re-derived (per ADR-0013 §3 / alice2-index a prior PR). The second
+// re-derived (per ADR-0013 §3 / yaad-index a prior PR). The second
 // return is false when the table is empty (no reindex has ever
 // run); the caller surfaces that as `null` on the cv-status wire.
 func (s *sqliteStore) LastReindexAt(ctx context.Context) (time.Time, bool, error) {
@@ -158,7 +158,7 @@ func (s *sqliteStore) DeleteEntityCascade(ctx context.Context, id string) error 
 }
 
 // WipeDerivedState drops every row from the vault-derived tables
-// in a single transaction. Used by `alice2-index reindex --full` and
+// in a single transaction. Used by `yaad-index reindex --full` and
 // the HTTP equivalent (POST /v1/reindex with mode=full).
 //
 // Per ADR-0008's "vault is source of truth, DB is derived" model:
@@ -178,7 +178,7 @@ func (s *sqliteStore) DeleteEntityCascade(ctx context.Context, id string) error 
 //
 // Excluded — not derived from the vault, preserved across the wipe:
 //
-// - `plugin_capabilities` — operator-config-driven plugin loader cache (ADR-0006 +). Wiping forces every plugin to re-run `--init` on the next server start, wasteful for the legitimate full-reindex use case (vault state drift, not plugin changes). Operator-driven cache clearing has its own subcommand: `alice2-index plugins clear-cache`.
+// - `plugin_capabilities` — operator-config-driven plugin loader cache (ADR-0006 +). Wiping forces every plugin to re-run `--init` on the next server start, wasteful for the legitimate full-reindex use case (vault state drift, not plugin changes). Operator-driven cache clearing has its own subcommand: `yaad-index plugins clear-cache`.
 // - `schema_migrations` — migration accounting. Dropping rows would make the next server start re-apply every migration, breaking schema-version checks.
 //
 // Adding a new table. When a future PR adds a new table that IS

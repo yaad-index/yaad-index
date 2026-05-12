@@ -72,7 +72,7 @@ type entity struct {
 	// rule as edgeRef.Archived.
 	Archived bool `json:"archived,omitempty"`
 
-	// Single-hop body fields per alice2-index the source issue a prior PR
+	// Single-hop body fields per yaad-index the source issue a prior PR
 	// addendum. The vault is the source of truth (ADR-0008) for
 	// these — the handler vault-reads when WithVaultIO is wired and
 	// merges the frontmatter values onto the wire entity. omitempty
@@ -92,7 +92,7 @@ func handleEntity(logger *slog.Logger, st store.Store, vaultReader *vault.Reader
 		// `with_edges` per ADR-0002 §"GET /v1/entities/{id}":
 		// comma-separated edge types to expand inline. Two
 		// equivalent shapes carry the "expand all types" intent
-		// (per alice2-index):
+		// (per yaad-index):
 		//
 		// - **Presence-based**: `?with_edges` or `?with_edges=`
 		// (key present, value empty) → expand all edge types.
@@ -135,7 +135,7 @@ func handleEntity(logger *slog.Logger, st store.Store, vaultReader *vault.Reader
 			got.Edges = edgeRefsFromStoreEdges(edges)
 		}
 
-		// Vault-merge for the single-hop body fields (per alice2-index
+		// Vault-merge for the single-hop body fields (per yaad-index
 		// the source issue a prior PR addendum). When WithVaultIO is wired, read
 		// the vault frontmatter and overlay clean_content, summary,
 		// tags, gaps, aliases, plugin, notations, comments onto the
@@ -174,7 +174,7 @@ func handleEntity(logger *slog.Logger, st store.Store, vaultReader *vault.Reader
 // whitespace, and drops empty entries. The output drives GetEdgesFor's
 // type filter — len == 0 means "no filter, return all edges".
 //
-// Per alice2-index the explicit "all types" sentinels `*` and
+// Per yaad-index the explicit "all types" sentinels `*` and
 // `all` collapse to the no-filter shape. Either spelling is
 // accepted; `*` is the canonical form. Mixing a sentinel with
 // concrete edge types in the same value (e.g. `?with_edges=*,
@@ -277,7 +277,7 @@ func toAPIEntity(e *store.Entity) entity {
 
 // mergeVaultEntity overlays vault-only fields (CleanContent, Summary,
 // Tags, Gaps, Aliases, Plugin, Notations, Comments) onto a wire
-// entity. Per alice2-index the source issue a prior PR addendum: GetEntity (and
+// entity. Per yaad-index the source issue a prior PR addendum: GetEntity (and
 // the cache-hit ingest path) should be a single hop — the agent
 // gets the body + gap state without re-fetching through the plugin.
 //

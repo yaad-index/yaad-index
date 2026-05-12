@@ -1,4 +1,4 @@
-// Package config loads the alice2-index server config (per ADR-0006).
+// Package config loads the yaad-index server config (per ADR-0006).
 //
 // Today the only top-level key is `plugins:` — a map of plugin name to
 // absolute binary path. Future PRs may add other keys (`store:`,
@@ -28,13 +28,13 @@ import (
 // start with a letter.
 var kindOrFieldName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// DefaultPath is the location alice2-index reads its config from when
+// DefaultPath is the location yaad-index reads its config from when
 // the operator hasn't set --config / YAAD_INDEX_CONFIG.
-const DefaultPath = "~/.config/alice2-index/config.yaml"
+const DefaultPath = "~/.config/yaad-index/config.yaml"
 
 // Config is the parsed top-level config document.
 type Config struct {
-	// Plugins is the ordered list of plugins alice2-index will register
+	// Plugins is the ordered list of plugins yaad-index will register
 	// at startup. **Order matters**: ADR-0006's first-match-wins
 	// dispatch rule means earlier entries claim ambiguous URLs before
 	// later ones. The list shape (rather than a map) is deliberate —
@@ -43,7 +43,7 @@ type Config struct {
 	//
 	// ADR-0006 explicitly rejects relative paths, PATH search, and
 	// `~/` shell expansion on Path — operators type the full absolute
-	// path or alice2-index doesn't run the plugin.
+	// path or yaad-index doesn't run the plugin.
 	Plugins []PluginEntry `yaml:"plugins"`
 
 	// Vault names the markdown-vault root (per ADR-0008). When the key
@@ -75,7 +75,7 @@ type Config struct {
 	// and re-ingest from sources where the now-enabled canonical
 	// kind would have materialized; past ingests don't backfill.
 	//
-	// **Schema migration (alice2-index, 2026-05-04):** the
+	// **Schema migration (yaad-index, 2026-05-04):** the
 	// previous list-of-strings shape (`canonical_kinds: [person,
 	// city]`) no longer parses. Operators migrate by giving each
 	// enabled kind its per-kind config block (gaps + instruction);
@@ -112,7 +112,7 @@ type Config struct {
 	CanonicalEdgeTypes []string `yaml:"canonical_edge_types"`
 
 	// UserContentFrontmatterEdges declares the operator-side mapping
-	// from UGC frontmatter field → canonical edge per alice2-index
+	// from UGC frontmatter field → canonical edge per yaad-index
 	// (ADR-0008 / ADR-0011 / ADR-0017 parity). Mirrors the
 	// plugin-side `FrontmatterEdges` Capabilities declaration: the
 	// daemon walks UGC `data.<field>` at create/edit time, slugifies
@@ -151,7 +151,7 @@ type Config struct {
 	// Timezone is the operator-configured IANA TZ identifier
 	// applied uniformly to every timestamp the binary renders
 	// (vault frontmatter, provenance, logs, CLI output, plugin-
-	// emitted fetched_at after PR-D) per alice2-index.
+	// emitted fetched_at after PR-D) per yaad-index.
 	// Examples: "America/Los_Angeles", "Asia/Tokyo", "America/New_York".
 	//
 	// Empty / missing → "UTC" (preserves legacy behavior). alice2-
@@ -171,7 +171,7 @@ type Config struct {
 	// LogLevel is the operator-controlled threshold the slog handler
 	// filters against . One of "debug", "info" (default),
 	// "warn", "error". Empty / missing → info, which matches the
-	// historical hardcoded value in cmd/alice2-index — omitting the
+	// historical hardcoded value in cmd/yaad-index — omitting the
 	// key is observationally equivalent to legacy behavior.
 	//
 	// Parsing happens at Validate time via ParseLogLevel; an
@@ -181,7 +181,7 @@ type Config struct {
 	LogLevel string `yaml:"log_level"`
 
 	// CacheTTLSeconds is the operator's global TTL contribution to
-	// the three-level resolution chain (per alice2-index;
+	// the three-level resolution chain (per yaad-index;
 	// originally introduced in a prior PR as a global-only knob).
 	// At ingest time, resolveCacheTTL walks {per-fetch
 	// FetchResult.CacheTTLSeconds > plugin Capabilities.CacheTTLSeconds
@@ -204,7 +204,7 @@ type Config struct {
 	CacheTTLSeconds int `yaml:"cache_ttl_seconds"`
 
 	// Auth carries the operational JWT-auth configuration (per
-	// alice2-index a prior PR of the auth series). Operational
+	// yaad-index a prior PR of the auth series). Operational
 	// config — sibling of port / log_level / vault.path — NOT
 	// vault-readable. Per the operator (2026-05-05): "the key should not
 	// be in vault. Then an agent can trick index to return it."
@@ -212,7 +212,7 @@ type Config struct {
 	// The path precedence chain is locked: CLI flag >
 	// `YAAD_INDEX_KEYS_DIR` env > `auth.keys_dir` config field.
 	// Same precedence applies to default-ttl. The CLI / env
-	// resolution happens in `cmd/alice2-index/main.go`; this struct
+	// resolution happens in `cmd/yaad-index/main.go`; this struct
 	// only carries the lowest-priority config layer.
 	Auth AuthEntry `yaml:"auth"`
 
@@ -230,7 +230,7 @@ type Config struct {
 	//
 	// Validate ensures the value (when non-empty) is absolute and
 	// names an existing directory. Empty is permitted at parse —
-	// the cmd/alice2-index boot fills the default before constructing
+	// the cmd/yaad-index boot fills the default before constructing
 	// the attachments dispatcher. Plugins receive the resolved path
 	// via the `YAAD_PLUGIN_STAGING_DIR` env (PR-B of the ADR-0014
 	// daemon series; same plumbing as `YAAD_TIMEZONE` from
@@ -258,7 +258,7 @@ type Config struct {
 }
 
 // UserContentFrontmatterEdgeMapping is one entry in
-// Config.UserContentFrontmatterEdges (per alice2-index). Mirrors
+// Config.UserContentFrontmatterEdges (per yaad-index). Mirrors
 // the plugin-side `plugins.FrontmatterEdgeMapping` shape — same
 // `{edge_type, target_kind}` pair — so the daemon can call the
 // shared `appendFrontmatterDerivedCanonicals` helper with operator-
@@ -272,12 +272,12 @@ type UserContentFrontmatterEdgeMapping struct {
 }
 
 // AuthEntry is the `auth:` block of the config document (per
-// alice2-index a prior PR, extended by a prior PR).
+// yaad-index a prior PR, extended by a prior PR).
 //
 // - KeysDir is the directory holding `private.pem` + `public.pem`.
 // Empty / unset → the CLI / env layer resolves the default
-// (`/etc/alice2-index/keys/`) at runtime.
-// - DefaultTTL is the duration the `alice2-index issue-token`
+// (`/etc/yaad-index/keys/`) at runtime.
+// - DefaultTTL is the duration the `yaad-index issue-token`
 // subcommand uses when `--ttl` isn't passed. Empty / unset →
 // the CLI defaults to `2160h` (90 days). Values use Go's
 // `time.ParseDuration` syntax: `ns`/`us`/`ms`/`s`/`m`/`h` only
@@ -331,7 +331,7 @@ type CanonicalKindConfig struct {
 type VaultEntry struct {
 	Path string `yaml:"path"`
 
-	// AutoCommit controls vault-write → git-commit (per alice2-index
+	// AutoCommit controls vault-write → git-commit (per yaad-index
 	// the source issue). The vault becomes its own audit log: every
 	// successful Writer.Write produces a git commit summarizing
 	// the operation. Tri-state via *bool:
@@ -339,7 +339,7 @@ type VaultEntry struct {
 	// - &true → enabled (Validate fails if no .git/).
 	// - &false → disabled regardless of .git/ presence.
 	// Operators with a non-git vault leave the field unset; auto-detect
-	// keeps alice2-index commit-free without ceremony.
+	// keeps yaad-index commit-free without ceremony.
 	AutoCommit *bool `yaml:"auto_commit,omitempty"`
 
 	// AutoCommitDebounceSeconds collapses bursty writes into batched
@@ -359,10 +359,10 @@ type VaultEntry struct {
 
 	// CommitterName / CommitterEmail are used as both the git committer
 	// AND the default author when a write doesn't carry an explicit
-	// agent identity. Empty values fall back to "alice2-index" /
-	// "alice2-index@localhost". The author CAN be overridden per-write
+	// agent identity. Empty values fall back to "yaad-index" /
+	// "yaad-index@localhost". The author CAN be overridden per-write
 	// (e.g. fill carries the calling agent's identity), but the
-	// committer is always alice2-index — the process that wrote the
+	// committer is always yaad-index — the process that wrote the
 	// file IS the committer regardless of which agent triggered it.
 	CommitterName string `yaml:"committer_name,omitempty"`
 	CommitterEmail string `yaml:"committer_email,omitempty"`
@@ -464,7 +464,7 @@ func (c *Config) Validate() error {
 	if _, err := ParseLogLevel(c.LogLevel); err != nil {
 		return err
 	}
-	// Timezone validation per alice2-index: empty defaults to
+	// Timezone validation per yaad-index: empty defaults to
 	// UTC (matches legacy behavior); non-empty must parse via
 	// time.LoadLocation. Operator catches misspellings / bad IANA
 	// identifiers at server start rather than seeing every
@@ -474,7 +474,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("timezone: load %q: %w", c.Timezone, err)
 		}
 	}
-	// Negative cache_ttl_seconds is now valid (per alice2-index) —
+	// Negative cache_ttl_seconds is now valid (per yaad-index) —
 	// it expresses "infinite" at the global level under the three-
 	// level sentinel resolution chain (positive=N seconds, 0=no
 	// opinion fall through, negative=infinite). Legacy deployments
@@ -509,7 +509,7 @@ func (c *Config) Validate() error {
 }
 
 // validateUserContentFrontmatterEdges enforces the per-mapping
-// shape rules per alice2-index: each mapping must name a
+// shape rules per yaad-index: each mapping must name a
 // non-empty edge_type and target_kind. CanonicalGuard's enabled-
 // kinds + edge-types gate runs at edge-creation time (same shape
 // as the plugin path); the parse-time check here only catches

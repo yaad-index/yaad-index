@@ -264,7 +264,7 @@ func TestPlugin_Fetch_HappyPath(t *testing.T) {
 		t.Errorf("Aliases[1]: want foreign-language alternate, got %q", bg.Aliases[1])
 	}
 
-	// Notations: input first (per alice2-index lookup-first
+	// Notations: input first (per yaad-index lookup-first
 	// invariant), then canonical, then shorthand. Dedupe on the
 	// input matching one of the derived forms.
 	wantNotations := []string{

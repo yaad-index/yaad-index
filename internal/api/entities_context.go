@@ -15,7 +15,7 @@ import (
 )
 
 // Wire shape locked by ADR-0002 §"GET /v1/entities/{id}/context" (per
-// alice2-index the source issue). The handler returns the root entity plus a
+// yaad-index the source issue). The handler returns the root entity plus a
 // flattened neighbor list, each neighbor carrying the edge that
 // introduced it + the BFS depth at which it was first reached.
 

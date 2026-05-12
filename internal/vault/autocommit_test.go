@@ -44,14 +44,14 @@ func initGitVault(t *testing.T) string {
 	root := t.TempDir()
 	for _, args := range [][]string{
 		{"init", "--initial-branch=main"},
-		{"config", "user.email", "test@alice2-index.localhost"},
-		{"config", "user.name", "test-alice2-index"},
+		{"config", "user.email", "test@yaad-index.localhost"},
+		{"config", "user.name", "test-yaad-index"},
 		{"commit", "--allow-empty", "-m", "init"},
 	} {
 		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
 		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@alice2-index.localhost",
-			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@alice2-index.localhost",
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@yaad-index.localhost",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@yaad-index.localhost",
 		)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -285,7 +285,7 @@ func TestGitCommitter_AuthorThreaded(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
 	got := strings.TrimSpace(string(out))
-	require.Equal(t, "bob <bob@alice2-index>", got)
+	require.Equal(t, "bob <bob@yaad-index>", got)
 }
 
 // commit-side error must NOT fail the surrounding write — the vault
@@ -317,7 +317,7 @@ func TestWriter_WriteWithCommit_BestEffortOnCommitError(t *testing.T) {
 }
 
 // OnWrite errors must land in the operator's logs at WARN level so
-// auto-commit failures aren't silent (alice2-index — git missing
+// auto-commit failures aren't silent (yaad-index — git missing
 // in the docker image was undetectable because writer.go discarded
 // the error with `_ =`). The write itself MUST still succeed; the
 // audit-commit is best-effort per ADR-0008.

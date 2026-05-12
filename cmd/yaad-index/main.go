@@ -1,4 +1,4 @@
-// Command alice2-index is the HTTP server entry point.
+// Command yaad-index is the HTTP server entry point.
 //
 // See ADR-0001 (AI-first remote API), ADR-0002 (v1 endpoint surface),
 // ADR-0003 (kong CLI library), ADR-0004 (slog logging), and ADR-0006
@@ -34,13 +34,13 @@ import (
 	"github.com/yaad-index/yaad-index/internal/vault"
 )
 
-// ServeCmd implements `alice2-index serve`.
+// ServeCmd implements `yaad-index serve`.
 type ServeCmd struct {
 	Bind string `name:"bind" env:"YAAD_INDEX_BIND" default:"localhost:7433" help:"host:port to bind the HTTP server to."`
-	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/alice2-index/alice2.db" help:"path to the SQLite database file (auto-created on first run)."`
-	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/alice2-index/config.yaml" help:"path to the alice2-index config file (per ADR-0006). Missing file → no plugins; broken file → fail-fast."`
-	AuthRequired *bool `name:"auth-required" env:"YAAD_INDEX_AUTH_REQUIRED" help:"require Bearer JWT on protected routes (per alice2-index). Default true; pass --auth-required=false (or set YAAD_INDEX_AUTH_REQUIRED=false) for dev mode. Lowest priority is auth.required in the config file."`
-	KeysDir string `name:"keys-dir" env:"YAAD_INDEX_KEYS_DIR" help:"override auth.keys_dir from the config file. Public-key (public.pem) is loaded from here at startup to verify Bearer JWTs. Default /etc/alice2-index/keys/."`
+	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/alice2.db" help:"path to the SQLite database file (auto-created on first run)."`
+	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file (per ADR-0006). Missing file → no plugins; broken file → fail-fast."`
+	AuthRequired *bool `name:"auth-required" env:"YAAD_INDEX_AUTH_REQUIRED" help:"require Bearer JWT on protected routes (per yaad-index). Default true; pass --auth-required=false (or set YAAD_INDEX_AUTH_REQUIRED=false) for dev mode. Lowest priority is auth.required in the config file."`
+	KeysDir string `name:"keys-dir" env:"YAAD_INDEX_KEYS_DIR" help:"override auth.keys_dir from the config file. Public-key (public.pem) is loaded from here at startup to verify Bearer JWTs. Default /etc/yaad-index/keys/."`
 }
 
 // Run starts the HTTP server and blocks until SIGINT/SIGTERM, then performs
@@ -86,7 +86,7 @@ func (s *ServeCmd) Run() error {
 			return fmt.Errorf("parse log_level: %w", perr)
 		}
 		levelVar.Set(level)
-		// Operator-configured timezone per alice2-index. Parsed +
+		// Operator-configured timezone per yaad-index. Parsed +
 		// validated in cfg.Validate; defensive re-parse here keeps
 		// the wiring honest if Validate ever loosens. Empty / unset
 		// → leave clock package on its default (UTC), matching pre-
@@ -135,7 +135,7 @@ func (s *ServeCmd) Run() error {
 		handlerOpts = append(handlerOpts, api.WithCanonicalGuard(guard))
 		warnCanonicalEmissionGaps(logger, registry, guard)
 		// Always pass the configured cache_ttl_seconds through (even
-		// when 0 or negative) — alice2-index's resolveCacheTTL
+		// when 0 or negative) — yaad-index's resolveCacheTTL
 		// uses sentinel rules: positive=N seconds, 0=no opinion fall
 		// through, negative=infinite. Legacy the option was
 		// gated on > 0 because negative was a config-validation
@@ -163,19 +163,19 @@ func (s *ServeCmd) Run() error {
 		// place. The cold-reviewer's a prior PR catch on the upstream null-empty drift.
 		handlerOpts = append(handlerOpts, api.WithCanonicalEdgeTypes(cfg.CanonicalEdgeTypes))
 
-		// Per alice2-index: thread the operator-config UGC
+		// Per yaad-index: thread the operator-config UGC
 		// frontmatter-edge mappings into the UGC create handler so
 		// declared fields trigger canonical-edge derivation. Empty/
 		// nil mapping → derivation is a no-op (the dead config field
 		// from/a prior PR stays parseable but inert).
 		if len(cfg.UserContentFrontmatterEdges) > 0 {
 			handlerOpts = append(handlerOpts, api.WithUserContentFrontmatterEdges(cfg.UserContentFrontmatterEdges))
-			logger.Info("user_content_frontmatter_edges configured (per alice2-index)",
+			logger.Info("user_content_frontmatter_edges configured (per yaad-index)",
 				"mappings", len(cfg.UserContentFrontmatterEdges))
 		}
 	}
 
-	// Per alice2-index a prior PR: resolve auth.required (CLI > env > config
+	// Per yaad-index a prior PR: resolve auth.required (CLI > env > config
 	// > default-true) and load the public-key verifier when enforcement
 	// is on. `auth.required=false` skips the verifier load entirely so
 	// dev binaries don't need a keypair to start.
@@ -192,9 +192,9 @@ func (s *ServeCmd) Run() error {
 			"hint", "drop --auth-required / YAAD_INDEX_AUTH_REQUIRED / auth.required to enable Bearer-JWT enforcement")
 	}
 
-	// Per alice2-index a prior PR: serve /v1/jwks whenever a keypair is
+	// Per yaad-index a prior PR: serve /v1/jwks whenever a keypair is
 	// reachable on disk — independent of whether enforcement is on.
-	// Peers verifying alice2-index-issued tokens need the public key
+	// Peers verifying yaad-index-issued tokens need the public key
 	// regardless of how this server is enforcing on inbound requests.
 	// Dev-mode without keys → endpoint stays unregistered (404).
 	if jwksKeys := loadJWKSIfAvailable(logger, s.KeysDir, cfg); len(jwksKeys) > 0 {
@@ -209,7 +209,7 @@ func (s *ServeCmd) Run() error {
 		}
 		handlerOpts = append(handlerOpts, api.WithReindexHandler(api.HandleReindex(logger, reindexer)))
 
-		// Auto-commit (per alice2-index the source issue): construct a
+		// Auto-commit (per yaad-index the source issue): construct a
 		// GitCommitter when the vault root is a git working tree and
 		// the operator hasn't opted out via vault.auto_commit: false.
 		// The plain Writer call ignores the committer; only handlers
@@ -272,7 +272,7 @@ func (s *ServeCmd) Run() error {
 
 	listenErr := make(chan error, 1)
 	go func() {
-		logger.Info("alice2-index listening", "bind", s.Bind)
+		logger.Info("yaad-index listening", "bind", s.Bind)
 		err := srv.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			listenErr <- err
@@ -305,23 +305,23 @@ func (s *ServeCmd) Run() error {
 
 // CLI is the top-level command tree. New subcommands land alongside Serve.
 type CLI struct {
-	Serve ServeCmd `cmd:"" help:"Run the alice2-index HTTP server."`
+	Serve ServeCmd `cmd:"" help:"Run the yaad-index HTTP server."`
 	Plugins PluginsCmd `cmd:"" help:"Operator-facing plugin management."`
 	Reindex ReindexCmd `cmd:"" help:"Walk the markdown vault and rebuild the derived index."`
-	Cache CacheCmd `cmd:"" help:"Operator-facing cache lifecycle management (per alice2-index)."`
-	Keygen KeygenCmd `cmd:"" help:"Generate the RS256 keypair under keys_dir (per alice2-index)."`
-	IssueToken IssueTokenCmd `cmd:"issue-token" help:"Issue a pair-claim JWT for an operator/agent pair (per alice2-index)."`
+	Cache CacheCmd `cmd:"" help:"Operator-facing cache lifecycle management (per yaad-index)."`
+	Keygen KeygenCmd `cmd:"" help:"Generate the RS256 keypair under keys_dir (per yaad-index)."`
+	IssueToken IssueTokenCmd `cmd:"issue-token" help:"Issue a pair-claim JWT for an operator/agent pair (per yaad-index)."`
 	Command CommandCmd `cmd:"" help:"Dispatch a command-shape plugin invocation against the running daemon (per ADR-0022 +)."`
 	Fetch FetchCmd `cmd:"" help:"Dispatch a URL-shape plugin invocation against the running daemon (per ADR-0022 +)."`
 }
 
-// ReindexCmd implements `alice2-index reindex`. Walks the vault root
+// ReindexCmd implements `yaad-index reindex`. Walks the vault root
 // and (re)builds the SQLite index. Default mode is incremental
 // (mtime + content hash per file); --full forces a complete drop +
 // rebuild. Mirrors POST /v1/reindex.
 type ReindexCmd struct {
-	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/alice2-index/alice2.db" help:"path to the SQLite database file (matches the serve subcommand)."`
-	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/alice2-index/config.yaml" help:"path to the alice2-index config file. vault.path is read from here unless --vault-path overrides."`
+	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/alice2.db" help:"path to the SQLite database file (matches the serve subcommand)."`
+	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file. vault.path is read from here unless --vault-path overrides."`
 	VaultPath string `name:"vault-path" env:"YAAD_INDEX_VAULT_PATH" help:"override vault root (otherwise read from config.vault.path). Must be absolute."`
 	Full bool `name:"full" help:"drop every entity, edge, and provenance row before rebuilding (default: incremental)."`
 }
@@ -361,7 +361,7 @@ func (c *ReindexCmd) Run() error {
 		if vaultPath == "" {
 			vaultPath = cfg.Vault.Path
 		}
-		// Operator-configured timezone (per alice2-index PR-C) —
+		// Operator-configured timezone (per yaad-index PR-C) —
 		// reindex re-walks the vault and renders provenance in summary
 		// logs; without this its log lines would print in UTC even
 		// when the operator runs every other binary in their local TZ.
@@ -424,12 +424,12 @@ type PluginsCmd struct {
 	Reprobe PluginsReprobeCmd `cmd:"reprobe" help:"Force a re-probe of plugin capabilities (--init re-runs, fresh row written). Use after a Capabilities-shape change where the plugin author forgot to bump --version. Restart required to load the new shape into the running daemon."`
 }
 
-// PluginsClearCacheCmd implements `alice2-index plugins clear-cache`.
+// PluginsClearCacheCmd implements `yaad-index plugins clear-cache`.
 // With no flags, drops all plugin_capabilities rows. With --name <n>,
 // drops the single named row. The next server start re-inits each
 // plugin from scratch and re-populates the cache.
 type PluginsClearCacheCmd struct {
-	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/alice2-index/alice2.db" help:"path to the SQLite database file (matches the serve subcommand)."`
+	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/alice2.db" help:"path to the SQLite database file (matches the serve subcommand)."`
 	Name string `name:"name" help:"clear only the named plugin's cache row; omit to clear all."`
 }
 
@@ -450,8 +450,8 @@ func (c *PluginsClearCacheCmd) Run() error {
 	return clearPluginCache(context.Background(), st, c.Name, os.Stderr)
 }
 
-// PluginsReprobeCmd implements `alice2-index plugins reprobe [--name X]`
-// per alice2-index. With no --name, walks every plugin entry in
+// PluginsReprobeCmd implements `yaad-index plugins reprobe [--name X]`
+// per yaad-index. With no --name, walks every plugin entry in
 // the operator's config and re-runs --init for each. With --name X,
 // targets just that plugin.
 //
@@ -469,8 +469,8 @@ func (c *PluginsClearCacheCmd) Run() error {
 // to load the new Capabilities into the running registry. Hot-
 // reload via an admin route is out of scope for v1 Per the prior design,.
 type PluginsReprobeCmd struct {
-	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/alice2-index/alice2.db" help:"path to the SQLite database file (matches the serve subcommand)."`
-	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/alice2-index/config.yaml" help:"path to the alice2-index config file. Required — reprobe needs to know each plugin's binary path."`
+	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/alice2.db" help:"path to the SQLite database file (matches the serve subcommand)."`
+	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file. Required — reprobe needs to know each plugin's binary path."`
 	Name string `name:"name" help:"reprobe only the named plugin; omit to reprobe all configured plugins."`
 }
 
@@ -681,12 +681,12 @@ func clearPluginCache(ctx context.Context, st store.Store, name string, w io.Wri
 func main() {
 	var cli CLI
 	ctx := kong.Parse(&cli,
-		kong.Name("alice2-index"),
-		kong.Description("alice2-index — knowledge index server."),
+		kong.Name("yaad-index"),
+		kong.Description("yaad-index — knowledge index server."),
 		kong.UsageOnError(),
 	)
 	if err := ctx.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "alice2-index:", err)
+		fmt.Fprintln(os.Stderr, "yaad-index:", err)
 		os.Exit(1)
 	}
 }
@@ -865,7 +865,7 @@ func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, na
 				"name", name)
 			outcome = cacheMissFirstStart
 		case subprocess.VersionCacheKey(cached.Version) != subprocess.VersionCacheKey(probedVersion):
-			// Per alice2-index: compare on the cache-key prefix
+			// Per yaad-index: compare on the cache-key prefix
 			// (stripped of the `+<build-hash>` suffix) so a fresh
 			// rebuild with the same semver tag reuses the cache.
 			// Logged versions surface the FULL strings the plugin
@@ -966,7 +966,7 @@ func warnCanonicalEmissionGaps(logger *slog.Logger, registry *plugins.Registry, 
 // expandPath resolves a leading "~/" against the current user's home
 // directory. kong's default tag is a literal string and does not expand
 // shell variables; doing the expansion here keeps the default ergonomic
-// (`~/.local/share/alice2-index/alice2.db`) without pulling kong into a
+// (`~/.local/share/yaad-index/alice2.db`) without pulling kong into a
 // custom mapper.
 func expandPath(p string) (string, error) {
 	if !strings.HasPrefix(p, "~/") && p != "~" {
@@ -983,7 +983,7 @@ func expandPath(p string) (string, error) {
 }
 
 // buildAutoCommitter resolves the operator's auto-commit configuration
-// (per alice2-index the source issue) into a vault.Committer. Returns
+// (per yaad-index the source issue) into a vault.Committer. Returns
 // (nil, false) when auto-commit is off — the Writer's nil-committer
 // path takes over and behaves identically to legacy (plain atomic
 // write, no git invocation). Returns (committer, true) when the
@@ -1032,14 +1032,14 @@ func buildAutoCommitter(logger *slog.Logger, vc config.VaultEntry) (*vault.GitCo
 // (required, verifier, err) where verifier is nil when required is
 // false (the AnonymousAuth bypass doesn't need a verifier).
 //
-// Path precedence chain (locked, per alice2-index):
+// Path precedence chain (locked, per yaad-index):
 // - CLI flag --auth-required (kong-populated *bool)
 // - YAAD_INDEX_AUTH_REQUIRED env (kong-populated into the same field)
 // - cfg.Auth.Required (config field, *bool tri-state)
 // - default true
 //
 // Same chain for --keys-dir / YAAD_INDEX_KEYS_DIR / auth.keys_dir /
-// /etc/alice2-index/keys default.
+// /etc/yaad-index/keys default.
 func resolveAuth(logger *slog.Logger, cliRequired *bool, cliKeysDir string, cfg *config.Config) (bool, auth.Verifier, error) {
 	required := true
 	switch {

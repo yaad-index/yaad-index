@@ -60,7 +60,7 @@ const (
 	// fakeModeFetchOKWithStderr writes a diagnostic line to stderr
 	// before emitting a normal success response. Pins the issue
 	// contract: success-path stderr must surface through the
-	// alice2-index logger (otherwise's canonical-
+	// yaad-index logger (otherwise's canonical-
 	// axis instrumentation is dead-letter).
 	fakeModeFetchOKWithStderr = "fetch-ok-with-stderr"
 	// fakeModeFetchWithNotations exercises the the source issue a prior PRv2
@@ -609,7 +609,7 @@ func TestPlugin_FetchOnNonZeroExitReturnsError(t *testing.T) {
 
 // TestPlugin_FetchSuccessForwardsStderrToLogger pins the the source issue
 // contract: when a plugin writes to stderr but exits successfully,
-// the bytes must surface through alice2-index's logger (otherwise
+// the bytes must surface through yaad-index's logger (otherwise
 // canonical-axis-style instrumentation in plugins is dead-letter).
 //
 // The peek-into-error path on non-zero exit is unchanged (covered by
@@ -742,7 +742,7 @@ func TestPlugin_FetchHonoursTimeout(t *testing.T) {
 // TestRunVersion_AcceptsBareString covers the simple shape: plugin
 // prints `0.1.0\n` on --version, exit 0. This is the lightest possible
 // version probe a plugin author can implement.
-// TestVersionCacheKey pins the hash-strip rule per alice2-index:
+// TestVersionCacheKey pins the hash-strip rule per yaad-index:
 // the cache-key prefix is everything before the first `+`. Any
 // post-`+` portion is build metadata (typically a git short hash)
 // that the daemon MUST NOT include in the cache key — otherwise
@@ -850,7 +850,7 @@ func TestNewWithCapabilities_SkipsInit(t *testing.T) {
 	assert.Equal(t, "0.1.0", p.Capabilities().Version)
 }
 
-// pluginEnv carries YAAD_TIMEZONE per alice2-index PR-D so
+// pluginEnv carries YAAD_TIMEZONE per yaad-index PR-D so
 // subprocess plugins can stamp provenance fetched_at in the
 // operator's TZ.
 //
@@ -897,7 +897,7 @@ func TestPluginEnv_CarriesYaadTimezone(t *testing.T) {
 func TestPluginEnv_CarriesPluginStagingDir(t *testing.T) {
 	t.Cleanup(func() { SetStagingDir("") })
 
-	SetStagingDir("/var/lib/alice2-index/staging")
+	SetStagingDir("/var/lib/yaad-index/staging")
 	envv := pluginEnv()
 	var found string
 	for _, kv := range envv {
@@ -907,7 +907,7 @@ func TestPluginEnv_CarriesPluginStagingDir(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, found, "YAAD_PLUGIN_STAGING_DIR must be set in plugin env")
-	assert.Equal(t, "/var/lib/alice2-index/staging", found)
+	assert.Equal(t, "/var/lib/yaad-index/staging", found)
 
 	// Reset → falls back to DefaultPluginStagingDir.
 	SetStagingDir("")

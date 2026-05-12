@@ -21,7 +21,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/vault"
 )
 
-// Per ADR-0013 §6 / alice2-index: `GET /v1/needs-fill` returns
+// Per ADR-0013 §6 / yaad-index: `GET /v1/needs-fill` returns
 // gap-callable entities (DB `gap_call_done_at IS NULL` AND vault
 // `gaps:` non-empty) with the full needs_fill payload — same shape
 // as the cache-hit ingest envelope. Pagination uses an opaque

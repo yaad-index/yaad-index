@@ -53,7 +53,7 @@ func newFakeIngestServer(t *testing.T, respCode int, respBody string) *fakeInges
 }
 
 // TestCommandCmd_BuildsBangShapeInput pins the wire-shape contract
-// for `alice2-index command <plugin> <cmd>`: the request body's `url`
+// for `yaad-index command <plugin> <cmd>`: the request body's `url`
 // field is the concatenated `<plugin>: !<cmd>` single-string input
 // per ADR-0022 §6.
 func TestCommandCmd_BuildsBangShapeInput(t *testing.T) {
@@ -75,7 +75,7 @@ func TestCommandCmd_BuildsBangShapeInput(t *testing.T) {
 }
 
 // TestFetchCmd_BuildsURLShapeInput pins the wire-shape for
-// `alice2-index fetch <plugin> <pattern>`: the request body's `url` is
+// `yaad-index fetch <plugin> <pattern>`: the request body's `url` is
 // `<plugin>: <pattern>` (no bang sigil).
 func TestFetchCmd_BuildsURLShapeInput(t *testing.T) {
 	t.Parallel()

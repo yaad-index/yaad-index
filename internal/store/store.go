@@ -1,4 +1,4 @@
-// Package store is the persistence boundary for alice2-index.
+// Package store is the persistence boundary for yaad-index.
 //
 // Handlers depend only on the Store interface; SQL strings, drivers, and
 // schema details live behind it (per the architectural decision in step 8's
@@ -18,7 +18,7 @@ import (
 // PRs wire the param plumbing).
 //
 // GapCallDoneAt tracks whether the AI has been gap-called for the
-// entity's current fetch-cycle (per ADR-0013 §4 + §5 / alice2-index).
+// entity's current fetch-cycle (per ADR-0013 §4 + §5 / yaad-index).
 // Set on a successful fill (any 2xx response from
 // `POST /v1/entities/{id}/fill`, full or partial); cleared by an
 // upstream refetch (`force_refetch=true` or TTL-driven). nil when
@@ -160,7 +160,7 @@ type FetchAttachmentRef struct {
 
 // DroppedCanonicalKindCount records how many times a plugin's
 // emitted canonical-kind stub was dropped at the orchestrator's
-// config-filter (per ADR-0013 §3 / alice2-index). The count
+// config-filter (per ADR-0013 §3 / yaad-index). The count
 // accumulates across the daemon's lifetime; it persists in the
 // `dropped_canonical_kinds` table so a restart doesn't reset the
 // drift signal. `/v1/cv-status` reads this for the
@@ -199,7 +199,7 @@ type Hit struct {
 }
 
 // ContextNeighbor is one entry in a context-traversal result (per
-// alice2-index the source issue / `GET /v1/entities/{id}/context`). Carries the
+// yaad-index the source issue / `GET /v1/entities/{id}/context`). Carries the
 // edge that introduced the neighbor, the neighbor entity itself, and
 // the BFS depth at which it was first reached. Entities are visited
 // at most once across a traversal — back-edges that would re-introduce
@@ -304,7 +304,7 @@ type Store interface {
 	// when the entity doesn't exist.
 	ClearGapCallDone(ctx context.Context, entityID string) error
 	// IncDroppedCanonicalKind bumps the per-(plugin, kind) drop
-	// counter (per ADR-0013 §3 / alice2-index a prior PR). Called by
+	// counter (per ADR-0013 §3 / yaad-index a prior PR). Called by
 	// the ingest orchestrator at the moment a plugin-emitted
 	// canonical stub is filtered out by the operator's
 	// `canonical_kinds:` config — the same site that fires the
@@ -328,7 +328,7 @@ type Store interface {
 	ListDroppedCanonicalEdges(ctx context.Context) ([]DroppedCanonicalEdgeCount, error)
 
 	// ListGapCallableCandidates returns entities whose gap-call-done
-	// flag is NULL (per ADR-0013 §4 + §6 / alice2-index),
+	// flag is NULL (per ADR-0013 §4 + §6 / yaad-index),
 	// ordered by `id ASC` for deterministic pagination. afterID,
 	// when non-empty, filters to ids strictly greater (cursor
 	// resume). limit caps the returned slice. The "actually has
@@ -339,12 +339,12 @@ type Store interface {
 	ListGapCallableCandidates(ctx context.Context, afterID string, limit int) ([]Entity, error)
 	GetEdgesFor(ctx context.Context, entityID string, types []string) ([]Edge, error)
 	// GetEdgesTo is the inbound mirror of GetEdgesFor — edges whose
-	// to_id matches the supplied id. Per alice2-index; the new
+	// to_id matches the supplied id. Per yaad-index; the new
 	// GET /v1/edges?direction=in path reads through this helper.
 	GetEdgesTo(ctx context.Context, entityID string, types []string) ([]Edge, error)
 	// GetEdgesForMany is GetEdgesFor over a frontier of source ids in
 	// a single SQL query. Used by the BFS context traversal (per
-	// alice2-index the source issue) so a depth-3 walk doesn't fan out into
+	// yaad-index the source issue) so a depth-3 walk doesn't fan out into
 	// N round-trips on each frontier. Empty fromIDs → empty result
 	// (not an error). Empty types → no type filter.
 	GetEdgesForMany(ctx context.Context, fromIDs []string, types []string) ([]Edge, error)
@@ -352,7 +352,7 @@ type Store interface {
 
 	// DeleteEdgesByTypeFrom removes every edge of the given type
 	// originating at fromID. Used by the canonical_type fill path
-	// (alice2-index) to implement idempotent re-fill semantics:
+	// (yaad-index) to implement idempotent re-fill semantics:
 	// before creating new edges from a re-filled canonical_type
 	// gap, the prior fill's edges are deleted so the post-fill
 	// edge set is exactly the new fill's labels. Returns the
@@ -360,7 +360,7 @@ type Store interface {
 	DeleteEdgesByTypeFrom(ctx context.Context, fromID, edgeType string) (int64, error)
 
 	// GetContextNeighbors walks outbound edges from rootID up to
-	// maxDepth hops in BFS order (per alice2-index the source issue). The
+	// maxDepth hops in BFS order (per yaad-index the source issue). The
 	// returned root is the canonical store.Entity for rootID;
 	// neighbors are flattened (depth-major; arbitrary within a
 	// depth) and capped at maxResults — when capped, truncated is
@@ -409,7 +409,7 @@ type Store interface {
 	// `MAX(last_indexed_at)` across the reindex_files table. The
 	// second return is `false` when no reindex has ever run (the
 	// table is empty). Used by `/v1/cv-status` per ADR-0013 §3 /
-	// alice2-index a prior PR to surface "when was the last full
+	// yaad-index a prior PR to surface "when was the last full
 	// re-derive?" alongside the drift counters.
 	LastReindexAt(ctx context.Context) (time.Time, bool, error)
 	ListReindexFiles(ctx context.Context) ([]ReindexFile, error)
@@ -445,7 +445,7 @@ type Store interface {
 	// Plugin capabilities cache . Operator-only — these
 	// methods aren't reachable from the agent-facing /v1 API surface;
 	// they're called by the server-startup registration path
-	// (cmd/alice2-index/main.go) and the `alice2-index plugins clear-cache`
+	// (cmd/yaad-index/main.go) and the `yaad-index plugins clear-cache`
 	// CLI subcommand. Version-driven invalidation: a freshly probed
 	// version mismatch on registration triggers an Upsert; the CLI
 	// path force-drops the row regardless.

@@ -1,14 +1,14 @@
-// Auth CLI subcommands (per alice2-index a prior PR):
+// Auth CLI subcommands (per yaad-index a prior PR):
 //
-// - `alice2-index keygen` — generate the RS256 keypair the
+// - `yaad-index keygen` — generate the RS256 keypair the
 // operational config relies on.
-// - `alice2-index issue-token` — sign a pair-claim JWT for an
+// - `yaad-index issue-token` — sign a pair-claim JWT for an
 // operator/agent pair. Prints the token on stdout.
 //
 // Both subcommands resolve `--keys-dir` (or the
 // `YAAD_INDEX_KEYS_DIR` env, or the `auth.keys_dir` config field
 // — in that precedence order). The default fallback is
-// `/etc/alice2-index/keys/` matching the operational deployment
+// `/etc/yaad-index/keys/` matching the operational deployment
 // shape.
 
 package main
@@ -28,20 +28,20 @@ import (
 // authDefaultKeysDir is the lowest-priority fallback when
 // neither the CLI flag, env var, nor config file specifies a
 // keys directory. Matches the documented operational deployment
-// shape — sibling of `/etc/alice2-index/config.yaml`.
-const authDefaultKeysDir = "/etc/alice2-index/keys"
+// shape — sibling of `/etc/yaad-index/config.yaml`.
+const authDefaultKeysDir = "/etc/yaad-index/keys"
 
 // authDefaultTTL is the issue-token CLI fallback when neither
 // the `--ttl` flag nor `auth.default_ttl` is set.
 const authDefaultTTL = 90 * 24 * time.Hour
 
-// KeygenCmd implements `alice2-index keygen`. Generates an RS256
+// KeygenCmd implements `yaad-index keygen`. Generates an RS256
 // keypair and writes private.pem + public.pem into the resolved
 // keys directory. Refuses to overwrite existing files unless
 // --force is passed.
 type KeygenCmd struct {
-	KeysDir string `name:"keys-dir" env:"YAAD_INDEX_KEYS_DIR" help:"directory holding private.pem + public.pem. Defaults to /etc/alice2-index/keys/, falls back through YAAD_INDEX_KEYS_DIR env and auth.keys_dir config."`
-	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/alice2-index/config.yaml" help:"path to the alice2-index config file (read for auth.keys_dir if --keys-dir / env not set)."`
+	KeysDir string `name:"keys-dir" env:"YAAD_INDEX_KEYS_DIR" help:"directory holding private.pem + public.pem. Defaults to /etc/yaad-index/keys/, falls back through YAAD_INDEX_KEYS_DIR env and auth.keys_dir config."`
+	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file (read for auth.keys_dir if --keys-dir / env not set)."`
 	Force bool `name:"force" help:"overwrite existing private.pem / public.pem instead of refusing."`
 }
 
@@ -58,7 +58,7 @@ func (c *KeygenCmd) Run() error {
 	return nil
 }
 
-// IssueTokenCmd implements `alice2-index issue-token`. Signs a
+// IssueTokenCmd implements `yaad-index issue-token`. Signs a
 // pair-claim JWT (operator + agent + iat + exp + kid) using the
 // RS256 private key under the resolved keys directory. Prints
 // the token on stdout — operators redirect into a secrets
@@ -66,10 +66,10 @@ func (c *KeygenCmd) Run() error {
 type IssueTokenCmd struct {
 	Operator string `name:"operator" required:"" help:"the human (resource owner). Stamped on the token's operator claim."`
 	Agent string `name:"agent" help:"the agent identity (the actor calling the API). Stamped on the token's sub claim. Required unless --operator-only is set."`
-	OperatorOnly bool `name:"operator-only" help:"issue an operator-only token (Subject == Operator). Required for CLI dispatch (alice2-index / ADR-0022 §6 — command-shape inputs reject pair-claim tokens). Sets --agent equal to --operator automatically; mutually exclusive with --agent."`
+	OperatorOnly bool `name:"operator-only" help:"issue an operator-only token (Subject == Operator). Required for CLI dispatch (yaad-index / ADR-0022 §6 — command-shape inputs reject pair-claim tokens). Sets --agent equal to --operator automatically; mutually exclusive with --agent."`
 	TTL string `name:"ttl" env:"YAAD_INDEX_DEFAULT_TTL" help:"token lifetime (Go time.ParseDuration: 24h, 30m, 2160h). Defaults via auth.default_ttl config, then 90d."`
-	KeysDir string `name:"keys-dir" env:"YAAD_INDEX_KEYS_DIR" help:"directory holding private.pem (default /etc/alice2-index/keys/)."`
-	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/alice2-index/config.yaml" help:"path to the alice2-index config file (read for auth.* defaults if CLI / env not set)."`
+	KeysDir string `name:"keys-dir" env:"YAAD_INDEX_KEYS_DIR" help:"directory holding private.pem (default /etc/yaad-index/keys/)."`
+	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file (read for auth.* defaults if CLI / env not set)."`
 }
 
 func (c *IssueTokenCmd) Run() error {
@@ -123,7 +123,7 @@ func (c *IssueTokenCmd) Run() error {
 // resolveKeysDir walks the precedence chain: CLI flag (or env
 // via Kong's `env:` tag — which Kong populates into the same
 // field) wins → config file's `auth.keys_dir` next → finally
-// the documented `/etc/alice2-index/keys/` default.
+// the documented `/etc/yaad-index/keys/` default.
 //
 // Empty config-file path is fine; a broken / non-existent
 // config doesn't error out here (the keygen subcommand may run

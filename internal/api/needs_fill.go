@@ -1,4 +1,4 @@
-// Pull-based batch gap-call surface (per ADR-0013 §6 / alice2-index).
+// Pull-based batch gap-call surface (per ADR-0013 §6 / yaad-index).
 //
 // Returns entities that are currently gap-callable — the AI has not yet
 // been called for the entity's current fetch-cycle (DB
@@ -51,8 +51,8 @@ type needsFillGapMeta struct {
 	MaxLength int `json:"max_length,omitempty"`
 	Values []string `json:"values,omitempty"`
 	// Kinds carries the canonical-kind allowlist for
-	// `type: canonical_type` gaps per alice2-index. Surfaced
-	// here (alice2-index) so the agent's UI sees the
+	// `type: canonical_type` gaps per yaad-index. Surfaced
+	// here (yaad-index) so the agent's UI sees the
 	// resolution set at fill-prompt construction time. Wildcard
 	// `["*"]` round-trips verbatim; downstream callers expand
 	// against the operator's full canonical_kinds registry per

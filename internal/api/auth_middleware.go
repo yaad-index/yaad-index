@@ -12,7 +12,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/auth"
 )
 
-// Bearer-token authentication middleware (per alice2-index, a prior PR of
+// Bearer-token authentication middleware (per yaad-index, a prior PR of
 // the auth series). RequireAuth extracts `Authorization: Bearer <token>`,
 // verifies via the auth.Verifier from a prior PR, attaches the parsed Claim to
 // the request context, and emits a canonical 401 envelope on any failure.
@@ -132,12 +132,12 @@ const (
 // IsAnonymousClaim reports whether the claim is the synthetic shape
 // stamped by AnonymousAuth in dev-mode (auth.required=false). Handlers
 // that derive enforcement from the claim's identity (e.g. comments
-// author validation per alice2-index) branch on this so dev-mode
+// author validation per yaad-index) branch on this so dev-mode
 // preserves pre-auth behavior — there is no real identity to enforce
 // against in the bypass path.
 //
 // Production RequireAuth never produces this shape: the verifier
-// rejects tokens whose `iss` is not "alice2-index", and signed tokens
+// rejects tokens whose `iss` is not "yaad-index", and signed tokens
 // carry the operator's real keypair-stamped subject + operator.
 func IsAnonymousClaim(c *auth.Claim) bool {
 	return c != nil && c.Subject == anonymousSubject && c.Operator == anonymousOperator
@@ -145,7 +145,7 @@ func IsAnonymousClaim(c *auth.Claim) bool {
 
 // ClaimHasOperatorAuthority reports whether the claim represents an
 // identity authorized to take operator-attributed actions on behalf
-// of a real human operator. The pair-claim model (alice2-index):
+// of a real human operator. The pair-claim model (yaad-index):
 // every authenticated request carries (Subject, Operator). Two valid
 // shapes hold operator authority:
 //
@@ -175,7 +175,7 @@ func ClaimHasOperatorAuthority(c *auth.Claim) bool {
 
 // ClaimIsOperatorOnly reports whether the claim is the operator-only
 // shape required for CLI dispatch (command-shape input on
-// /v1/ingest, per alice2-index + ADR-0022 §6).
+// /v1/ingest, per yaad-index + ADR-0022 §6).
 //
 // Operator-only = Subject == Operator: the operator issued and
 // signed their own token, no agent intermediary. Pair-claim tokens

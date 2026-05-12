@@ -106,7 +106,7 @@ func agentFillReq(t *testing.T, h http.Handler, id, tok string, fields map[strin
 }
 
 // TestAgentFill_CanonicalType_HappyPath_ObjectForm covers the
-// primary canonical_type path on agent-fill per alice2-index:
+// primary canonical_type path on agent-fill per yaad-index:
 // agent submits a list of `{name, kind}` objects, daemon
 // slugifies each via slug.Slug, edges land from the source entity
 // to the derived canonical-label endpoints. Mirrors the
@@ -357,7 +357,7 @@ func TestAgentFill_LegacyFieldsStillWork(t *testing.T) {
 }
 
 // TestNeedsFill_GapMetadataKindsSurfaces pins the nice-to-have
-// per alice2-index: when a canonical_type gap is open, the
+// per yaad-index: when a canonical_type gap is open, the
 // `gap_metadata` wire field surfaces the gap's `kinds` allowlist
 // so the agent's UI can render the resolution set at fill-prompt
 // time.

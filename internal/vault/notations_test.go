@@ -58,7 +58,7 @@ func TestMarshal_NotationsOmitemptyDropsField(t *testing.T) {
 
 // TestMarshal_NotationsRoundTrip — Marshal then Unmarshal preserves
 // the Notations slice in order. End-to-end of the cache-key
-// vault-roundtrip path that reindex relies on (per alice2-index issue
+// vault-roundtrip path that reindex relies on (per yaad-index issue
 // a prior PR).
 func TestMarshal_NotationsRoundTrip(t *testing.T) {
 	t.Parallel()

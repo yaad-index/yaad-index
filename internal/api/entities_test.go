@@ -233,7 +233,7 @@ func provenanceSources(in []provenanceEntry) []string {
 	return out
 }
 
-// Per alice2-index: `with_edges` accepts three "all types" shapes
+// Per yaad-index: `with_edges` accepts three "all types" shapes
 // in addition to the comma-separated type filter. These tests pin
 // the matrix.
 

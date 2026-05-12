@@ -73,7 +73,7 @@ var kindByQID = map[string]string{
 
 // KnownCanonicalKinds is the set of canonical kinds yaad-wikipedia
 // declares it MAY emit, surfaced through `Capabilities.
-// CanonicalKindsEmitted` per ADR-0008. alice2-index startup warns
+// CanonicalKindsEmitted` per ADR-0008. yaad-index startup warns
 // operators when a plugin declares a canonical kind they haven't
 // enabled in their `canonical_kinds:` config, so this list shapes
 // the discovery message.

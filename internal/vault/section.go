@@ -1,4 +1,4 @@
-// Section parser for UGC bodies per ADR-0012 / alice2-index.
+// Section parser for UGC bodies per ADR-0012 / yaad-index.
 //
 // The containment model: every markdown ATX heading (`#` … `######`)
 // is one addressable section in a flat list. A section's body
@@ -234,7 +234,7 @@ func ResolveSectionAddr(sections []Section, addr string) (int, bool) {
 // the next section's heading onto the same line as the new content.
 //
 // Returns an error when idx is out of range. Used by the PUT
-// /v1/user-content/{id}/sections/{sec} handler per alice2-index.
+// /v1/user-content/{id}/sections/{sec} handler per yaad-index.
 func ReplaceSectionBody(body string, sections []Section, idx int, newSectionBody string) (string, error) {
 	if idx < 0 || idx >= len(sections) {
 		return "", fmt.Errorf("section index %d out of range [0, %d)", idx, len(sections))

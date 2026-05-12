@@ -1,5 +1,5 @@
 // Per-(plugin, kind/edge_type) drop counters — the durable signal
-// behind `/v1/cv-status` (per ADR-0013 §3 / alice2-index a prior PR).
+// behind `/v1/cv-status` (per ADR-0013 §3 / yaad-index a prior PR).
 // The orchestrator increments these at the existing config-filter
 // drop site (the startup-WARN site) so operators see an aggregate
 // count of "you would have materialized N more entities" rather

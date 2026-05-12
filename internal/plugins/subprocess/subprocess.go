@@ -104,7 +104,7 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // VersionCacheKey returns the cache-key prefix of a plugin's
-// `--version` output per alice2-index: anything before the
+// `--version` output per yaad-index: anything before the
 // first `+` separator. The post-`+` portion (typically a git
 // short hash like `+deadbeef`) is build metadata that the daemon
 // MUST NOT include in the cache key — otherwise every rebuild
@@ -338,7 +338,7 @@ func (p *Plugin) Stream(ctx context.Context, rawURL string, onEnvelope plugins.E
 
 	// Success-path stderr is plugin diagnostic output (per
 	//'s canonical-axis traces, e.g.). Forward it
-	// through the alice2-index logger so operators can see it via
+	// through the yaad-index logger so operators can see it via
 	// docker logs (the source issue). Emitted regardless of run outcome —
 	// non-zero exit's stderr is also valuable for debugging.
 	if trimmed := strings.TrimSpace(stderr.String()); trimmed != "" {
@@ -615,7 +615,7 @@ func (p *Plugin) runInit() (Capabilities, error) {
 	rejectPluginInstructionFields(p.logger, p.name, stdout.Bytes())
 
 	// ADR-0019 step 3: typed-gap validation. Mirror the operator-
-	// config validation from alice2-index — a plugin emitting an
+	// config validation from yaad-index — a plugin emitting an
 	// invalid gap shape (bad fill_strategy, malformed range, enum
 	// without values) fails server start so the plugin author sees
 	// the typo before any agent or operator hits it.
@@ -716,7 +716,7 @@ type fetchResponse struct {
 	// tracker decides the wire-level `state` from which is populated.
 	Options map[string]optionJSON `json:"options,omitempty"`
 	// Notations is the list of every input form the plugin knows
-	// resolves to this entity (per alice2-index the source issue a prior PR).
+	// resolves to this entity (per yaad-index the source issue a prior PR).
 	// The orchestrator (a prior PR) writes these to entity_notations
 	// after a successful Fetch so subsequent ingests of an
 	// equivalent form short-circuit on the cache. Empty / absent
@@ -725,7 +725,7 @@ type fetchResponse struct {
 	// land here as nil — backward compatible.
 	Notations []string `json:"notations,omitempty"`
 	// Aliases is the list of alternative labels the plugin knows
-	// for this entity (per alice2-index the source issue). Two shapes
+	// for this entity (per yaad-index the source issue). Two shapes
 	// coexist in the flat list — bare strings for wikilink
 	// rendering, `<edge-type>: <label>` prefixes for typed
 	// reverse-lookup. The orchestrator dedupes against ADR-0011's
@@ -734,7 +734,7 @@ type fetchResponse struct {
 	// emit no `aliases` field at all (current behavior preserved).
 	Aliases []string `json:"aliases,omitempty"`
 	// CacheTTLSeconds is the optional per-fetch cache TTL override
-	// (per alice2-index). Pointer-shape on the wire so absent /
+	// (per yaad-index). Pointer-shape on the wire so absent /
 	// explicit-zero / positive / negative are all distinguishable.
 	// JSON null (or omitted) → no override; the orchestrator's
 	// resolveCacheTTL falls through to plugin-level / global-level.
@@ -894,7 +894,7 @@ func (r *fetchResponse) toFetchResult(caps Capabilities) *plugins.FetchResult {
 		}
 	}
 
-	// Notations (per alice2-index the source issue a prior PR). Copy through; the
+	// Notations (per yaad-index the source issue a prior PR). Copy through; the
 	// orchestrator (a prior PR) decides what to do with them. Empty/absent
 	// surfaces as nil — backwards compatible with plugins that don't
 	// emit the field yet.
@@ -902,7 +902,7 @@ func (r *fetchResponse) toFetchResult(caps Capabilities) *plugins.FetchResult {
 		out.Notations = append([]string(nil), r.Notations...)
 	}
 
-	// Aliases (per alice2-index the source issue a prior PR). Same defensive copy
+	// Aliases (per yaad-index the source issue a prior PR). Same defensive copy
 	// shape as Notations — orchestrator dedupes against the ADR-
 	// 0011 title-synthesized alias at vault-write time. Empty
 	// surfaces as nil; plugins not yet emitting aliases see no
@@ -1001,7 +1001,7 @@ func (r *fetchResponse) toFetchResult(caps Capabilities) *plugins.FetchResult {
 			OK: true,
 		}}
 	}
-	// Per-fetch cache TTL override (per alice2-index). Pointer
+	// Per-fetch cache TTL override (per yaad-index). Pointer
 	// passed verbatim — the orchestrator interprets nil vs *=0 vs
 	// non-zero per the sentinel rules.
 	out.CacheTTLSeconds = r.CacheTTLSeconds
@@ -1068,11 +1068,11 @@ func stagingDirOrDefault() string {
 }
 
 // pluginEnv returns the parent process environment extended with
-// alice2-index-specific variables that subprocess plugins read at
+// yaad-index-specific variables that subprocess plugins read at
 // startup:
 //
 // - YAAD_TIMEZONE — the operator-configured IANA timezone (per
-// alice2-index PR-D). Plugins use this when stamping
+// yaad-index PR-D). Plugins use this when stamping
 // `provenance.fetched_at` so the operator-TZ surface stays
 // end-to-end consistent.
 //

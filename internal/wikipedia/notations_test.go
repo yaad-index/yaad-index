@@ -6,7 +6,7 @@ import (
 )
 
 // Test_notationsFor pins the per-article notation set yaad-wikipedia
-// emits for the entity_notations cache (per alice2-index the source issue
+// emits for the entity_notations cache (per yaad-index the source issue
 // a prior PRv2). Always includes the originating input first; derives
 // canonical URL, mobile-subdomain URL, and shorthand forms.
 // Duplicates dedupe but preserve input-first ordering.

@@ -1,4 +1,4 @@
-// Cache TTL resolution per alice2-index (three-level hierarchy).
+// Cache TTL resolution per yaad-index (three-level hierarchy).
 //
 // resolveCacheTTL walks levels {entry-input > plugin-Capabilities >
 // global-config} and returns the first non-zero value found. Each
@@ -35,7 +35,7 @@ import (
 
 // resolveCacheExpires runs the three-level resolution chain (entry,
 // plugin, global) and translates the resulting duration into the
-// absolute-date `cache_expires:` stamp per alice2-index.
+// absolute-date `cache_expires:` stamp per yaad-index.
 //
 // `fetchedAt` is the new ingest's freshest provenance.fetched_at —
 // the anchor for the absolute expiry date. The returned pointer is:

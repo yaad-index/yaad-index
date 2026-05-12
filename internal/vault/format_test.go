@@ -102,7 +102,7 @@ func TestMarshal_RoundTrip(t *testing.T) {
 	assert.Equal(t, expectedClean, got.CleanContent)
 }
 
-// TestMarshal_CacheExpiresRoundTrip pins the new alice2-index
+// TestMarshal_CacheExpiresRoundTrip pins the new yaad-index
 // `cache_expires:` frontmatter field: nil / Never / dated values
 // all round-trip through Marshal → Unmarshal cleanly.
 func TestMarshal_CacheExpiresRoundTrip(t *testing.T) {
@@ -459,7 +459,7 @@ func TestUnmarshal_CommentsFromBodyTable(t *testing.T) {
 	assert.Equal(t, "2026-04-16", got.Comments[1].Date.UTC().Format("2006-01-02"))
 }
 
-// TestUnmarshal_CommentsWithOperator pins the alice2-index a prior PR
+// TestUnmarshal_CommentsWithOperator pins the yaad-index a prior PR
 // extension: heading rows of the form `<date> — <author> @ <operator>`
 // parse the operator into Comment.Operator. Backward compat: the
 // legacy form (`<date> — <author>`) leaves Operator empty, so legacy

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Per ADR-0013 §3 / alice2-index a prior PR: the dropped-canonical
+// Per ADR-0013 §3 / yaad-index a prior PR: the dropped-canonical
 // counters surface canonical-vocabulary drift on `/v1/cv-status`.
 // Tests exercise increment + idempotency + list-ordering +
 // input-validation + persistence-across-restart at the store

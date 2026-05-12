@@ -55,7 +55,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux := http.NewServeMux()
 	tracker := newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher)
 
-	// Per alice2-index a prior PR: the protect wrapper enforces Bearer-JWT
+	// Per yaad-index a prior PR: the protect wrapper enforces Bearer-JWT
 	// auth on every protected route. When auth.required=false the
 	// AnonymousAuth bypass attaches a synthetic claim instead — handlers
 	// dereferencing ClaimFromContext continue to work either way.
@@ -102,7 +102,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg))))
 	mux.Handle("POST /v1/entities/{id}/comments", protect(http.HandlerFunc(handleComments(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg))))
 
-	// User-content (UGC) read + write surface per alice2-index
+	// User-content (UGC) read + write surface per yaad-index
 	// (PR-B added the GETs; PR-C added the writes).
 	mux.Handle("GET /v1/user-content/{id}", protect(http.HandlerFunc(handleUserContentRead(logger, st, cfg.vaultReader))))
 	mux.Handle("GET /v1/user-content/{id}/sections", protect(http.HandlerFunc(handleUserContentSectionsList(logger, st, cfg.vaultReader))))
@@ -195,7 +195,7 @@ func WithVaultIO(w *vault.Writer, r *vault.Reader) HandlerOption {
 // WithCanonicalGuard wires the operator-config-derived canonical
 // kinds / edge types validator into the ingest path (per ADR-0008 /
 // a prior PR). When a plugin emits canonical-shape stubs alongside its
-// source-shape entity, alice2-index filters them through this guard;
+// source-shape entity, yaad-index filters them through this guard;
 // only kinds in the operator's `canonical_kinds:` config materialize.
 //
 // Omitting this option is observationally equivalent to passing a
@@ -207,7 +207,7 @@ func WithCanonicalGuard(g *config.CanonicalGuard) HandlerOption {
 }
 
 // WithCacheTTL bounds how long a notation cache hit is considered
-// fresh (per alice2-index the source issue a prior PR; reshaped under PR for
+// fresh (per yaad-index the source issue a prior PR; reshaped under PR for
 // the three-level resolution chain). The argument is taken as the
 // global-level input to resolveCacheTTL at ingest time — sentinel
 // rules apply (positive = N seconds, negative = infinite, zero =
@@ -248,7 +248,7 @@ func WithFillInstruction(text string) HandlerOption {
 
 // WithCanonicalEdgeTypes surfaces the operator's
 // `canonical_edge_types` list onto introspection endpoints (per
-// alice2-index / ADR-0013 §7). The list is read-only on the
+// yaad-index / ADR-0013 §7). The list is read-only on the
 // handler side — the same caller-must-not-mutate contract as the
 // registry map. Empty / nil → empty list on the wire.
 func WithCanonicalEdgeTypes(edgeTypes []string) HandlerOption {
@@ -274,7 +274,7 @@ func WithCanonicalEdgeTypes(edgeTypes []string) HandlerOption {
 // **Caller must not mutate the map after passing it.** The handler
 // retains the reference and surfaces it verbatim on every
 // needs_fill response — concurrent mutation under load races the
-// JSON encoder. alice2-index v1 treats config as immutable post-
+// JSON encoder. yaad-index v1 treats config as immutable post-
 // startup so this is safe today; documenting the contract pre-
 // empts a config-hot-reload regression. Defensive-copy is a future
 // option if the contract has to relax.
@@ -285,7 +285,7 @@ func WithCanonicalKindRegistry(reg map[string]config.CanonicalKindConfig) Handle
 }
 
 // WithUserContentFrontmatterEdges wires the operator's
-// `user_content_frontmatter_edges:` config block per alice2-index
+// `user_content_frontmatter_edges:` config block per yaad-index
 // (re-implementation of on the ADR-0021 contract). When
 // set, the UGC create handler walks each declared
 // frontmatter-field name on the request body's `data` map and
@@ -306,7 +306,7 @@ func WithUserContentFrontmatterEdges(m map[string]config.UserContentFrontmatterE
 
 // WithAuthVerifier wires the auth.Verifier (constructed in main.go from
 // `<keys_dir>/public.pem`) onto the protected-route middleware (per
-// alice2-index a prior PR). When this option is omitted, protected routes
+// yaad-index a prior PR). When this option is omitted, protected routes
 // fall through to AnonymousAuth — useful for tests that don't exercise
 // the auth path. Production main.go always wires both this and
 // WithAuthRequired.
@@ -317,7 +317,7 @@ func WithAuthVerifier(v auth.Verifier) HandlerOption {
 }
 
 // WithAuthRequired toggles the Bearer-JWT enforcement on protected
-// routes (per alice2-index a prior PR). True → RequireAuth; false →
+// routes (per yaad-index a prior PR). True → RequireAuth; false →
 // AnonymousAuth bypass with a synthetic claim. Default false so tests
 // that don't construct a verifier continue working; production main.go
 // resolves the precedence chain (CLI > env > config > default-true)
@@ -344,7 +344,7 @@ func WithAttachmentsDispatcher(d *attachments.Dispatcher) HandlerOption {
 }
 
 // WithJWKS publishes the verifier's public key on `GET /v1/jwks` per
-// alice2-index a prior PR. The slice is constructed at startup by
+// yaad-index a prior PR. The slice is constructed at startup by
 // auth.LoadJWKS and cached for the server's lifetime — clients
 // (peer agents, future yaad-mcp) cache for one hour via the
 // `Cache-Control: public, max-age=3600` response header.

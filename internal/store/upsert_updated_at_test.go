@@ -20,7 +20,7 @@ import (
 // refactor that drops or re-orders that line breaks visibly here
 // rather than silently stamping 0001-01-01 on every fill row.
 //
-// Pinned per alice2-index a prior PR cold-reviewer carry-over (2026-05-08):
+// Pinned per yaad-index a prior PR cold-reviewer carry-over (2026-05-08):
 // reviewers initially read the call-site struct literal in
 // handleEntityOperatorFill as "passes zero UpdatedAt" without
 // noticing the store-layer's internal stamp. The test makes the

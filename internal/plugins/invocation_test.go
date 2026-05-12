@@ -92,7 +92,7 @@ func TestParseInvocation_FullURLFallsThrough(t *testing.T) {
 }
 
 // TestCapabilities_CommandsRoundTrip pins the JSON round-trip of the
-// new `commands` field added by ADR-0022 / alice2-index. This is
+// new `commands` field added by ADR-0022 / yaad-index. This is
 // the same path the capability cache walks: subprocess --init JSON →
 // plugins.Capabilities → store-roundtrip JSON → plugins.Capabilities.
 // The opaque-JSON store contract means a new field plumbs through

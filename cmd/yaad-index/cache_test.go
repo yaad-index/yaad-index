@@ -17,7 +17,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/vault"
 )
 
-// cacheEntryExpired — sentinel-rule predicate per alice2-index
+// cacheEntryExpired — sentinel-rule predicate per yaad-index
 // (post-PR-B: cache_expires-only; the legacy cache_ttl_seconds
 // fallback is gone).
 func TestCacheEntryExpired_SentinelRules(t *testing.T) {
