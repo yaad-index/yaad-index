@@ -102,6 +102,18 @@ LLM-involved decision evaluation is a **later v1 step**, not v2 — but not in t
 
 Each workflow declares which plugins it operates on (`allowed_plugins: [yaad-bgg]`, `allowed_plugins: [yaad-gmail, yaad-wikipedia]`). Analogous to `import` at the top of a code file: the workflow only sees those plugins' surface. This naturally constrains things like `canonical_type` gaps (a `canonical_type(*)` gap inside a workflow with `allowed_plugins: [yaad-bgg]` is implicitly limited to kinds yaad-bgg emits).
 
+**Load-time validation.** When the daemon loads a workflow file, it validates `allowed_plugins` against the live plugin registry. If a declared plugin isn't loaded, the workflow file is rejected on load with a clear error in the daemon log. Operator fixes the workflow (drops the plugin or loads it) and the daemon picks it up on next reload.
+
+**Runtime errors — the err-task pattern.** A workflow can still fail after load: a plugin breaks mid-fetch, an upstream API returns malformed data, a fill-gap times out. These don't crash the workflow; instead they surface via a per-workflow **err task**.
+
+- One err task per workflow, ever. Not per-failure.
+- First failure creates the err task (kind `task`, with an `errored=true` marker).
+- Subsequent failures on the same workflow update the existing err task — appending the failure details (timestamp, source entity, error message) to the task body, not spawning new err tasks.
+- The err task is operator-visible alongside normal tasks (with the failure marker). Operator can read it, mark it resolved (which closes the err task), at which point the next failure spawns a fresh err task.
+- Err tasks don't block the workflow from continuing to fire — they're observability, not a stop-signal.
+
+This means: one consolidated "this workflow has been having trouble" surface per workflow, instead of N error tasks the operator has to triage one at a time.
+
 ### Missing-reference handling
 
 If a workflow's context-load step follows a reference that doesn't resolve (e.g., regex for a JIRA key in a PR body and finds none), the workflow:
