@@ -616,7 +616,7 @@ func TestMarshal_BodySectionsRegeneratedFromFrontmatter(t *testing.T) {
 		"empty Comments should not produce a `## Comments` section")
 }
 
-// TestMarshal_HandEditWithoutReindexLoses pins alice2's recommended
+// TestMarshal_HandEditWithoutReindexLoses pins yaad's recommended
 // behavior assertion: a writer firing on an entity that hasn't first
 // been re-read (so body hand-edits aren't in the in-memory entity)
 // overwrites those body hand-edits. This is the v1 staleness window

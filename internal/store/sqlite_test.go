@@ -175,7 +175,7 @@ func TestEntities_ArchivedAtIndexExists(t *testing.T) {
 func TestNew_ReopeningSamePathIsIdempotent(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "alice2-test.db")
+	dbPath := filepath.Join(t.TempDir(), "yaad-test.db")
 
 	s1, err := New(dbPath)
 	require.NoError(t, err, "first New")
@@ -208,7 +208,7 @@ func TestNew_ReopeningSamePathIsIdempotent(t *testing.T) {
 func TestNew_AutoCreatesParentDirectory(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "nested", "deeper", "alice2.db")
+	dbPath := filepath.Join(t.TempDir(), "nested", "deeper", "yaad.db")
 	s, err := New(dbPath)
 	require.NoError(t, err, "New on path with missing parents")
 	assert.NoError(t, s.Close(), "Close")

@@ -11,13 +11,13 @@ import (
 // views; operators see clean rendered output and the daemon-plugin
 // contract stays vault-readable.
 //
-// Generic `alice2:plugin` (rather than per-plugin `alice2:bgg`,
-// `alice2:wikipedia`) so the daemon implementation is plugin-agnostic
+// Generic `yaad:plugin` (rather than per-plugin `yaad:bgg`,
+// `yaad:wikipedia`) so the daemon implementation is plugin-agnostic
 // — one merge implementation handles every plugin emitting body
 // content (per ADR-0015 §"Alternative A: rejected").
 const (
-	PluginBodyStartMarker = "<!-- alice2:plugin start -->"
-	PluginBodyEndMarker = "<!-- alice2:plugin end -->"
+	PluginBodyStartMarker = "<!-- yaad:plugin start -->"
+	PluginBodyEndMarker = "<!-- yaad:plugin end -->"
 )
 
 // ErrPluginEmittedMarker is returned by MergePluginBody when the
@@ -27,7 +27,7 @@ const (
 // (the ingest tracker) propagates this as a tracker-failed
 // transition; the operator sees a clear ingest_failed envelope
 // naming the plugin.
-var ErrPluginEmittedMarker = errors.New("plugin body contains reserved alice2:plugin marker substring")
+var ErrPluginEmittedMarker = errors.New("plugin body contains reserved yaad:plugin marker substring")
 
 // PluginBodyMerge is the result of merging plugin-emitted body
 // content into an existing vault entity body per ADR-0015 §3.

@@ -757,7 +757,7 @@ func (t *ingestTracker) writeIngestVaultFile(ctx context.Context, e *store.Entit
 	}
 
 	// ADR-0015 marker-pair body merge. Plugin-emitted body content
-	// is wrapped in `<!-- alice2:plugin start/end -->` markers so
+	// is wrapped in `<!-- yaad:plugin start/end -->` markers so
 	// operator hand-edits outside the markers survive across re-
 	// ingest. Plugins emit plain markdown; the daemon owns the
 	// markers end-to-end.

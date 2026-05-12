@@ -615,7 +615,7 @@ func TestNew_RejectsBadStagingDir(t *testing.T) {
 	}{
 		{"empty", ""},
 		{"relative", "rel/path"},
-		{"nonexistent", "/this/path/almost/certainly/does/not/exist/alice2-test"},
+		{"nonexistent", "/this/path/almost/certainly/does/not/exist/yaad-test"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

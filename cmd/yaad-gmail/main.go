@@ -17,11 +17,11 @@
 // per ADR-0023 (one JSON line per un-ingested message,
 // terminated with `\n`, plus a final `_summary` packet with
 // {ingested, errors, duration_ms}). Per-message commit on
-// emit success: the `alice2-ingested` Gmail label flips
+// emit success: the `yaad-ingested` Gmail label flips
 // immediately so the next cycle's IMAP-side search excludes
 // the message. Auth (account_email + app_password) flows in
 // via env vars: YAAD_GMAIL_ACCOUNT + YAAD_GMAIL_APP_PASSWORD.
-// Label slots default to alice2-ingested + alice2-skip; override
+// Label slots default to yaad-ingested + yaad-skip; override
 // via env.
 //
 // - `yaad-gmail` (no args) — convenience alias for
@@ -257,7 +257,7 @@ type errorFields struct {
 // `_summary` packet with aggregate stats.
 //
 // Per-message commit semantics (existing Poller behavior preserved
-// from a prior PR): the `alice2-ingested` Gmail label flips immediately
+// from a prior PR): the `yaad-ingested` Gmail label flips immediately
 // after each emit returns nil. A crash mid-cycle leaves
 // already-emitted messages on-disk via the daemon (write-as-you-go
 // per ADR-0023 §recovery) AND label-flipped on Gmail's side; the

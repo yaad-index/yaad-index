@@ -266,7 +266,7 @@ const cacheNotationsSource = "cache:notations"
 // regardless of stamped TTL. Useful for bulk-clearing entries that
 // aren't TTL-stamped (e.g. legacy deployments).
 type CachePurgeCmd struct {
-	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/alice2.db" help:"path to the SQLite database file (matches the serve subcommand)."`
+	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/yaad.db" help:"path to the SQLite database file (matches the serve subcommand)."`
 	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file. vault.path is read from here unless --vault-path overrides."`
 	VaultPath string `name:"vault-path" env:"YAAD_INDEX_VAULT_PATH" help:"override vault root (otherwise read from config.vault.path). Must be absolute."`
 	Plugin string `name:"plugin" help:"filter to entities whose Plugin frontmatter field matches this value."`
@@ -609,7 +609,7 @@ func postForceRefetch(client *http.Client, ingestURL, token, url string) error {
 
 // formatFetchedAge centralizes the dry-run / list-expired output
 // formatting used by both purge and list-expired. Renders the
-// fetched-at time in the operator-configured location (per alice2-
+// fetched-at time in the operator-configured location (per yaad-
 // index) so CLI output reads in the operator's local TZ.
 func formatFetchedAge(r expiredEntry) (string, string) {
 	if r.FetchedAt.IsZero() {

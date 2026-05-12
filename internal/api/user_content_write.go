@@ -294,7 +294,7 @@ func handleUserContentCreate(
 		//
 		// This is create-side only. Re-edit (PUT-shape endpoint
 		// that re-derives edges on existing UGC) is deferred to
-		// a follow-up issue per alice2's scope direction.
+		// a follow-up issue per yaad's scope direction.
 		if len(ucEdgeOps) > 0 {
 			ucGaps := userContentEdgeGapsFromMappings(frontmatterEdges)
 			if err := applyCanonicalTypeEdges(r.Context(), st, id, ucEdgeOps, ucGaps, logger); err != nil {

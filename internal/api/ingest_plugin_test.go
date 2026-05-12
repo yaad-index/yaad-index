@@ -213,7 +213,7 @@ func Test_Ingest_PluginPath_FallsBackToFixturesForUnmatchedURL(t *testing.T) {
 // --- Disambiguation protocol (ADR-0006 amendment) ---
 
 // disambiguationOptions returns a 2-option fixture mirroring the
-// canonical "Go" example from alice2's design chat: programming
+// canonical "Go" example from yaad's design chat: programming
 // language vs. board game. Map keys are the plugin's canonical ids
 // (the caller re-invokes ingest via `wikipedia: <id>` shorthand to
 // fetch the chosen option).

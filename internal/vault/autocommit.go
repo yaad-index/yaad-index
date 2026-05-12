@@ -366,8 +366,8 @@ func (c *GitCommitter) execGit(ctx context.Context, args ...string) error {
 }
 
 func (c *GitCommitter) formatAuthor(author string) string {
-	// Author of the form "agent:bob" maps to "alice2 <alice2@yaad-index>".
-	// Bare strings ("alice2") use the same fallback. The format must
+	// Author of the form "agent:bob" maps to "yaad <yaad@yaad-index>".
+	// Bare strings ("yaad") use the same fallback. The format must
 	// satisfy git's "Name <email>" parser.
 	name := author
 	if idx := strings.IndexByte(author, ':'); idx >= 0 && idx < len(author)-1 {

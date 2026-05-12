@@ -262,7 +262,7 @@ func TestUserContent_SectionReplace_OperatorCanEditAcrossAgents(t *testing.T) {
 	t.Parallel()
 	h, _, _, signer := newAuthedUGCFixture(t)
 	forgeTok := mintToken(t, signer, "the implementer", "alice")
-	yaadTok := mintToken(t, signer, "alice2", "alice") // same operator as charlie
+	alice2Tok := mintToken(t, signer, "alice2", "alice") // same operator as charlie
 
 	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content", forgeTok, map[string]any{
 		"title": "Shared",
@@ -272,7 +272,7 @@ func TestUserContent_SectionReplace_OperatorCanEditAcrossAgents(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code)
 	etag := rec.Header().Get("ETag")
 
-	rec = ugcReq(t, h, http.MethodPut, "/v1/user-content/user-content:shared/sections/a", yaadTok,
+	rec = ugcReq(t, h, http.MethodPut, "/v1/user-content/user-content:shared/sections/a", alice2Tok,
 		map[string]any{"body": "alice2's edit on charlie's UGC\n"},
 		map[string]string{"If-Match": etag},
 	)
@@ -392,7 +392,7 @@ func TestUserContent_Delete_OperatorCanDeleteAcrossAgents(t *testing.T) {
 	t.Parallel()
 	h, _, _, signer := newAuthedUGCFixture(t)
 	forgeTok := mintToken(t, signer, "the implementer", "alice")
-	yaadTok := mintToken(t, signer, "alice2", "alice")
+	alice2Tok := mintToken(t, signer, "alice2", "alice")
 
 	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content", forgeTok, map[string]any{
 		"title": "Shared",
@@ -402,10 +402,10 @@ func TestUserContent_Delete_OperatorCanDeleteAcrossAgents(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code)
 
 	// Co-operator alice2 archives + deletes the entity charlie created.
-	rec = ugcReq(t, h, http.MethodPost, "/v1/entities/user-content:shared/archive", yaadTok, nil, nil)
+	rec = ugcReq(t, h, http.MethodPost, "/v1/entities/user-content:shared/archive", alice2Tok, nil, nil)
 	require.Equal(t, http.StatusOK, rec.Code, "archive: body=%s", rec.Body.String())
 
-	rec = ugcReq(t, h, http.MethodDelete, "/v1/user-content/user-content:shared", yaadTok, nil, nil)
+	rec = ugcReq(t, h, http.MethodDelete, "/v1/user-content/user-content:shared", alice2Tok, nil, nil)
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 }
 

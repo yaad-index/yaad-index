@@ -107,7 +107,7 @@ var KnownCanonicalKinds = []string{
 // label. Surfaced through `Capabilities.CanonicalEdgeTypesEmitted`.
 const CanonicalEdgeType = "is_about"
 
-// SourceTypeEdgeType is the universal source-type edge alice2-
+// SourceTypeEdgeType is the universal source-type edge yaad-
 // wikipedia always emits per ADR-0021: from the source node to
 // `source-type:wikipedia-article`. Surfaces source-type info as
 // a label-edge (rather than as the source node's own kind);

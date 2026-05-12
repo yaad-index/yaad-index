@@ -96,7 +96,7 @@ func TestIngest_WritesVaultFile_NeedsFill_GapsInFrontmatter(t *testing.T) {
 		v.Gaps,
 		"needs_fill ingest writes the gap field-name set into frontmatter")
 	// Per ADR-0015: plugin-emitted body content is wrapped in
-	// `<!-- alice2:plugin start/end -->` markers. The plugin-side
+	// `<!-- yaad:plugin start/end -->` markers. The plugin-side
 	// content is preserved verbatim between the markers.
 	wantBody := vault.PluginBodyStartMarker + "\n<stub-cleaned content>\n" +
 		vault.PluginBodyEndMarker + "\n"

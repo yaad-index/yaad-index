@@ -73,7 +73,7 @@ func (c *CacheExpires) Expired(now time.Time) bool {
 
 // MarshalYAML emits the "never" sentinel or an RFC3339-formatted
 // time string. Time values keep their *time.Location, so a stamp
-// with operator-TZ Location prints with that offset (per alice2-
+// with operator-TZ Location prints with that offset (per yaad-
 // index PR-B's clock.Now() flow).
 func (c *CacheExpires) MarshalYAML() (any, error) {
 	if c == nil {
