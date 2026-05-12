@@ -17,8 +17,8 @@ import (
 
 // TestRunInit_EmitsCapabilities exercises the `--init` mode end-to-end:
 // the JSON written to stdout must conform to the capabilities document
-// shape alice2-index's subprocess.New consumes (per
-// internal/plugins/subprocess/subprocess.go in alice2-index). If this test
+// shape yaad-index's subprocess.New consumes (per
+// internal/plugins/subprocess/subprocess.go in yaad-index). If this test
 // drifts from the index's expectations, the loop breaks at startup —
 // not at first /v1/ingest — so it stays a sharp regression signal.
 func TestRunInit_EmitsCapabilities(t *testing.T) {
@@ -43,7 +43,7 @@ func TestRunInit_EmitsCapabilities(t *testing.T) {
 	if len(got.URLPatterns) < 2 {
 		t.Fatalf("url_patterns: want at least two (canonical URL + shorthand), got %d", len(got.URLPatterns))
 	}
-	// Compile each pattern — alice2-index will compile these at startup
+	// Compile each pattern — yaad-index will compile these at startup
 	// and a malformed regex would fail-fast there. Catching it here
 	// keeps the surprise local.
 	for _, pat := range got.URLPatterns {
@@ -96,7 +96,7 @@ func TestRunInit_EmitsCapabilities(t *testing.T) {
 	}
 
 	// Per: top-level cache_ttl_seconds = 365 days
-	// participates in alice2-index's three-level cache resolution
+	// participates in yaad-index's three-level cache resolution
 	// at the plugin level.
 	if got.CacheTTLSeconds != wikipedia.DefaultCacheTTLSeconds {
 		t.Errorf("cache_ttl_seconds: want %d (DefaultCacheTTLSeconds = 365d), got %d",
@@ -106,7 +106,7 @@ func TestRunInit_EmitsCapabilities(t *testing.T) {
 
 // TestRunFetch_HappyPath drives runFetch with a fake Wikipedia API and
 // checks the JSON written to stdout matches the wire shape (ok=true,
-// structured.{id,kind,data,provenance}) alice2-index's subprocess
+// structured.{id,kind,data,provenance}) yaad-index's subprocess
 // wrapper expects.
 func TestRunFetch_HappyPath(t *testing.T) {
 	t.Parallel()
@@ -212,7 +212,7 @@ func TestRunFetch_HappyPath(t *testing.T) {
 
 // TestRunFetch_EmitsAliasesArray pins the the source issue a prior PR wire
 // shape: a successful Fetch produces an `aliases` array on the
-// response carrying the article's title. alice2-index's subprocess
+// response carrying the article's title. yaad-index's subprocess
 // wrapper reads this into FetchResult.Aliases; the orchestrator
 // merges with ADR-0011's title-synthesized alias on Marshal.
 func TestRunFetch_EmitsAliasesArray(t *testing.T) {
@@ -328,7 +328,7 @@ func TestRunFetch_EmitsEdgesBlock(t *testing.T) {
 }
 
 // TestRunFetch_EmitsNotationsArray pins the wire-shape change for
-// alice2-index the source issue a prior PRv2: a successful Fetch produces a
+// yaad-index the source issue a prior PRv2: a successful Fetch produces a
 // `notations` array on the response carrying every input form
 // yaad-wikipedia knows resolves to this article. The originating
 // notation is always present (so a self-roundtrip with the same
@@ -390,7 +390,7 @@ func TestRunFetch_EmitsNotationsArray(t *testing.T) {
 // TestRunInit_DeclaresCanonicalKindsEmitted pins the capabilities
 // surface: yaad-wikipedia ships the comprehensive Wikidata Q-id
 // → canonical-kind mapping per, and tells
-// alice2-index it MAY emit any of those kinds. alice2-index startup
+// yaad-index it MAY emit any of those kinds. yaad-index startup
 // warns operators when a plugin declares a kind not in their
 // config; the list shape here is what drives that warning. The
 // operator's `canonical_kinds:` config gates which of these
@@ -441,7 +441,7 @@ func TestRunInit_DeclaresCanonicalKindsEmitted(t *testing.T) {
 }
 
 // TestRunFetch_RejectsUnsupportedOperation guards the forward-compat
-// `operation` field. alice2-index might one day send `refresh` or `fill`;
+// `operation` field. yaad-index might one day send `refresh` or `fill`;
 // until we implement those, the binary should error loudly rather
 // than treat the request as ingest.
 func TestRunFetch_RejectsUnsupportedOperation(t *testing.T) {
@@ -474,7 +474,7 @@ func TestRunFetch_RejectsMissingURL(t *testing.T) {
 // TestRunFetch_PropagatesUpstream404 asserts that a 404 from Wikipedia
 // surfaces as an error from runFetch (which run() then turns into
 // stderr + exit code 1). Distinct from a malformed-request error so
-// alice2-index's subprocess wrapper sees the wrapping, not a generic
+// yaad-index's subprocess wrapper sees the wrapping, not a generic
 // "runtime error" envelope.
 func TestRunFetch_PropagatesUpstream404(t *testing.T) {
 	t.Parallel()
@@ -506,9 +506,9 @@ func TestRunFetch_PropagatesUpstream404(t *testing.T) {
 // TestRun_VersionFlag pins the cache-probe contract (closes the source issue): both
 // `--version` and `-version` (Go's flag library accepts either) print
 // the version constant + a newline on stdout, exit 0, and emit nothing
-// to stderr. alice2-index's subprocess.RunVersion reads this as the
+// to stderr. yaad-index's subprocess.RunVersion reads this as the
 // bare-string shape; a regression breaks the cache-key probe and
-// surfaces an INFO line per alice2-index on every reload.
+// surfaces an INFO line per yaad-index on every reload.
 func TestRun_VersionFlag(t *testing.T) {
 	t.Parallel()
 
@@ -527,7 +527,7 @@ func TestRun_VersionFlag(t *testing.T) {
 			t.Errorf("run(%v) stdout: want %q, got %q", args, wikipedia.PluginVersion, got)
 		}
 		if !strings.HasSuffix(stdout.String(), "\n") {
-			t.Errorf("run(%v) stdout: want trailing newline (alice2-index probe expects line-terminated)", args)
+			t.Errorf("run(%v) stdout: want trailing newline (yaad-index probe expects line-terminated)", args)
 		}
 		if stderr.Len() != 0 {
 			t.Errorf("run(%v) stderr: want empty, got %q", args, stderr.String())
@@ -618,7 +618,7 @@ func TestRun_UserAgentFlagOverridesDefault(t *testing.T) {
 
 // TestRun_UserAgentEnvOverridesDefault is the env-var counterpart to
 // the flag test. Verifies the YAAD_WIKIPEDIA_USER_AGENT env var seeds
-// the flag default — which is the integration path under alice2-index
+// the flag default — which is the integration path under yaad-index
 // (config takes a path only; env is what gets inherited).
 func TestRun_UserAgentEnvOverridesDefault(t *testing.T) {
 	// Cannot t.Parallel — t.Setenv mutates process env.
@@ -683,10 +683,10 @@ func TestRun_LangEnvSeedsFlagDefault(t *testing.T) {
 
 // TestRunFetch_EmitsNDJSONShape pins the ADR-0023 NDJSON migration
 // for the fetch response: stdout is a single JSON line terminated
-// by exactly one `\n`. alice2-index a prior PR's daemon-side reader uses
+// by exactly one `\n`. yaad-index a prior PR's daemon-side reader uses
 // json.Decoder so it parses both pretty-printed AND single-line
 // shapes today; this test pins the post-migration shape so the
-// future N-line consumer (alice2-index) sees the canonical wire
+// future N-line consumer (yaad-index) sees the canonical wire
 // format.
 func TestRunFetch_EmitsNDJSONShape(t *testing.T) {
 	t.Parallel()

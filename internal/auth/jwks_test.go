@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// JWKS round-trip tests (per alice2-index a prior PR). The defining
+// JWKS round-trip tests (per yaad-index a prior PR). The defining
 // invariant: a peer that fetches /v1/jwks must be able to reconstruct
 // an *rsa.PublicKey from `n` + `e` and use it to verify a token
 // signed by the corresponding private key. These tests exercise that

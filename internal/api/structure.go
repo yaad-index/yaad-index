@@ -1,6 +1,6 @@
-// Introspection endpoint per ADR-0013 §7 / alice2-index.
+// Introspection endpoint per ADR-0013 §7 / yaad-index.
 //
-// `GET /v1/structure` returns alice2-index's structural signature: the
+// `GET /v1/structure` returns yaad-index's structural signature: the
 // canonical-kind registry (with gaps + per-kind instructions),
 // canonical edge-type set, and active plugin metadata. A `version`
 // field carries a deterministic config-hash so operator tooling can
@@ -199,7 +199,7 @@ func computeStructureVersion(
 		Kinds: canonicalKinds,
 		EdgeTypes: edgeTypes,
 		Plugins: pluginFingerprints,
-		Discrim: "alice2-index/structure-v1",
+		Discrim: "yaad-index/structure-v1",
 	})
 	if err != nil {
 		// Marshal failure here means a non-JSON-encodable value

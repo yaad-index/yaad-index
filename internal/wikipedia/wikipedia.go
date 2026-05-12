@@ -10,7 +10,7 @@
 //
 // This package is consumed by the top-level yaad-wikipedia binary,
 // which translates Article + ProvenanceEntry into the JSON wire shape
-// alice2-index's subprocess.Plugin expects (per ADR-0006). The wire
+// yaad-index's subprocess.Plugin expects (per ADR-0006). The wire
 // translation lives in main.go on purpose — keeping wire concerns out
 // of the parser keeps this package straightforwardly unit-testable.
 package wikipedia
@@ -69,19 +69,19 @@ const UniversalSourceKind = "source"
 
 // DefaultTTLDays is the LEGACY freshness budget surfaced on
 // `entity_kinds[].default_ttl_days` in the --init capabilities
-// document. Predates alice2-index's three-level cache TTL
+// document. Predates yaad-index's three-level cache TTL
 // hierarchy; kept on the wire for backward compat with older
-// alice2-index builds. Modern alice2-index (post-) reads
+// yaad-index builds. Modern yaad-index (post-) reads
 // DefaultCacheTTLSeconds instead. Operators on the upgrade path
 // see consistent values until they fully migrate.
 const DefaultTTLDays = 7
 
 // DefaultCacheTTLSeconds is the post- plugin-level cache TTL
-// in seconds (per alice2-index/yaad-wikipedia). 31536000s = 365
+// in seconds (per yaad-index/yaad-wikipedia). 31536000s = 365
 // days. Wikipedia article cadence is slow enough that a yearly
 // default is the right hands-off contract. Operators wanting
 // fresher data override per-entry / per-plugin config via the
-// alice2-index three-level hierarchy.
+// yaad-index three-level hierarchy.
 //
 // Surfaced through `Capabilities.CacheTTLSeconds` (--init top-
 // level field) AND `FetchResult.CacheTTLSeconds` (per-fetch
@@ -91,7 +91,7 @@ const DefaultTTLDays = 7
 const DefaultCacheTTLSeconds = 31536000
 
 // DefaultUpstreamTimeout caps each upstream HTTP fetch. 5s matches the
-// per-fetch budget on alice2-index's subprocess wrapper, so the
+// per-fetch budget on yaad-index's subprocess wrapper, so the
 // subprocess timeout never trips before the in-binary timeout has a
 // chance to surface a clean error.
 const DefaultUpstreamTimeout = 5 * time.Second
@@ -105,7 +105,7 @@ const DefaultLang = "en"
 
 // ErrNotFoundUpstream is returned when Wikipedia replies 404 to the
 // summary request. The yaad-wikipedia binary maps this to a non-zero
-// exit + a stderr message naming the URL; alice2-index's subprocess
+// exit + a stderr message naming the URL; yaad-index's subprocess
 // wrapper translates the exit code into a fetch_failed envelope.
 var ErrNotFoundUpstream = errors.New("wikipedia: article not found")
 
@@ -143,7 +143,7 @@ type DisambiguationOption struct {
 	Summary string
 }
 
-// Article is the parsed result of a successful Fetch. The alice2-index
+// Article is the parsed result of a successful Fetch. The yaad-index
 // wire shape (per ADR-0021: kind="source" + descriptive name + edges
 // block under the `structured` key + top-level raw_content / gaps)
 // is constructed from Article in main.go.
@@ -204,8 +204,8 @@ type Article struct {
 	// Notations is every input form yaad-wikipedia knows resolves
 	// to this article — canonical desktop URL, mobile subdomain URL,
 	// shorthand `wikipedia: <human-title>`, and the original input
-	// if it differs from the derived forms. alice2-index's
-	// orchestrator (per alice2-index the source issue a prior PR) writes these to
+	// if it differs from the derived forms. yaad-index's
+	// orchestrator (per yaad-index the source issue a prior PR) writes these to
 	// the entity_notations cache after Fetch so subsequent ingests
 	// of any equivalent form short-circuit on the cache without
 	// re-invoking this plugin.
@@ -216,11 +216,11 @@ type Article struct {
 	Notations []string
 
 	// Aliases is the alternative-label list emitted alongside the
-	// article (per alice2-index the source issue a prior PR). Today, populated
+	// article (per yaad-index the source issue a prior PR). Today, populated
 	// with the article's human-readable title from the REST summary
 	// — the same string the agent's natural Obsidian wikilink would
 	// type. Supplements ADR-0011's title-synthesized alias on the
-	// alice2-index side; the merge dedupes so emitting both is fine.
+	// yaad-index side; the merge dedupes so emitting both is fine.
 	//
 	// Future expansion: multi-language aliases
 	// pulled from Wikidata's `also_known_as` claims. v1 keeps it
@@ -229,8 +229,8 @@ type Article struct {
 }
 
 // ProvenanceEntry records the upstream attempt for one article fetch.
-// Mirrors the alice2-index store.ProvenanceEntry shape, but defined
-// locally so this module has no alice2-index dependency.
+// Mirrors the yaad-index store.ProvenanceEntry shape, but defined
+// locally so this module has no yaad-index dependency.
 type ProvenanceEntry struct {
 	Source string
 	FetchedAt time.Time
@@ -318,7 +318,7 @@ func New(opts ...Option) *Plugin {
 	p := &Plugin{
 		httpClient: &http.Client{Timeout: DefaultUpstreamTimeout},
 		userAgent: fmt.Sprintf(
-			"yaad-wikipedia/%s (https://github.com/alice2-index/yaad-wikipedia; contact: alice2-index@alice2-index.invalid)",
+			"yaad-wikipedia/%s (https://github.com/yaad-index/yaad-wikipedia; contact: yaad-index@yaad-index.invalid)",
 			PluginVersion,
 		),
 		lang: DefaultLang,
@@ -330,7 +330,7 @@ func New(opts ...Option) *Plugin {
 }
 
 // URLPattern is the regex yaad-wikipedia advertises for canonical
-// `https://<lang>.wikipedia.org/wiki/<title>` URLs. alice2-index
+// `https://<lang>.wikipedia.org/wiki/<title>` URLs. yaad-index
 // pre-compiles every plugin's url_patterns and dispatches in
 // registration order; we keep the pattern conservative (anchored host
 // + /wiki/ prefix) so we don't claim API or edit URLs.
@@ -345,7 +345,7 @@ const URLPattern = `^https?://[a-z]{2,3}(\.m)?\.wikipedia\.org/wiki/.+`
 const ShorthandPattern = `(?i)^wikipedia:\s*(\S.*)$`
 
 // shorthandRegex is ShorthandPattern compiled once for in-package use.
-// The advertised pattern (ShorthandPattern) is what alice2-index
+// The advertised pattern (ShorthandPattern) is what yaad-index
 // dispatches against; this in-process copy lets Match and Fetch
 // recognise the shape without a per-call regex compile.
 var shorthandRegex = regexp.MustCompile(ShorthandPattern)
@@ -354,7 +354,7 @@ var shorthandRegex = regexp.MustCompile(ShorthandPattern)
 // Wikipedia URL OR the shorthand `wikipedia: <topic>` form. The
 // function exists in addition to URLPattern + ShorthandPattern so
 // callers (e.g. unit tests) can dispatch without the regex round-trip
-// alice2-index does.
+// yaad-index does.
 func (*Plugin) Match(input string) bool {
 	if _, ok := matchShorthand(input); ok {
 		return true
@@ -563,9 +563,9 @@ func (p *Plugin) Fetch(ctx context.Context, input string) (*FetchOutcome, error)
 			},
 		},
 		Notations: notationsFor(input, canonicalURL, summary.Lang, summary.Title, title),
-		// Aliases per alice2-index the source issue a prior PR — the article's
+		// Aliases per yaad-index the source issue a prior PR — the article's
 		// human-readable title is the primary wikilink target.
-		// alice2-index merges this with its own ADR-0011-synthesized
+		// yaad-index merges this with its own ADR-0011-synthesized
 		// alias and dedupes; emitting it here is cheap-redundant
 		// but keeps the plugin-side intent explicit.
 		Aliases: []string{summary.Title},
@@ -596,7 +596,7 @@ func (p *Plugin) Fetch(ctx context.Context, input string) (*FetchOutcome, error)
 	//
 	// Stderr instrumentation per the source issue — three silent failure
 	// modes (no wikibase_item, fetchKindByQID errored, no kind
-	// matched). Stderr surfaces in `docker logs` via alice2-index's
+	// matched). Stderr surfaces in `docker logs` via yaad-index's
 	// subprocess wrapper, so each branch is observable without other
 	// tooling. The success branch logs the chosen kind so a positive
 	// trace also appears alongside negatives.
@@ -926,7 +926,7 @@ type actionExtractResponse struct {
 
 // notationsFor returns every input form yaad-wikipedia knows resolves
 // to a given article — for the orchestrator's entity_notations cache
-// (per alice2-index the source issue a prior PR). The list always includes the
+// (per yaad-index the source issue a prior PR). The list always includes the
 // originating notation (in whatever shape the caller passed) so a
 // self-roundtrip with the same input registers a hit on the next
 // call. Duplicates are deduped while order is preserved (input

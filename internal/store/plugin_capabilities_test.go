@@ -73,7 +73,7 @@ func TestPluginCapabilities_UpsertOverwrites(t *testing.T) {
 }
 
 // TestPluginCapabilities_DeleteRemovesOne covers the
-// `alice2-index plugins clear-cache --name <n>` path. A delete on an
+// `yaad-index plugins clear-cache --name <n>` path. A delete on an
 // existing row reports rows-deleted=true; subsequent Get returns
 // not-found. Other rows are untouched.
 func TestPluginCapabilities_DeleteRemovesOne(t *testing.T) {
@@ -105,7 +105,7 @@ func TestPluginCapabilities_DeleteRemovesOne(t *testing.T) {
 }
 
 // TestPluginCapabilities_ClearAllEmptiesTable covers the
-// `alice2-index plugins clear-cache` (no --name) path. Every row goes;
+// `yaad-index plugins clear-cache` (no --name) path. Every row goes;
 // the count returned matches what was there.
 func TestPluginCapabilities_ClearAllEmptiesTable(t *testing.T) {
 	t.Parallel()

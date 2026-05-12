@@ -52,7 +52,7 @@ type Entity struct {
 	// the agent-facing reverse-lookup hint set.
 	//
 	// Two contributing sources, merged by Marshal at write time
-	// (per alice2-index the source issue a prior PR):
+	// (per yaad-index the source issue a prior PR):
 	//
 	// 1. ADR-0011 title-synthesized — a single entry derived from
 	// `data.title` (source-shape entities) or `data.name`
@@ -78,7 +78,7 @@ type Entity struct {
 	// the next ingest re-writes the file.
 	Aliases []string
 
-	// Notations is the cache-key list per alice2-index the source issue a prior PR.
+	// Notations is the cache-key list per yaad-index the source issue a prior PR.
 	// Mirrors the entity_notations DB table — every input form
 	// (canonical URL, shorthand `<plugin>: <id>`, mobile-subdomain
 	// URL, etc.) the plugin knows resolves to this entity. The vault
@@ -104,7 +104,7 @@ type Entity struct {
 	CleanContent string
 
 	// CacheExpires is the absolute-date cache freshness stamp per
-	// alice2-index (replaces's CacheTTLSeconds). Resolved
+	// yaad-index (replaces's CacheTTLSeconds). Resolved
 	// at ingest time as `fetched_at + resolveCacheTTL(...)` and
 	// baked into vault frontmatter. Lookup is just `now <
 	// CacheExpires.Time` (or true on Never sentinel).
@@ -115,7 +115,7 @@ type Entity struct {
 	// Non-nil with Time set → finite expiry.
 	//
 	// Stamped in operator-TZ via clock.Now()-derived fetched_at
-	// per alice2-index. Hand-edits to the frontmatter date
+	// per yaad-index. Hand-edits to the frontmatter date
 	// survive a single read but get overwritten on the next
 	// ingest — same write-only-by-orchestrator contract as
 	// CacheTTLSeconds had.
@@ -214,7 +214,7 @@ type Edge struct {
 // `## Comments` section as a dated block. Append-only in v1 (edit/delete
 // is a follow-up per ADR-0008's open questions).
 //
-// Per alice2-index a prior PR (auth pair-claim model): Author is the agent
+// Per yaad-index a prior PR (auth pair-claim model): Author is the agent
 // that posted the comment (mapped to JWT `sub`); Operator is the human
 // resource owner (JWT `operator`). Both fields are optional on parse —
 // legacy vault files omit Operator, and the parser leaves it empty

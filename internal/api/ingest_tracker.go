@@ -43,7 +43,7 @@ const (
 // the tracker's mutex; the goroutine closes transition exactly once,
 // after the writes. Readers acquire the mutex to take a snapshot.
 //
-// Per alice2-index (the operator's "extend tracker" decision over a
+// Per yaad-index (the operator's "extend tracker" decision over a
 // separate jobs package): records may be SHARED across concurrent
 // /v1/ingest calls when their invocationKey collides. The first
 // arrival creates the record + spawns the simulator goroutine
@@ -140,7 +140,7 @@ type ingestAttempt struct {
 	simulation ingestSimulation
 
 	// forceRefetch + ttlExpired flow into the auto-commit message
-	// (per alice2-index the source issue) so a `re-ingest:` commit can carry
+	// (per yaad-index the source issue) so a `re-ingest:` commit can carry
 	// the cause: `[force_refetch=true]` or `[ttl_expired]`. Default
 	// false on both → the plain `ingest:` / `re-ingest:` shape (a
 	// re-ingest with no flagged cause is a normal cache-bypass refresh).
@@ -176,7 +176,7 @@ type ingestTracker struct {
 	guard *config.CanonicalGuard
 	logger *slog.Logger
 	// globalCacheTTLSeconds is the operator's
-	// `cache_ttl_seconds` config in seconds (per alice2-index).
+	// `cache_ttl_seconds` config in seconds (per yaad-index).
 	// Used as the global-level input to resolveCacheTTL at ingest
 	// time. Sentinel rules: 0 = no opinion, positive = N seconds,
 	// negative = infinite. Lookup-side reads TTL from vault
@@ -366,7 +366,7 @@ func (t *ingestTracker) runSimulation(rec *ingestRecord, att ingestAttempt) {
 			t.markFailed(rec, "internal_error", "failed to record provenance")
 			return
 		}
-		// Per ADR-0013 §4 / alice2-index: a fresh fetch rolls the
+		// Per ADR-0013 §4 / yaad-index: a fresh fetch rolls the
 		// entity into a new fetch-cycle. Clear any prior gap-call-done
 		// flag so the next ingest cache-hit will re-issue the
 		// needs_fill payload. Best-effort: a clear failure logs but
@@ -854,14 +854,14 @@ func buildVaultEntity(e *store.Entity, plugin string, gaps []string, cleanConten
 		Provenance: provenance,
 		Gaps: gaps,
 		CleanContent: cleanContent,
-		// Notations is the cache-key list per alice2-index the source issue
+		// Notations is the cache-key list per yaad-index the source issue
 		// a prior PR. Plugin emits the canonical set on FetchResult; we
 		// land it on every vault write so reindex can reconstitute
 		// the entity_notations DB table from the vault. Replace
 		// wholesale (no merging with existing) — the plugin's view
 		// is canonical for cache keys.
 		Notations: notations,
-		// Aliases (per alice2-index the source issue a prior PR). Plugin-emitted
+		// Aliases (per yaad-index the source issue a prior PR). Plugin-emitted
 		// list rides through to vault.Entity.Aliases; the Marshal
 		// step (synthesizeAliases) merges in ADR-0011's title-
 		// synthesized alias and dedupes. Same wholesale-replace
@@ -900,7 +900,7 @@ func buildVaultEntity(e *store.Entity, plugin string, gaps []string, cleanConten
 		merged.Edges = out
 	}
 
-	// Per alice2-index: stamp the resolved absolute-date cache
+	// Per yaad-index: stamp the resolved absolute-date cache
 	// expiry into vault frontmatter (replaces's duration-
 	// based `cache_ttl_seconds:`). nil cacheExpires leaves the
 	// field absent (no opinion at any resolution level → cache
@@ -1051,7 +1051,7 @@ func (t *ingestTracker) persistCanonicalEdges(ctx context.Context, candidates []
 			t.logger.Debug("ingest: canonical edge dropped — edge type not in operator config",
 				"plugin", plugin, "type", e.Type, "from", e.From, "to", e.To)
 			// Bump the per-(plugin, edge_type) drop counter (per
-			// ADR-0013 §3 / alice2-index a prior PR). Counterpart of
+			// ADR-0013 §3 / yaad-index a prior PR). Counterpart of
 			// the kind drop above; surfaces on /v1/cv-status as
 			// `drift.edge_types_emitted_not_enabled[]`. Best-effort.
 			//

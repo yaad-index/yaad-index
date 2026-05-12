@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestIssueTokenCmd_OperatorOnlyAcceptsBareOperator pins alice2-index
+// TestIssueTokenCmd_OperatorOnlyAcceptsBareOperator pins yaad-index
 //'s `--operator-only` shape: the flag is mutually exclusive
 // with --agent (the operator-only token has Subject == Operator
 // by definition; explicit --agent is redundant). When passed bare,

@@ -1,5 +1,5 @@
 // Command yaad-gmail is the standalone Gmail extractor binary for
-// alice2-index, implementing the subprocess plugin protocol from
+// yaad-index, implementing the subprocess plugin protocol from
 // ADR-0006.
 //
 // CLI modes (per ADR-0006 + ADR-0022):
@@ -9,7 +9,7 @@
 // commands list) as JSON to stdout and exit 0.
 //
 // - `yaad-gmail --version` — write the bare version string to
-// stdout and exit 0. Answers alice2-index's startup cache-key
+// stdout and exit 0. Answers yaad-index's startup cache-key
 // probe without the full --init handshake.
 //
 // - `yaad-gmail --command fetch` (per ADR-0022 §1) — runs ONE
@@ -29,7 +29,7 @@
 // need to remember the flag. Same NDJSON wire shape.
 //
 // Per-envelope binary attachments (MIME parts) are deferred to a
-// follow-up issue (alice2-index); v1 emits cleanContent only.
+// follow-up issue (yaad-index); v1 emits cleanContent only.
 package main
 
 import (
@@ -47,7 +47,7 @@ import (
 )
 
 // Env-var integration points for operator config (per ADR-0006:
-// alice2-index inherits env into the subprocess; the config
+// yaad-index inherits env into the subprocess; the config
 // allowlist takes a path only, not args). Mirrors yaad-wikipedia's
 // env-passthrough pattern.
 const (
@@ -80,9 +80,9 @@ func run(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("yaad-gmail", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	initMode := fs.Bool("init", false,
-		"emit the capabilities document on stdout and exit (called by alice2-index at startup)")
+		"emit the capabilities document on stdout and exit (called by yaad-index at startup)")
 	versionMode := fs.Bool("version", false,
-		"print the plugin version and exit (called by alice2-index's cache-key probe)")
+		"print the plugin version and exit (called by yaad-index's cache-key probe)")
 	commandName := fs.String("command", "",
 		"named command to run (per ADR-0022 §1). Today the only declared command is `fetch` — runs one IMAP poll cycle, emits NDJSON envelopes.")
 	if err := fs.Parse(args); err != nil {
@@ -156,7 +156,7 @@ type kindSpecJSON struct {
 // the `gmail` source-shape kind, the three canonical kinds (email,
 // email-address, label) yaad-gmail emits, and the seven edge types
 // (is_about, is_a, from, to, cc, bcc, tagged_as). URL patterns
-// stay empty — Gmail messages don't have a URL form alice2-index
+// stay empty — Gmail messages don't have a URL form yaad-index
 // dispatches against; this plugin is poll-driven, not URL-driven.
 func runInit(stdout io.Writer) error {
 	doc := capabilitiesDoc{
@@ -164,7 +164,7 @@ func runInit(stdout io.Writer) error {
 		Version: gmail.PluginVersion,
 		// Gmail has no URL form — operator can't `/v1/ingest` a
 		// gmail message by URL. Polling drives all ingest. Empty
-		// patterns means alice2-index never dispatches a /v1/ingest
+		// patterns means yaad-index never dispatches a /v1/ingest
 		// to this plugin via URL match; the binary's default mode
 		// runs a poll cycle when invoked.
 		URLPatterns: []string{},
@@ -266,7 +266,7 @@ type errorFields struct {
 // Auth-required env vars (account_email, app_password) MUST be set;
 // missing either surfaces as a single `_error` line + non-zero exit.
 // Per-envelope binary attachments (MIME parts) are deferred to
-// alice2-index (follow-up MIME-walking + staging issue).
+// yaad-index (follow-up MIME-walking + staging issue).
 func runCommandFetch(ctx context.Context, stdout, stderr io.Writer) error {
 	start := time.Now()
 

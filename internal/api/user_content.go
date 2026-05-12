@@ -1,4 +1,4 @@
-// User-content (UGC) read endpoints per alice2-index PR-B of 3.
+// User-content (UGC) read endpoints per yaad-index PR-B of 3.
 //
 // PR-B scope: GET surface only. Writes (POST create, PUT section
 // replace, DELETE entity) ship in PR-C with the auth-author / operator-
@@ -11,7 +11,7 @@
 // at write time (PR-C: the agent supplies the body directly rather
 // than a plugin fetching it); on the read side both paths converge.
 //
-// Section parsing uses vault.ParseSections (ADR-0012 / alice2-index
+// Section parsing uses vault.ParseSections (ADR-0012 / yaad-index
 //'s containment model) — every ATX heading is one addressable
 // section, deeper headings are textually contained in their parent's
 // body, pre-heading body is the implicit section 0.

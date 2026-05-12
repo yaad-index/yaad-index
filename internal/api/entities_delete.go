@@ -22,7 +22,7 @@ type entityDeleteResponse struct {
 }
 
 // handleEntityDelete implements DELETE /v1/entities/{id} per
-// alice2-index.
+// yaad-index.
 //
 // **Destructive.** The entity's vault file is removed (with auto-
 // commit producing the audit trail); the DB row + its inbound +
@@ -38,7 +38,7 @@ type entityDeleteResponse struct {
 // - The auto-commit chain (vault.Writer.DeleteWithCommit's
 // Committer hook) produces a git commit recording the delete
 // event. THAT commit is the durable provenance trail —
-// alice2-index spec'd "provenance entry on every delete";
+// yaad-index spec'd "provenance entry on every delete";
 // since the entity is being cascade-deleted, a per-entity
 // provenance row would itself be deleted. The audit-commit
 // message survives in git history regardless.

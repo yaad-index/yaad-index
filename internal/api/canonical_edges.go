@@ -6,7 +6,7 @@
 // import these helpers — the contract was set by and reused
 // verbatim by the others, so the helpers live in one place.
 //
-// The "(per alice2-index)" / "" provenance comments
+// The "(per yaad-index)" / "" provenance comments
 // stay because that's where the contract was set; the file split
 // is a structural reorg, not a contract change.
 package api
@@ -26,7 +26,7 @@ import (
 )
 
 // applyCanonicalTypeEdges runs the post-write edge create/replace
-// step for canonical_type gap fills per alice2-index. Each
+// step for canonical_type gap fills per yaad-index. Each
 // canonical_type op produces a deterministic set of edges from
 // the source entity to one canonical label per fill entry; the
 // edge type is the gap-name (e.g. `subjects → boardgame:brass-…`,
@@ -116,7 +116,7 @@ func splitCanonicalLabelID(id string) (kind, slug string, ok bool) {
 }
 
 // parseCanonicalLabelList decodes a `canonical_type` gap fill per
-// alice2-index. Two element shapes coexist:
+// yaad-index. Two element shapes coexist:
 //
 // - Object `{"name": "Brass Pittsburgh", "kind": "boardgame"}` —
 // daemon slugifies via `slug.Slug(name)` to produce the

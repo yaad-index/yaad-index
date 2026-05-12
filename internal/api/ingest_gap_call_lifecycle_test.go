@@ -17,7 +17,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/vault"
 )
 
-// Per ADR-0013 §4 + §5 / alice2-index: the gap-call is bounded
+// Per ADR-0013 §4 + §5 / yaad-index: the gap-call is bounded
 // to one per fetch-cycle. The DB-only `gap_call_done_at` flag is
 // set on a successful fill (any 2xx, full or partial), suppresses
 // the cache-hit needs_fill payload while set, and is cleared by
@@ -120,7 +120,7 @@ func TestGapCallLifecycle_FlagSet_SuppressesNeedsFill(t *testing.T) {
 	assert.Equal(t, "complete", got["state"],
 		"flag set + open gaps → suppress needs_fill, return complete")
 	// instruction + canonical_vocabulary fields are needs_fill-only
-	// per ADR-0013 §2 / alice2-index — they must not leak onto
+	// per ADR-0013 §2 / yaad-index — they must not leak onto
 	// this complete-shape response.
 	_, hasInst := got["instruction"]
 	assert.False(t, hasInst)

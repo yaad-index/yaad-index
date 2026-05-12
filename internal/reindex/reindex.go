@@ -1,6 +1,6 @@
 // Package reindex walks a markdown vault and (re)builds the derived
 // SQLite index from its files. Implements the body of the
-// `alice2-index reindex` CLI subcommand and the POST /v1/reindex HTTP
+// `yaad-index reindex` CLI subcommand and the POST /v1/reindex HTTP
 // endpoint declared in ADR-0008.
 //
 // Two modes:
@@ -408,7 +408,7 @@ func (r *Reindexer) upsertEntity(ctx context.Context, e *vault.Entity) error {
 	if err := r.store.ReplaceProvenance(ctx, e.ID, vaultProvenanceToStore(e.Provenance)); err != nil {
 		return fmt.Errorf("ReplaceProvenance %s: %w", e.ID, err)
 	}
-	// Notations cache (per alice2-index the source issue a prior PR). The vault is
+	// Notations cache (per yaad-index the source issue a prior PR). The vault is
 	// the canonical source for the entity_notations table — reindex
 	// reconciles the DB to the vault frontmatter `notations:` list,
 	// dropping orphaned rows the vault no longer carries. Same

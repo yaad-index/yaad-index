@@ -49,7 +49,7 @@ func WithCanonicalKinds(kinds []string) WriterOption {
 	return func(w *Writer) { w.canonicalKinds = kinds }
 }
 
-// WithCommitter wires an auto-commit Committer (per alice2-index issue
+// WithCommitter wires an auto-commit Committer (per yaad-index issue
 //) so successful Writer.WriteWithCommit calls produce git
 // commits summarizing the operation. nil committer = no auto-commit
 // (the implicit default; tests + non-git vaults pass through). The
@@ -60,7 +60,7 @@ func WithCommitter(c Committer) WriterOption {
 }
 
 // WithLogger wires the operator logger so committer.OnWrite errors
-// land at WARN level (per alice2-index). Without this, OnWrite
+// land at WARN level (per yaad-index). Without this, OnWrite
 // failures (git missing, .git permissions, push auth) are invisible
 // to the operator since the audit-commit error must NOT propagate
 // to the API caller per ADR-0008. Pass the same logger threaded
@@ -108,7 +108,7 @@ func NewWriter(vaultRoot string, opts ...WriterOption) (*Writer, error) {
 // best-effort removed; the destination is never partially written.
 //
 // Write does NOT auto-commit. Callers wanting an audit-log commit
-// (per alice2-index the source issue) call WriteWithCommit instead.
+// (per yaad-index the source issue) call WriteWithCommit instead.
 func (w *Writer) Write(e *Entity) error {
 	_, err := w.writeAtomic(e)
 	return err
@@ -136,7 +136,7 @@ func (w *Writer) WriteWithCommit(ctx context.Context, e *Entity, message, author
 	// Best-effort: a commit-side error is not a write-side error
 	// (per ADR-0008 the vault file landed; the audit-log commit is
 	// best-effort). But silently dropping the error left auto-commit
-	// failures invisible — see alice2-index — so log at WARN with
+	// failures invisible — see yaad-index — so log at WARN with
 	// the relPath + err for the operator to investigate (git missing,
 	// .git permissions, push auth fail, etc.). The error does NOT
 	// propagate to the caller.
@@ -149,7 +149,7 @@ func (w *Writer) WriteWithCommit(ctx context.Context, e *Entity, message, author
 }
 
 // WriteCanonicalLabelWithCommit is the auto-materialize-on-first-
-// fill path per ADR-0021's amendment (alice2-index phase D).
+// fill path per ADR-0021's amendment (yaad-index phase D).
 // Writes the entity to `<root>/ct/<kind>/<slug>.md` rather than
 // `<root>/<kind>/<slug>.md` — the `ct/` prefix marks the file as
 // a canonical-label metadata file, distinct from source-shape
@@ -486,7 +486,7 @@ func (w *Writer) moveBetweenArchive(ctx context.Context, kind, id, message, auth
 }
 
 // SlugFromTitle derives a vault-filename-safe slug from a UGC title
-// (alice2-index). Lowercase, ASCII alphanumeric runs separated by
+// (yaad-index). Lowercase, ASCII alphanumeric runs separated by
 // single hyphens, leading/trailing hyphens trimmed. Markdown
 // formatting (`*`, `_`, “ ` “) is dropped before the alphanumeric
 // pass so `My **Bold** Note` and `My Bold Note` collapse to the same

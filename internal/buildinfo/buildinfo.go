@@ -1,5 +1,5 @@
 // Package buildinfo carries build-time-injected identity data for the
-// alice2-index binary. Today that's just `Version` — the git-derived
+// yaad-index binary. Today that's just `Version` — the git-derived
 // `<tag>+<short-hash>` string the Makefile passes via `-ldflags -X`
 // at link time.
 //

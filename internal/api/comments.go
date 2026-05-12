@@ -18,7 +18,7 @@ import (
 // commentsRequest is the POST /v1/entities/{id}/comments body. The
 // server stamps `date` (UTC) — clients never send it.
 //
-// Per alice2-index a prior PR, `author` must match the JWT subject
+// Per yaad-index a prior PR, `author` must match the JWT subject
 // attached by the auth middleware. Empty `author` is filled from the
 // claim's Subject for client convenience; a non-empty `author` that
 // disagrees with the claim returns 403 author_mismatch. Clients have
@@ -85,7 +85,7 @@ type commentsResponse struct {
 // for comments because the canonical comment list lives in vault
 // frontmatter. Returns 503 vault_required when WithVaultIO is
 // omitted.
-// canonicalKindReg widens the carve-out per alice2-index: comments
+// canonicalKindReg widens the carve-out per yaad-index: comments
 // targeting a canonical-label thin row (`<kind>:<slug>` where `kind`
 // is in the operator's canonical_kinds registry) auto-materialize
 // the vault file at `{ROOT}/ct/<kind>/<slug>.md` when the caller
@@ -110,7 +110,7 @@ func handleComments(logger *slog.Logger, st store.Store, vaultReader *vault.Read
 		}
 		author := strings.TrimSpace(req.Author)
 
-		// Per alice2-index a prior PR: enforce author == JWT subject.
+		// Per yaad-index a prior PR: enforce author == JWT subject.
 		// Empty author → fill from claim (client-convenience). Non-
 		// empty author that disagrees with the claim → 403. The
 		// claim is always present at this point: RequireAuth lands a
@@ -153,7 +153,7 @@ func handleComments(logger *slog.Logger, st store.Store, vaultReader *vault.Read
 		}
 
 		// autoMaterialize covers the "thin DB row exists, vault file
-		// missing" case for canonical-label entities (per alice2-index
+		// missing" case for canonical-label entities (per yaad-index
 		//). The comment write then creates the vault file via
 		// WriteCanonicalLabelWithCommit. Per the operator's scope
 		// tightening, comments do NOT create the entity row from

@@ -1,4 +1,4 @@
-// Tests for the alice2-index add_comment auto-materialize path:
+// Tests for the yaad-index add_comment auto-materialize path:
 // a comment targeting a canonical-label thin row creates the
 // vault file at `{ROOT}/ct/<kind>/<slug>.md` when the caller holds
 // operator authority. ADR-0021 §3 carve-out widened from "first

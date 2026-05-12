@@ -12,7 +12,7 @@ import (
 )
 
 // Test_clearPluginCache_NoNameClearsAll covers the no-flag path:
-// `alice2-index plugins clear-cache` drops every cached row and prints
+// `yaad-index plugins clear-cache` drops every cached row and prints
 // the count. After the call, GetPluginCapabilities for any seeded
 // plugin returns not-found.
 func Test_clearPluginCache_NoNameClearsAll(t *testing.T) {

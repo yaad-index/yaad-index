@@ -18,7 +18,7 @@ import (
 )
 
 // Wire-level integration tests for the auth middleware (per
-// alice2-index a prior PR). These exercise NewHandlerWithRegistry with
+// yaad-index a prior PR). These exercise NewHandlerWithRegistry with
 // WithAuthVerifier + WithAuthRequired so the route-level wiring (which
 // routes are protected, which stay public) is pinned end-to-end —
 // not just the standalone middleware unit tests.
@@ -78,7 +78,7 @@ func validBearer(t *testing.T, s auth.Signer) string {
 // requires updating this list AND the doc.
 //
 // /v1/jwks lives outside this list — registration depends on whether
-// keys are loaded (per alice2-index a prior PR), so it can't be asserted
+// keys are loaded (per yaad-index a prior PR), so it can't be asserted
 // against newAuthAPI which doesn't pass WithJWKS. The dedicated
 // jwks_test.go suite covers the public-route invariant for it.
 var publicRoutes = []struct {

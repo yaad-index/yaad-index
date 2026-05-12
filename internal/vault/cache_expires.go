@@ -1,5 +1,5 @@
 // CacheExpires is the absolute-date cache freshness stamp per
-// alice2-index. Replaces's `cache_ttl_seconds:` (duration-
+// yaad-index. Replaces's `cache_ttl_seconds:` (duration-
 // based, opaque to a human reading the vault file) with an
 // absolute date that's glanceable: "good until 2027-05-03" beats
 // "31536000 seconds after a timestamp I have to find."
@@ -30,7 +30,7 @@ import (
 const neverSentinel = "never"
 
 // CacheExpires is the cache-freshness stamp on a vault entity per
-// alice2-index. Two shapes:
+// yaad-index. Two shapes:
 //
 // - Never == true: entity never expires (always cache hit).
 // - Never == false, !Time.IsZero(): entity expires AT the

@@ -47,7 +47,7 @@ type ingestRequest struct {
 // canonical discriminator going forward) AND the legacy `status` field
 // (same value) so existing clients reading either field keep working.
 //
-// `state` is alice2-index inference, NOT plugin-emitted — the plugin's
+// `state` is yaad-index inference, NOT plugin-emitted — the plugin's
 // FetchResult populates Entity/Options/Gaps and the tracker labels
 // the response per ADR-0006.
 
@@ -135,7 +135,7 @@ type ingestDisambiguationOption struct {
 // cacheNotationsSource is the canonical `provenance.source` value
 // surfaced on a cache-hit response so the agent can distinguish
 // "served from the index cache" from "served from a fresh upstream
-// fetch." Per alice2-index the source issue a prior PR — these entries ride on
+// fetch." Per yaad-index the source issue a prior PR — these entries ride on
 // the response only; the entity's persistent provenance stays
 // untouched (cache hits aren't fetches).
 const cacheNotationsSource = "cache:notations"
@@ -156,7 +156,7 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 			return
 		}
 
-		// Routing-time validation per ADR-0022 §4 + alice2-index.
+		// Routing-time validation per ADR-0022 §4 + yaad-index.
 		// Cheap shape-check that rejects inputs naming a registered
 		// plugin whose declared url_patterns / commands don't accept
 		// the input — saving subprocess wall-clock on the unhappy
@@ -176,7 +176,7 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 			return
 		}
 
-		// CLI-dispatch authorization gate per ADR-0022 §6 + alice2-index
+		// CLI-dispatch authorization gate per ADR-0022 §6 + yaad-index
 		//. Command-shape inputs (`<plugin>: !<command>`) require
 		// an operator-only token (Subject == Operator); pair-claim
 		// tokens representing agent-on-behalf-of-operator authority
@@ -363,7 +363,7 @@ type notationCacheHit struct {
 // Returns the cache hit (when fresh) or nil + a bool flagging whether
 // the miss was specifically a TTL fall-through (so the caller can
 // surface `re-ingest: ... [ttl_expired]` on the auto-commit message,
-// per alice2-index the source issue).
+// per yaad-index the source issue).
 func tryNotationCacheHit(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -418,7 +418,7 @@ func tryNotationCacheHit(
 		}
 	}
 
-	// TTL gate (per alice2-index). The vault entity's
+	// TTL gate (per yaad-index). The vault entity's
 	// `cache_expires:` is the SOLE freshness signal post-PR-B.
 	// Legacy entries that carried only `cache_ttl_seconds:`
 	// no longer participate in the gate — they cache forever
@@ -441,7 +441,7 @@ func tryNotationCacheHit(
 // is now `vault.CacheExpires.Expired(now)` — no provenance scan
 // needed. The CLI's freshestPersistentFetchVault — which mirrors
 // the same shape on vault.Entity for the operator-facing list-
-// expired age column — still lives in cmd/alice2-index/cache.go.)
+// expired age column — still lives in cmd/yaad-index/cache.go.)
 
 // resolveInstruction picks the right `instruction` value to surface
 // on a needs_fill response per ADR-0013 §2's resolution order:
@@ -481,7 +481,7 @@ func resolveInstruction(kind, global string, reg map[string]config.CanonicalKind
 // The wire entity carries the same single-hop body fields
 // (clean_content / summary / tags / gaps / aliases / plugin /
 // notations / comments) that GetEntity surfaces, via the
-// mergeVaultEntity overlay (per alice2-index the source issue a prior PR
+// mergeVaultEntity overlay (per yaad-index the source issue a prior PR
 // addendum). Closes the gap a prior PR left where cache hits returned
 // only the DB-mirrored slice.
 func respondFromCacheHit(w http.ResponseWriter, r *http.Request, logger *slog.Logger, hit *notationCacheHit, fillInstruction string, canonicalKindReg map[string]config.CanonicalKindConfig) {
@@ -496,7 +496,7 @@ func respondFromCacheHit(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 		OK: true,
 	})
 
-	// Per ADR-0013 §4 + §5 / alice2-index: even when gaps remain
+	// Per ADR-0013 §4 + §5 / yaad-index: even when gaps remain
 	// open, the gap-call-done flag suppresses the needs_fill payload
 	// for the rest of the current fetch-cycle. The AI couldn't satisfy
 	// the gap-set with the prior `clean_content`; re-prompting against

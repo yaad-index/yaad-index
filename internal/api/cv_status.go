@@ -1,5 +1,5 @@
 // Canonical-vocabulary drift status endpoint (per ADR-0013 §3 /
-// alice2-index a prior PR). Surfaces:
+// yaad-index a prior PR). Surfaces:
 //
 // - `config_hash`: deterministic SHA over canonical_kinds +
 // canonical_edge_types (a prior PR's `config.ConfigHash`).
@@ -112,7 +112,7 @@ func handleCVStatus(
 		// `make([]T, 0, ...)` rather than nil slices so empty
 		// drift sections serialize as `[]` on the wire (not
 		// `null`). Same parity contract as `/v1/needs-fill`'s
-		// edge_types fix from alice2-index a prior PR.
+		// edge_types fix from yaad-index a prior PR.
 		out := cvStatusResponse{
 			OK: true,
 			ConfigHash: hash,

@@ -1,4 +1,4 @@
-// Tests for the alice2-index wildcard-parity contract on
+// Tests for the yaad-index wildcard-parity contract on
 // /v1/entities/{id}/context: parseEdgeTypesFilter accepts the same
 // `*` / `all` sentinels as parseWithEdges does on the main entity-GET,
 // returning nil filter so the underlying edge-fetcher returns every

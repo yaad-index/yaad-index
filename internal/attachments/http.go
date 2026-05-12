@@ -11,9 +11,9 @@ import (
 
 // httpUserAgent is the default User-Agent the daemon sends on
 // `https://` / `http://` attachment fetches. Plain string — no
-// version pinning yet (alice2-index/<version> when buildinfo lands
+// version pinning yet (yaad-index/<version> when buildinfo lands
 // here).
-const httpUserAgent = "alice2-index/0"
+const httpUserAgent = "yaad-index/0"
 
 // httpMaxRedirects caps redirect chains per ADR-0014 §2.https.
 // http.Client's default would follow up to 10 — we tighten to 5 for
@@ -25,7 +25,7 @@ const httpMaxRedirects = 5
 // the daemon GETs it, follows up to 5 redirects, applies a 60s
 // timeout, and writes the response body to dest. 4xx/5xx → error
 // (caller drops the attachment with a WARN). The default User-Agent
-// is `alice2-index/<version>`; no auth headers — plugins authenticating
+// is `yaad-index/<version>`; no auth headers — plugins authenticating
 // against private endpoints SHOULD use the `file://` scheme.
 //
 // The 60s timeout is enforced by the http.Client constructed in

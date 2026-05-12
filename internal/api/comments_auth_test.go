@@ -20,7 +20,7 @@ import (
 )
 
 // Author-validation tests for POST /v1/entities/{id}/comments per
-// alice2-index a prior PR. Production runs through RequireAuth — these
+// yaad-index a prior PR. Production runs through RequireAuth — these
 // tests wire that path explicitly so the strict identity check fires.
 // The dev-mode (AnonymousAuth) path is exercised by the existing
 // comments_test.go corpus, which keeps passing because IsAnonymousClaim

@@ -299,7 +299,7 @@ func TestOperatorFill_AgentOnlyField(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "agent_only_field")
 }
 
-// TestOperatorFill_AgentOnBehalfOfOperatorAccepted (per alice2-index
+// TestOperatorFill_AgentOnBehalfOfOperatorAccepted (per yaad-index
 //): a JWT where Subject is an agent + Operator names a real
 // human now passes the operator-authority gate. Legacy this
 // rejected with 403 agent_not_allowed; the gate widened to accept

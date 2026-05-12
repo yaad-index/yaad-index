@@ -10,7 +10,7 @@ import (
 )
 
 // pluginEntry mirrors the per-plugin subset of plugins.Capabilities
-// surfaced on /v1/plugins (alice2-index). The endpoint is the
+// surfaced on /v1/plugins (yaad-index). The endpoint is the
 // inverse of /v1/kinds: /v1/kinds aggregates "kind → plugins";
 // /v1/plugins enumerates "plugin → kinds + url_patterns + commands
 // + source_namespace + version". Consumers (yaad-mcp SKILL.md

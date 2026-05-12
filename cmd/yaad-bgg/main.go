@@ -1,12 +1,12 @@
 // Command yaad-bgg is the standalone BoardGameGeek extractor binary
-// for alice2-index, implementing the subprocess plugin protocol from
-// alice2-index's ADR-0006.
+// for yaad-index, implementing the subprocess plugin protocol from
+// yaad-index's ADR-0006.
 //
 // Two CLI modes:
 //
 // - `yaad-bgg --init` — write the capabilities document
 // (name, version, url_patterns, entity_kinds, cache_ttl_seconds)
-// as JSON to stdout and exit 0. alice2-index calls this once at
+// as JSON to stdout and exit 0. yaad-index calls this once at
 // server startup.
 //
 // - `yaad-bgg` (no args) — read a JSON request
@@ -16,7 +16,7 @@
 // to stdout, and exit 0. On failure: write a human-readable
 // message to stderr and exit non-zero.
 //
-// The wire shapes mirror alice2-index's
+// The wire shapes mirror yaad-index's
 // internal/plugins/subprocess/subprocess.go (Capabilities,
 // fetchRequest, fetchResponse). Keeping the marshalling here — and
 // the fetcher in internal/bgg/ — means the fetcher stays
@@ -25,7 +25,7 @@
 //
 // Per ADR-0014 (plugin attachment contract), a successful fetch
 // stages the BGG thumbnail under attach.StagingDir() and emits an
-// `attachments[]` entry pointing at the staged path; alice2-index's
+// `attachments[]` entry pointing at the staged path; yaad-index's
 // daemon copies/hardlinks it into the vault next to the entity .md
 // file.
 package main
@@ -79,9 +79,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("yaad-bgg", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	initMode := fs.Bool("init", false,
-		"emit the capabilities document on stdout and exit (called by alice2-index at startup)")
+		"emit the capabilities document on stdout and exit (called by yaad-index at startup)")
 	versionMode := fs.Bool("version", false,
-		"print the plugin version and exit (called by alice2-index's cache-key probe)")
+		"print the plugin version and exit (called by yaad-index's cache-key probe)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -126,8 +126,8 @@ type capabilitiesDoc struct {
 	SourceNamespace string `json:"source_namespace,omitempty"`
 }
 
-// canonicalKindExtras mirrors the wire shape alice2-index's
-// plugins.CanonicalKindExtras decodes per alice2-index (typed
+// canonicalKindExtras mirrors the wire shape yaad-index's
+// plugins.CanonicalKindExtras decodes per yaad-index (typed
 // gaps in plugin Capabilities) — the per-kind gap-extras the
 // plugin contributes on top of the daemon's universal +
 // kind-specific built-in gap defaults. Layered as Layer 2 in
@@ -136,7 +136,7 @@ type canonicalKindExtras struct {
 	Gaps map[string]gapSpecJSON `json:"gaps,omitempty"`
 }
 
-// gapSpecJSON mirrors alice2-index plugins.GapSpec (post- typed
+// gapSpecJSON mirrors yaad-index plugins.GapSpec (post- typed
 // shape). Field VALUES live under entity `data`; this declares the
 // metadata about how each gap is expected to be filled. ADR-0019
 // adds FillStrategy, Range, MaxLength, Values to the pre-existing
@@ -193,7 +193,7 @@ func runInit(stdout io.Writer) error {
 		CacheTTLSeconds: bgg.DefaultCacheTTLSeconds,
 		SourceNamespace: bgg.SourceNamespace,
 
-		// Per alice2-index ADR-0019 step 8: declare the five
+		// Per yaad-index ADR-0019 step 8: declare the five
 		// operator-strategy gaps the boardgame canonical kind needs.
 		// Field VALUES live under entity `data`; the daemon's typed
 		// operator-fill endpoint validates writes against these
@@ -205,7 +205,7 @@ func runInit(stdout io.Writer) error {
 		// an agent-on-behalf-of-operator) writes via /v1/entities/
 		// {id}/operator-fill.
 		//
-		// The daemon's Layer 1.5 BuiltinKindGaps (per alice2-index
+		// The daemon's Layer 1.5 BuiltinKindGaps (per yaad-index
 		//) already carries the same five for boardgame; this
 		// plugin declaration is Layer 2 of the merge so the contract
 		// is also explicit at the plugin layer. Operator config
@@ -258,7 +258,7 @@ type fetchRequest struct {
 	URL string `json:"url"`
 }
 
-// fetchResponse mirrors the wire shape alice2-index's
+// fetchResponse mirrors the wire shape yaad-index's
 // subprocess.fetchResponse decodes (per ADR-0005 + ADR-0008 +
 // ADR-0014 §1). Optional fields use omitempty / pointer shapes so
 // "absent" and "explicit zero" are distinguishable.
@@ -275,7 +275,7 @@ type fetchResponse struct {
 	// string — the agent re-ingests via `bgg: <id>`); value is the
 	// human-readable label + an optional summary. Mutually exclusive
 	// with Structured: a single Fetch call emits one or the other,
-	// never both. alice2-index's subprocess wrapper reads this into
+	// never both. yaad-index's subprocess wrapper reads this into
 	// FetchResult.Options and translates to `state: disambiguation`
 	// on the API surface.
 	Options map[string]optionJSON `json:"options,omitempty"`
@@ -299,7 +299,7 @@ type optionJSON struct {
 	Summary string `json:"summary,omitempty"`
 }
 
-// structuredResponse mirrors alice2-index's subprocess.structuredResponse
+// structuredResponse mirrors yaad-index's subprocess.structuredResponse
 // under the ADR-0021 universal-source-shape contract: `kind:
 // "source"` + descriptive `name` + `data` + `edges` block. Daemon
 // derives the source-node ID from `<source_namespace>:<slug.Slug(name)>`
@@ -365,7 +365,7 @@ func runFetch(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) er
 
 	// Disambiguation path: name-shorthand resolved to multiple BGG
 	// search candidates. Emit options-only (no Structured / no
-	// attachments / no body) — alice2-index's subprocess wrapper
+	// attachments / no body) — yaad-index's subprocess wrapper
 	// translates this to `state: disambiguation` on the API surface,
 	// per ADR-0006 +. Agent picks one and re-ingests via
 	// `bgg: <id>` (the option key).
@@ -405,7 +405,7 @@ func runFetch(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) er
 
 	// Thumbnail attachment per + ADR-0014. Stage to
 	// attach.StagingDir() and emit a `file://` attachment via the
-	// SDK; alice2-index's dispatcher copies into the vault and
+	// SDK; yaad-index's dispatcher copies into the vault and
 	// deletes the staged source on success. Empty Thumbnail (BGG
 	// returned no image) skips the attachment with a stderr WARN
 	// per the operator's spec — entity still lands.
@@ -451,7 +451,7 @@ func runFetch(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) er
 // ADR-0023: single-line JSON terminated by exactly one `\n`
 // (Encoder.Encode appends one). The pre-ADR-0023 pretty-printed
 // multi-line shape is retired so each invocation produces exactly
-// one envelope line — the canonical wire format for alice2-index's
+// one envelope line — the canonical wire format for yaad-index's
 // streaming reader (a prior PR) + the future N-line consumer.
 func writeFetchResponse(stdout io.Writer, resp fetchResponse) error {
 	return json.NewEncoder(stdout).Encode(resp)

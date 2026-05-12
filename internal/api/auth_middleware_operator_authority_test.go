@@ -1,5 +1,5 @@
 // Tests for the ClaimHasOperatorAuthority helper added in
-// alice2-index — the operator-authority gate replaces the
+// yaad-index — the operator-authority gate replaces the
 // brittle Subject==Operator check at operator-fill + add_comment
 // call sites. The gate accepts agent-on-behalf-of-operator
 // pair-claims (Subject is an agent, Operator names the human),

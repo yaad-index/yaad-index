@@ -1,4 +1,4 @@
-// Cache management CLI subcommands per alice2-index.
+// Cache management CLI subcommands per yaad-index.
 //
 // Cache lifecycle is vault-driven (per ADR-0008): past-expiry only
 // gates the lookup path, NOT the on-disk state. An expired entity
@@ -12,7 +12,7 @@
 // reconciles DB rows.
 // - `refetch`: force-refetch via the running daemon's HTTP API.
 //
-// Per alice2-index PR-B: TTL resolution at ingest produces an
+// Per yaad-index PR-B: TTL resolution at ingest produces an
 // absolute-date `cache_expires:` stamp; the CLI reads that stamp
 // directly. Legacy entries that still carry `cache_ttl_seconds:`
 // don't participate in the predicate — operators bulk-migrate
@@ -44,17 +44,17 @@ import (
 )
 
 // CacheCmd is the parent subcommand grouping cache management
-// operations (per alice2-index). The kong tree mounts it under
-// `alice2-index cache <subcommand>`.
+// operations (per yaad-index). The kong tree mounts it under
+// `yaad-index cache <subcommand>`.
 type CacheCmd struct {
 	ListExpired CacheListExpiredCmd `cmd:"list-expired" help:"List vault entries whose cache TTL has expired."`
 	Purge CachePurgeCmd `cmd:"purge" help:"Delete expired vault entries; reindex reconciles DB rows."`
-	Refetch CacheRefetchCmd `cmd:"refetch" help:"Force-refetch expired entries via a running alice2-index daemon (preserves user-added comments / UGC Per the prior design,/)."`
+	Refetch CacheRefetchCmd `cmd:"refetch" help:"Force-refetch expired entries via a running yaad-index daemon (preserves user-added comments / UGC Per the prior design,/)."`
 }
 
-// CacheListExpiredCmd implements `alice2-index cache list-expired`.
+// CacheListExpiredCmd implements `yaad-index cache list-expired`.
 // Read-only walk of the vault root: prints every entity whose
-// frontmatter `cache_expires:` is in the past (per alice2-index).
+// frontmatter `cache_expires:` is in the past (per yaad-index).
 //
 // Filters:
 //
@@ -67,7 +67,7 @@ type CacheCmd struct {
 // Output is tab-separated, suitable for piping through `column -t`
 // for visual alignment OR for awk/cut-style processing.
 type CacheListExpiredCmd struct {
-	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/alice2-index/config.yaml" help:"path to the alice2-index config file. vault.path is read from here unless --vault-path overrides."`
+	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file. vault.path is read from here unless --vault-path overrides."`
 	VaultPath string `name:"vault-path" env:"YAAD_INDEX_VAULT_PATH" help:"override vault root (otherwise read from config.vault.path). Must be absolute."`
 	Plugin string `name:"plugin" help:"filter to entities whose Plugin frontmatter field matches this value."`
 	Kind string `name:"kind" help:"filter to entities of the given kind."`
@@ -78,7 +78,7 @@ type CacheListExpiredCmd struct {
 // slice (rather than streaming directly to stdout) so tests can
 // assert on the discovered set without parsing tab-formatted text.
 //
-// Per alice2-index PR-B: the row carries the absolute expiry
+// Per yaad-index PR-B: the row carries the absolute expiry
 // date (or the Never sentinel) instead of's duration field.
 // Legacy entries with cache_ttl_seconds only never reach this
 // row — they don't participate in the list-expired predicate
@@ -197,7 +197,7 @@ func findExpiredCacheEntries(logger *slog.Logger, vaultPath, pluginFilter, kindF
 }
 
 // cacheEntryExpired returns true when the entity should appear on
-// the `list-expired` output per alice2-index's cache_expires
+// the `list-expired` output per yaad-index's cache_expires
 // stamp:
 //
 // - nil CacheExpires → no opinion; cache forever; NOT expired.
@@ -247,12 +247,12 @@ func freshestPersistentFetchVault(e *vault.Entity) time.Time {
 
 // cacheNotationsSource is the provenance.source string used by the
 // lookup-first cache path to mark its ephemeral cache-hit response
-// (per alice2-index a prior PR). Defined here to avoid pulling
+// (per yaad-index a prior PR). Defined here to avoid pulling
 // internal/api into the cmd binary's import graph.
 const cacheNotationsSource = "cache:notations"
 
-// CachePurgeCmd implements `alice2-index cache purge`. Deletes vault
-// files for expired entries (per alice2-index's sentinel rules)
+// CachePurgeCmd implements `yaad-index cache purge`. Deletes vault
+// files for expired entries (per yaad-index's sentinel rules)
 // and runs reindex to drop the corresponding store rows via the
 // disappear-pass reconcile.
 //
@@ -266,8 +266,8 @@ const cacheNotationsSource = "cache:notations"
 // regardless of stamped TTL. Useful for bulk-clearing entries that
 // aren't TTL-stamped (e.g. legacy deployments).
 type CachePurgeCmd struct {
-	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/alice2-index/alice2.db" help:"path to the SQLite database file (matches the serve subcommand)."`
-	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/alice2-index/config.yaml" help:"path to the alice2-index config file. vault.path is read from here unless --vault-path overrides."`
+	DBPath string `name:"db-path" env:"YAAD_INDEX_DB_PATH" default:"~/.local/share/yaad-index/alice2.db" help:"path to the SQLite database file (matches the serve subcommand)."`
+	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file. vault.path is read from here unless --vault-path overrides."`
 	VaultPath string `name:"vault-path" env:"YAAD_INDEX_VAULT_PATH" help:"override vault root (otherwise read from config.vault.path). Must be absolute."`
 	Plugin string `name:"plugin" help:"filter to entities whose Plugin frontmatter field matches this value."`
 	Kind string `name:"kind" help:"filter to entities of the given kind."`
@@ -452,9 +452,9 @@ func findOlderThanCacheEntries(logger *slog.Logger, vaultPath, pluginFilter, kin
 	return out, nil
 }
 
-// CacheRefetchCmd implements `alice2-index cache refetch`. Force-
+// CacheRefetchCmd implements `yaad-index cache refetch`. Force-
 // refetches expired vault entries by issuing `POST /v1/ingest` with
-// `force_refetch=true` against a RUNNING alice2-index daemon. The
+// `force_refetch=true` against a RUNNING yaad-index daemon. The
 // daemon's existing ingest path (post- +/) preserves
 // user-added comments and UGC sections by design (the
 // buildVaultEntity merge inherits Comments/Tags/Summary/Edges from
@@ -472,9 +472,9 @@ func findOlderThanCacheEntries(logger *slog.Logger, vaultPath, pluginFilter, kin
 //
 // Operators with no running daemon: start serve, then run refetch.
 type CacheRefetchCmd struct {
-	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/alice2-index/config.yaml" help:"path to the alice2-index config file. vault.path is read from here unless --vault-path overrides."`
+	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file. vault.path is read from here unless --vault-path overrides."`
 	VaultPath string `name:"vault-path" env:"YAAD_INDEX_VAULT_PATH" help:"override vault root (otherwise read from config.vault.path). Must be absolute."`
-	Server string `name:"server" env:"YAAD_INDEX_SERVER" default:"http://127.0.0.1:7433" help:"URL of the running alice2-index daemon."`
+	Server string `name:"server" env:"YAAD_INDEX_SERVER" default:"http://127.0.0.1:7433" help:"URL of the running yaad-index daemon."`
 	Token string `name:"token" env:"YAAD_INDEX_AUTH_TOKEN" help:"Bearer JWT for the daemon's auth.required=true mode (omit for anonymous bypass)."`
 	Plugin string `name:"plugin" help:"filter to entities whose Plugin frontmatter field matches."`
 	Kind string `name:"kind" help:"filter to entities of the given kind."`
@@ -619,7 +619,7 @@ func formatFetchedAge(r expiredEntry) (string, string) {
 }
 
 // formatExpires renders the cache_expires column for list-expired
-// + purge-dry-run output (per alice2-index PR-B). Three shapes:
+// + purge-dry-run output (per yaad-index PR-B). Three shapes:
 //
 // - r.Never → "never" (sentinel)
 // - r.ExpiresAt non-zero → ISO date in operator-TZ
@@ -642,7 +642,7 @@ func formatExpires(r expiredEntry) string {
 // override).
 //
 // Also applies cfg.Timezone to the clock package as a side effect
-// (per alice2-index PR-C) so subsequent log lines + CLI output
+// (per yaad-index PR-C) so subsequent log lines + CLI output
 // use the operator-configured location.
 func resolveVaultPath(logger *slog.Logger, configPath, override string) (string, error) {
 	vaultPath := override

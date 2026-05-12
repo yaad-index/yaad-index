@@ -14,7 +14,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/config"
 )
 
-// resolveAuth precedence tests (per alice2-index a prior PR). The locked
+// resolveAuth precedence tests (per yaad-index a prior PR). The locked
 // chain is CLI > env > config > default-true. Kong unifies CLI + env
 // into a single *bool field on ServeCmd, so the test only has to
 // distinguish CLI/env (one variable) from config (cfg.Auth.Required)
@@ -93,7 +93,7 @@ func TestResolveAuth_KeysDirCLIBeatsConfig(t *testing.T) {
 func TestResolveAuth_NilConfig_DefaultTrue_BadDefaultDir(t *testing.T) {
 	t.Parallel()
 	// Nil config + no CLI keys-dir + default-true → tries to load
-	// from /etc/alice2-index/keys/, which is unlikely to exist on a
+	// from /etc/yaad-index/keys/, which is unlikely to exist on a
 	// test box. The error message must mention the default path so
 	// operators see what to fix.
 	required, verifier, err := resolveAuth(quietLogger(), nil, "", nil)
@@ -103,7 +103,7 @@ func TestResolveAuth_NilConfig_DefaultTrue_BadDefaultDir(t *testing.T) {
 		assert.Nil(t, verifier)
 		assert.False(t, required, "on error required is reported as false")
 	} else {
-		// On a box where /etc/alice2-index/keys/public.pem does happen
+		// On a box where /etc/yaad-index/keys/public.pem does happen
 		// to exist (operator dev VM), the load succeeds and required
 		// is true. Either path is correct; the assertion is just that
 		// we got internally consistent state.

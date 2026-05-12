@@ -81,7 +81,7 @@ func (s *sqliteStore) GetEdgesForMany(ctx context.Context, fromIDs []string, typ
 }
 
 // GetContextNeighbors implements the BFS-with-cycle-detection traversal
-// behind `GET /v1/entities/{id}/context` (per alice2-index the source issue).
+// behind `GET /v1/entities/{id}/context` (per yaad-index the source issue).
 //
 // Algorithm:
 //

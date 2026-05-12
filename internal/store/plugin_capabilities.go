@@ -70,7 +70,7 @@ func (s *sqliteStore) UpsertPluginCapabilities(ctx context.Context, name, versio
 
 // DeletePluginCapabilities drops the cache row for `name`. Returns
 // (true, nil) when a row was actually deleted, (false, nil) when no
-// row matched. Used by `alice2-index plugins clear-cache --name <n>`.
+// row matched. Used by `yaad-index plugins clear-cache --name <n>`.
 func (s *sqliteStore) DeletePluginCapabilities(ctx context.Context, name string) (bool, error) {
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM plugin_capabilities WHERE plugin_name = ?`,
@@ -87,7 +87,7 @@ func (s *sqliteStore) DeletePluginCapabilities(ctx context.Context, name string)
 
 // ClearAllPluginCapabilities truncates the plugin_capabilities table
 // and returns the count of rows deleted. Used by
-// `alice2-index plugins clear-cache` (no --name flag).
+// `yaad-index plugins clear-cache` (no --name flag).
 func (s *sqliteStore) ClearAllPluginCapabilities(ctx context.Context) (int, error) {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM plugin_capabilities`)
 	if err != nil {

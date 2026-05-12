@@ -6,7 +6,7 @@
 //
 // Built on top of github.com/fzerorubigd/bggo (the operator's BGG API
 // client lib). Every upstream call goes through *bggo.Client; we
-// don't roll our own HTTP. Per alice2-index/+ the operator's
+// don't roll our own HTTP. Per yaad-index/+ the operator's
 // 2026-05-06 spec, scope is `boardgame` kind only — expansions /
 // publishers / designers / play-logs are separate follow-ups.
 package bgg
@@ -103,8 +103,8 @@ type EdgeTarget struct {
 
 // DefaultTTLDays is the LEGACY freshness budget surfaced on
 // `entity_kinds[].default_ttl_days`. Kept on the wire for backward
-// compat with older alice2-index builds that pre-date's three-
-// level cache TTL hierarchy. Modern alice2-index reads
+// compat with older yaad-index builds that pre-date's three-
+// level cache TTL hierarchy. Modern yaad-index reads
 // DefaultCacheTTLSeconds; the dual emission lets operators on the
 // upgrade path see consistent values until they fully migrate.
 //
@@ -116,7 +116,7 @@ const DefaultTTLDays = 365
 // seconds. 31536000s = 365 days. BGG metadata (designer/publisher/
 // year/mechanics) is essentially static once a game ships, so a
 // yearly hands-off contract is the right default. Operators wanting
-// fresher data override per-entry / globally via alice2-index's
+// fresher data override per-entry / globally via yaad-index's
 // three-level hierarchy.
 //
 // Surfaced through `Capabilities.CacheTTLSeconds` (--init top-level
@@ -126,13 +126,13 @@ const DefaultTTLDays = 365
 const DefaultCacheTTLSeconds = 31536000
 
 // URLPattern is the regex yaad-bgg advertises for canonical
-// `https://boardgamegeek.com/boardgame/<id>[/<slug>]` URLs. alice2-index
+// `https://boardgamegeek.com/boardgame/<id>[/<slug>]` URLs. yaad-index
 // pre-compiles every plugin's url_patterns and dispatches in
 // registration order; we keep the pattern conservative (anchored host
 // + /boardgame/ + numeric id) so we don't claim search/list/forum
 // URLs.
 //
-// Scope per alice2-index/is `boardgame` only. Expansion
+// Scope per yaad-index/is `boardgame` only. Expansion
 // (`/boardgameexpansion/<id>`) and other BGG kinds (publisher,
 // designer, person) are separate follow-ups; their URL patterns
 // will land alongside their fetchers.
@@ -149,7 +149,7 @@ const URLPattern = `^https?://(www\.)?boardgamegeek\.com/boardgame/[0-9]+(/.*)?$
 const ShorthandPattern = `(?i)^bgg:\s*(\S.*)$`
 
 // shorthandRegex is ShorthandPattern compiled once for in-package use.
-// The advertised pattern (ShorthandPattern) is what alice2-index
+// The advertised pattern (ShorthandPattern) is what yaad-index
 // dispatches against; this in-process copy lets Match recognise the
 // shape without a per-call regex compile.
 var shorthandRegex = regexp.MustCompile(ShorthandPattern)
@@ -161,7 +161,7 @@ var urlRegex = regexp.MustCompile(URLPattern)
 // Match returns true for any input this plugin can handle: a canonical
 // boardgamegeek.com /boardgame/<id> URL OR the shorthand `bgg: <id>`
 // form. Mirrors yaad-wikipedia's Match shape so callers (incl. unit
-// tests) can dispatch without the regex round-trip alice2-index does.
+// tests) can dispatch without the regex round-trip yaad-index does.
 func Match(input string) bool {
 	if _, ok := matchShorthand(input); ok {
 		return true
@@ -198,7 +198,7 @@ var urlIDRegex = regexp.MustCompile(`(?i)^https?://(?:www\.)?boardgamegeek\.com/
 var numericIDRegex = regexp.MustCompile(`^\d+$`)
 
 // ErrNotFoundUpstream is returned when BGG replies with no items
-// for the requested id. alice2-index's subprocess wrapper translates
+// for the requested id. yaad-index's subprocess wrapper translates
 // the non-zero plugin exit into a fetch_failed envelope.
 var ErrNotFoundUpstream = errors.New("bgg: thing not found")
 
@@ -282,7 +282,7 @@ func New(apiKey string, opts ...Option) (*Plugin, error) {
 // emits `structured` / `raw_content` from this.
 // - `Options` populated → BGG search returned multi-match (name-
 // shorthand path per. main.go emits `options` and
-// alice2-index's subprocess wrapper translates that to
+// yaad-index's subprocess wrapper translates that to
 // `state: disambiguation`. Agent picks one and re-invokes ingest
 // via the `bgg: <id>` numeric shorthand.
 //
@@ -366,8 +366,8 @@ type Boardgame struct {
 	//. Populated from BGG's `alternate name` entries
 	// — foreign-language titles, original publisher's title, etc.
 	// First element is always the primary name (matches the
-	// title-synthesis surface alice2-index runs on the canonical-
-	// kinds path). alice2-index dedupes against ADR-0011's title-
+	// title-synthesis surface yaad-index runs on the canonical-
+	// kinds path). yaad-index dedupes against ADR-0011's title-
 	// synthesized alias at vault-write time.
 	Aliases []string
 
@@ -379,7 +379,7 @@ type Boardgame struct {
 
 	// Notations is the set of input forms that resolve to this
 	// boardgame — canonical URL + `bgg: <id>` shorthand. Used by
-	// alice2-index's lookup-first cache to short-circuit re-ingest.
+	// yaad-index's lookup-first cache to short-circuit re-ingest.
 	Notations []string
 }
 
@@ -658,7 +658,7 @@ func (p *Plugin) fetchByName(ctx context.Context, query string) (*FetchOutcome, 
 // - min/max_players — player count range
 // - playing_time — minutes
 //
-// alice2-index's ingest layer translates `publisher: <name>`,
+// yaad-index's ingest layer translates `publisher: <name>`,
 // `designed_by: [...]`, `artist_by: [...]` into typed canonical
 // edges (`published_by company:<name>`, `designed_by person:<name>`,
 // etc.) per the operator's 2026-05-06 spec — the plugin only emits the
@@ -704,7 +704,7 @@ func buildData(canonicalURL string, t bggo.ThingResult) map[string]any {
 }
 
 // buildAliases returns the alias list per ADR-0011: primary BGG
-// name first (matches what alice2-index's title-synthesis would
+// name first (matches what yaad-index's title-synthesis would
 // produce), followed by every BGG alternate name (foreign-language
 // titles, original-publisher's title). Dedupes inline.
 func buildAliases(t bggo.ThingResult) []string {
@@ -744,9 +744,9 @@ func dedupeStrings(s []string) []string {
 }
 
 // operatorNow returns time.Now() in the operator-configured TZ
-// (per alice2-index PR-D's YAAD_TIMEZONE env). Falls back to
+// (per yaad-index PR-D's YAAD_TIMEZONE env). Falls back to
 // UTC when the env var is unset or malformed — same defensive
-// posture as alice2-index's own clock.Location() default.
+// posture as yaad-index's own clock.Location() default.
 func operatorNow() time.Time {
 	if name := strings.TrimSpace(os.Getenv("YAAD_TIMEZONE")); name != "" {
 		if loc, err := time.LoadLocation(name); err == nil {

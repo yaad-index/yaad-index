@@ -1,4 +1,4 @@
-// Auto-commit-on-write per alice2-index the source issue.
+// Auto-commit-on-write per yaad-index the source issue.
 //
 // When the vault root is a git working tree, vault.Writer can hand
 // every successful atomic write to a Committer that records it as a
@@ -8,7 +8,7 @@
 //
 // Detection + opt-out semantics live in the operator config layer
 // (`vault.auto_commit`, `vault.auto_commit_debounce_seconds`,
-// `vault.auto_push`); the wiring in cmd/alice2-index/main.go
+// `vault.auto_push`); the wiring in cmd/yaad-index/main.go
 // constructs the right Committer flavor and passes it via
 // WithCommitter. Tests + non-vault deploys leave Committer nil,
 // in which case Writer skips the commit step entirely.
@@ -72,7 +72,7 @@ func (NoopCommitter) Close() error { return nil }
 type GitCommitterOptions struct {
 	// CommitterName / CommitterEmail are the git committer identity
 	// stamped on every commit. Empty values fall back to
-	// "alice2-index" / "alice2-index@localhost".
+	// "yaad-index" / "yaad-index@localhost".
 	CommitterName string
 	CommitterEmail string
 
@@ -154,11 +154,11 @@ func NewGitCommitter(vaultRoot string, opts GitCommitterOptions) (*GitCommitter,
 
 	name := opts.CommitterName
 	if name == "" {
-		name = "alice2-index"
+		name = "yaad-index"
 	}
 	email := opts.CommitterEmail
 	if email == "" {
-		email = "alice2-index@localhost"
+		email = "yaad-index@localhost"
 	}
 
 	return &GitCommitter{
@@ -338,7 +338,7 @@ func (c *GitCommitter) runGit(ctx context.Context, args ...string) error {
 
 func (c *GitCommitter) execGit(ctx context.Context, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", c.root}, args...)...)
-	// TZ env propagates the operator-configured timezone (alice2-index
+	// TZ env propagates the operator-configured timezone (yaad-index
 	// PR-C) into git's commit timestamp rendering. Default
 	// time.UTC.String() = "UTC"; named locations like
 	// "Europe/Berlin" resolve via /usr/share/zoneinfo. Per ADR-
@@ -366,14 +366,14 @@ func (c *GitCommitter) execGit(ctx context.Context, args ...string) error {
 }
 
 func (c *GitCommitter) formatAuthor(author string) string {
-	// Author of the form "agent:bob" maps to "alice2 <alice2@alice2-index>".
+	// Author of the form "agent:bob" maps to "alice2 <alice2@yaad-index>".
 	// Bare strings ("alice2") use the same fallback. The format must
 	// satisfy git's "Name <email>" parser.
 	name := author
 	if idx := strings.IndexByte(author, ':'); idx >= 0 && idx < len(author)-1 {
 		name = author[idx+1:]
 	}
-	return fmt.Sprintf("%s <%s@alice2-index>", name, name)
+	return fmt.Sprintf("%s <%s@yaad-index>", name, name)
 }
 
 // gitError captures `git`'s exit + output for clearer logging.

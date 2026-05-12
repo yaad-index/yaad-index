@@ -28,7 +28,7 @@ const (
 	fakeModeOKv2 = "ok-v2" // --version → "0.2.0"; --init → caps with version=0.2.0
 	fakeModeNoVer = "no-ver" // --version → exits non-zero (probe fails)
 	fakeModeBadCtor = "bad-ctor" // --version → "0.1.0"; --init → caps with malformed url_patterns regex
-	fakeModeHashOld = "hash-old" // --version → "v0.1.0+oldhash"; --init → caps with version=v0.1.0+oldhash (alice2-index)
+	fakeModeHashOld = "hash-old" // --version → "v0.1.0+oldhash"; --init → caps with version=v0.1.0+oldhash (yaad-index)
 	fakeModeHashNewSameTag = "hash-new-same-tag" // --version → "v0.1.0+newhash"; --init → caps with version=v0.1.0+newhash — same tag, different build hash
 )
 
@@ -256,7 +256,7 @@ func TestRegisterPlugin_CacheHit_NoExtraLog(t *testing.T) {
 	assert.Equal(t, 0, summary.Fails)
 }
 
-// TestRegisterPlugin_HashOnlyChange_CacheStillHits pins alice2-index
+// TestRegisterPlugin_HashOnlyChange_CacheStillHits pins yaad-index
 //'s hash-strip contract: when --version output's tag prefix
 // is unchanged but the build hash differs (typical of a rebuild
 // that didn't bump the semver tag), the daemon's cache compare
@@ -285,7 +285,7 @@ func TestRegisterPlugin_HashOnlyChange_CacheStillHits(t *testing.T) {
 	registered := findLog(logs, "plugin registered")
 	require.NotNil(t, registered)
 	assert.Equal(t, "cache", registered.Source,
-		"hash-only change must produce a cache hit per alice2-index")
+		"hash-only change must produce a cache hit per yaad-index")
 
 	versionChanged := findLog(logs, "plugin version changed")
 	assert.Nil(t, versionChanged,
@@ -299,7 +299,7 @@ func TestRegisterPlugin_HashOnlyChange_CacheStillHits(t *testing.T) {
 
 // TestRegisterPlugin_TagBumpInvalidates ensures the dual: when the
 // SEMVER tag actually moves (not just the hash), cache misses and
-// --init re-runs. Otherwise alice2-index's cache key would be
+// --init re-runs. Otherwise yaad-index's cache key would be
 // too sticky.
 func TestRegisterPlugin_TagBumpInvalidates(t *testing.T) {
 	st := newSeededStore(t)

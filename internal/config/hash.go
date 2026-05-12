@@ -1,5 +1,5 @@
 // Deterministic hash over the canonical-vocabulary subset of the
-// config (per ADR-0013 §3 / alice2-index a prior PR). Surfaced as the
+// config (per ADR-0013 §3 / yaad-index a prior PR). Surfaced as the
 // `config_hash` field on `/v1/cv-status` so operator tooling can
 // detect when the canonical_kinds / canonical_edge_types config
 // changed between calls — agents and CI can poll, diff the hash,
@@ -22,7 +22,7 @@ import (
 )
 
 // ConfigHash produces the canonical-vocabulary config hash
-// surfaced by `/v1/cv-status` (per ADR-0013 §3 / alice2-index).
+// surfaced by `/v1/cv-status` (per ADR-0013 §3 / yaad-index).
 //
 // SHA-256 over a canonical JSON serialization of:
 //
@@ -32,12 +32,12 @@ import (
 // - canonical_edge_types slice — caller-sorted before hashing
 // so an operator reorder of the YAML list does NOT bump the
 // hash. Matches `/v1/structure`'s `version` contract from
-// a prior PR (alice2-index) so the two observability surfaces
+// a prior PR (yaad-index) so the two observability surfaces
 // agree on what counts as a config change. The orchestrator
 // already treats edge_types as a set (dedupe-via-map at
 // lookup time), so the YAML order has no semantic load — the
 // two-surface consistency is the right invariant.
-// - A discrim sentinel binding the schema-version: "alice2-index/
+// - A discrim sentinel binding the schema-version: "yaad-index/
 // cv-config-v1". Hand-bumped when the canonForm layout
 // changes.
 //
@@ -84,7 +84,7 @@ func ConfigHash(canonicalKinds map[string]CanonicalKindConfig, canonicalEdgeType
 	body, err := json.Marshal(canonForm{
 		Kinds: canonicalKinds,
 		EdgeTypes: sortedEdges,
-		Discrim: "alice2-index/cv-config-v1",
+		Discrim: "yaad-index/cv-config-v1",
 	})
 	if err != nil {
 		return "", fmt.Errorf("ConfigHash: marshal canonical-vocabulary form: %w", err)

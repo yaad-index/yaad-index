@@ -23,7 +23,7 @@ import (
 // wired through. Plugin records call counts so tests can assert
 // when the plugin path was invoked vs. served from cache. Returns
 // the vault root too so tests can mutate cache_expires directly
-// (per alice2-index the lookup-side comparison is against the
+// (per yaad-index the lookup-side comparison is against the
 // frontmatter date, not against provenance fetched_at).
 func newCacheTTLAPI(t *testing.T, ttl time.Duration) (
 	http.Handler,

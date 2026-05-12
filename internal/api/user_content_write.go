@@ -1,4 +1,4 @@
-// User-content (UGC) write endpoints per alice2-index PR-C of 3.
+// User-content (UGC) write endpoints per yaad-index PR-C of 3.
 //
 // Endpoints:
 //
@@ -9,7 +9,7 @@
 // Auth contract (mirrors a prior PR comment author validation):
 //
 // - All endpoints require Bearer JWT (via the protect() middleware
-// from alice2-index). Dev-mode AnonymousAuth bypasses identity-
+// from yaad-index). Dev-mode AnonymousAuth bypasses identity-
 // derived enforcement so existing tests + non-auth deploys keep
 // working — the synthetic anon claim returns from IsAnonymousClaim
 // and short-circuits the author/operator check.
@@ -59,7 +59,7 @@ import (
 //
 // `data` is optional UGC frontmatter. Fields declared in the
 // operator's `user_content_frontmatter_edges:` config trigger
-// canonical-edge derivation per alice2-index (re-implementation
+// canonical-edge derivation per yaad-index (re-implementation
 // of on the ADR-0021 contract). Each declared field's value
 // is a `{name, kind}` object (or list of), or a pre-formed
 // `<kind>:<slug>` canonical-label string (or list of) — UGC is
@@ -82,7 +82,7 @@ type userContentSectionReplaceRequest struct {
 }
 
 // userContentFrontmatterEditRequest is the PUT
-// /v1/user-content/{id}/frontmatter body per alice2-index.
+// /v1/user-content/{id}/frontmatter body per yaad-index.
 //
 // `data` is the replacement frontmatter map: per-field semantics
 // match POST /v1/user-content's `data` field — operator-config-
@@ -282,7 +282,7 @@ func handleUserContentCreate(
 			return
 		}
 
-		// Frontmatter-edge derivation per alice2-index (re-impl
+		// Frontmatter-edge derivation per yaad-index (re-impl
 		// of on the ADR-0021 contract). Walks the parsed
 		// canonical-label ops and creates edges from the UGC
 		// entity to each label. Re-uses the shared
@@ -364,7 +364,7 @@ func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultR
 		ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
 		if ifMatch == "" {
 			writeError(w, http.StatusPreconditionRequired, "precondition_required",
-				"If-Match header is required on user-content section edits (per alice2-index)")
+				"If-Match header is required on user-content section edits (per yaad-index)")
 			return
 		}
 		current := userContentEtag(ve.CleanContent)
@@ -483,7 +483,7 @@ func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultR
 }
 
 // handleUserContentFrontmatterEdit implements PUT
-// /v1/user-content/{id}/frontmatter per alice2-index. Replaces
+// /v1/user-content/{id}/frontmatter per yaad-index. Replaces
 // the entity's `data` map (full replacement, not patch) and
 // re-derives canonical-label edges via the shared
 // applyCanonicalTypeEdges helper from — the helper's
@@ -549,7 +549,7 @@ func handleUserContentFrontmatterEdit(
 		// write. UGC is operator-authored content (the operator
 		// IS the writer), so pre-formed canonical-label strings
 		// are accepted same as on operator-fill per
-		// alice2-index.
+		// yaad-index.
 		operatorAllKinds := make([]string, 0, len(canonicalKindReg))
 		for k := range canonicalKindReg {
 			operatorAllKinds = append(operatorAllKinds, k)

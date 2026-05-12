@@ -29,7 +29,7 @@ const stubFillProvenanceSource = "agent:stub"
 //
 // The request body's wire shape is `{"fields": {<name>: <value>}}`.
 // handleFill decodes via an inline `map[string]json.RawMessage` so
-// canonical_type fields per alice2-index can be re-decoded
+// canonical_type fields per yaad-index can be re-decoded
 // against the shared parseCanonicalLabelList helper while other
 // fields land their natural Go shape via applyFieldsToVaultEntity.
 
@@ -82,12 +82,12 @@ type fillConflictResponse struct {
 // vault file path `<vault>/<kind>/<slug>.md`). The DB row is
 // presumed in sync with the vault for the recently-ingested-entity
 // case that the agent flow targets. A stale DB → 404 not_found is
-// acceptable behavior — operator runs `alice2-index reindex` to
+// acceptable behavior — operator runs `yaad-index reindex` to
 // repair drift.
 func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Decode once into json.RawMessage values so canonical_type
-		// fields per alice2-index can re-decode against the
+		// fields per yaad-index can re-decode against the
 		// shared parseCanonicalLabelList helper. Other fields decode
 		// to their natural Go shape via applyFieldsToVaultEntity.
 		var rawReq struct {
@@ -276,7 +276,7 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 			return
 		}
 
-		// Canonical_type edge create/replace per alice2-index
+		// Canonical_type edge create/replace per yaad-index
 		// (mirror of the operator-fill path's post-write step).
 		// Walks the canonical_type ops collected above; for each,
 		// deletes prior edges of type=field originating from this
@@ -293,7 +293,7 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 		}
 
 		// Mark gap-call done for this fetch-cycle (per ADR-0013 §4 +
-		// §5 / alice2-index). Reaching this point means we just
+		// §5 / yaad-index). Reaching this point means we just
 		// returned 2xx on the fill — full or partial, both count.
 		// The flag suppresses the cache-hit needs_fill payload on
 		// subsequent ingests until a refetch clears it. Best-effort

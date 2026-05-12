@@ -326,8 +326,8 @@ func TestDispatch_HTTPScheme(t *testing.T) {
 	if res.FetchAttachments[0].Role != "thumb" {
 		t.Errorf("FetchAttachments[0].Role: want thumb, got %q", res.FetchAttachments[0].Role)
 	}
-	if !strings.HasPrefix(gotUA, "alice2-index/") {
-		t.Errorf("User-Agent: want alice2-index/* prefix, got %q", gotUA)
+	if !strings.HasPrefix(gotUA, "yaad-index/") {
+		t.Errorf("User-Agent: want yaad-index/* prefix, got %q", gotUA)
 	}
 
 	dest := filepath.Join(vaultRoot, "boardgame", "130680", "attachments", "thumb.png")
