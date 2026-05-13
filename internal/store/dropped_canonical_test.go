@@ -128,6 +128,76 @@ func TestDroppedCanonical_EmptyTablesListsCleanly(t *testing.T) {
 	assert.Empty(t, edges)
 }
 
+// TestDroppedCanonicalKinds_ClearWipesAllRows pins the
+// yaad-index #31 clear primitive: ClearDroppedCanonicalKinds
+// removes every row in one call (the "reindex consumed drift"
+// semantic). Idempotent on an already-empty table.
+func TestDroppedCanonicalKinds_ClearWipesAllRows(t *testing.T) {
+	t.Parallel()
+	st := newStore(t)
+	ctx := context.Background()
+	require.NoError(t, st.IncDroppedCanonicalKind(ctx, "wikipedia", "person"))
+	require.NoError(t, st.IncDroppedCanonicalKind(ctx, "wikipedia", "boardgame"))
+	require.NoError(t, st.IncDroppedCanonicalKind(ctx, "bgg", "person"))
+
+	pre, err := st.ListDroppedCanonicalKinds(ctx)
+	require.NoError(t, err)
+	require.Len(t, pre, 3, "fixture sanity: three rows pre-clear")
+
+	require.NoError(t, st.ClearDroppedCanonicalKinds(ctx))
+
+	post, err := st.ListDroppedCanonicalKinds(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, post, "clear wipes every row regardless of plugin / kind")
+
+	// Idempotent: second call on the empty table is a no-op success.
+	require.NoError(t, st.ClearDroppedCanonicalKinds(ctx))
+}
+
+// TestDroppedCanonicalEdges_ClearWipesAllRows is the edge-type
+// counterpart.
+func TestDroppedCanonicalEdges_ClearWipesAllRows(t *testing.T) {
+	t.Parallel()
+	st := newStore(t)
+	ctx := context.Background()
+	require.NoError(t, st.IncDroppedCanonicalEdge(ctx, "wikipedia", "is_about"))
+	require.NoError(t, st.IncDroppedCanonicalEdge(ctx, "bgg", "designed_by"))
+
+	pre, err := st.ListDroppedCanonicalEdges(ctx)
+	require.NoError(t, err)
+	require.Len(t, pre, 2)
+
+	require.NoError(t, st.ClearDroppedCanonicalEdges(ctx))
+
+	post, err := st.ListDroppedCanonicalEdges(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, post)
+
+	require.NoError(t, st.ClearDroppedCanonicalEdges(ctx))
+}
+
+// TestDroppedCanonical_ClearTablesAreSiblings pins that clearing
+// one table doesn't affect the other — the kind + edge counter
+// tables stay isolated (mirrors the no-cross-contamination
+// invariant the Inc paths already enforce).
+func TestDroppedCanonical_ClearTablesAreSiblings(t *testing.T) {
+	t.Parallel()
+	st := newStore(t)
+	ctx := context.Background()
+	require.NoError(t, st.IncDroppedCanonicalKind(ctx, "wikipedia", "is_about"))
+	require.NoError(t, st.IncDroppedCanonicalEdge(ctx, "wikipedia", "is_about"))
+
+	require.NoError(t, st.ClearDroppedCanonicalKinds(ctx))
+
+	kinds, err := st.ListDroppedCanonicalKinds(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, kinds, "kinds cleared")
+
+	edges, err := st.ListDroppedCanonicalEdges(ctx)
+	require.NoError(t, err)
+	require.Len(t, edges, 1, "edges untouched by kind-clear")
+}
+
 func TestDroppedCanonical_SeparateTablesNoCrossContamination(t *testing.T) {
 	t.Parallel()
 	st := newStore(t)

@@ -265,7 +265,28 @@ func (r *Reindexer) Run(ctx context.Context, mode Mode) (Summary, error) {
 	summary.DurationMillis = end.Sub(start).Milliseconds()
 
 	if walkErr != nil {
+		// Surface the walk failure without clearing drift counters —
+		// the operator hasn't "consumed" the drift signal if reindex
+		// didn't complete, so the cv-status counters stay as-is.
 		return summary, fmt.Errorf("walk %s: %w", r.vaultRoot, walkErr)
+	}
+
+	// yaad-index #31: clear the per-(plugin, kind/edge_type) drop
+	// counters now that the reindex pass has completed successfully.
+	// Reindex is the operator's "consume drift signal" action — post-
+	// reindex /v1/cv-status reads as zero drift; the next ingest's
+	// drops (if any) accumulate fresh under the originating plugin's
+	// tag, preserving attribution that would blur if we cleared at
+	// the start of the pass (reindex's own drops attribute under a
+	// synthetic "reindex" plugin string). Failures here surface in
+	// summary.Errors but don't fail the reindex itself — the walk
+	// succeeded; a stale drift counter is annoying but not data-
+	// integrity-affecting.
+	if err := r.store.ClearDroppedCanonicalKinds(ctx); err != nil {
+		summary.Errors = append(summary.Errors, fmt.Sprintf("clear dropped_canonical_kinds: %v", err))
+	}
+	if err := r.store.ClearDroppedCanonicalEdges(ctx); err != nil {
+		summary.Errors = append(summary.Errors, fmt.Sprintf("clear dropped_canonical_edges: %v", err))
 	}
 	return summary, nil
 }

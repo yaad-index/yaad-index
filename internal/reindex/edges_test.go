@@ -180,17 +180,16 @@ func TestReindex_EdgesRespectAllowEdgeType(t *testing.T) {
 	require.Len(t, out, 1)
 	assert.Equal(t, "is_about", out[0].Type)
 
+	// Per yaad-index #31: reindex.Run clears the drop-counter tables
+	// at the end of a successful walk so post-reindex drift surfaces
+	// as zero. The drop behavior is still verified by the edge count
+	// above (1 edge written, designed_by silently dropped) — this
+	// table is now the "since-last-reindex" view, not the cumulative
+	// counter it used to be.
 	dropped, err := st.ListDroppedCanonicalEdges(context.Background())
 	require.NoError(t, err)
-	require.NotEmpty(t, dropped, "drop counter bumped for designed_by")
-	var found bool
-	for _, d := range dropped {
-		if d.EdgeType == "designed_by" && d.Plugin == "reindex" {
-			found = true
-			assert.Greater(t, d.Count, int64(0), "designed_by drop counter > 0")
-		}
-	}
-	assert.True(t, found, "designed_by drop counter recorded under reindex provenance")
+	assert.Empty(t, dropped,
+		"post-#31: dropped_canonical_edges cleared after successful reindex")
 }
 
 // TestReindex_EdgesRespectAllowKind drops an edge whose target's

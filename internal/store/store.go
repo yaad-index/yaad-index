@@ -326,6 +326,16 @@ type Store interface {
 	ListDroppedCanonicalKinds(ctx context.Context) ([]DroppedCanonicalKindCount, error)
 	// ListDroppedCanonicalEdges is the edge-type counterpart.
 	ListDroppedCanonicalEdges(ctx context.Context) ([]DroppedCanonicalEdgeCount, error)
+	// ClearDroppedCanonicalKinds wipes the per-(plugin, kind) drop
+	// counter table. Called by reindex.Run after a successful walk
+	// per yaad-index #31: reindex is the operator's "consume drift
+	// signal" action, so post-reindex the drift surface zeroes and
+	// any new drops from subsequent ingest accrue fresh under their
+	// originating plugin's tag (preserving attribution that would
+	// blur if we cleared at the start of reindex instead).
+	ClearDroppedCanonicalKinds(ctx context.Context) error
+	// ClearDroppedCanonicalEdges is the edge-type counterpart.
+	ClearDroppedCanonicalEdges(ctx context.Context) error
 
 	// ListGapCallableCandidates returns entities whose gap-call-done
 	// flag is NULL (per ADR-0013 §4 + §6 / yaad-index),

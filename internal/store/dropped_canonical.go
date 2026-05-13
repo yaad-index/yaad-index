@@ -104,6 +104,35 @@ func (s *sqliteStore) ListDroppedCanonicalKinds(ctx context.Context) ([]DroppedC
 	return out, nil
 }
 
+// ClearDroppedCanonicalKinds wipes every row from the
+// dropped_canonical_kinds table. Called by reindex.Run after a
+// successful walk per yaad-index #31 — reindex is the operator's
+// "consume drift signal" action, so post-reindex drift resets to
+// zero and any new drops from subsequent ingest accumulate under
+// the originating plugin's tag (preserving attribution that would
+// otherwise be blurred by clearing during the pass).
+//
+// Atomicity: single DELETE; SQL-level atomic. A concurrent ingest
+// that fires between reindex-walk-end and this call sees its
+// IncDroppedCanonicalKind row wiped by the clear — acceptable per
+// the v1 semantic (drift means "since last reindex"; the next
+// ingest re-emits).
+func (s *sqliteStore) ClearDroppedCanonicalKinds(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM dropped_canonical_kinds`); err != nil {
+		return fmt.Errorf("clear dropped canonical kinds: %w", err)
+	}
+	return nil
+}
+
+// ClearDroppedCanonicalEdges is the edge-type counterpart to
+// ClearDroppedCanonicalKinds (yaad-index #31).
+func (s *sqliteStore) ClearDroppedCanonicalEdges(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM dropped_canonical_edges`); err != nil {
+		return fmt.Errorf("clear dropped canonical edges: %w", err)
+	}
+	return nil
+}
+
 // ListDroppedCanonicalEdges is the edge-type counterpart.
 func (s *sqliteStore) ListDroppedCanonicalEdges(ctx context.Context) ([]DroppedCanonicalEdgeCount, error) {
 	rows, err := s.db.QueryContext(ctx, `
