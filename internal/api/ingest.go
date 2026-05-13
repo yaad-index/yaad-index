@@ -525,14 +525,27 @@ func respondFromCacheHit(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 		}
 		return
 	}
-	// Surface the gap names without prompts — the plugin generated
-	// the prompts on the original ingest, and the cache-hit path
-	// avoids re-invoking it. Agents that need the prompts can
-	// re-fetch via force_refetch=true. Empty-string values are the
-	// documented "prompt unavailable" sentinel.
+	// Per yaad-index #4 / ADR-0013 §1: the canonical-kind registry
+	// is the canonical source for AI-prompts. On the cache-hit
+	// path:
+	//
+	//   - Kind present in registry: surface the registry's per-gap
+	//     Description as the prompt. Gaps not in the registry's
+	//     per-kind Gaps map drop (no plugin-side fallback).
+	//   - Kind NOT in registry: return needs_fill with empty gaps
+	//     so the agent receives the entity but no fill work to do.
+	//     Operator must enable the kind in `canonical_kinds:` to
+	//     surface prompts.
+	kindCfg, kindInRegistry := canonicalKindReg[wireEntity.Kind]
 	gaps := make(map[string]string, len(hit.openGaps))
-	for _, g := range hit.openGaps {
-		gaps[g] = ""
+	if kindInRegistry {
+		for _, g := range hit.openGaps {
+			spec, hasSpec := kindCfg.Gaps[g]
+			if !hasSpec {
+				continue
+			}
+			gaps[g] = spec.Description
+		}
 	}
 	cleanContent := ""
 	if hit.vaultEntity != nil {

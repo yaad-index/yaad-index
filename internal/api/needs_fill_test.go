@@ -27,6 +27,22 @@ import (
 // as the cache-hit ingest envelope. Pagination uses an opaque
 // base64(last-seen-id) cursor over `id ASC` ordering.
 
+// nfRegistryWithBoardgameSummary returns a canonical-kind registry
+// containing the `boardgame` kind with a `summary` gap configured.
+// Used by tests that seed boardgame entities with a `summary` gap
+// — post-yaad-index #4 the registry is the canonical source for
+// AI-prompts, so the test fixtures need the gap declared there to
+// see it surface in needs-fill responses.
+func nfRegistryWithBoardgameSummary() map[string]config.CanonicalKindConfig {
+	return map[string]config.CanonicalKindConfig{
+		"boardgame": {
+			Gaps: config.GapsFromMap(map[string]string{
+				"summary": "Game summary prompt.",
+			}),
+		},
+	}
+}
+
 // nfFixture wires a handler with vault IO + optional global
 // fill_instruction + optional canonical_kinds registry, and seeds
 // `count` entities with given ids each carrying open gaps. Returns
@@ -111,7 +127,7 @@ func TestNeedsFill_EmptyStore_EmptyEntities(t *testing.T) {
 // Single entity with unfilled gaps + flag NULL → returned.
 func TestNeedsFill_SingleCandidate_Returned(t *testing.T) {
 	t.Parallel()
-	h, _ := nfFixture(t, []string{"boardgame:a"}, "G", nil)
+	h, _ := nfFixture(t, []string{"boardgame:a"}, "G", nfRegistryWithBoardgameSummary())
 	req := httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -129,7 +145,7 @@ func TestNeedsFill_SingleCandidate_Returned(t *testing.T) {
 func TestNeedsFill_PaginationCursor(t *testing.T) {
 	t.Parallel()
 	ids := []string{"boardgame:a", "boardgame:b", "boardgame:c", "boardgame:d", "boardgame:e"}
-	h, _ := nfFixture(t, ids, "", nil)
+	h, _ := nfFixture(t, ids, "", nfRegistryWithBoardgameSummary())
 
 	// Page 1: limit=2 → ["a", "b"] + cursor.
 	rec := httptest.NewRecorder()
@@ -226,7 +242,7 @@ func TestNeedsFill_LimitDefaulting(t *testing.T) {
 	for i := range ids {
 		ids[i] = fmt.Sprintf("boardgame:%03d", i)
 	}
-	h, _ := nfFixture(t, ids, "", nil)
+	h, _ := nfFixture(t, ids, "", nfRegistryWithBoardgameSummary())
 
 	for _, raw := range []string{"", "0", "-3", "abc"} {
 		raw := raw
@@ -252,7 +268,7 @@ func TestNeedsFill_LimitOverCap_ClampedTo200(t *testing.T) {
 	for i := range ids {
 		ids[i] = fmt.Sprintf("boardgame:%04d", i)
 	}
-	h, _ := nfFixture(t, ids, "", nil)
+	h, _ := nfFixture(t, ids, "", nfRegistryWithBoardgameSummary())
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill?limit=999", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -347,22 +363,73 @@ func TestNeedsFill_VaultReaderNil_EmptyResultNoCursor(t *testing.T) {
 
 // Empty registry + no global → instruction omitted, canonical_vocabulary
 // omitted (omitempty on both per ADR-0013 §2 a prior PR + a prior PR).
-func TestNeedsFill_EmptyRegistryAndGlobal_OmitsBoth(t *testing.T) {
+// TestNeedsFill_KindNotInRegistry_EntitySkipped pins the
+// yaad-index #4 strict-mode skip: an entity whose kind isn't
+// declared in the operator's canonical_kinds registry has no
+// prompts to surface, so it's dropped from the needs-fill list.
+// (Pre-#4 the entity surfaced with empty-string prompts under the
+// plugin-emit fallback; the strict semantic now requires explicit
+// operator-config to participate in fill.)
+func TestNeedsFill_KindNotInRegistry_EntitySkipped(t *testing.T) {
 	t.Parallel()
+	// Empty registry — the seeded boardgame entity has no kind
+	// entry in `canonical_kinds:`.
 	h, _ := nfFixture(t, []string{"boardgame:a"}, "", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
-	// Decode as raw JSON to assert presence/absence of optional keys.
-	var raw map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
-	entities := raw["entities"].([]any)
-	require.Len(t, entities, 1)
-	first := entities[0].(map[string]any)
-	_, hasInst := first["instruction"]
-	_, hasCV := first["canonical_vocabulary"]
-	assert.False(t, hasInst, "instruction omitted when neither per-kind nor global set")
-	assert.False(t, hasCV, "canonical_vocabulary omitted when registry empty")
+	got := decodeNFResponse(t, rec)
+	assert.Empty(t, got.Entities,
+		"kind not in registry → entity dropped from needs-fill list (yaad-index #4 strict mode)")
+}
+
+// TestNeedsFill_GapNotInRegistry_GapSkipped pins the strict-mode
+// per-gap skip: an entity whose kind IS in the registry but the
+// gap-name isn't declared in the registry's per-kind Gaps map is
+// dropped (no plugin-side prompt fallback). When that's the only
+// gap, the entity itself drops too.
+func TestNeedsFill_GapNotInRegistry_GapSkipped(t *testing.T) {
+	t.Parallel()
+	// Registry declares boardgame but only the `tags` gap, not
+	// the `summary` gap the fixture seeds.
+	reg := map[string]config.CanonicalKindConfig{
+		"boardgame": {
+			Gaps: config.GapsFromMap(map[string]string{
+				"tags": "Tag prompt.",
+			}),
+		},
+	}
+	h, _ := nfFixture(t, []string{"boardgame:a"}, "", reg)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	got := decodeNFResponse(t, rec)
+	assert.Empty(t, got.Entities,
+		"gap not in registry → gap dropped; sole-gap entity drops from list")
+}
+
+// TestNeedsFill_RegistryPromptSurfaces pins the post-#4 happy
+// path: the registry's per-gap Description becomes the AI prompt
+// on the wire — replacing the pre-#4 empty-string sentinel that
+// signaled "plugin generated the prompt but the daemon lost it."
+func TestNeedsFill_RegistryPromptSurfaces(t *testing.T) {
+	t.Parallel()
+	reg := map[string]config.CanonicalKindConfig{
+		"boardgame": {
+			Gaps: config.GapsFromMap(map[string]string{
+				"summary": "Write a one-paragraph summary of the game.",
+			}),
+		},
+	}
+	h, _ := nfFixture(t, []string{"boardgame:a"}, "", reg)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	got := decodeNFResponse(t, rec)
+	require.Len(t, got.Entities, 1)
+	assert.Equal(t, "Write a one-paragraph summary of the game.",
+		got.Entities[0].Gaps["summary"],
+		"registry Description surfaces as the AI prompt on the wire")
 }
 
 // nfFixtureWithGaps is a richer fixture variant that lets the test
