@@ -105,7 +105,7 @@ func WalkMIMEParts(raw []byte) (htmlBody []byte, attachments []MIMEAttachment, e
 	// gets reclassified to an attachment.
 	if !strings.HasPrefix(mediaType, "multipart/") {
 		w := &mimeWalker{}
-		w.handleSinglePart(msg.Header, msg.Body, mediaType, 0)
+		w.handleSinglePart(msg.Header, msg.Body, mediaType)
 		return w.htmlBody, w.attachments, nil
 	}
 
@@ -179,7 +179,7 @@ func (w *mimeWalker) handlePart(part *multipart.Part, parentMediaType string) {
 // handleSinglePart is the top-level non-multipart entry point. The
 // `header` is a textproto-equivalent mail header; the body bytes are
 // read once.
-func (w *mimeWalker) handleSinglePart(header mail.Header, body io.Reader, mediaType string, _ int) {
+func (w *mimeWalker) handleSinglePart(header mail.Header, body io.Reader, mediaType string) {
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return

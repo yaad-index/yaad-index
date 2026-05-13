@@ -189,6 +189,47 @@ func TestWalkMIMEParts_NoBody(t *testing.T) {
 	assert.Empty(t, atts)
 }
 
+// TestWalkMIMEParts_HTMLInMixedBecomesAttachment pins the
+// parentMediaType-driven reclassification: a `text/html` part
+// directly inside `multipart/mixed` (no `multipart/alternative`
+// wrapper) is NOT the rendered body — it's an embedded /
+// forwarded html that the operator may want to read, surfaced as
+// a `role: attachment`. The walker's html-body candidate gate
+// rejects parentMediaType=multipart/mixed precisely to make this
+// distinction.
+func TestWalkMIMEParts_HTMLInMixedBecomesAttachment(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(strings.Join([]string{
+		"From: alice@example.com",
+		"To: bob@example.com",
+		"Subject: Forwarded html",
+		"Message-ID: <mixed-html@example.com>",
+		`Content-Type: multipart/mixed; boundary="MIXED"`,
+		"",
+		"--MIXED",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"Plain wrapper note.",
+		"--MIXED",
+		"Content-Type: text/html; charset=utf-8",
+		"",
+		"<p>Forwarded HTML body.</p>",
+		"--MIXED--",
+		"",
+	}, "\r\n"))
+
+	html, atts, err := WalkMIMEParts(raw)
+	require.NoError(t, err)
+	assert.Nil(t, html,
+		"html under multipart/mixed (no alternative wrapper) must NOT become htmlBody")
+	require.Len(t, atts, 1,
+		"the html part must surface as a role:attachment under multipart/mixed")
+	assert.Equal(t, "attachment", atts[0].Role)
+	assert.Equal(t, "html", atts[0].Extension)
+	assert.Contains(t, string(atts[0].Data), "Forwarded HTML body.")
+}
+
 // TestWalkMIMEParts_TopLevelHTML pins the single-part HTML shape:
 // some senders emit text/html as the top-level Content-Type without
 // a multipart wrapper. That html becomes the htmlBody.
