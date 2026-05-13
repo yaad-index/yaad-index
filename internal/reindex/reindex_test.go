@@ -402,6 +402,41 @@ func TestReindex_SkipsArchiveSubtree(t *testing.T) {
 	assert.Empty(t, summary.Errors)
 }
 
+// TestReindex_ClearsDriftCountersOnSuccess pins yaad-index #31:
+// after a successful reindex.Run, the dropped_canonical_{kinds,
+// edges} tables are wiped. Pre-existing rows (from earlier ingest
+// drift under a now-corrected config) and rows the reindex pass
+// itself accrued both vanish — the "operator consumed drift signal"
+// semantic.
+func TestReindex_ClearsDriftCountersOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	r, st, _, _ := newTestEnv(t)
+	ctx := context.Background()
+
+	// Pre-seed stale drift counters as if an earlier ingest under a
+	// pre-corrective-config state had dropped emissions.
+	require.NoError(t, st.IncDroppedCanonicalKind(ctx, "wikipedia", "person"))
+	require.NoError(t, st.IncDroppedCanonicalEdge(ctx, "wikipedia", "is_about"))
+
+	pre, err := st.ListDroppedCanonicalKinds(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, pre, "fixture sanity: stale kind drift present pre-reindex")
+
+	summary, err := r.Run(ctx, Incremental)
+	require.NoError(t, err)
+	assert.Empty(t, summary.Errors,
+		"clear ops are best-effort but in a healthy store should not surface in summary.Errors")
+
+	kinds, err := st.ListDroppedCanonicalKinds(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, kinds, "kind drift counter cleared after successful reindex")
+
+	edges, err := st.ListDroppedCanonicalEdges(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, edges, "edge drift counter cleared after successful reindex")
+}
+
 func listRows(t *testing.T, st store.Store) []store.ReindexFile {
 	t.Helper()
 	rows, err := st.ListReindexFiles(context.Background())
