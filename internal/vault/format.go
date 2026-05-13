@@ -342,6 +342,16 @@ var commentHeadingRow = regexp.MustCompile(`^(\S+)(?:\s+(?:—|-)\s+([^@]+?)(?:\
 // and is skipped. Subsequent rows alternate between heading
 // (`<date> — <author>`) and body (raw text, with `<br><br>` decoded
 // back to `\n\n` and `\|` decoded back to `|`).
+//
+// Per yaad-index #8: the `## Comments` section is wrapped in the
+// CommentsStartMarker / CommentsEndMarker pair on write. On read,
+// the parser enters "comments" mode on encountering the start
+// marker (regardless of whether a `## Comments` heading follows
+// immediately) and exits on the end marker. Legacy un-marked
+// entities continue to enter comments mode on the `## Comments`
+// heading — the fallback path lets first-read recover comments
+// from pre-marker vault files; the next write produces marker-
+// wrapped output.
 func splitBody(b []byte) (cleanContent string, edges []Edge, comments []Comment) {
 	var (
 		section = "clean"
@@ -387,28 +397,80 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, comments []Comment)
 		commentExpectHeading = true
 	}
 
+	// Whether we're currently inside a marker-wrapped comments
+	// region. Distinct from `section == "comments"` because the
+	// start-marker line may precede the `## Comments` heading; we
+	// enter the comments section on the marker and ignore the
+	// heading inside it.
+	inCommentsMarker := false
+
+	resetCommentsState := func() {
+		commentTableHeaderSeen = false
+		commentTableSepSeen = false
+		commentExpectHeading = true
+	}
+
 	scanner := bufio.NewScanner(bytes.NewReader(b))
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		trimmed := strings.TrimRight(line, " \t")
 		switch {
+		case trimmed == CommentsStartMarker:
+			// Enter comments-marker region. Comments parsing
+			// activates regardless of whether a `## Comments`
+			// heading follows.
+			if section == "comments" {
+				flushOrphanedHeading()
+			}
+			section = "comments"
+			inCommentsMarker = true
+			resetCommentsState()
+			continue
+		case trimmed == CommentsEndMarker:
+			// Exit comments-marker region. Flush any orphaned
+			// heading row + return to clean section so subsequent
+			// content (rare; usually nothing follows the end
+			// marker) is captured as clean_content.
+			if section == "comments" {
+				flushOrphanedHeading()
+			}
+			inCommentsMarker = false
+			section = "clean"
+			continue
 		case trimmed == "## Edges":
+			if inCommentsMarker {
+				// Inside marker region — ignore section-like
+				// headings. Comments end at the end marker.
+				continue
+			}
 			if section == "comments" {
 				flushOrphanedHeading()
 			}
 			section = "edges"
 			continue
 		case trimmed == "## Comments":
+			if inCommentsMarker {
+				// Inside marker region — the `## Comments` heading
+				// is decorative for human reading; the table parser
+				// below skips it via the column-header rule.
+				continue
+			}
+			// Legacy un-marked path: enter comments mode on the
+			// heading itself.
 			if section == "comments" {
 				flushOrphanedHeading()
 			}
 			section = "comments"
-			commentTableHeaderSeen = false
-			commentTableSepSeen = false
-			commentExpectHeading = true
+			resetCommentsState()
 			continue
 		case strings.HasPrefix(line, "## "):
+			if inCommentsMarker {
+				// Inside marker region — unknown headings are
+				// folded as decorative table content (table parser
+				// below will skip non-table-row lines).
+				continue
+			}
 			// Unknown section heading. Treat it as part of clean_content
 			// — preserves user-authored body shape that doesn't match
 			// the canonical sections. (Once we leave a known section
@@ -573,10 +635,16 @@ func writeEdgesSection(w *bytes.Buffer, edges []Edge) {
 //
 // The frontmatter `comment_count` field carries the count; the body
 // table is the source of truth.
+//
+// Per yaad-index #8: wraps the section in CommentsStartMarker /
+// CommentsEndMarker so the read path can splice deterministically
+// + so a plugin body re-ingest doesn't touch this region.
 func writeCommentsSection(w *bytes.Buffer, comments []Comment) {
 	if len(comments) == 0 {
 		return
 	}
+	w.WriteString(CommentsStartMarker)
+	w.WriteByte('\n')
 	w.WriteString("## Comments\n\n")
 	w.WriteString("| Comments |\n")
 	w.WriteString("|----------|\n")
@@ -604,6 +672,7 @@ func writeCommentsSection(w *bytes.Buffer, comments []Comment) {
 		w.WriteString(encodeCommentCell(strings.TrimRight(c.Text, "\n")))
 		w.WriteString(" |\n")
 	}
+	w.WriteString(CommentsEndMarker)
 	w.WriteByte('\n')
 }
 
