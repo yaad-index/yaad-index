@@ -29,7 +29,7 @@ A **workflow** is a declared pattern with:
 - A **decision** — deterministic evaluation against entity data (filled-or-otherwise), agent-free by default.
 - An **output** — what the workflow produces if the decision evaluates true.
 
-Workflows are markdown files at `workflow/<name>.md` (vault-side, daemon-managed). Frontmatter holds the rules; body is operator-readable documentation. **Workflow definitions are operator-authored, not yaad-index-shipped.** yaad-index ships the engine — parser, trigger detector, fill-gap integration, output dispatch. Operators (with agent help) write the actual workflow files.
+Workflows are markdown files at `workflows/<name>.md` (vault-side, daemon-managed; plural to match `tasks/`). Frontmatter holds the rules; body is operator-readable documentation. **Workflow definitions are operator-authored, not yaad-index-shipped.** yaad-index ships the engine — parser, trigger detector, fill-gap integration, output dispatch. Operators (with agent help) write the actual workflow files.
 
 ### Task
 
@@ -63,11 +63,15 @@ The daemon emits internal events that workflows can subscribe to:
 
 - `entity.created` — new entity added by any plugin (fresh-ingest only; not re-fetch of an already-known entity).
 - `entity.edge_added` — new edge attached to an entity. Fires on every ingest that produces a new connection — including cache-hit re-fetches of a known entity that surface new edges, and operator-side manual edge adds.
-- `fill.completed` — a gap-fill landed on an entity. Fires on every fill, including workflow-injected gap-fills evaluating during re-fetch.
+- `fill.completed` — a gap-fill landed on an entity. Fires on every fill, including workflow-injected gap-fills evaluating during re-fetch. Carries a `source` tag identifying who initiated the fill (`agent`, `operator`, or `workflow:<name>` for workflow-injected fills).
 
 This is the load-bearing piece. Without an internal event bus, workflows can only react to "new external thing came in via ingest" and the fill-gap integration described below collapses. With it, workflows become reactive to the index itself, not just external input — which is what differentiates a workflow from a glorified gmail rule.
 
 **Cache-hit re-fetch semantics.** Re-fetch of a known entity does NOT re-fire `entity.created` (the entity already exists). Workflows that need to react to changes from re-fetch subscribe to `entity.edge_added` instead — a re-fetch surfacing a new connection (a news article gaining a topic-link, a PR gaining a new reviewer) fires `entity.edge_added` and the workflow re-evaluates from there. A workflow watching a topic entity for incoming `is_about` edges sees every new article tagged to that topic without needing a sibling "fetched" event.
+
+**Self-loop detection.** Because workflows can both inject gaps AND subscribe to `fill.completed`, a naive engine would re-trigger the same workflow when its own injected fill lands. The `source` tag on `fill.completed` is what the engine uses to skip self-triggered re-evaluation — a workflow named `X` does not re-fire on a `fill.completed` event whose `source` is `workflow:X`. Cross-workflow chains are still out of v1 (see "Out of v1"), but the source tag also lays the groundwork for that future iteration to detect and break loops at the engine layer rather than relying on per-workflow author discipline.
+
+**Re-evaluation timing.** A workflow re-evaluates on every event matching its trigger condition. If a workflow subscribes to `fill.completed` for a gap that the agent strategy never extracts, the workflow does not fire — there is no event. If the gap stays unfilled across multiple ingests, the workflow stays dormant; surfacing-on-incomplete-context is handled by the missing-reference path below, not by firing on absence.
 
 ### Fill-gap injection (third filler-source)
 
@@ -116,10 +120,11 @@ Each workflow declares which plugins it operates on (`allowed_plugins: [yaad-bgg
 **Runtime errors — the err-task pattern.** A workflow can still fail after load: a plugin breaks mid-fetch, an upstream API returns malformed data, a fill-gap times out. These don't crash the workflow; instead they surface via a per-workflow **err task**.
 
 - One err task per workflow, ever. Not per-failure.
-- First failure creates the err task (kind `task`, with an `errored=true` marker).
+- First failure creates the err task. **Frontmatter shape: `kind: task` + `errored: true` field** — not a separate `kind: err-task`. The reasoning: err tasks remain queryable through the standard `task.list` paths and the operator's normal task surface; the `errored` boolean is a filter, not a separate entity kind. Avoids the kind-explosion problem and keeps err tasks first-class without a parallel taxonomy.
 - Subsequent failures on the same workflow update the existing err task — appending the failure details (timestamp, source entity, error message) to the task body, not spawning new err tasks.
 - The err task is operator-visible alongside normal tasks (with the failure marker). Operator can read it, mark it resolved (which closes the err task), at which point the next failure spawns a fresh err task.
 - Err tasks don't block the workflow from continuing to fire — they're observability, not a stop-signal.
+- **`auto_archive_on_done: false` does NOT apply to err tasks.** That flag governs normal-task lifecycle when the operator completes the work. Err tasks always auto-archive on operator-resolve regardless, because resolution means "I fixed the source of the failures," which is operationally distinct from "I completed the work the task surfaced." Keeping resolved err tasks around bloats the surface without payoff.
 
 This means: one consolidated "this workflow has been having trouble" surface per workflow, instead of N error tasks the operator has to triage one at a time.
 
@@ -132,13 +137,17 @@ If a workflow's context-load step follows a reference that doesn't resolve (e.g.
 
 Non-blocking: the task still surfaces, the operator sees the incomplete-context state and decides how to handle.
 
+**Re-trigger on edge add.** When the operator manually adds the missing edge later, `entity.edge_added` fires. Workflows subscribed to that event re-evaluate with the now-complete context. The workflow's de-dup key (next section) determines what happens to the existing missing-reference task: with `update` policy the task is updated with the resolved context (still the same task, now complete); with `replace` policy the missing-ref task closes and a fresh task spawns; with `skip` the missing-ref task stays as-is and the re-trigger no-ops. This is a self-healing pattern when the workflow opts into it via subscription + policy.
+
 ### Per-pattern de-duplication
 
 When the same entity gets re-triggered (e.g., PR-foo gets 3 review-request emails over 2 days), the workflow should not spawn 3 separate tasks. De-dup is declared per workflow as a key that scopes "same situation."
 
 The default key is `workflow + entity_id`: one task per workflow per source entity. A PR-review workflow keyed on `entity_id` produces one task for PR-123 — subsequent ingest events touching PR-123 update that existing task rather than creating new ones. Concrete example: an operator gets the initial PR-review-request email, then a ping-reminder a day later; the second email's workflow fire updates the existing task (with the latest PR state from the cache) instead of creating a duplicate.
 
-For workflows whose "same situation" is time-windowed rather than entity-keyed (a daily morning-brief, a weekly summary), the key extends to include the window: `workflow + entity_id + day` or `workflow + week`.
+For workflows whose "same situation" is time-windowed rather than entity-keyed (a daily morning-brief, a weekly summary), the key takes a different form. Time-based workflows don't always have a single source entity — a morning-brief reads across many entities, a weekly summary aggregates. The key drops the entity anchor and becomes `workflow + window`: `workflow + day` for daily cadences, `workflow + week` for weekly, etc. Multi-entity time-based workflows are explicitly excluded from entity-keyed de-dup; their key form is window-only. Entity-keyed time-windowed forms (e.g. `workflow + entity_id + day`) remain available for time-windowed-but-still-entity-anchored cases (a daily-digest for a specific PR's review activity).
+
+**Two distinct dedup paths.** The err-task pattern above carries an *implicit* one-per-workflow-ever dedup (one err task per workflow, by mechanism). The per-pattern de-dup here is *functional* — the workflow declares its own key + policy. These are different mechanisms operating at different concerns: err-task dedup is observability scaffolding tied to engine-detected failures; per-pattern dedup is the workflow author's expression of "same situation." The engine should not conflate them. A workflow's `key` + `policy` settings apply to its **normal task** outputs only; err tasks are out of band.
 
 Policy when a duplicate key fires:
 - `update` (default) — modify the existing task with the new data; useful when the task surfaces a live entity that's getting refreshed.
@@ -166,6 +175,19 @@ New tools exposed via the daemon HTTP API + MCP:
 - `task.list` — light list of open tasks with one-line descriptions.
 - `task.load(id)` — uses the standard entity+edges fetch (`GET /v1/entities/{id}?with_edges=*`); no special endpoint needed. The workflow's pre-load step ensures the bundle is attached as edges by the time the agent reads the task.
 - `task.resolve(id)` — mark done.
+
+### `workflow.trigger(input)` input semantics
+
+`input` accepts two shapes, dispatched by string form:
+
+- **Entity ID** (matches the daemon's canonical ID format) — caller has already resolved the target entity; the engine attaches the workflow to it directly.
+- **URL** (matches a URL pattern) — the engine routes through ingest-or-lookup before attaching: if the URL is already a known entity, that entity is the target; if not, the URL is ingested through the normal plugin pipeline and the workflow attaches to the resulting entity.
+
+Both shapes are first-class; the engine branches on the input's syntactic shape. Callers can pre-resolve for performance (skip ingest-or-lookup) or pass a URL for convenience (let the engine handle resolution).
+
+### `workflow.discover(entity_id)` performance note
+
+The discovery walks every registered workflow and evaluates each trigger condition against the entity. Cost is `O(W × T)` where W is the registered workflow count and T is the per-condition evaluation cost. For v1, W is small (single-digit or low-double-digit workflows per operator) so this is fine; if W grows past a few dozen and discovery becomes the bottleneck, a future iteration can index trigger conditions for sublinear lookup. Not in v1.
 
 The pain point this ADR addresses (context-bundle assembly) is resolved by combining the workflow's pre-load step with the standard entity-with-edges fetch. The agent sees a task; the task has edges to the loaded context; the bundle is already there.
 
