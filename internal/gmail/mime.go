@@ -3,30 +3,19 @@ package gmail
 import (
 	"bytes"
 	"fmt"
-	"io"
-	"mime"
-	"mime/multipart"
-	"net/mail"
 	"path/filepath"
 	"strings"
+
+	"github.com/jhillyerd/enmime"
 )
 
 // MIMEAttachment is a per-message MIME part the Poller surfaces to
-// the wire layer for ADR-0014 staging + emission. Includes the part's
-// payload bytes (decoded from Content-Transfer-Encoding), its
-// suggested filename / extension, and a Role hint mirroring the
-// ADR-0014 attach.Attachment.Role field — "html-body" for the
-// alternative HTML body, "attachment" for disposition=attachment +
-// large inline parts per the #12 spec.
-//
-// Role values:
-//
-//   - "html-body" — the message's HTML alternative body. At most one
-//     per envelope (the walker picks the first text/html part it
-//     finds in multipart/alternative or at the top level).
-//   - "attachment" — a binary or text part whose Content-Disposition
-//     is "attachment", OR an inline part whose size exceeds
-//     InlineSizeThreshold.
+// the wire layer for ADR-0014 staging + emission. Carries the
+// part's decoded payload bytes (CTE + charset resolved by enmime),
+// suggested filename / extension, and a Role hint mirroring
+// ADR-0014 attach.Attachment.Role — "html-body" for the alternative
+// HTML body, "attachment" for disposition=attachment + large inline
+// parts per the #12 spec.
 //
 // PartIndex is a stable per-message ordinal across the depth-first
 // MIME walk, used by the wire layer to name staged files
@@ -43,220 +32,129 @@ type MIMEAttachment struct {
 
 // InlineSizeThreshold is the byte cap above which an inline-disposition
 // MIME part is reclassified as an "attachment" role per the #12 spec.
-// A small inline part (e.g. a signature image, an embedded tracking
+// A small inline part (e.g. a signature image, embedded tracking
 // pixel) stays out of the attachment surface; a large inline payload
-// (e.g. an inline-displayed photo the sender embedded vs attached) is
-// staged so the operator can read it.
+// (e.g. an inline-displayed photo) is staged so the operator can
+// read it.
 //
-// 8 KiB is the threshold — empirically matches the inline/genuine-
-// attachment split on representative mail in the yaad-index org. Bump
-// if false-positive small-attachments surface; lower if signature
-// images leak through.
+// 8 KiB empirically matches the inline/genuine-attachment split on
+// representative mail in the yaad-index org. Bump if false-positive
+// small-attachments surface; lower if signature images leak through.
 const InlineSizeThreshold = 8 * 1024
 
 // WalkMIMEParts parses raw (the full RFC-822 message bytes from
-// IMAP) and returns the HTML body (if any) plus the per-message
-// attachment list. Pure function: no I/O, no env var reads — the
-// caller decides whether to stage the returned bytes to disk.
+// IMAP) via enmime and returns the HTML body (when the message has
+// one) plus the per-message attachment list. Returns (nil, nil, nil)
+// when raw is empty.
 //
-// The walk is depth-first over nested multipart structures. The
-// first text/html part encountered (in either a top-level
-// multipart/alternative or a nested multipart/mixed > alternative
-// branch) becomes the html-body; subsequent text/html parts are
-// surfaced as attachments. text/plain parts are NOT surfaced as
-// attachments — the existing clean_content path already covers
-// plain-text body extraction.
+// enmime handles the bulk of MIME parsing: nested multipart walks,
+// Content-Transfer-Encoding decoding (base64, quoted-printable),
+// charset conversion, RFC-2047 header decoding for filenames. The
+// thin layer on top applies two yaad-index-specific rules:
 //
-// Returns (nil, nil, nil) when raw is empty / unparseable as RFC-822
-// — the caller falls back to the legacy body-bytes-only emission
-// path. Per-part decode failures are logged via the walker's
-// non-fatal path (the part is skipped, the walk continues); the
-// public signature stays simple so the caller doesn't have to thread
-// a logger through.
+//  1. **html-in-multipart/mixed → attachment.** An HTML part that
+//     enmime would surface as the body but whose parent in the MIME
+//     tree is multipart/mixed (no multipart/alternative wrapper) is
+//     a forwarded HTML email body, not the rendered body. Operators
+//     may want to read it, so it surfaces as a role:attachment
+//     instead of role:html-body.
 //
-// The returned htmlBody is decoded text — Content-Transfer-Encoding
-// resolution (quoted-printable, base64) handled by Go's stdlib
-// mime/multipart reader. Same for each attachment's Data.
+//  2. **Inline parts above InlineSizeThreshold → attachment.** Small
+//     inline parts (signatures, tracking pixels) stay hidden; large
+//     inline parts (genuine embedded images) reclassify so the
+//     operator gets them.
 func WalkMIMEParts(raw []byte) (htmlBody []byte, attachments []MIMEAttachment, err error) {
 	if len(raw) == 0 {
 		return nil, nil, nil
 	}
-	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	env, err := enmime.ReadEnvelope(bytes.NewReader(raw))
 	if err != nil {
-		return nil, nil, fmt.Errorf("gmail: walk mime: parse rfc-822: %w", err)
+		return nil, nil, fmt.Errorf("gmail: walk mime: %w", err)
 	}
 
-	ct := msg.Header.Get("Content-Type")
-	if ct == "" {
-		// No Content-Type header → plain text body, nothing to walk.
-		return nil, nil, nil
-	}
-	mediaType, params, parseErr := mime.ParseMediaType(ct)
-	if parseErr != nil {
-		// Malformed Content-Type → treat as opaque single-part body,
-		// not an error: legacy gmail clients sometimes emit broken
-		// headers; we don't want one bad message to drop the cycle.
-		return nil, nil, nil
+	var atts []MIMEAttachment
+	partIndex := 0
+	nextIndex := func() int {
+		partIndex++
+		return partIndex
 	}
 
-	// Single-part top-level: only meaningful when it's text/html (the
-	// html-body candidate). text/plain is already covered by
-	// clean_content; binary single-part at the top level is rare and
-	// gets reclassified to an attachment.
-	if !strings.HasPrefix(mediaType, "multipart/") {
-		w := &mimeWalker{}
-		w.handleSinglePart(msg.Header, msg.Body, mediaType)
-		return w.htmlBody, w.attachments, nil
-	}
-
-	boundary := params["boundary"]
-	if boundary == "" {
-		return nil, nil, nil
-	}
-	w := &mimeWalker{}
-	w.walkMultipart(msg.Body, boundary, mediaType)
-	return w.htmlBody, w.attachments, nil
-}
-
-// mimeWalker carries the depth-first walk state. PartIndex is
-// monotonic across the whole walk so staged filenames are unique
-// even for deeply-nested attachments.
-type mimeWalker struct {
-	htmlBody    []byte
-	attachments []MIMEAttachment
-	partIndex   int
-}
-
-// walkMultipart iterates the parts of a multipart container, dispatching
-// each leaf to handleSinglePart and recursing into nested multiparts.
-// parentMediaType controls a small semantic difference: html-body
-// candidates from multipart/alternative win over candidates from
-// multipart/mixed (the alternative branch is the "rendered body"
-// channel; the mixed branch's html parts are usually attached
-// rendered emails).
-func (w *mimeWalker) walkMultipart(r io.Reader, boundary, parentMediaType string) {
-	mr := multipart.NewReader(r, boundary)
-	for {
-		part, err := mr.NextPart()
-		if err != nil {
-			// Either io.EOF (clean end) or a malformed boundary —
-			// either way, stop walking. Already-collected parts
-			// survive.
-			return
-		}
-		w.handlePart(part, parentMediaType)
-		_ = part.Close()
-	}
-}
-
-// handlePart classifies a part as leaf vs nested-multipart and routes.
-func (w *mimeWalker) handlePart(part *multipart.Part, parentMediaType string) {
-	ct := part.Header.Get("Content-Type")
-	mediaType, params, err := mime.ParseMediaType(ct)
-	if err != nil {
-		// Parts without a Content-Type default to text/plain per
-		// RFC-2045 — treat as such, but skip the html-body /
-		// attachment assignment (text/plain isn't surfaced here).
-		return
-	}
-	if strings.HasPrefix(mediaType, "multipart/") {
-		boundary := params["boundary"]
-		if boundary != "" {
-			w.walkMultipart(part, boundary, mediaType)
-		}
-		return
-	}
-	// Leaf part. Read body fully; if the read errors, skip silently.
-	w.partIndex++
-	idx := w.partIndex
-	data, err := io.ReadAll(part)
-	if err != nil {
-		return
-	}
-	w.classifyAndStash(part.Header, mediaType, data, idx, parentMediaType)
-}
-
-// handleSinglePart is the top-level non-multipart entry point. The
-// `header` is a textproto-equivalent mail header; the body bytes are
-// read once.
-func (w *mimeWalker) handleSinglePart(header mail.Header, body io.Reader, mediaType string) {
-	data, err := io.ReadAll(body)
-	if err != nil {
-		return
-	}
-	w.partIndex++
-	idx := w.partIndex
-	// Adapt mail.Header → the same get-shape classifyAndStash uses.
-	w.classifyAndStash(headerAdapter{h: header}, mediaType, data, idx, "")
-}
-
-// partHeader is the minimal interface classifyAndStash needs — both
-// multipart.Part and mail.Header (via headerAdapter) implement it.
-type partHeader interface {
-	Get(key string) string
-}
-
-// headerAdapter lifts a mail.Header to the same Get-shape multipart.Part
-// uses, so classifyAndStash can take either.
-type headerAdapter struct {
-	h mail.Header
-}
-
-func (a headerAdapter) Get(key string) string { return a.h.Get(key) }
-
-// classifyAndStash decides whether a leaf MIME part is the html-body,
-// an attachment, or neither (text/plain / unrecognized), and updates
-// the walker state accordingly.
-func (w *mimeWalker) classifyAndStash(header partHeader, mediaType string, data []byte, partIndex int, parentMediaType string) {
-	disposition, dispParams, _ := mime.ParseMediaType(header.Get("Content-Disposition"))
-	filename := dispParams["filename"]
-
-	switch {
-	case mediaType == "text/html" && disposition != "attachment":
-		// First html in an alternative branch wins. Subsequent ones
-		// (including htmls from multipart/mixed sub-branches) become
-		// attachments — the operator may want to read embedded
-		// forwarded htmls.
-		if w.htmlBody == nil && (parentMediaType == "multipart/alternative" || parentMediaType == "" || parentMediaType == "multipart/related") {
-			w.htmlBody = data
-			return
-		}
+	// HTML body assignment with the html-in-mixed reclassification.
+	// enmime fills env.HTML from the first text/html part it finds
+	// regardless of parent; we walk to confirm the parent's wrap.
+	htmlAsBody := env.HTML
+	htmlPart := findHTMLBodyPart(env.Root)
+	if htmlPart != nil && parentIsMultipartMixed(htmlPart) {
 		// Reclassify as attachment.
-		w.attachments = append(w.attachments, MIMEAttachment{
-			Role:        "attachment",
-			Filename:    filename,
-			Extension:   extensionForPart(filename, mediaType),
-			ContentType: mediaType,
-			PartIndex:   partIndex,
-			Data:        data,
-		})
+		htmlAsBody = ""
+		atts = append(atts, partToAttachment(htmlPart, "attachment", nextIndex()))
+	}
 
-	case mediaType == "text/plain":
-		// Plain-text body is already surfaced via clean_content. Skip.
+	// Real attachments (Content-Disposition: attachment).
+	for _, p := range env.Attachments {
+		atts = append(atts, partToAttachment(p, "attachment", nextIndex()))
+	}
 
-	case disposition == "attachment":
-		w.attachments = append(w.attachments, MIMEAttachment{
-			Role:        "attachment",
-			Filename:    filename,
-			Extension:   extensionForPart(filename, mediaType),
-			ContentType: mediaType,
-			PartIndex:   partIndex,
-			Data:        data,
-		})
+	// Inline parts: reclassify above the threshold.
+	for _, p := range env.Inlines {
+		if len(p.Content) > InlineSizeThreshold {
+			atts = append(atts, partToAttachment(p, "attachment", nextIndex()))
+		}
+	}
 
-	case len(data) > InlineSizeThreshold:
-		// Inline-disposition above the threshold. Per #12 spec these
-		// reclassify to attachment — large inline images are
-		// indistinguishable from genuine attachments at the operator-
-		// surface level.
-		w.attachments = append(w.attachments, MIMEAttachment{
-			Role:        "attachment",
-			Filename:    filename,
-			Extension:   extensionForPart(filename, mediaType),
-			ContentType: mediaType,
-			PartIndex:   partIndex,
-			Data:        data,
-		})
+	// OtherParts: enmime parks things that don't fit Inline /
+	// Attachment / body channels here (e.g. multipart/related
+	// sub-parts that aren't pure decoration). Surface as
+	// attachments so the operator can see them.
+	for _, p := range env.OtherParts {
+		atts = append(atts, partToAttachment(p, "attachment", nextIndex()))
+	}
+
+	if htmlAsBody != "" {
+		htmlBody = []byte(htmlAsBody)
+	}
+	return htmlBody, atts, nil
+}
+
+// findHTMLBodyPart walks the part tree depth-first and returns the
+// first text/html leaf — matches enmime's env.HTML selection so the
+// parent-of-html check below stays aligned.
+func findHTMLBodyPart(root *enmime.Part) *enmime.Part {
+	if root == nil {
+		return nil
+	}
+	if root.ContentType == "text/html" && root.FirstChild == nil {
+		return root
+	}
+	for c := root.FirstChild; c != nil; c = c.NextSibling {
+		if got := findHTMLBodyPart(c); got != nil {
+			return got
+		}
+	}
+	return nil
+}
+
+// parentIsMultipartMixed reports whether the part's immediate
+// parent is multipart/mixed — the project rule for treating the
+// part as an embedded / forwarded body rather than the rendered
+// body.
+func parentIsMultipartMixed(p *enmime.Part) bool {
+	if p == nil || p.Parent == nil {
+		return false
+	}
+	return p.Parent.ContentType == "multipart/mixed"
+}
+
+// partToAttachment lifts an enmime.Part into the project's
+// MIMEAttachment shape with the role + part-index resolved.
+func partToAttachment(p *enmime.Part, role string, idx int) MIMEAttachment {
+	return MIMEAttachment{
+		Role:        role,
+		Filename:    p.FileName,
+		Extension:   extensionForPart(p.FileName, p.ContentType),
+		ContentType: p.ContentType,
+		PartIndex:   idx,
+		Data:        p.Content,
 	}
 }
 
@@ -264,17 +162,13 @@ func (w *mimeWalker) classifyAndStash(header partHeader, mediaType string, data 
 // prefer the filename's extension when present (operator wants to
 // see the sender's chosen extension), fall back to a Content-Type
 // → extension mapping for the common types. Empty when neither is
-// resolvable — the caller decides whether to stage extension-less
-// (yaad-bgg's pattern: empty extension produces a no-extension
-// staged file, daemon-side dispatcher handles it).
+// resolvable.
 func extensionForPart(filename, mediaType string) string {
 	if filename != "" {
 		if ext := strings.TrimPrefix(filepath.Ext(filename), "."); ext != "" {
 			return strings.ToLower(ext)
 		}
 	}
-	// Content-Type fallback for common types. Not exhaustive — the
-	// long tail (application/vnd.*) gets empty, which is fine.
 	switch mediaType {
 	case "text/html":
 		return "html"
