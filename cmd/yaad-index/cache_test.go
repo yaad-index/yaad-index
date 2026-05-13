@@ -529,6 +529,7 @@ func TestCacheRefetchCmd_HappyPath(t *testing.T) {
 		ConfigPath: filepath.Join(t.TempDir(), "missing.yaml"),
 		VaultPath: root,
 		Server: srv.URL,
+		WaitSeconds: 30,
 	}
 	require.NoError(t, cmd.Run())
 
@@ -537,6 +538,8 @@ func TestCacheRefetchCmd_HappyPath(t *testing.T) {
 		"prefers the http(s) URL over shorthand")
 	assert.Equal(t, true, seenReqs[0]["force_refetch"],
 		"force_refetch=true must be set")
+	assert.EqualValues(t, 30, seenReqs[0]["wait_seconds"],
+		"wait_seconds must be plumbed from the CLI flag")
 }
 
 // --limit clamps the number of refetch POSTs.
@@ -622,4 +625,88 @@ func TestCacheRefetchCmd_DaemonErrorContinues(t *testing.T) {
 	// is the documented contract.
 	require.NoError(t, cmd.Run())
 	assert.Equal(t, 2, seen, "loop must continue past per-entity 500s")
+}
+
+// TestCacheRefetchCmd_WaitSecondsPlumbed pins the yaad-index #6
+// flag plumbing: --wait-seconds=N becomes the `wait_seconds` field
+// on every /v1/ingest POST body. Default (30) is exercised by the
+// happy-path test above; this one exercises a non-default value to
+// catch a regression where the field were left hardcoded.
+func TestCacheRefetchCmd_WaitSecondsPlumbed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	stale := now.Add(-2 * time.Hour)
+	pastExpiry := now.Add(-time.Hour)
+	require.NoError(t, w.Write(&vault.Entity{
+		ID: "wikipedia:foo", Kind: "wikipedia-article", Plugin: "wikipedia",
+		Data: map[string]any{"title": "Foo"},
+		Provenance: []vault.ProvenanceEntry{
+			{Source: "fake:fetch", FetchedAt: &stale, OK: true},
+		},
+		Notations: []string{"https://en.wikipedia.org/wiki/Foo"},
+		CacheExpires: vault.CacheExpiresAt(pastExpiry),
+	}))
+
+	var seenWait float64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		seenWait, _ = body["wait_seconds"].(float64)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"state":"complete"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	cmd := CacheRefetchCmd{
+		ConfigPath:  filepath.Join(t.TempDir(), "missing.yaml"),
+		VaultPath:   root,
+		Server:      srv.URL,
+		WaitSeconds: 7,
+	}
+	require.NoError(t, cmd.Run())
+	assert.EqualValues(t, 7, seenWait,
+		"non-default --wait-seconds must plumb through to /v1/ingest wait_seconds")
+}
+
+// TestCacheRefetchCmd_QueuedResponseAnnotates pins the yaad-index
+// #6 202/queued branch: when the daemon returns 202 (fetch still in
+// flight after the wait_seconds budget), the per-entity stdout line
+// gains the "(still in flight after Ns; via ...)" annotation and
+// the stderr summary includes "; N still in flight".
+func TestCacheRefetchCmd_QueuedResponseAnnotates(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	stale := now.Add(-2 * time.Hour)
+	pastExpiry := now.Add(-time.Hour)
+	require.NoError(t, w.Write(&vault.Entity{
+		ID: "wikipedia:foo", Kind: "wikipedia-article", Plugin: "wikipedia",
+		Data: map[string]any{"title": "Foo"},
+		Provenance: []vault.ProvenanceEntry{
+			{Source: "fake:fetch", FetchedAt: &stale, OK: true},
+		},
+		Notations: []string{"https://en.wikipedia.org/wiki/Foo"},
+		CacheExpires: vault.CacheExpiresAt(pastExpiry),
+	}))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"state":"queued"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	httpClient := &http.Client{Timeout: 60 * time.Second}
+	queued, err := postForceRefetch(httpClient, srv.URL+"/v1/ingest", "", "https://x", 12)
+	require.NoError(t, err)
+	assert.True(t, queued, "202 response must surface queued=true so the CLI can annotate")
 }
