@@ -30,6 +30,9 @@ func (p *fakePlugin) Stream(_ context.Context, _ string, _ EnvelopeFunc, _ Contr
 	return errors.New("fakePlugin.Stream never called in registry tests")
 }
 func (p *fakePlugin) Capabilities() Capabilities { return Capabilities{} }
+func (p *fakePlugin) Search(_ context.Context, _ string, _ int) ([]SearchCandidate, error) {
+	return nil, ErrSearchNotSupported
+}
 
 // compile-time interface assertion (mirrors what we do for the real
 // implementations in subprocess + fixture).

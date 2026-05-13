@@ -396,6 +396,78 @@ func (p *Plugin) Stream(ctx context.Context, rawURL string, onEnvelope plugins.E
 	return nil
 }
 
+// Search implements plugins.Plugin per yaad-index #2. Dispatches a
+// subprocess invocation with `{"operation":"search","query":"...",
+// "limit":N}` on stdin; expects a single JSON object on stdout with
+// `{"ok":bool, "candidates":[{id,label,summary}], "error_message"}`.
+//
+// Plugins with SupportsSearch=false are never dispatched here by
+// the federation handler; if a caller invokes this method anyway
+// the plugin's binary may handle the request, return an unsupported
+// error, or any other outcome — the daemon doesn't guard the call
+// site because the gate lives in the handler.
+//
+// Errors:
+//   - Subprocess failure (non-zero exit, stderr peek wrapped).
+//   - Malformed response JSON.
+//   - response.ok=false → error wraps response.error_message verbatim.
+//
+// Context cancellation (the federation handler's per-plugin
+// timeout) propagates via exec.CommandContext; the subprocess
+// receives SIGKILL on context expiry.
+func (p *Plugin) Search(ctx context.Context, query string, limit int) ([]plugins.SearchCandidate, error) {
+	reqBody, err := json.Marshal(searchRequest{
+		Operation: "search",
+		Query:     query,
+		Limit:     limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("subprocess(%s): marshal search request: %w", p.name, err)
+	}
+
+	cmd := exec.CommandContext(ctx, p.path)
+	cmd.Env = p.env()
+	cmd.Stdin = bytes.NewReader(reqBody)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	runErr := cmd.Run()
+	if trimmed := strings.TrimSpace(stderr.String()); trimmed != "" {
+		p.logger.Info("plugin stderr (search)",
+			"plugin", p.name,
+			"stderr", trimmed)
+	}
+	if runErr != nil {
+		const peek = 512
+		stderrPeek := bytes.TrimSpace(stderr.Bytes())
+		if len(stderrPeek) > peek {
+			stderrPeek = stderrPeek[:peek]
+		}
+		return nil, fmt.Errorf("subprocess(%s): search exit non-zero: %w: %s",
+			p.name, runErr, string(stderrPeek))
+	}
+
+	var resp searchResponse
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &resp); err != nil {
+		const peek = 256
+		out := bytes.TrimSpace(stdout.Bytes())
+		if len(out) > peek {
+			out = out[:peek]
+		}
+		return nil, fmt.Errorf("subprocess(%s): parse search response: %w: %s",
+			p.name, err, string(out))
+	}
+	if !resp.OK {
+		msg := resp.ErrorMessage
+		if msg == "" {
+			msg = "(no error_message)"
+		}
+		return nil, fmt.Errorf("subprocess(%s): search ok=false: %s", p.name, msg)
+	}
+	return resp.Candidates, nil
+}
+
 // streamStdout walks the plugin's stdout buffer per ADR-0023,
 // dispatching each JSON value to the right callback. See
 // scanResponse's godoc for the line-shape and resilience contracts;
@@ -714,6 +786,28 @@ func rejectPluginInstructionFields(logger *slog.Logger, pluginName string, body 
 type fetchRequest struct {
 	Operation string `json:"operation"`
 	URL string `json:"url"`
+}
+
+// searchRequest is the subprocess-stdin shape per yaad-index #2:
+// operator/agent query → plugin candidate list. Sent on the same
+// stdin channel as fetchRequest; plugins dispatch on the
+// `operation` field.
+type searchRequest struct {
+	Operation string `json:"operation"`
+	Query     string `json:"query"`
+	Limit     int    `json:"limit"`
+}
+
+// searchResponse is the subprocess-stdout shape returned by a
+// search-supporting plugin. Single JSON object (no NDJSON wrap —
+// search isn't streaming-shaped). On failure ok=false +
+// error_message carries the plugin-side reason; the daemon
+// surfaces it in the per_plugin_status block of the federated
+// /v1/search/upstream response.
+type searchResponse struct {
+	OK           bool                       `json:"ok"`
+	Candidates   []plugins.SearchCandidate  `json:"candidates,omitempty"`
+	ErrorMessage string                     `json:"error_message,omitempty"`
 }
 
 // fetchResponse mirrors the ADR-0005 plugin response (lines 119–139).

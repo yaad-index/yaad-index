@@ -37,6 +37,19 @@ type Plugin struct {
 	// Fetch path so existing fixtures keep working without
 	// modification (one envelope → onEnvelope, then return nil).
 	StreamFunc func(ctx context.Context, rawURL string, onEnvelope plugins.EnvelopeFunc, onControl plugins.ControlFunc) error
+
+	// SearchFunc, when set, drives Plugin.Search per yaad-index #2.
+	// Tests of the federation handler register a fixture with
+	// CapabilitiesValue.SupportsSearch=true + a SearchFunc that
+	// emits a canned candidate list.
+	//
+	// When SearchFunc is nil + SearchValue is nil + SearchError is
+	// nil, Search returns plugins.ErrSearchNotSupported so the
+	// federation handler's gate-not-honored failure path stays
+	// observable in tests.
+	SearchFunc  func(ctx context.Context, query string, limit int) ([]plugins.SearchCandidate, error)
+	SearchValue []plugins.SearchCandidate
+	SearchError error
 }
 
 // New builds a fixture plugin with the most common shape: name + a
@@ -111,6 +124,24 @@ func (p *Plugin) Stream(ctx context.Context, rawURL string, onEnvelope plugins.E
 		return onEnvelope(res)
 	}
 	return nil
+}
+
+// Search implements plugins.Plugin per yaad-index #2. Precedence
+// matches Fetch: SearchFunc → SearchError → SearchValue → not-
+// supported fallback. The fallback returns
+// plugins.ErrSearchNotSupported so federation tests can observe
+// the "plugin opted in but didn't deliver" failure surface.
+func (p *Plugin) Search(ctx context.Context, query string, limit int) ([]plugins.SearchCandidate, error) {
+	if p.SearchFunc != nil {
+		return p.SearchFunc(ctx, query, limit)
+	}
+	if p.SearchError != nil {
+		return nil, p.SearchError
+	}
+	if p.SearchValue != nil {
+		return p.SearchValue, nil
+	}
+	return nil, plugins.ErrSearchNotSupported
 }
 
 // containsSubstring is the cheap substring matcher used by New. Kept
