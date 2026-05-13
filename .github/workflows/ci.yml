@@ -66,6 +66,20 @@ jobs:
       - name: make build
         run: make build
 
+  # e2e harness (yaad-index #1). Non-blocking; promote to required
+  # in branch protection when stable.
+  e2e:
+    name: e2e (advisory)
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: make e2e
+        run: make e2e
+
   coverage:
     name: coverage
     needs: test
