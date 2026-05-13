@@ -311,14 +311,15 @@ func runFetch(ctx context.Context, p *wikipedia.Plugin, stdin io.Reader, stdout 
 
 	outcome, err := p.Fetch(ctx, req.URL)
 	if err != nil {
-		// ErrNotFoundUpstream is wrapped with the URL so operators
-		// can grep for the offending request in stderr-tagged logs;
-		// yaad-index's subprocess wrapper surfaces this as
-		// fetch_failed.
-		if errors.Is(err, wikipedia.ErrNotFoundUpstream) {
-			return fmt.Errorf("%w: %s", err, req.URL)
-		}
-		return err
+		// Wrap every fetch error with the URL so operators can grep
+		// for the offending request in stderr-tagged logs — applies
+		// to ErrNotFoundUpstream + parse errors + upstream HTTP
+		// failures + timeouts uniformly. yaad-index's subprocess
+		// wrapper surfaces these as fetch_failed; errors.Is downstream
+		// still resolves ErrNotFoundUpstream through the %w chain so
+		// the daemon's not-found-vs-other-failure differentiation is
+		// preserved.
+		return fmt.Errorf("%w: %s", err, req.URL)
 	}
 
 	resp := fetchResponse{OK: true}
