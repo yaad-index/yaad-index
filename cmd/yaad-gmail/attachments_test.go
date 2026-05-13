@@ -50,7 +50,7 @@ func TestStageAttachments_MultiPartHTMLAndBinary(t *testing.T) {
 	// Order is deterministic: html-body first, then attachments in
 	// walk order. Assert by Role to make the test resilient to a
 	// future ordering refactor.
-	var htmlAtt, pdfAtt int = -1, -1
+	htmlAtt, pdfAtt := -1, -1
 	for i, a := range got {
 		switch a.Role {
 		case "html-body":
