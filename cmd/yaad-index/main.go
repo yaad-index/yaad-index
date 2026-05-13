@@ -263,14 +263,10 @@ func (s *ServeCmd) Run() error {
 		// Attachments dispatcher (per ADR-0014). Plugins emitting
 		// FetchResult.Attachments route through here for scheme
 		// dispatch + vault placement + tmp cleanup. The staging
-		// dir defaults to /tmp when the operator leaves
-		// plugin_staging_dir unset (matches a single-operator
-		// deploy's expectations); validate already enforces
-		// absolute + existing when set.
-		stagingDir := cfg.PluginStagingDir
-		if stagingDir == "" {
-			stagingDir = "/tmp"
-		}
+		// dir is resolved via the three-layer chain in
+		// resolvePluginStagingDir below (yaad-index #33): operator
+		// yaml > YAAD_PLUGIN_STAGING_DIR env > os.TempDir().
+		stagingDir := resolvePluginStagingDir(cfg.PluginStagingDir, os.Getenv("YAAD_PLUGIN_STAGING_DIR"))
 		dispatcher, err := attachments.New(stagingDir, attachments.WithLogger(logger))
 		if err != nil {
 			return fmt.Errorf("init attachments dispatcher (plugin_staging_dir=%s): %w", stagingDir, err)
@@ -983,6 +979,36 @@ func warnCanonicalEmissionGaps(logger *slog.Logger, registry *plugins.Registry, 
 				"hint", "add to canonical_edge_types in config.yaml to materialize edges of this type")
 		}
 	}
+}
+
+// resolvePluginStagingDir picks the daemon's attachment staging root
+// per ADR-0014 + yaad-index #33. Resolution chain, highest priority
+// first:
+//
+//  1. Operator yaml (`cfg.PluginStagingDir`) — validated absolute +
+//     existing-directory at config load.
+//  2. `YAAD_PLUGIN_STAGING_DIR` env var on the daemon process — the
+//     same var name plugins read via the SDK. Lets operators flip
+//     the staging root without editing yaml (useful for systemd
+//     drop-ins + containerized deploys).
+//  3. `os.TempDir()` — POSIX-conformant fallback that respects
+//     `$TMPDIR`. Previously hardcoded `/tmp`; the change picks up
+//     containerized runtimes (often `/var/tmp` or a tmpfs mount)
+//     and per-user tempdirs in development.
+//
+// Empty strings at any layer are skipped — the chain falls through.
+// The selected value is propagated to subprocess plugins via the
+// same env var name (`subprocess.SetStagingDir` plumbing) so the
+// daemon-side dispatcher and the plugin-side SDK see one consistent
+// path.
+func resolvePluginStagingDir(yamlValue, envValue string) string {
+	if yamlValue != "" {
+		return yamlValue
+	}
+	if envValue != "" {
+		return envValue
+	}
+	return os.TempDir()
 }
 
 // expandPath resolves a leading "~/" against the current user's home
