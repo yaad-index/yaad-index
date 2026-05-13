@@ -106,6 +106,14 @@ func WalkMIMEParts(raw []byte) (htmlBody []byte, attachments []MIMEAttachment, e
 	// Attachment / body channels here (e.g. multipart/related
 	// sub-parts that aren't pure decoration). Surface as
 	// attachments so the operator can see them.
+	//
+	// v1 trade-off (sora's PR-35 note): this can surface calendar
+	// invites + signature blocks the operator may not want as
+	// individual attachments. The next iteration can filter by
+	// content-type (text/calendar, application/pgp-signature,
+	// application/pkcs7-signature) — left implicit here so v1
+	// errs toward showing all per-message non-body parts rather
+	// than hiding them. Better to over-surface than silently drop.
 	for _, p := range env.OtherParts {
 		atts = append(atts, partToAttachment(p, "attachment", nextIndex()))
 	}
