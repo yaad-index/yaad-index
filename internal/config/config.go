@@ -224,13 +224,22 @@ type Config struct {
 	// descendant of this dir, so a malicious plugin can't write
 	// outside the intended staging surface.
 	//
-	// Empty / missing → defaults to `/tmp` at server-boot resolve
-	// time (matches a single-operator deployment's expectations;
-	// operators wanting isolation override).
+	// Resolution chain at server boot (per yaad-index #33), highest
+	// priority first:
+	//
+	//  1. This yaml field, when set to a non-empty value.
+	//  2. `YAAD_PLUGIN_STAGING_DIR` env var on the daemon process —
+	//     same var name plugins read via the SDK. Lets operators
+	//     flip the root without editing yaml (systemd drop-ins,
+	//     container deploys).
+	//  3. `os.TempDir()` — POSIX-conformant fallback that respects
+	//     `$TMPDIR`. Previously hardcoded `/tmp`; the change picks
+	//     up containerized runtimes (often `/var/tmp` or a tmpfs
+	//     mount) and per-user tempdirs.
 	//
 	// Validate ensures the value (when non-empty) is absolute and
 	// names an existing directory. Empty is permitted at parse —
-	// the cmd/yaad-index boot fills the default before constructing
+	// the cmd/yaad-index boot resolves the chain before constructing
 	// the attachments dispatcher. Plugins receive the resolved path
 	// via the `YAAD_PLUGIN_STAGING_DIR` env (PR-B of the ADR-0014
 	// daemon series; same plumbing as `YAAD_TIMEZONE` from
