@@ -479,6 +479,7 @@ type CacheRefetchCmd struct {
 	Plugin string `name:"plugin" help:"filter to entities whose Plugin frontmatter field matches."`
 	Kind string `name:"kind" help:"filter to entities of the given kind."`
 	Limit int `name:"limit" default:"0" help:"maximum number of refetches in this invocation; 0 means no limit. Useful for rate-bounded operator workflows."`
+	WaitSeconds int `name:"wait-seconds" env:"YAAD_INDEX_WAIT_SECONDS" default:"30" help:"per-refetch wait budget in seconds sent to /v1/ingest. Daemon returns 200/complete when the fetch lands inside the window, 202/queued when it's still in flight after the budget elapses (CLI annotates the per-entity line + summary so the operator sees what didn't complete in-band)."`
 }
 
 // Run executes the refetch CLI subcommand.
@@ -522,7 +523,7 @@ func (c *CacheRefetchCmd) Run() error {
 	httpClient := &http.Client{Timeout: 60 * time.Second}
 	ingestURL := strings.TrimRight(c.Server, "/") + "/v1/ingest"
 
-	var refetched, failed int
+	var refetched, failed, stillInFlight int
 	for i, r := range rows {
 		if i >= limit {
 			break
@@ -539,19 +540,47 @@ func (c *CacheRefetchCmd) Run() error {
 			failed++
 			continue
 		}
-		if err := postForceRefetch(httpClient, ingestURL, c.Token, notation); err != nil {
+		queued, err := postForceRefetch(httpClient, ingestURL, c.Token, notation, c.WaitSeconds)
+		if err != nil {
 			logger.Warn("refetch POST failed", "id", r.ID, "url", notation, "err", err)
 			failed++
 			continue
 		}
-		_, _ = fmt.Fprintf(os.Stdout, "refetched %s (via %s)\n", r.ID, notation)
+		_, _ = fmt.Fprintln(os.Stdout, formatRefetchedLine(r.ID, queued, c.WaitSeconds, notation))
+		if queued {
+			stillInFlight++
+		}
 		refetched++
 	}
 
-	_, _ = fmt.Fprintf(os.Stderr,
-		"refetched %d entries; %d failed (see logs); %d remaining over --limit.\n",
-		refetched, failed, max(0, len(rows)-limit))
+	_, _ = fmt.Fprintln(os.Stderr,
+		formatRefetchSummary(refetched, failed, max(0, len(rows)-limit), stillInFlight))
 	return nil
+}
+
+// formatRefetchedLine renders the per-entity stdout line per
+// yaad-index #6. Format strings are extracted to a pure helper so
+// tests can pin them without swapping os.Stdout (which races
+// concurrent parallel tests in the same package).
+func formatRefetchedLine(id string, queued bool, waitSeconds int, notation string) string {
+	if queued {
+		return fmt.Sprintf("refetched %s (still in flight after %ds; via %s)",
+			id, waitSeconds, notation)
+	}
+	return fmt.Sprintf("refetched %s (via %s)", id, notation)
+}
+
+// formatRefetchSummary renders the stderr terminal summary line.
+// The "; N still in flight" suffix surfaces only when non-zero so
+// the common all-complete path keeps the legacy three-counter
+// shape.
+func formatRefetchSummary(refetched, failed, remaining, stillInFlight int) string {
+	out := fmt.Sprintf("refetched %d entries; %d failed (see logs); %d remaining over --limit",
+		refetched, failed, remaining)
+	if stillInFlight > 0 {
+		out += fmt.Sprintf("; %d still in flight", stillInFlight)
+	}
+	return out + "."
 }
 
 // pickRefetchNotation chooses a notation to use for the refetch
@@ -576,19 +605,25 @@ func pickRefetchNotation(notations []string) string {
 // Synchronous: waits for the daemon's response so per-entity
 // failures surface immediately (logged + counted; the loop
 // continues with the next entity).
-func postForceRefetch(client *http.Client, ingestURL, token, url string) error {
+//
+// waitSeconds carries the operator-controlled `--wait-seconds`
+// budget from the CLI (per yaad-index #6). The daemon returns
+// 200/complete when the fetch lands inside the window, 202/queued
+// when it's still in flight after the budget elapses. The boolean
+// return discriminates the two so the caller can annotate output.
+func postForceRefetch(client *http.Client, ingestURL, token, url string, waitSeconds int) (queued bool, err error) {
 	body := map[string]any{
 		"url": url,
 		"force_refetch": true,
-		"wait_seconds": 30,
+		"wait_seconds": waitSeconds,
 	}
 	buf, err := json.Marshal(body)
 	if err != nil {
-		return fmt.Errorf("marshal request: %w", err)
+		return false, fmt.Errorf("marshal request: %w", err)
 	}
 	req, err := http.NewRequest(http.MethodPost, ingestURL, bytes.NewReader(buf))
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return false, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -597,14 +632,17 @@ func postForceRefetch(client *http.Client, ingestURL, token, url string) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("execute request: %w", err)
+		return false, fmt.Errorf("execute request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("daemon returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return false, fmt.Errorf("daemon returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
-	return nil
+	// 202 → daemon accepted the request but the fetch is still in
+	// flight after wait_seconds elapsed. The caller annotates output
+	// so the operator can re-poll if they need a fully-complete refresh.
+	return resp.StatusCode == http.StatusAccepted, nil
 }
 
 // formatFetchedAge centralizes the dry-run / list-expired output

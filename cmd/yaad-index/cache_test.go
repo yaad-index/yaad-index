@@ -529,6 +529,7 @@ func TestCacheRefetchCmd_HappyPath(t *testing.T) {
 		ConfigPath: filepath.Join(t.TempDir(), "missing.yaml"),
 		VaultPath: root,
 		Server: srv.URL,
+		WaitSeconds: 30,
 	}
 	require.NoError(t, cmd.Run())
 
@@ -537,6 +538,8 @@ func TestCacheRefetchCmd_HappyPath(t *testing.T) {
 		"prefers the http(s) URL over shorthand")
 	assert.Equal(t, true, seenReqs[0]["force_refetch"],
 		"force_refetch=true must be set")
+	assert.EqualValues(t, 30, seenReqs[0]["wait_seconds"],
+		"wait_seconds must be plumbed from the CLI flag")
 }
 
 // --limit clamps the number of refetch POSTs.
@@ -622,4 +625,160 @@ func TestCacheRefetchCmd_DaemonErrorContinues(t *testing.T) {
 	// is the documented contract.
 	require.NoError(t, cmd.Run())
 	assert.Equal(t, 2, seen, "loop must continue past per-entity 500s")
+}
+
+// TestCacheRefetchCmd_WaitSecondsPlumbed pins the yaad-index #6
+// flag plumbing: --wait-seconds=N becomes the `wait_seconds` field
+// on every /v1/ingest POST body. Default (30) is exercised by the
+// happy-path test above; this one exercises a non-default value to
+// catch a regression where the field were left hardcoded.
+func TestCacheRefetchCmd_WaitSecondsPlumbed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	stale := now.Add(-2 * time.Hour)
+	pastExpiry := now.Add(-time.Hour)
+	require.NoError(t, w.Write(&vault.Entity{
+		ID: "wikipedia:foo", Kind: "wikipedia-article", Plugin: "wikipedia",
+		Data: map[string]any{"title": "Foo"},
+		Provenance: []vault.ProvenanceEntry{
+			{Source: "fake:fetch", FetchedAt: &stale, OK: true},
+		},
+		Notations: []string{"https://en.wikipedia.org/wiki/Foo"},
+		CacheExpires: vault.CacheExpiresAt(pastExpiry),
+	}))
+
+	var seenWait float64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		seenWait, _ = body["wait_seconds"].(float64)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"state":"complete"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	cmd := CacheRefetchCmd{
+		ConfigPath:  filepath.Join(t.TempDir(), "missing.yaml"),
+		VaultPath:   root,
+		Server:      srv.URL,
+		WaitSeconds: 7,
+	}
+	require.NoError(t, cmd.Run())
+	assert.EqualValues(t, 7, seenWait,
+		"non-default --wait-seconds must plumb through to /v1/ingest wait_seconds")
+}
+
+// TestCacheRefetchCmd_QueuedResponseAnnotates pins the yaad-index
+// #6 202/queued branch: when the daemon returns 202 (fetch still in
+// flight after the wait_seconds budget), the per-entity stdout line
+// gains the "(still in flight after Ns; via ...)" annotation and
+// the stderr summary includes "; N still in flight".
+func TestCacheRefetchCmd_QueuedResponseAnnotates(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	stale := now.Add(-2 * time.Hour)
+	pastExpiry := now.Add(-time.Hour)
+	require.NoError(t, w.Write(&vault.Entity{
+		ID: "wikipedia:foo", Kind: "wikipedia-article", Plugin: "wikipedia",
+		Data: map[string]any{"title": "Foo"},
+		Provenance: []vault.ProvenanceEntry{
+			{Source: "fake:fetch", FetchedAt: &stale, OK: true},
+		},
+		Notations: []string{"https://en.wikipedia.org/wiki/Foo"},
+		CacheExpires: vault.CacheExpiresAt(pastExpiry),
+	}))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"state":"queued"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	httpClient := &http.Client{Timeout: 60 * time.Second}
+	queued, err := postForceRefetch(httpClient, srv.URL+"/v1/ingest", "", "https://x", 12)
+	require.NoError(t, err)
+	assert.True(t, queued, "202 response must surface queued=true so the CLI can annotate")
+}
+
+// TestFormatRefetchedLine pins the per-entity stdout line shape on
+// both response paths per sora's PR-42 review nit. Extracted to a
+// pure-helper test (rather than swapping os.Stdout/Stderr globals
+// which races concurrent parallel tests in the same package).
+func TestFormatRefetchedLine(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		id          string
+		queued      bool
+		waitSeconds int
+		notation    string
+		want        string
+	}{
+		{
+			name:        "200/complete — bare via clause",
+			id:          "wikipedia:foo",
+			queued:      false,
+			waitSeconds: 30,
+			notation:    "https://en.wikipedia.org/wiki/Foo",
+			want:        "refetched wikipedia:foo (via https://en.wikipedia.org/wiki/Foo)",
+		},
+		{
+			name:        "202/queued — adds still-in-flight annotation",
+			id:          "wikipedia:slowfetch",
+			queued:      true,
+			waitSeconds: 12,
+			notation:    "https://en.wikipedia.org/wiki/Slowfetch",
+			want:        "refetched wikipedia:slowfetch (still in flight after 12s; via https://en.wikipedia.org/wiki/Slowfetch)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := formatRefetchedLine(tc.id, tc.queued, tc.waitSeconds, tc.notation)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestFormatRefetchSummary pins the stderr summary shape, including
+// the conditional "; N still in flight" suffix per sora's PR-42
+// review nit.
+func TestFormatRefetchSummary(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name                                 string
+		refetched, failed, remaining, queued int
+		want                                 string
+	}{
+		{
+			name:      "no still-in-flight — suffix absent",
+			refetched: 3, failed: 1, remaining: 2, queued: 0,
+			want: "refetched 3 entries; 1 failed (see logs); 2 remaining over --limit.",
+		},
+		{
+			name:      "with still-in-flight — suffix appended before period",
+			refetched: 5, failed: 0, remaining: 0, queued: 2,
+			want: "refetched 5 entries; 0 failed (see logs); 0 remaining over --limit; 2 still in flight.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := formatRefetchSummary(tc.refetched, tc.failed, tc.remaining, tc.queued)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
