@@ -90,7 +90,14 @@ A workflow's output is one of:
 - **Silent log** — process inline, no task created (Amazon-receipt-shape: the workflow knows what it is, files it, done).
 - **Emit notification** — out-of-v1 unless concrete need surfaces.
 
-**Concurrent writes.** Two workflows — or any two writers (workflow output, UGC mutation, comment addition, edge addition, plugin emit, operator manual write) — may touch the same on-disk artifact at the same time. v1 protects against file corruption / overwrite via a daemon-internal **global write lock** that serializes ALL daemon-side writes, not just workflow outputs. Per-entity concurrency and conflict resolution are deferred to a follow-up iteration tracked separately.
+**Concurrent writes.** Two workflows — or any two writers (workflow output, UGC mutation, comment addition, edge addition, plugin emit, operator manual write) — may touch the same on-disk artifact at the same time. v1 protects via a daemon-internal **per-artifact write-lock manager** (`internal/writelocks` per yaad-index #23) with a **block-on-conflict** policy: an Acquire on an artifact already held by another writer returns a typed conflict error immediately, surfacing as a 409 envelope naming the active holder. No queuing, no merging, no last-writer-wins; the rejected caller retries.
+
+Two write classes deliberately skip the lock as additive-append shapes that don't conflict at the storage layer:
+
+- **Comments** (`POST /v1/entities/{id}/comments`) — append-only entries in vault frontmatter's comments table.
+- **Edges** (`POST /v1/edges`) — append-only rows in the store + frontmatter.
+
+Every other mutation surface (ingest, fill, operator-fill, archive/restore, delete, UGC section / frontmatter / create / delete) acquires the per-entity lock — section-scoped where applicable (UGC section writers key on `<id>#<idx>` so different sections of the same UGC file proceed concurrently). Cross-host distributed locking is out of scope; the manager is in-process only.
 
 Workflow-to-workflow chaining is **out of v1** (decision deferred from the May 9 trio brainstorm; ergonomic but adds engine complexity).
 

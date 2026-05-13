@@ -10,6 +10,7 @@ import (
 
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
 // archiveResponse is the wire shape returned on a successful
@@ -31,14 +32,14 @@ type archiveResponse struct {
 // Auth + audit shape mirrors handleEntityDelete (WARN audit log on
 // every transition; auto-commit prefix `archive: <id>`). The
 // transition is non-destructive — restore reverses it.
-func handleEntityArchive(logger *slog.Logger, st store.Store, vaultWriter *vault.Writer) http.HandlerFunc {
-	return handleEntityArchiveTransition(logger, st, vaultWriter, true)
+func handleEntityArchive(logger *slog.Logger, st store.Store, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
+	return handleEntityArchiveTransition(logger, st, vaultWriter, writeLocks, true)
 }
 
 // handleEntityRestore implements POST /v1/entities/{id}/restore.
 // Inverse of handleEntityArchive; same audit + commit shape.
-func handleEntityRestore(logger *slog.Logger, st store.Store, vaultWriter *vault.Writer) http.HandlerFunc {
-	return handleEntityArchiveTransition(logger, st, vaultWriter, false)
+func handleEntityRestore(logger *slog.Logger, st store.Store, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
+	return handleEntityArchiveTransition(logger, st, vaultWriter, writeLocks, false)
 }
 
 // handleEntityArchiveTransition is the shared body for archive +
@@ -53,7 +54,7 @@ func handleEntityRestore(logger *slog.Logger, st store.Store, vaultWriter *vault
 // move logs at ERROR; reindex's incremental walk will reconcile on
 // next pass (the `archived_at` flag is DB-only today, but the
 // vault-side `_archive/` placement is the durable signal).
-func handleEntityArchiveTransition(logger *slog.Logger, st store.Store, vaultWriter *vault.Writer, archiving bool) http.HandlerFunc {
+func handleEntityArchiveTransition(logger *slog.Logger, st store.Store, vaultWriter *vault.Writer, writeLocks *writelocks.Manager, archiving bool) http.HandlerFunc {
 	op := "restore"
 	if archiving {
 		op = "archive"
@@ -69,6 +70,12 @@ func handleEntityArchiveTransition(logger *slog.Logger, st store.Store, vaultWri
 				fmt.Sprintf("POST /v1/entities/{id}/%s requires vault.path configuration; the entity body lives in vault files", op))
 			return
 		}
+		// Per-entity write-lock (yaad-index #23 + ADR-0024).
+		release, ok := acquireWriteLock(w, r, writeLocks, id)
+		if !ok {
+			return
+		}
+		defer release()
 
 		// Load the entity first so we can 404 cleanly when it
 		// doesn't exist AND learn the kind for the vault move.

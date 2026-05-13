@@ -13,6 +13,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
 // stubFillProvenanceSource matches edges.go's `agent:stub` convention —
@@ -84,7 +85,7 @@ type fillConflictResponse struct {
 // case that the agent flow targets. A stale DB → 404 not_found is
 // acceptable behavior — operator runs `yaad-index reindex` to
 // repair drift.
-func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
+func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, canonicalKindReg map[string]config.CanonicalKindConfig, writeLocks *writelocks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Decode once into json.RawMessage values so canonical_type
 		// fields per yaad-index can re-decode against the
@@ -113,6 +114,12 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 				"fill requires vault.path configuration; the gap set lives in vault frontmatter")
 			return
 		}
+		// Per-entity write-lock (yaad-index #23 + ADR-0024).
+		release, ok := acquireWriteLock(w, r, writeLocks, id)
+		if !ok {
+			return
+		}
+		defer release()
 
 		got, err := st.GetEntity(r.Context(), id)
 		if err != nil {
