@@ -131,7 +131,29 @@ func (s *ServeCmd) Run() error {
 		// of the merged registry — code defaults are always-on for
 		// every plugin-emitted kind, so plugin auto-activation
 		// flows through here too.
-		guard = config.NewCanonicalGuard(canonicalKindNames(mergedRegistry), cfg.CanonicalEdgeTypes)
+		//
+		// Edge types follow the same ADR-0016 §plugin-driven-
+		// activation semantic: a plugin's Capabilities.
+		// CanonicalEdgeTypesEmitted auto-activate via union with the
+		// operator's canonical_edge_types. Without this, plugins like
+		// yaad-wikipedia emitting is_about would drop edges silently
+		// on every ingest until an operator copied the type into
+		// config — which contradicts the ADR-0016 plugin-driven-
+		// activation promise and surfaces as cv-status drift
+		// (yaad-index #9).
+		//
+		// The kind arg derives from mergedRegistry while the edge
+		// arg derives from the bare registry — same plugin source
+		// either way. mergedRegistry's KEY SET is built by
+		// MergeCanonicalRegistry from (pluginEmittedKinds collected
+		// via collectPluginCanonicalContributions(registry)) UNION
+		// (operator cfg.CanonicalKinds keys); the edge path here
+		// mirrors that exact union shape via unionEdgeTypes — only
+		// the kind-side has a kind-keyed config struct to bind gaps,
+		// so the edge path doesn't go through a merge intermediate.
+		// Effective enabled sets are symmetric.
+		enabledEdgeTypes := unionEdgeTypes(cfg.CanonicalEdgeTypes, collectPluginEmittedEdgeTypes(registry))
+		guard = config.NewCanonicalGuard(canonicalKindNames(mergedRegistry), enabledEdgeTypes)
 		handlerOpts = append(handlerOpts, api.WithCanonicalGuard(guard))
 		warnCanonicalEmissionGaps(logger, registry, guard)
 		// Always pass the configured cache_ttl_seconds through (even
@@ -1180,4 +1202,55 @@ func collectPluginCanonicalContributions(registry *plugins.Registry) (map[string
 		emitted = append(emitted, k)
 	}
 	return pluginGaps, emitted
+}
+
+// collectPluginEmittedEdgeTypes is the edge-type half of ADR-0016
+// §plugin-driven-activation: walks the loaded plugins and unions
+// every Capabilities.CanonicalEdgeTypesEmitted value into a single
+// slice. Mirrors the kind-side path in
+// collectPluginCanonicalContributions so a plugin declaring it MAY
+// emit a canonical edge type auto-activates that type without
+// operator opt-in. Empty strings (sloppy capabilities declarations)
+// are dropped silently — NewCanonicalGuard already skips them too.
+func collectPluginEmittedEdgeTypes(registry *plugins.Registry) []string {
+	emittedSet := make(map[string]struct{})
+	for _, p := range registry.Plugins() {
+		caps := p.Capabilities()
+		for _, t := range caps.CanonicalEdgeTypesEmitted {
+			if t == "" {
+				continue
+			}
+			emittedSet[t] = struct{}{}
+		}
+	}
+	emitted := make([]string, 0, len(emittedSet))
+	for t := range emittedSet {
+		emitted = append(emitted, t)
+	}
+	return emitted
+}
+
+// unionEdgeTypes returns the deduped union of two edge-type slices
+// in arbitrary order. Used to merge operator-config canonical_edge_
+// types with plugin-declared CanonicalEdgeTypesEmitted before
+// constructing the guard.
+func unionEdgeTypes(a, b []string) []string {
+	set := make(map[string]struct{}, len(a)+len(b))
+	for _, t := range a {
+		if t == "" {
+			continue
+		}
+		set[t] = struct{}{}
+	}
+	for _, t := range b {
+		if t == "" {
+			continue
+		}
+		set[t] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for t := range set {
+		out = append(out, t)
+	}
+	return out
 }
