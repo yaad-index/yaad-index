@@ -22,6 +22,7 @@ import { runListEntities } from "../src/tools/list_entities.js";
 import { runListUserContentSections } from "../src/tools/list_user_content_sections.js";
 import { runReindex } from "../src/tools/reindex.js";
 import { runSearchLocal } from "../src/tools/search_local.js";
+import { runSearchUpstream } from "../src/tools/search_upstream.js";
 
 function clientWith(
  responder: (url: string, init: RequestInit) => Response | Promise<Response>,
@@ -453,6 +454,147 @@ describe("search_local tool", () => {
  });
  await runSearchLocal(client, { query: "go (programming language)" });
  expect(seen).toContain("q=go+%28programming+language%29");
+ });
+});
+
+describe("search_upstream tool", () => {
+ test("query forwarded in JSON body to POST /v1/search/upstream", async () => {
+ let seenUrl = "";
+ let seenMethod = "";
+ let seenBody = "";
+ const client = clientWith((u, init) => {
+ seenUrl = u;
+ seenMethod = String(init?.method ?? "");
+ seenBody = String(init?.body ?? "");
+ return new Response(
+ JSON.stringify({
+ ok: true,
+ results: [{ plugin: "wikipedia", id: "Brass", label: "Brass (board game)" }],
+ per_plugin_status: [
+ { plugin: "wikipedia", ok: true, candidates: 1, duration_ms: 42 },
+ ],
+ query: "Brass",
+ limit: 10,
+ per_plugin_timeout_seconds: 5,
+ }),
+ { headers: { "Content-Type": "application/json" } },
+ );
+ });
+ const got = (await runSearchUpstream(client, { query: "Brass" })) as {
+ ok: boolean;
+ results: { plugin: string; id: string }[];
+ };
+ expect(seenUrl).toBe("http://yaad-index.test/v1/search/upstream");
+ expect(seenMethod).toBe("POST");
+ expect(JSON.parse(seenBody)).toEqual({ query: "Brass" });
+ expect(got.ok).toBe(true);
+ expect(got.results[0]?.plugin).toBe("wikipedia");
+ expect(got.results[0]?.id).toBe("Brass");
+ });
+
+ test("optional fields (plugins, limit, per_plugin_timeout_seconds) forwarded", async () => {
+ let seenBody = "";
+ const client = clientWith((_u, init) => {
+ seenBody = String(init?.body ?? "");
+ return new Response(
+ JSON.stringify({
+ ok: true,
+ results: [],
+ per_plugin_status: [],
+ query: "x",
+ limit: 25,
+ per_plugin_timeout_seconds: 12,
+ }),
+ { headers: { "Content-Type": "application/json" } },
+ );
+ });
+ await runSearchUpstream(client, {
+ query: "x",
+ plugins: ["wikipedia", "bgg"],
+ limit: 25,
+ per_plugin_timeout_seconds: 12,
+ });
+ expect(JSON.parse(seenBody)).toEqual({
+ query: "x",
+ plugins: ["wikipedia", "bgg"],
+ limit: 25,
+ per_plugin_timeout_seconds: 12,
+ });
+ });
+
+ test("missing query returns invalid_argument without calling the API", async () => {
+ let called = false;
+ const client = clientWith(() => {
+ called = true;
+ return new Response("{}", { headers: { "Content-Type": "application/json" } });
+ });
+ const got = (await runSearchUpstream(client, {})) as { ok: boolean; error: string };
+ expect(called).toBe(false);
+ expect(got.ok).toBe(false);
+ expect(got.error).toBe("invalid_argument");
+ });
+
+ test("non-string plugins entries are filtered out", async () => {
+ let seenBody = "";
+ const client = clientWith((_u, init) => {
+ seenBody = String(init?.body ?? "");
+ return new Response(
+ JSON.stringify({
+ ok: true,
+ results: [],
+ per_plugin_status: [],
+ query: "x",
+ limit: 10,
+ per_plugin_timeout_seconds: 5,
+ }),
+ { headers: { "Content-Type": "application/json" } },
+ );
+ });
+ // Pass a mixed array; the tool runner must drop non-strings
+ // before forwarding to the daemon.
+ await runSearchUpstream(client, {
+ query: "x",
+ plugins: ["wikipedia", 42, null, "bgg"],
+ });
+ expect(JSON.parse(seenBody)).toEqual({
+ query: "x",
+ plugins: ["wikipedia", "bgg"],
+ });
+ });
+
+ test("partial-results semantic: per_plugin_status surfaces errors at 200", async () => {
+ const client = clientWith(() =>
+ new Response(
+ JSON.stringify({
+ ok: true,
+ results: [{ plugin: "wikipedia", id: "x", label: "X" }],
+ per_plugin_status: [
+ { plugin: "wikipedia", ok: true, candidates: 1, duration_ms: 50 },
+ {
+ plugin: "broken",
+ ok: false,
+ candidates: 0,
+ duration_ms: 5,
+ error_message: "upstream is down",
+ },
+ ],
+ query: "x",
+ limit: 10,
+ per_plugin_timeout_seconds: 5,
+ }),
+ { status: 200, headers: { "Content-Type": "application/json" } },
+ ),
+ );
+ const got = (await runSearchUpstream(client, { query: "x" })) as {
+ ok: boolean;
+ results: unknown[];
+ per_plugin_status: { plugin: string; ok: boolean; error_message?: string }[];
+ };
+ expect(got.ok).toBe(true);
+ expect(got.results).toHaveLength(1);
+ const broken = got.per_plugin_status.find((s) => s.plugin === "broken");
+ expect(broken?.ok).toBe(false);
+ expect(broken?.error_message).toContain("upstream is down");
  });
 });
 

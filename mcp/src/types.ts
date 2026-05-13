@@ -175,6 +175,59 @@ export interface SearchResultEntry {
 }
 
 /**
+ * SearchUpstreamRequest is the POST /v1/search/upstream wire body
+ * per yaad-index #2 — federated search across plugins that opted
+ * in via Capabilities.SupportsSearch=true.
+ *
+ * `plugins` empty / omitted → federate to every opted-in plugin in
+ * registry order. Explicit list selects exactly the named plugins;
+ * an explicit name that isn't registered → 400, an explicit name
+ * whose plugin SupportsSearch=false → 422.
+ */
+export interface SearchUpstreamRequest {
+ query: string;
+ plugins?: string[];
+ limit?: number;
+ per_plugin_timeout_seconds?: number;
+}
+
+/**
+ * SearchUpstreamCandidate is one merged result on the federated
+ * response. Carries plugin attribution alongside the plugin-emitted
+ * SearchCandidate fields.
+ */
+export interface SearchUpstreamCandidate {
+ plugin: string;
+ id: string;
+ label: string;
+ summary?: string;
+}
+
+/**
+ * SearchUpstreamPluginStatus surfaces per-plugin outcome so the
+ * caller sees exactly which plugins returned vs timed out vs
+ * errored. Partial-results semantic — the federated call returns
+ * 200 even when individual plugins fail; per-plugin error_message
+ * carries the reason.
+ */
+export interface SearchUpstreamPluginStatus {
+ plugin: string;
+ ok: boolean;
+ candidates: number;
+ duration_ms: number;
+ error_message?: string;
+}
+
+export interface SearchUpstreamResponse {
+ ok: boolean;
+ results: SearchUpstreamCandidate[];
+ per_plugin_status: SearchUpstreamPluginStatus[];
+ query: string;
+ limit: number;
+ per_plugin_timeout_seconds: number;
+}
+
+/**
  * ReindexResponse mirrors yaad-index's `reindex.Summary`
  * (`internal/reindex/reindex.go`) — returned by POST /v1/reindex.
  * The daemon walks the markdown vault, re-parses files, and updates
