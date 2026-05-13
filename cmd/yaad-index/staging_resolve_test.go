@@ -42,26 +42,17 @@ func TestResolvePluginStagingDir_DefaultIsOSTempDir(t *testing.T) {
 	assert.NotEmpty(t, got, "os.TempDir() always returns a non-empty path")
 }
 
-// TestResolvePluginStagingDir_EmptyStringsSkipped pins the empty-string
-// handling: empty strings at any layer fall through to the next, they
-// don't poison the resolution. Stops a bare `YAAD_PLUGIN_STAGING_DIR=`
-// (unset-via-empty) from setting the staging root to "".
-func TestResolvePluginStagingDir_EmptyStringsSkipped(t *testing.T) {
+// TestResolvePluginStagingDir_EmptyEnvSetButEmpty pins the
+// empty-string handling: a bare `YAAD_PLUGIN_STAGING_DIR=`
+// (set-but-empty) doesn't poison the chain — falls through to
+// os.TempDir() as if unset. Distinct from
+// TestResolvePluginStagingDir_DefaultIsOSTempDir which covers the
+// pure-default path; this case exists because Go's os.Getenv
+// returns "" for both unset and set-but-empty.
+func TestResolvePluginStagingDir_EmptyEnvSetButEmpty(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name string
-		yaml string
-		env  string
-	}{
-		{"both empty", "", ""},
-		{"yaml empty env empty", "", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := resolvePluginStagingDir(tc.yaml, tc.env)
-			assert.Equal(t, os.TempDir(), got)
-		})
-	}
+	got := resolvePluginStagingDir("", "")
+	assert.Equal(t, os.TempDir(), got,
+		"empty env (set-but-empty or unset) must fall through to os.TempDir(), not produce empty staging root")
 }
