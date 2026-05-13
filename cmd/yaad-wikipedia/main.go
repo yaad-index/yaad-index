@@ -51,6 +51,13 @@ const EnvUserAgent = "YAAD_WIKIPEDIA_USER_AGENT"
 // EnvUserAgent — yaad-index inherits the env into the subprocess.
 const EnvLang = "YAAD_WIKIPEDIA_LANG"
 
+// EnvAPIHostOverride redirects every upstream Wikipedia API call
+// (action API, REST summary, Wikidata) to the named host. Unset /
+// empty → production behavior (canonical Wikipedia hosts). Set →
+// every call routes through the value; pass a full origin like
+// `http://127.0.0.1:NNNN` for local mocks.
+const EnvAPIHostOverride = "YAAD_WIKIPEDIA_API_HOST_OVERRIDE"
+
 // requestTimeout caps the wall-clock budget for a single fetch
 // invocation, including reading the request from stdin and the
 // upstream HTTP call. The internal upstream timeout
@@ -112,6 +119,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if *lang != "" {
 		opts = append(opts, wikipedia.WithLang(*lang))
+	}
+	if host := os.Getenv(EnvAPIHostOverride); host != "" {
+		opts = append(opts, wikipedia.WithAPIHostOverride(host))
 	}
 	if err := runFetch(context.Background(), wikipedia.New(opts...), stdin, stdout); err != nil {
 		_, _ = fmt.Fprintf(stderr, "yaad-wikipedia: %v\n", err)

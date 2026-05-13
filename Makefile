@@ -78,6 +78,10 @@ vet:
 test:
 	go test -race -timeout 2m ./...
 
+# e2e harness (yaad-index #1). Build tag keeps it off `make test`.
+e2e:
+	go test -tags=e2e -timeout 5m -v ./e2e/...
+
 build:
 	go build -ldflags "$(LDFLAGS)" -o yaad-index ./cmd/yaad-index
 
