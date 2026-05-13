@@ -20,6 +20,11 @@ import (
 type IngestEnvelope struct {
 	// SourceID is the full source-shape id `gmail:<source-slug>`.
 	SourceID string
+	// MessageID is the RFC-822 Message-ID header (angle brackets
+	// stripped). Used by the wire layer as the per-message subdir
+	// name under attach.StagingDir() when staging MIME-walked
+	// attachments to disk.
+	MessageID string
 	// Subject + Date come from the parsed RFC-822 headers.
 	Subject string
 	Date time.Time
@@ -29,6 +34,18 @@ type IngestEnvelope struct {
 	// cc/bcc + tagged_as) per AssembleEdges. is_a / source-type is
 	// applied at the wire-emission layer (main.go), not here.
 	Edges []Edge
+	// HTMLBody is the text/html alternative body extracted from the
+	// MIME tree per yaad-index #12. Empty when the message has no
+	// HTML alternative. The wire layer stages this under
+	// attach.StagingDir()/<message-id>/body.html and emits a
+	// `role: html-body` ADR-0014 attachment when non-empty.
+	HTMLBody []byte
+	// Attachments lists the per-message binary / non-text MIME parts
+	// (Content-Disposition attachment, inline-above-threshold) the
+	// MIME walker surfaced. The wire layer stages each under
+	// attach.StagingDir()/<message-id>/<part-index>.<ext> and emits
+	// `role: attachment` ADR-0014 entries.
+	Attachments []MIMEAttachment
 }
 
 // EmitFunc is the per-envelope hand-off the Poller calls. Returns
@@ -113,12 +130,28 @@ func (p *Poller) Tick(ctx context.Context) (ingested int, errs []error) {
 				continue
 			}
 
+			// MIME walk for ADR-0014 attachment emission per #12. Errors
+			// here are non-fatal: a message whose MIME tree the walker
+			// can't parse still emits its source-shape + edges; the
+			// attachment surface stays empty for that envelope. The
+			// walker handles malformed Content-Type by returning empty
+			// results, so the only error path is a fundamental
+			// rfc-822 parse failure — log it + continue.
+			htmlBody, attachments, mimeErr := WalkMIMEParts(fm.Body)
+			if mimeErr != nil {
+				p.Logger.Debug("gmail poll: mime walk failed; continuing without attachments",
+					"folder", folder, "uid", fm.UID, "err", mimeErr)
+			}
+
 			env := IngestEnvelope{
 				SourceID: SourceNamespace + ":" + SourceSlug(pm.Subject, pm.MessageID),
+				MessageID: pm.MessageID,
 				Subject: pm.Subject,
 				Date: pm.Date,
 				Body: pm.Body,
 				Edges: AssembleEdges(pm, p.IngestedLabel, p.SkipLabel),
+				HTMLBody: htmlBody,
+				Attachments: attachments,
 			}
 
 			if err := p.Emit(ctx, env); err != nil {
