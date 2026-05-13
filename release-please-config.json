@@ -8,7 +8,13 @@
     ".": {
       "release-type": "go",
       "component": "yaad-index",
-      "package-name": "yaad-index"
+      "package-name": "yaad-index",
+      "exclude-paths": [
+        "cmd/yaad-wikipedia",
+        "cmd/yaad-bgg",
+        "cmd/yaad-gmail",
+        "mcp"
+      ]
     },
     "cmd/yaad-wikipedia": {
       "release-type": "go",
