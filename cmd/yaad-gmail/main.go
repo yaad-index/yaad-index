@@ -28,8 +28,9 @@
 // `--command fetch` so manual operator invocation doesn't
 // need to remember the flag. Same NDJSON wire shape.
 //
-// Per-envelope binary attachments (MIME parts) are deferred to a
-// follow-up issue (yaad-index); v1 emits cleanContent only.
+// Per-envelope binary attachments (MIME parts) emit as ADR-0014
+// attach.Attachment entries on the source line per yaad-index #12;
+// staged under attach.StagingDir()/<message-id>/ at emit time.
 package main
 
 import (
@@ -40,10 +41,12 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/yaad-index/yaad-index/internal/gmail"
+	"github.com/yaad-index/yaad-index/pkg/plugin/attach"
 )
 
 // Env-var integration points for operator config (per ADR-0006:
@@ -190,9 +193,16 @@ func runInit(stdout io.Writer) error {
 // `structured` block. Each invocation of `--command fetch` emits
 // zero or more of these (one per un-ingested message), terminated
 // by a trailing `\n`, optionally followed by a `_summary` packet.
+//
+// Attachments carries the ADR-0014 per-envelope attachment list
+// when the MIME walker found an HTML alternative body and/or
+// disposition=attachment + large-inline parts (yaad-index #12).
+// Empty when the message is plain-text-only; mirrors yaad-bgg's
+// fetchResponse.Attachments shape.
 type sourceLine struct {
-	OK bool `json:"ok"`
-	Structured *structuredEnvelope `json:"structured,omitempty"`
+	OK          bool                `json:"ok"`
+	Structured  *structuredEnvelope `json:"structured,omitempty"`
+	Attachments []attach.Attachment `json:"attachments,omitempty"`
 }
 
 // structuredEnvelope is the per-message ADR-0021 structured payload.
@@ -265,8 +275,9 @@ type errorFields struct {
 //
 // Auth-required env vars (account_email, app_password) MUST be set;
 // missing either surfaces as a single `_error` line + non-zero exit.
-// Per-envelope binary attachments (MIME parts) are deferred to
-// yaad-index (follow-up MIME-walking + staging issue).
+// Per-envelope MIME parts emit as ADR-0014 attach.Attachment entries
+// staged under attach.StagingDir()/<message-id>/ at emit time
+// (yaad-index #12).
 func runCommandFetch(ctx context.Context, stdout, stderr io.Writer) error {
 	start := time.Now()
 
@@ -290,14 +301,23 @@ func runCommandFetch(ctx context.Context, stdout, stderr io.Writer) error {
 
 	enc := json.NewEncoder(stdout)
 	now := time.Now().UTC().Format(time.RFC3339)
+	stagingRoot := attach.StagingDir()
 
 	emit := func(_ context.Context, env gmail.IngestEnvelope) error {
+		// Stage MIME-walked attachments + HTML body under
+		// attach.StagingDir()/<message-id>/... per #12. Errors are
+		// non-fatal: the source-shape envelope still emits without
+		// the failed attachments. The daemon's path-traversal guard
+		// enforces the staging-root constraint at receive time.
+		attachments := stageAttachments(stagingRoot, env, logger)
+		line := buildSourceLine(env, now)
+		line.Attachments = attachments
 		// Encoder.Encode writes the JSON value followed by a
 		// trailing `\n` — exactly the NDJSON shape the daemon's
 		// json.Decoder consumes one value at a time. stdout is
 		// unbuffered (os.Stdout default), so the line reaches
 		// the daemon's pipe immediately, before MarkIngested fires.
-		return enc.Encode(buildSourceLine(env, now))
+		return enc.Encode(line)
 	}
 
 	poller := gmail.NewPoller(client, ingestedLabel, skipLabel, emit, logger)
@@ -366,6 +386,90 @@ func buildSourceLine(env gmail.IngestEnvelope, fetchedAt string) sourceLine {
 			}},
 		},
 	}
+}
+
+// stageAttachments writes each MIME-walked attachment + the HTML
+// alternative body (when present) under a per-message subdir of
+// stagingRoot, returning the ADR-0014 attach.Attachment list the
+// wire layer emits. Per Forud's call on yaad-index #33: the daemon
+// owns the staging root via plugin_staging_dir; this plugin's
+// per-message subdir is the plugin designer's organizational choice
+// under that root.
+//
+// File layout for message-id "<mid>":
+//
+//	<stagingRoot>/<mid-sanitized>/body.html         (when HTMLBody present)
+//	<stagingRoot>/<mid-sanitized>/<part-index>.<ext>  (one per attachment)
+//
+// Returns nil + empty slice when the envelope has no MIME-walked
+// content. Per-file write failures log + skip — the goal is best-
+// effort emission; a fully-failed stage means an empty attachment
+// list, not a dropped envelope.
+func stageAttachments(stagingRoot string, env gmail.IngestEnvelope, logger *slog.Logger) []attach.Attachment {
+	if len(env.HTMLBody) == 0 && len(env.Attachments) == 0 {
+		return nil
+	}
+	subdir := filepath.Join(stagingRoot, sanitizeMessageID(env.MessageID))
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		logger.Warn("yaad-gmail: stage attachments: mkdir subdir failed; skipping all attachments",
+			"subdir", subdir, "err", err)
+		return nil
+	}
+
+	out := make([]attach.Attachment, 0, 1+len(env.Attachments))
+
+	if len(env.HTMLBody) > 0 {
+		bodyPath := filepath.Join(subdir, "body.html")
+		if err := os.WriteFile(bodyPath, env.HTMLBody, 0o644); err != nil {
+			logger.Warn("yaad-gmail: stage html body failed; skipping",
+				"path", bodyPath, "err", err)
+		} else {
+			out = append(out, attach.File("html-body", bodyPath, "html"))
+		}
+	}
+
+	for _, p := range env.Attachments {
+		name := fmt.Sprintf("%d", p.PartIndex)
+		if p.Extension != "" {
+			name = name + "." + p.Extension
+		}
+		path := filepath.Join(subdir, name)
+		if err := os.WriteFile(path, p.Data, 0o644); err != nil {
+			logger.Warn("yaad-gmail: stage attachment part failed; skipping",
+				"path", path, "part_index", p.PartIndex, "err", err)
+			continue
+		}
+		out = append(out, attach.File(p.Role, path, p.Extension))
+	}
+	return out
+}
+
+// sanitizeMessageID strips characters unsafe in filesystem path
+// segments. RFC-822 Message-IDs are bounded but can carry `/`, `\`,
+// `..` segments — the daemon's path-traversal guard catches the
+// final URI, but failing early at file-stage time produces a
+// cleaner error log.
+func sanitizeMessageID(mid string) string {
+	if mid == "" {
+		return "no-message-id"
+	}
+	out := strings.Map(func(r rune) rune {
+		switch r {
+		case '/', '\\', ':', '\x00':
+			return '_'
+		}
+		if r < 0x20 {
+			return '_'
+		}
+		return r
+	}, mid)
+	// Strip leading dots so the subdir doesn't traverse upward via
+	// `..` patterns.
+	out = strings.TrimLeft(out, ".")
+	if out == "" {
+		return "no-message-id"
+	}
+	return out
 }
 
 // edgesToBlock converts the Poller's flat Edge list into the
