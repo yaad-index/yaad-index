@@ -141,6 +141,17 @@ func (s *ServeCmd) Run() error {
 		// config — which contradicts the ADR-0016 plugin-driven-
 		// activation promise and surfaces as cv-status drift
 		// (yaad-index #9).
+		//
+		// The kind arg derives from mergedRegistry while the edge
+		// arg derives from the bare registry — same plugin source
+		// either way. mergedRegistry's KEY SET is built by
+		// MergeCanonicalRegistry from (pluginEmittedKinds collected
+		// via collectPluginCanonicalContributions(registry)) UNION
+		// (operator cfg.CanonicalKinds keys); the edge path here
+		// mirrors that exact union shape via unionEdgeTypes — only
+		// the kind-side has a kind-keyed config struct to bind gaps,
+		// so the edge path doesn't go through a merge intermediate.
+		// Effective enabled sets are symmetric.
 		enabledEdgeTypes := unionEdgeTypes(cfg.CanonicalEdgeTypes, collectPluginEmittedEdgeTypes(registry))
 		guard = config.NewCanonicalGuard(canonicalKindNames(mergedRegistry), enabledEdgeTypes)
 		handlerOpts = append(handlerOpts, api.WithCanonicalGuard(guard))
