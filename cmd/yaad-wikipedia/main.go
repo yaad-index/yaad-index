@@ -214,11 +214,13 @@ type fetchResponse struct {
 	RawContent string `json:"raw_content,omitempty"`
 
 	// Gaps is the {field-name → AI-prompt} map per ADR-0002's
-	// universal-state amendment. Plugin chooses which gaps to
-	// declare; the agent's AI fills via POST /v1/entities/{id}/fill.
-	// yaad-wikipedia declares `summary` + `tags` universally; when a
-	// canonical kind is detected, kind-specific gaps merge in from
-	// `wikipedia.kindGaps(<kind>)`.
+	// universal-state amendment. yaad-wikipedia declares the
+	// gap-name set (`summary` + `tags` universally) with
+	// empty-string placeholder prompt values — post yaad-index #4
+	// the daemon's canonical-kind registry is the authoritative
+	// source for the AI-prompt text (operator's `canonical_kinds:`
+	// config supplies the per-gap Description). The agent fills via
+	// POST /v1/entities/{id}/fill.
 	Gaps map[string]string `json:"gaps,omitempty"`
 
 	// Options is the disambiguation-candidate map per ADR-0006.
@@ -345,16 +347,15 @@ func runFetch(ctx context.Context, p *wikipedia.Plugin, stdin io.Reader, stdout 
 		return json.NewEncoder(stdout).Encode(resp)
 	}
 
-	// Article path: standard fetched-entity. Compose gaps as
-	// universal (summary + tags) + kind-specific from the wikidata
-	// lookup (nil when no kind detected).
+	// Article path: standard fetched-entity. Emit the universal gap
+	// name set (summary + tags). Post yaad-index #4 the daemon's
+	// canonical-kind registry is the authoritative source for the
+	// AI-prompt text per gap; the values here are vestigial empty
+	// placeholders kept so the wire shape's gaps map stays present.
 	article := outcome.Article
 	gaps := map[string]string{
-		"summary": "One-paragraph narrative summary of the article. Read RawContent and write a concise overview.",
-		"tags": "Short label set distilled from the article's Wikipedia categories + key topics. Plain strings, lowercase, kebab-case where useful.",
-	}
-	for k, v := range article.KindGaps {
-		gaps[k] = v
+		"summary": "",
+		"tags":    "",
 	}
 
 	// ADR-0021 source-shape: kind="source" + descriptive name +

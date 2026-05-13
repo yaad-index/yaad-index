@@ -195,12 +195,6 @@ type Article struct {
 	// daemon's slug.Slug to converge on `martin-wallace`.
 	Edges map[string][]EdgeTarget
 
-	// KindGaps is the kind-specific gap-name → AI-prompt map merged
-	// into the wire-level `gaps` (alongside the universal summary +
-	// tags). Set when a known canonical kind is detected; nil
-	// otherwise. main.go's runFetch composes the final gap map.
-	KindGaps map[string]string
-
 	// Notations is every input form yaad-wikipedia knows resolves
 	// to this article — canonical desktop URL, mobile subdomain URL,
 	// shorthand `wikipedia: <human-title>`, and the original input
@@ -633,7 +627,6 @@ func (p *Plugin) Fetch(ctx context.Context, input string) (*FetchOutcome, error)
 			article.Edges[CanonicalEdgeType] = []EdgeTarget{
 				{Name: canonicalName, Kind: kind},
 			}
-			article.KindGaps = kindGaps(kind)
 		}
 	}
 

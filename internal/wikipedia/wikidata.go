@@ -29,10 +29,12 @@ import (
 // The dedup happens implicitly via the map's value set
 // (KnownCanonicalKinds below).
 //
-// Adding a Q-id = add a row here, optionally add a row in
-// kindGaps for kind-specific prompts (universal name + summary +
-// tags ride regardless of kind), and the value lands in
-// KnownCanonicalKinds via the deduper.
+// Adding a Q-id = add a row here; the value lands in
+// KnownCanonicalKinds via the deduper. Kind-specific gap prompts
+// now live in the daemon's canonical-kind registry per yaad-index
+// #4 — the operator's `canonical_kinds:` config supplies the
+// per-gap Description. Universal gaps (summary + tags) ride
+// regardless of kind detection.
 var kindByQID = map[string]string{
 	// People (existing).
 	"Q5": "person",
@@ -252,126 +254,4 @@ type wikidataDataValue struct {
 
 type wikidataValue struct {
 	ID string `json:"id"`
-}
-
-// kindGaps returns the kind-specific gap-name → AI-prompt map for
-// a given canonical kind. Returns nil for unknown kinds. Universal
-// gaps (summary, tags) are added in the wire layer regardless of
-// kind detection; this set is the kind-specific addition.
-//
-// Each prompt names the field name AND tells the agent's AI what
-// to put there, so the fill flow can derive a value from RawContent
-// without external data.
-func kindGaps(kind string) map[string]string {
-	switch kind {
-	case "person":
-		return map[string]string{
-			"birth_date": "Date of birth (YYYY or YYYY-MM-DD). Read RawContent's biography section.",
-			"birth_place": "City / region / country of birth. Plain string.",
-			"occupation": "One or two short labels (e.g. 'composer, conductor'). Comma-separated.",
-		}
-	case "city":
-		return map[string]string{
-			"country": "Country the city is in. Plain string, English name.",
-			"population": "Most recent population estimate (integer; no commas or units).",
-		}
-	case "country":
-		return map[string]string{
-			"capital": "Name of the capital city. Plain string.",
-			"population": "Most recent national population estimate (integer; no commas or units).",
-		}
-	case "book":
-		return map[string]string{
-			"author": "Author name. Plain string.",
-			"year_published": "Year of first publication (integer).",
-			"genre": "Short genre label (e.g. 'fantasy', 'literary fiction').",
-		}
-	case "comic":
-		return map[string]string{
-			"author": "Author / writer name. Comma-separated if multi-author.",
-			"year_published": "Year of first publication (integer).",
-			"publisher": "Publishing house or imprint. Plain string.",
-		}
-	case "movie":
-		return map[string]string{
-			"director": "Director name (comma-separated if multi-director).",
-			"year_released": "Year of first release (integer).",
-			"genre": "Short genre label (e.g. 'thriller', 'documentary').",
-		}
-	case "film-series":
-		return map[string]string{
-			"year_started": "Year the series began (integer).",
-			"genre": "Short genre label common to the series. Plain string.",
-			"film_count": "Number of films in the series so far (integer).",
-		}
-	case "tv-show":
-		return map[string]string{
-			"creator": "Creator / showrunner name. Comma-separated if multiple.",
-			"year_first": "Year of first broadcast (integer).",
-			"network": "Original network or streaming service. Plain string.",
-			"season_count": "Total number of seasons released (integer).",
-		}
-	case "anime":
-		return map[string]string{
-			"studio": "Animation studio. Plain string.",
-			"year_first": "Year of first broadcast (integer).",
-			"episode_count": "Total episode count if known (integer; omit if ongoing).",
-		}
-	case "album":
-		return map[string]string{
-			"artist": "Performing artist or band. Plain string.",
-			"year_released": "Year of release (integer).",
-			"label": "Record label. Plain string.",
-		}
-	case "podcast":
-		return map[string]string{
-			"host": "Host name(s). Comma-separated if multiple.",
-			"year_first": "Year the show started (integer).",
-			"network": "Network or distribution platform. Plain string.",
-		}
-	case "video-game":
-		return map[string]string{
-			"developer": "Developer studio. Comma-separated if multi-studio.",
-			"year_released": "Year of first release (integer).",
-			"platform": "Platform(s) — comma-separated (e.g. 'PC, PS5, Xbox Series X').",
-			"genre": "Short genre label (e.g. 'RPG', 'platformer').",
-		}
-	case "boardgame":
-		return map[string]string{
-			"designer": "Designer name (or comma-separated names if multi-designer).",
-			"year_released": "Year first released (integer).",
-			"player_count": "Player count range (e.g. '2-4').",
-		}
-	case "artwork":
-		return map[string]string{
-			"artist": "Artist who created the work. Plain string.",
-			"year_completed": "Year of completion (integer).",
-			"medium": "Medium / material (e.g. 'oil on canvas', 'bronze').",
-		}
-	case "organization":
-		return map[string]string{
-			"founded": "Year founded (integer).",
-			"headquarters": "City + country of HQ. Plain string.",
-			"purpose": "Short description of mission or purpose. One sentence max.",
-		}
-	case "business":
-		return map[string]string{
-			"founded": "Year founded (integer).",
-			"headquarters": "City + country of HQ. Plain string.",
-			"industry": "Primary industry / sector. Plain string.",
-		}
-	case "school":
-		return map[string]string{
-			"founded": "Year founded (integer).",
-			"location": "City + country. Plain string.",
-			"type": "Short type label (e.g. 'university', 'high school', 'primary').",
-		}
-	case "software":
-		return map[string]string{
-			"developer": "Developer or maintaining org. Plain string.",
-			"initial_release": "Year of initial release (integer).",
-			"license": "License (e.g. 'Apache-2.0', 'MIT', 'proprietary').",
-		}
-	}
-	return nil
 }
