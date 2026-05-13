@@ -71,6 +71,11 @@ This is the load-bearing piece. Without an internal event bus, workflows can onl
 
 **Self-loop detection.** Because workflows can both inject gaps AND subscribe to `fill.completed`, a naive engine would re-trigger the same workflow when its own injected fill lands. The `source` tag on `fill.completed` is what the engine uses to skip self-triggered re-evaluation — a workflow named `X` does not re-fire on a `fill.completed` event whose `source` is `workflow:X`. Cross-workflow chains are still out of v1 (see "Out of v1"), but the source tag also lays the groundwork for that future iteration to detect and break loops at the engine layer rather than relying on per-workflow author discipline.
 
+The source tag breaks **direct** self-loops only. An **indirect** loop is still possible: workflow X injects gap G; agent fills G (`source: agent`); X subscribes to `fill.completed` on the entity, re-fires; X injects G again (or a different gap that the agent also fills); loop. v1 addresses this with two layered defenses:
+
+1. **Workflow author discipline (primary).** Decision conditions must be monotone — once a workflow has produced its output for an entity, the decision should not re-fire on the same state. In practice this means the workflow's decision checks for the output's presence (a task already exists for this entity + key) before injecting again; the per-pattern dedup key + `update`/`skip` policies are the standard mechanism.
+2. **Engine backstop.** Engine maintains a per-`(workflow, entity)` re-evaluation counter. If a workflow re-fires on the same entity more than a fixed bound within a short window (initial bound: 10 re-evaluations within 60 seconds), the engine suppresses further fires for that pair and surfaces an err task on the workflow with details. Backstop, not policy.
+
 **Re-evaluation timing.** A workflow re-evaluates on every event matching its trigger condition. If a workflow subscribes to `fill.completed` for a gap that the agent strategy never extracts, the workflow does not fire — there is no event. If the gap stays unfilled across multiple ingests, the workflow stays dormant; surfacing-on-incomplete-context is handled by the missing-reference path below, not by firing on absence.
 
 ### Fill-gap injection (third filler-source)
@@ -184,6 +189,13 @@ New tools exposed via the daemon HTTP API + MCP:
 - **URL** (matches a URL pattern) — the engine routes through ingest-or-lookup before attaching: if the URL is already a known entity, that entity is the target; if not, the URL is ingested through the normal plugin pipeline and the workflow attaches to the resulting entity.
 
 Both shapes are first-class; the engine branches on the input's syntactic shape. Callers can pre-resolve for performance (skip ingest-or-lookup) or pass a URL for convenience (let the engine handle resolution).
+
+**Failure paths.** Two distinct failure modes for URL inputs:
+
+- **URL doesn't resolve to a plugin / no plugin accepts it / URL is malformed** — the trigger call itself fails. `workflow.trigger` returns a typed error to the caller before any workflow run starts; no entity is attached, no err task is created, the workflow's behavior is unchanged. The caller sees a synchronous error.
+- **URL routes to a plugin but the plugin fails during ingest** (network timeout, upstream API error, unparseable payload) — the trigger call succeeds (it dispatched to a known plugin), and the failure surfaces through the existing err-task pattern: one err task per workflow, updated on subsequent failures, resolvable by the operator. This is the same pathway as workflow-runtime failures already documented above.
+
+Entity-ID inputs only have one failure mode (entity does not exist) — synchronous error to the caller, no err task.
 
 ### `workflow.discover(entity_id)` performance note
 
