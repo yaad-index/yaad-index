@@ -471,6 +471,41 @@ func TestRunFetch_RejectsMissingURL(t *testing.T) {
 	}
 }
 
+// TestRunFetch_NonNotFoundErrorIncludesURLContext pins that
+// non-ErrNotFoundUpstream fetch errors (parse failures, upstream
+// 5xx, malformed responses, etc.) also carry the URL on the
+// returned error message. Previously the 404 branch wrapped with
+// URL but the generic fall-through returned the raw error,
+// dropping the URL from operator stderr tails. Now all fetch
+// errors uniformly carry URL context for debug-ability.
+func TestRunFetch_NonNotFoundErrorIncludesURLContext(t *testing.T) {
+	t.Parallel()
+
+	// Upstream returns 500 — wikipedia.Plugin surfaces this as a
+	// non-ErrNotFoundUpstream error (the not-found special-case is
+	// scoped to 404).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	plugin := wikipedia.New(
+		wikipedia.WithHTTPClient(srv.Client()),
+		wikipedia.WithAPIHostOverride(srv.URL),
+	)
+
+	const url = "https://en.wikipedia.org/wiki/Server_Error_Article"
+	stdin := strings.NewReader(`{"operation":"ingest","url":"` + url + `"}`)
+	var stdout bytes.Buffer
+	err := runFetch(context.Background(), plugin, stdin, &stdout)
+	if err == nil {
+		t.Fatalf("want error on upstream 500, got nil")
+	}
+	if !strings.Contains(err.Error(), "Server_Error_Article") {
+		t.Errorf("non-404 error must include URL for grep-ability, got %q", err.Error())
+	}
+}
+
 // TestRunFetch_PropagatesUpstream404 asserts that a 404 from Wikipedia
 // surfaces as an error from runFetch (which run() then turns into
 // stderr + exit code 1). Distinct from a malformed-request error so
