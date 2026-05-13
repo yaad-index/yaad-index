@@ -21,6 +21,7 @@ In-side (real, against the operator-configured yaad-index):
 | `fill(id, fields)` | POST `/v1/entities/{id}/fill`. Each key in `fields` must be a current gap on the entity; returns the updated entity + remaining gap names. |
 | `add_comment(entity_id, text, author?)` | POST `/v1/entities/{id}/comments` (via the comments API). Server stamps `date` UTC, `author` from JWT subject (when omitted), and `operator` from the pair-claim. Explicit `author` MUST equal the JWT subject or upstream returns `{ok:false, error:"author_mismatch"}` verbatim. Distinct from other tools: 4xx error envelopes pass through structured (no exception) so the agent can branch on `error === "author_mismatch"` / `"missing_authorization"`. |
 | `list_entities(kind)` | GET `/v1/search?kind=...&limit=100`. `kind` is required — yaad-index has no list-all route. Returns `{results, total, limit, offset}` where each result is `{id, kind, snippet, score}`. |
+| `search_upstream(query, plugins?, limit?, per_plugin_timeout_seconds?)` | POST `/v1/search/upstream` (per yaad-index #2). Plugin-federated search across opted-in plugins (Capabilities.SupportsSearch=true). Goroutine-per-plugin fan-out with per-plugin timeout + partial-results semantic. Returns `{results, per_plugin_status, query, limit, per_plugin_timeout_seconds}` where `results` carries plugin attribution (`[{plugin, id, label, summary}]`) and `per_plugin_status` surfaces per-plugin outcome (ok / candidates / duration_ms / error_message). Explicit-name allowlist: unregistered name → 400, registered-but-not-opted-in → 422. |
 
 ## Setup
 
@@ -43,7 +44,7 @@ Smoke-run:
 YAAD_INDEX_URL=http://localhost:7433 bun run start
 ```
 
-Server boots on stdio. To verify, send the `tools/list` JSON-RPC request via your MCP host of choice — should return all 25 tools.
+Server boots on stdio. To verify, send the `tools/list` JSON-RPC request via your MCP host of choice — should return all 27 tools.
 
 ## Add to Claude Code
 

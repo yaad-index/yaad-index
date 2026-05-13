@@ -54,6 +54,7 @@ import { needsFillTool, runNeedsFill } from "./tools/needs_fill.js";
 import { pluginsTool, runPlugins } from "./tools/plugins.js";
 import { reindexTool, runReindex } from "./tools/reindex.js";
 import { runSearchLocal, searchLocalTool } from "./tools/search_local.js";
+import { runSearchUpstream, searchUpstreamTool } from "./tools/search_upstream.js";
 import { restoreEntityTool, runRestoreEntity } from "./tools/restore_entity.js";
 import { runSetOperatorFill, setOperatorFillTool } from "./tools/set_operator_fill.js";
 import { runStructure, structureTool } from "./tools/structure.js";
@@ -70,6 +71,7 @@ const TOOLS = [
  needsFillTool,
  reindexTool,
  searchLocalTool,
+ searchUpstreamTool,
  structureTool,
  cvStatusTool,
  kindsTool,
@@ -148,6 +150,8 @@ async function dispatch(
  return runReindex(client, args);
  case "search_local":
  return runSearchLocal(client, args);
+ case "search_upstream":
+ return runSearchUpstream(client, args);
  case "structure":
  return runStructure(client, args);
  case "cv_status":

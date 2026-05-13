@@ -20,6 +20,8 @@ import type {
  PluginsResponse,
  ReindexResponse,
  SearchLocalResponse,
+ SearchUpstreamRequest,
+ SearchUpstreamResponse,
  StructureResponse,
  UpstreamErrorEnvelope,
  UserContentCreateRequest,
@@ -744,6 +746,34 @@ export class YaadIndexClient {
  return this.request<SearchLocalResponse>(
  "GET",
  `/v1/search?${params.toString()}`,
+ );
+ }
+
+ /**
+ * searchUpstream wraps POST /v1/search/upstream — the plugin-
+ * federated search surface per yaad-index #2. Daemon dispatches
+ * to each opted-in plugin (Capabilities.SupportsSearch=true) in
+ * parallel with a per-plugin timeout and returns merged
+ * candidates plus a per-plugin status block.
+ *
+ * Partial-results semantic: a single plugin failure / timeout
+ * doesn't fail the call; the per-plugin status block surfaces
+ * the error. Explicit-allowlist names that aren't registered →
+ * 400; names whose plugin opted out → 422.
+ */
+ async searchUpstream(
+ req: SearchUpstreamRequest,
+ ): Promise<SearchUpstreamResponse> {
+ if (!req.query) {
+ throw new YaadIndexError(
+ 400,
+ "search_upstream requires a non-empty query",
+ );
+ }
+ return this.request<SearchUpstreamResponse>(
+ "POST",
+ "/v1/search/upstream",
+ req,
  );
  }
 
