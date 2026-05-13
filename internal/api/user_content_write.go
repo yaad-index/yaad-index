@@ -49,6 +49,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
 // userContentCreateRequest is the POST /v1/user-content body.
@@ -127,6 +128,7 @@ func handleUserContentCreate(
 	vaultWriter *vault.Writer,
 	canonicalKindReg map[string]config.CanonicalKindConfig,
 	frontmatterEdges map[string]config.UserContentFrontmatterEdgeMapping,
+	writeLocks *writelocks.Manager,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if vaultWriter == nil || vaultReader == nil {
@@ -162,6 +164,18 @@ func handleUserContentCreate(
 			return
 		}
 		id := userContentIDPrefix + slug
+
+		// Per-entity write-lock (yaad-index #23 + ADR-0024). The
+		// slug is operator-supplied via the title; a concurrent
+		// create on the same slug surfaces as a write conflict
+		// rather than racing on os.Rename. Lock acquired after
+		// slug derivation so the artifact key reflects the
+		// resolved ID.
+		release, lockOK := acquireWriteLock(w, r, writeLocks, id)
+		if !lockOK {
+			return
+		}
+		defer release()
 
 		claim, ok := ClaimFromContext(r.Context())
 		if !ok || claim == nil {
@@ -330,7 +344,7 @@ func handleUserContentCreate(
 // handleUserContentSectionReplace implements PUT
 // /v1/user-content/{id}/sections/{sec}. Validates author/operator,
 // honors If-Match, applies vault.ReplaceSectionBody, persists.
-func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer) http.HandlerFunc {
+func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if vaultWriter == nil {
@@ -397,6 +411,19 @@ func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultR
 				fmt.Sprintf("no section %q on %s (or duplicate-slug, in which case use positional index)", addr, id))
 			return
 		}
+
+		// Section-scoped write-lock (yaad-index #23 + ADR-0024).
+		// Key on the resolved index (not the raw addr) so two writers
+		// targeting the same section via slug + positional forms
+		// collide correctly. Two writers on DIFFERENT sections of the
+		// same UGC file proceed concurrently — the OS-rename layer
+		// serializes the final disk write per ADR-0008.
+		artifactKey := fmt.Sprintf("%s#%d", id, idx)
+		release, lockOK := acquireWriteLock(w, r, writeLocks, artifactKey)
+		if !lockOK {
+			return
+		}
+		defer release()
 
 		newBody, err := vault.ReplaceSectionBody(ve.CleanContent, sections, idx, req.Body)
 		if err != nil {
@@ -507,6 +534,7 @@ func handleUserContentFrontmatterEdit(
 	vaultWriter *vault.Writer,
 	canonicalKindReg map[string]config.CanonicalKindConfig,
 	frontmatterEdges map[string]config.UserContentFrontmatterEdgeMapping,
+	writeLocks *writelocks.Manager,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -515,6 +543,17 @@ func handleUserContentFrontmatterEdit(
 				"user-content endpoints require vault.path configuration; the body lives in vault files")
 			return
 		}
+		// Whole-entity write-lock for frontmatter edits (yaad-index
+		// #23 + ADR-0024). Section-scoped key isn't applicable —
+		// frontmatter spans the whole file. Keyed on entity ID;
+		// section writers using `<id>#<idx>` don't collide here,
+		// which matches the documented v1 trade-off in
+		// internal/writelocks's TestAcquire_UGCSectionVsWholeFileDontConflict.
+		release, ok := acquireWriteLock(w, r, writeLocks, id)
+		if !ok {
+			return
+		}
+		defer release()
 		ve, status, errCode, errMsg := loadUserContentVaultEntity(logger, r, st, vaultReader, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
@@ -730,7 +769,7 @@ func buildFullEditOpsFromMappings(
 // handleUserContentDelete implements DELETE /v1/user-content/{id}.
 // Validates author/operator, removes the vault file (with auto-
 // commit), drops the store rows via DeleteEntityCascade.
-func handleUserContentDelete(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer) http.HandlerFunc {
+func handleUserContentDelete(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if vaultWriter == nil {
@@ -738,6 +777,12 @@ func handleUserContentDelete(logger *slog.Logger, st store.Store, vaultReader *v
 				"user-content endpoints require vault.path configuration; the body lives in vault files")
 			return
 		}
+		// Whole-entity write-lock (yaad-index #23 + ADR-0024).
+		release, ok := acquireWriteLock(w, r, writeLocks, id)
+		if !ok {
+			return
+		}
+		defer release()
 		ve, status, errCode, errMsg := loadUserContentVaultEntity(logger, r, st, vaultReader, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)

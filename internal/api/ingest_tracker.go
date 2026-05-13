@@ -17,6 +17,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
 // ingestState names the lifecycle phases of a /v1/ingest attempt.
@@ -190,6 +191,15 @@ type ingestTracker struct {
 	// production main.go wires a Dispatcher rooted at the
 	// operator-configured plugin_staging_dir.
 	attachmentsDispatcher *attachments.Dispatcher
+	// writeLocks is the per-artifact daemon write-lock manager (per
+	// yaad-index #23). persistEnvelope acquires the entity-ID lock
+	// before any vault.Writer call; conflict on acquire means a
+	// cross-surface writer (operator-fill, archive, etc.) is in
+	// flight against the same entity and the ingest fails with a
+	// fetch_failed envelope. The dedup-by-invocationKey path above
+	// already collapses concurrent ingests of the same URL; this
+	// lock catches cross-surface conflicts the dedup can't see.
+	writeLocks *writelocks.Manager
 }
 
 // newIngestTracker constructs the in-flight tracker. writer + reader
@@ -205,9 +215,12 @@ type ingestTracker struct {
 // constructs a guard from the keys of cfg.CanonicalKinds (the
 // registry map per ADR-0013 §1) plus cfg.CanonicalEdgeTypes; tests
 // typically pass nil unless they exercise the canonical path.
-func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer, reader *vault.Reader, guard *config.CanonicalGuard, globalCacheTTLSeconds int, dispatcher *attachments.Dispatcher) *ingestTracker {
+func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer, reader *vault.Reader, guard *config.CanonicalGuard, globalCacheTTLSeconds int, dispatcher *attachments.Dispatcher, writeLocks *writelocks.Manager) *ingestTracker {
 	if (writer == nil) != (reader == nil) {
 		panic("newIngestTracker: vault writer and reader must both be set or both be nil")
+	}
+	if writeLocks == nil {
+		writeLocks = writelocks.New()
 	}
 	return &ingestTracker{
 		records: make(map[string]*ingestRecord),
@@ -219,6 +232,7 @@ func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer,
 		guard: guard,
 		logger: logger,
 		attachmentsDispatcher: dispatcher,
+		writeLocks: writeLocks,
 	}
 }
 
@@ -632,6 +646,30 @@ func (t *ingestTracker) persistSubsequentEnvelope(ctx context.Context, att inges
 // error (the caller decides whether to mark the tracker record
 // failed or just abort the stream).
 func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, result *plugins.FetchResult) error {
+	// Per-artifact write-lock (per yaad-index #23 + ADR-0024).
+	// Block-on-conflict against any cross-surface writer holding
+	// the same entity ID (operator-fill, archive, delete, etc.).
+	// The dedup-by-invocationKey path in beginAttempt already
+	// collapses concurrent ingests of the same URL into a single
+	// runner; this lock catches the cross-surface case the dedup
+	// can't see. Holder names the plugin + the rawURL so a 409
+	// from a concurrent HTTP handler reads as
+	// "ingest of <plugin>:<url> in flight."
+	holder := "ingest:" + att.simulation.plugin.Name() + ":" + att.simulation.rawURL
+	release, lockErr := t.writeLocks.Acquire(result.Entity.ID, holder)
+	if lockErr != nil {
+		if ce, ok := writelocks.AsConflict(lockErr); ok {
+			t.logger.Warn("ingest persistEnvelope: write conflict",
+				"entity_id", result.Entity.ID,
+				"current_holder", ce.Holder,
+				"acquired_at", ce.AcquiredAt,
+			)
+			return fmt.Errorf("write conflict: entity %q locked by %q", result.Entity.ID, ce.Holder)
+		}
+		return fmt.Errorf("acquire write lock: %w", lockErr)
+	}
+	defer release()
+
 	provenance := result.Provenance
 	if len(provenance) == 0 {
 		// Synthesize when the plugin omits provenance (the cold-reviewer's PR

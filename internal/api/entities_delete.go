@@ -10,6 +10,7 @@ import (
 
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
 // entityDeleteResponse is the wire shape returned on a successful
@@ -46,7 +47,7 @@ type entityDeleteResponse struct {
 // **Auth:** same Bearer-JWT gate as ingest. Anonymous bypass (when
 // auth.required=false) is permitted by the middleware; the WARN
 // audit-log records the synthetic claim's subject in that case.
-func handleEntityDelete(logger *slog.Logger, st store.Store, vaultWriter *vault.Writer) http.HandlerFunc {
+func handleEntityDelete(logger *slog.Logger, st store.Store, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if id == "" {
@@ -58,6 +59,15 @@ func handleEntityDelete(logger *slog.Logger, st store.Store, vaultWriter *vault.
 				"DELETE /v1/entities/{id} requires vault.path configuration; the entity body lives in vault files")
 			return
 		}
+		// Per-entity write-lock (yaad-index #23 + ADR-0024). Block-
+		// on-conflict against any other writer holding this entity
+		// (ingest, fill, archive/restore). 409 with the active
+		// holder; operator retries.
+		release, ok := acquireWriteLock(w, r, writeLocks, id)
+		if !ok {
+			return
+		}
+		defer release()
 
 		// Load the entity first so we can 404 cleanly when it
 		// doesn't exist AND learn the kind for the vault delete.

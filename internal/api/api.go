@@ -14,6 +14,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
 // NewHandler returns the v1 API router with an empty plugin registry —
@@ -51,9 +52,16 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	// Default-init the write-lock manager when no opt provided. Every
+	// handler that mutates the vault expects a non-nil manager; a
+	// fresh empty manager is the right zero-value for tests + dev
+	// deployments.
+	if cfg.writeLocks == nil {
+		cfg.writeLocks = writelocks.New()
+	}
 
 	mux := http.NewServeMux()
-	tracker := newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher)
+	tracker := newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks)
 
 	// Per yaad-index a prior PR: the protect wrapper enforces Bearer-JWT
 	// auth on every protected route. When auth.required=false the
@@ -85,12 +93,12 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	// a confusing "no entity with id batch" 404. See rejectGetOnBatch.
 	mux.Handle("GET /v1/entities/batch", protect(http.HandlerFunc(rejectGetOnBatch())))
 	mux.Handle("GET /v1/entities/{id}", protect(http.HandlerFunc(handleEntity(logger, st, cfg.vaultReader))))
-	mux.Handle("DELETE /v1/entities/{id}", protect(http.HandlerFunc(handleEntityDelete(logger, st, cfg.vaultWriter))))
+	mux.Handle("DELETE /v1/entities/{id}", protect(http.HandlerFunc(handleEntityDelete(logger, st, cfg.vaultWriter, cfg.writeLocks))))
 	// Archive lifecycle per ADR-0018 step 2. Same vault-then-DB
 	// ordering as DELETE; non-destructive transitions toggling the
 	// `archived_at` column + `_archive/<kind>/<slug>.md` placement.
-	mux.Handle("POST /v1/entities/{id}/archive", protect(http.HandlerFunc(handleEntityArchive(logger, st, cfg.vaultWriter))))
-	mux.Handle("POST /v1/entities/{id}/restore", protect(http.HandlerFunc(handleEntityRestore(logger, st, cfg.vaultWriter))))
+	mux.Handle("POST /v1/entities/{id}/archive", protect(http.HandlerFunc(handleEntityArchive(logger, st, cfg.vaultWriter, cfg.writeLocks))))
+	mux.Handle("POST /v1/entities/{id}/restore", protect(http.HandlerFunc(handleEntityRestore(logger, st, cfg.vaultWriter, cfg.writeLocks))))
 	mux.Handle("GET /v1/entities/{id}/context", protect(http.HandlerFunc(handleEntityContext(logger, st, cfg.vaultReader))))
 	mux.Handle("GET /v1/entities/{id}/attachments/{name}", protect(http.HandlerFunc(handleEntityAttachment(logger, st, cfg.vaultReader))))
 	mux.Handle("POST /v1/edges", protect(http.HandlerFunc(handleCreateEdge(logger, st, registry))))
@@ -98,8 +106,8 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("GET /v1/search", protect(http.HandlerFunc(handleSearch(logger, st, registry))))
 	mux.Handle("POST /v1/ingest", protect(http.HandlerFunc(handleIngest(logger, st, tracker, registry, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg))))
 	mux.Handle("GET /v1/needs-fill", protect(http.HandlerFunc(handleNeedsFill(logger, st, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg))))
-	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg))))
-	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg))))
+	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks))))
+	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks))))
 	mux.Handle("POST /v1/entities/{id}/comments", protect(http.HandlerFunc(handleComments(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg))))
 
 	// User-content (UGC) read + write surface per yaad-index
@@ -107,16 +115,16 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("GET /v1/user-content/{id}", protect(http.HandlerFunc(handleUserContentRead(logger, st, cfg.vaultReader))))
 	mux.Handle("GET /v1/user-content/{id}/sections", protect(http.HandlerFunc(handleUserContentSectionsList(logger, st, cfg.vaultReader))))
 	mux.Handle("GET /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSection(logger, st, cfg.vaultReader))))
-	mux.Handle("POST /v1/user-content", protect(http.HandlerFunc(handleUserContentCreate(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.userContentFrontmatterEdges))))
-	mux.Handle("PUT /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSectionReplace(logger, st, cfg.vaultReader, cfg.vaultWriter))))
-	mux.Handle("PUT /v1/user-content/{id}/frontmatter", protect(http.HandlerFunc(handleUserContentFrontmatterEdit(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.userContentFrontmatterEdges))))
-	mux.Handle("DELETE /v1/user-content/{id}", protect(http.HandlerFunc(handleUserContentDelete(logger, st, cfg.vaultReader, cfg.vaultWriter))))
+	mux.Handle("POST /v1/user-content", protect(http.HandlerFunc(handleUserContentCreate(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.userContentFrontmatterEdges, cfg.writeLocks))))
+	mux.Handle("PUT /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSectionReplace(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
+	mux.Handle("PUT /v1/user-content/{id}/frontmatter", protect(http.HandlerFunc(handleUserContentFrontmatterEdit(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.userContentFrontmatterEdges, cfg.writeLocks))))
+	mux.Handle("DELETE /v1/user-content/{id}", protect(http.HandlerFunc(handleUserContentDelete(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
 	// Archive lifecycle for user-content per ADR-0018 step 2. Same
 	// shared handler as the entity routes — kind-aware via the row
 	// loaded from store. UGC entities live under their own DB IDs +
 	// vault path namespace, but the archive transition is uniform.
-	mux.Handle("POST /v1/user-content/{id}/archive", protect(http.HandlerFunc(handleEntityArchive(logger, st, cfg.vaultWriter))))
-	mux.Handle("POST /v1/user-content/{id}/restore", protect(http.HandlerFunc(handleEntityRestore(logger, st, cfg.vaultWriter))))
+	mux.Handle("POST /v1/user-content/{id}/archive", protect(http.HandlerFunc(handleEntityArchive(logger, st, cfg.vaultWriter, cfg.writeLocks))))
+	mux.Handle("POST /v1/user-content/{id}/restore", protect(http.HandlerFunc(handleEntityRestore(logger, st, cfg.vaultWriter, cfg.writeLocks))))
 
 	if cfg.reindexHandler != nil {
 		mux.Handle("POST /v1/reindex", protect(cfg.reindexHandler))
@@ -168,6 +176,14 @@ type handlerConfig struct {
 	authRequired bool
 	jwks []auth.JWK
 	attachmentsDispatcher *attachments.Dispatcher
+	// writeLocks is the per-artifact daemon write-lock manager
+	// (yaad-index #23 + ADR-0024). Acquired before any vault
+	// mutation surface (ingest, fill, archive/restore, delete, UGC
+	// section, UGC frontmatter); skipped for additive surfaces
+	// (comments, edges). NewHandlerWithRegistry constructs a fresh
+	// Manager when this is nil so tests + dev deployments don't
+	// have to wire one explicitly.
+	writeLocks *writelocks.Manager
 }
 
 // WithReindexHandler registers a handler for POST /v1/reindex. When
@@ -176,6 +192,16 @@ type handlerConfig struct {
 // constructed by internal/reindex.HTTPHandler.
 func WithReindexHandler(h http.Handler) HandlerOption {
 	return func(c *handlerConfig) { c.reindexHandler = h }
+}
+
+// WithWriteLocks wires an externally-constructed write-lock Manager
+// (per yaad-index #23). When unset, NewHandlerWithRegistry
+// constructs a fresh empty Manager so tests + dev binaries don't
+// have to wire one. Production main.go wires a single Manager
+// shared across the daemon so all write handlers consult the same
+// lock map.
+func WithWriteLocks(m *writelocks.Manager) HandlerOption {
+	return func(c *handlerConfig) { c.writeLocks = m }
 }
 
 // WithVaultIO wires a vault.Writer + vault.Reader into the ingest

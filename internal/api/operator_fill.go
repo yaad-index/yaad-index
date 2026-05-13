@@ -14,6 +14,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
 // operatorFillResponse is the 200 envelope on a successful
@@ -56,6 +57,7 @@ func handleEntityOperatorFill(
 	vaultReader *vault.Reader,
 	vaultWriter *vault.Writer,
 	canonicalKindReg map[string]config.CanonicalKindConfig,
+	writeLocks *writelocks.Manager,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -65,6 +67,12 @@ func handleEntityOperatorFill(
 				"operator-fill requires vault.path configuration; gap_state lives in vault frontmatter")
 			return
 		}
+		// Per-entity write-lock (yaad-index #23 + ADR-0024).
+		release, ok := acquireWriteLock(w, r, writeLocks, id)
+		if !ok {
+			return
+		}
+		defer release()
 
 		claim, ok := ClaimFromContext(r.Context())
 		if !ok || claim == nil {
