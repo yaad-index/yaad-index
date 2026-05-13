@@ -546,25 +546,41 @@ func (c *CacheRefetchCmd) Run() error {
 			failed++
 			continue
 		}
+		_, _ = fmt.Fprintln(os.Stdout, formatRefetchedLine(r.ID, queued, c.WaitSeconds, notation))
 		if queued {
-			_, _ = fmt.Fprintf(os.Stdout,
-				"refetched %s (still in flight after %ds; via %s)\n",
-				r.ID, c.WaitSeconds, notation)
 			stillInFlight++
-		} else {
-			_, _ = fmt.Fprintf(os.Stdout, "refetched %s (via %s)\n", r.ID, notation)
 		}
 		refetched++
 	}
 
-	summary := fmt.Sprintf(
-		"refetched %d entries; %d failed (see logs); %d remaining over --limit",
-		refetched, failed, max(0, len(rows)-limit))
-	if stillInFlight > 0 {
-		summary += fmt.Sprintf("; %d still in flight", stillInFlight)
-	}
-	_, _ = fmt.Fprintln(os.Stderr, summary+".")
+	_, _ = fmt.Fprintln(os.Stderr,
+		formatRefetchSummary(refetched, failed, max(0, len(rows)-limit), stillInFlight))
 	return nil
+}
+
+// formatRefetchedLine renders the per-entity stdout line per
+// yaad-index #6. Format strings are extracted to a pure helper so
+// tests can pin them without swapping os.Stdout (which races
+// concurrent parallel tests in the same package).
+func formatRefetchedLine(id string, queued bool, waitSeconds int, notation string) string {
+	if queued {
+		return fmt.Sprintf("refetched %s (still in flight after %ds; via %s)",
+			id, waitSeconds, notation)
+	}
+	return fmt.Sprintf("refetched %s (via %s)", id, notation)
+}
+
+// formatRefetchSummary renders the stderr terminal summary line.
+// The "; N still in flight" suffix surfaces only when non-zero so
+// the common all-complete path keeps the legacy three-counter
+// shape.
+func formatRefetchSummary(refetched, failed, remaining, stillInFlight int) string {
+	out := fmt.Sprintf("refetched %d entries; %d failed (see logs); %d remaining over --limit",
+		refetched, failed, remaining)
+	if stillInFlight > 0 {
+		out += fmt.Sprintf("; %d still in flight", stillInFlight)
+	}
+	return out + "."
 }
 
 // pickRefetchNotation chooses a notation to use for the refetch

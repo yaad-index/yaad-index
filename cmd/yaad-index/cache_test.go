@@ -710,3 +710,75 @@ func TestCacheRefetchCmd_QueuedResponseAnnotates(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, queued, "202 response must surface queued=true so the CLI can annotate")
 }
+
+// TestFormatRefetchedLine pins the per-entity stdout line shape on
+// both response paths per sora's PR-42 review nit. Extracted to a
+// pure-helper test (rather than swapping os.Stdout/Stderr globals
+// which races concurrent parallel tests in the same package).
+func TestFormatRefetchedLine(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		id          string
+		queued      bool
+		waitSeconds int
+		notation    string
+		want        string
+	}{
+		{
+			name:        "200/complete — bare via clause",
+			id:          "wikipedia:foo",
+			queued:      false,
+			waitSeconds: 30,
+			notation:    "https://en.wikipedia.org/wiki/Foo",
+			want:        "refetched wikipedia:foo (via https://en.wikipedia.org/wiki/Foo)",
+		},
+		{
+			name:        "202/queued — adds still-in-flight annotation",
+			id:          "wikipedia:slowfetch",
+			queued:      true,
+			waitSeconds: 12,
+			notation:    "https://en.wikipedia.org/wiki/Slowfetch",
+			want:        "refetched wikipedia:slowfetch (still in flight after 12s; via https://en.wikipedia.org/wiki/Slowfetch)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := formatRefetchedLine(tc.id, tc.queued, tc.waitSeconds, tc.notation)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestFormatRefetchSummary pins the stderr summary shape, including
+// the conditional "; N still in flight" suffix per sora's PR-42
+// review nit.
+func TestFormatRefetchSummary(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name                                 string
+		refetched, failed, remaining, queued int
+		want                                 string
+	}{
+		{
+			name:      "no still-in-flight — suffix absent",
+			refetched: 3, failed: 1, remaining: 2, queued: 0,
+			want: "refetched 3 entries; 1 failed (see logs); 2 remaining over --limit.",
+		},
+		{
+			name:      "with still-in-flight — suffix appended before period",
+			refetched: 5, failed: 0, remaining: 0, queued: 2,
+			want: "refetched 5 entries; 0 failed (see logs); 0 remaining over --limit; 2 still in flight.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := formatRefetchSummary(tc.refetched, tc.failed, tc.remaining, tc.queued)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
