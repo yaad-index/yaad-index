@@ -587,7 +587,11 @@ func reprobePlugins(ctx context.Context, logger *slog.Logger, st store.Store, co
 		// Force a fresh --init via subprocess.New. The constructor
 		// reads --init, parses, and returns the constructed
 		// plugin; we capture caps for the fresh upsert below.
-		p, err := subprocess.New(entry.Name, entry.Path, subprocess.WithLogger(logger))
+		// Per-plugin config env (#7) threaded through so reprobe
+		// matches the boot path.
+		p, err := subprocess.New(entry.Name, entry.Path,
+			subprocess.WithLogger(logger),
+			subprocess.WithConfigEnv(config.PluginConfigEnvVars(entry.Name, entry.Config)))
 		if err != nil {
 			_, _ = fmt.Fprintf(out, "%s: ERROR --init failed: %v\n", entry.Name, err)
 			failures = append(failures, entry.Name)
@@ -809,7 +813,7 @@ func buildPluginRegistry(logger *slog.Logger, st store.Store, cfg *config.Config
 	// Iterate the slice in YAML order — first-match-wins dispatch
 	// priority depends on it (ADR-0006). Don't rewrite as a map range.
 	for _, entry := range cfg.Plugins {
-		p, outcome, err := registerPlugin(probeCtx, logger, st, entry.Name, entry.Path)
+		p, outcome, err := registerPlugin(probeCtx, logger, st, entry)
 		if err != nil {
 			return nil, fmt.Errorf("plugin %q at %s: %w", entry.Name, entry.Path, err)
 		}
@@ -867,8 +871,16 @@ func buildPluginRegistry(logger *slog.Logger, st store.Store, cfg *config.Config
 // - WARN cache lookup error — DB transient, recoverable.
 // - ERROR cached caps malformed — corrupt DB row, operator-actionable.
 // - ERROR Plugin construction fail — corrupt-cached-state, operator-actionable.
-func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, name, path string) (*subprocess.Plugin, pluginCacheOutcome, error) {
+func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, entry config.PluginEntry) (*subprocess.Plugin, pluginCacheOutcome, error) {
+	name := entry.Name
+	path := entry.Path
 	outcome := cacheMissFirstStart // overwritten below as paths discriminate
+
+	// Build per-plugin env-var slice from operator yaml `config:`
+	// sub-block per yaad-index #7. Passed to both --init and
+	// cache-hit construction paths so plugins reading config at
+	// --init time see the same env regardless of cache state.
+	configEnv := config.PluginConfigEnvVars(name, entry.Config)
 
 	probedVersion, probeErr := subprocess.RunVersion(ctx, path, 2*time.Second)
 	if probeErr == nil && probedVersion != "" {
@@ -904,7 +916,9 @@ func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, na
 					"err", uErr, "name", name)
 				outcome = cacheFailure
 			} else {
-				p, ctorErr := subprocess.NewWithCapabilities(name, path, caps, subprocess.WithLogger(logger))
+				p, ctorErr := subprocess.NewWithCapabilities(name, path, caps,
+				subprocess.WithLogger(logger),
+				subprocess.WithConfigEnv(configEnv))
 				if ctorErr != nil {
 					logger.Error("Plugin construction from cached caps failed, ignoring cache",
 						"err", ctorErr, "name", name)
@@ -930,7 +944,9 @@ func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, na
 	}
 
 	// Fall-through: full --init load + cache upsert.
-	p, err := subprocess.New(name, path, subprocess.WithLogger(logger))
+	p, err := subprocess.New(name, path,
+		subprocess.WithLogger(logger),
+		subprocess.WithConfigEnv(configEnv))
 	if err != nil {
 		return nil, outcome, err
 	}

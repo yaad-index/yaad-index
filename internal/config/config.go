@@ -378,9 +378,31 @@ type VaultEntry struct {
 }
 
 // PluginEntry is one entry in Config.Plugins.
+//
+// Config is the per-plugin operator-supplied scalar-config map per
+// yaad-index #7. Daemon walks each entry at subprocess spawn time
+// and converts (key, value) into env vars the plugin reads via
+// os.Getenv. Keys must be lowercase-snake-case ASCII (matches the
+// yaml convention); values must be scalar (string / bool / int /
+// float). Nested maps + lists are rejected at Load time — the v1
+// scope is flat scalars; nested config defers to the
+// <PLUGIN>_CONFIG_JSON shape if/when a plugin needs it.
+//
+// Conversion to env var name follows the
+// <PLUGIN_NAME_UPPER>_<KEY_UPPER> convention with prefix-strip when
+// the key already starts with the plugin name. Examples for plugin
+// `bgg`:
+//
+//   - `bgg_api_key: "abc"`     → `BGG_API_KEY=abc`     (prefix stripped)
+//   - `api_key: "abc"`         → `BGG_API_KEY=abc`     (clean prefix)
+//   - `timeout_seconds: 30`    → `BGG_TIMEOUT_SECONDS=30`
+//
+// The two `*_api_key` forms produce the same env var so the
+// operator can pick whichever reads cleanest in their yaml.
 type PluginEntry struct {
-	Name string `yaml:"name"`
-	Path string `yaml:"path"`
+	Name   string         `yaml:"name"`
+	Path   string         `yaml:"path"`
+	Config map[string]any `yaml:"config,omitempty"`
 }
 
 // Load reads and validates the config at path. Returns ErrFileMissing
@@ -435,6 +457,9 @@ func (c *Config) Validate() error {
 		}
 		if info.Mode().Perm()&0o111 == 0 {
 			return fmt.Errorf("plugin %q: path %s is not executable", entry.Name, entry.Path)
+		}
+		if err := validatePluginConfig(entry.Name, entry.Config); err != nil {
+			return err
 		}
 	}
 	if c.Vault.Path != "" {

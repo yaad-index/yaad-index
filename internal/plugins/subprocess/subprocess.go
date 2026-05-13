@@ -63,6 +63,12 @@ type Plugin struct {
 	initTimeout time.Duration
 	fetchTimeout time.Duration
 	logger *slog.Logger
+	// configEnv carries pre-formatted "KEY=VALUE" entries from the
+	// operator's per-plugin `config:` sub-block per yaad-index #7.
+	// Appended to pluginEnv() on every subprocess spawn (--version,
+	// --init, fetch, command). Nil when the operator didn't supply
+	// a config block for this plugin.
+	configEnv []string
 }
 
 // Option configures a Plugin at construction.
@@ -100,6 +106,22 @@ func WithLogger(l *slog.Logger) Option {
 		if l != nil {
 			p.logger = l
 		}
+	}
+}
+
+// WithConfigEnv sets pre-formatted "KEY=VALUE" env-var entries the
+// daemon derived from the operator's per-plugin `config:` sub-block
+// per yaad-index #7. The caller is responsible for shape (use
+// config.PluginConfigEnvVars to build the slice); this option
+// trusts the input and appends it to every subprocess spawn.
+//
+// Empty / nil slice → no per-plugin env vars are added (the
+// pre-#7 behavior). Calling repeatedly REPLACES the prior config
+// rather than appending — daemon construction sets this once per
+// plugin from the operator yaml.
+func WithConfigEnv(env []string) Option {
+	return func(p *Plugin) {
+		p.configEnv = append([]string(nil), env...)
 	}
 }
 
@@ -328,7 +350,7 @@ func (p *Plugin) Stream(ctx context.Context, rawURL string, onEnvelope plugins.E
 	}
 
 	cmd := exec.CommandContext(ctx, p.path)
-	cmd.Env = pluginEnv()
+	cmd.Env = p.env()
 	cmd.Stdin = bytes.NewReader(reqBody)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -573,7 +595,7 @@ func (p *Plugin) runInit() (Capabilities, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, p.path, "--init")
-	cmd.Env = pluginEnv()
+	cmd.Env = p.env()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -1065,6 +1087,23 @@ func stagingDirOrDefault() string {
 		return v
 	}
 	return DefaultPluginStagingDir
+}
+
+// env returns this Plugin's subprocess env: the global pluginEnv()
+// (parent env + YAAD_TIMEZONE + YAAD_PLUGIN_STAGING_DIR) extended
+// with the per-plugin config env vars derived from the operator's
+// `config:` sub-block per yaad-index #7. Per-plugin entries land
+// last so they override shell-env values with the same name —
+// operator yaml is the authoritative source when both are set.
+func (p *Plugin) env() []string {
+	base := pluginEnv()
+	if len(p.configEnv) == 0 {
+		return base
+	}
+	out := make([]string, 0, len(base)+len(p.configEnv))
+	out = append(out, base...)
+	out = append(out, p.configEnv...)
+	return out
 }
 
 // pluginEnv returns the parent process environment extended with
