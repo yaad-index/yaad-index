@@ -214,10 +214,11 @@ func handleNeedsFill(
 
 // buildNeedsFillEntry shapes a single entity's gap-call payload.
 // Returns (entry, true) when at least one gap survives the
-// audience-aware filter (defer + fill_strategy); returns
-// (zero, false) when all gaps are filtered out — caller skips the
-// entry entirely so an entity whose only open gap is deferred or
-// wrong-audience doesn't surface as an empty-gaps row.
+// audience-aware filter (defer + fill_strategy + registry
+// presence); returns (zero, false) when all gaps are filtered out
+// — caller skips the entry entirely so an entity whose only open
+// gap is deferred, wrong-audience, or not in the registry doesn't
+// surface as an empty-gaps row.
 //
 // ADR-0019 step 6 audience filtering:
 //
@@ -233,11 +234,12 @@ func handleNeedsFill(
 // ve.GapState[field].Deferred=true. The operator can un-defer via
 // operator-fill {"defer": false} to bring them back.
 //
-// Resolved per-field metadata (Type, FillStrategy, Range, etc.)
-// is sourced from the canonical-kind registry and surfaced on the
-// new GapMetadata wire field. Operator-set FillStrategy from the
-// kind config wins; entity-emitted gaps without a config entry get
-// no metadata (the field is omitted from GapMetadata for that key).
+// Per yaad-index #4 / ADR-0013 §1: the canonical-kind registry is
+// the canonical source for AI-prompts. A gap whose kind isn't in
+// the registry OR whose name isn't in the registry's per-kind
+// Gaps map is dropped (no plugin-side prompt fallback). Operators
+// who want to surface fill prompts MUST enable the kind in
+// `canonical_kinds:` config and declare the gap there.
 func buildNeedsFillEntry(
 	id, kind string,
 	ve *vault.Entity,
@@ -245,7 +247,13 @@ func buildNeedsFillEntry(
 	reg map[string]config.CanonicalKindConfig,
 	isOperator bool,
 ) (needsFillEntry, bool) {
-	kindCfg := reg[kind]
+	kindCfg, kindInRegistry := reg[kind]
+	if !kindInRegistry {
+		// Strict mode (#4): without a registry entry there are no
+		// prompts to surface. Skip the entry entirely so the list
+		// endpoint doesn't return zero-prompt rows.
+		return needsFillEntry{}, false
+	}
 	gaps := make(map[string]string, len(ve.Gaps))
 	meta := make(map[string]needsFillGapMeta, len(ve.Gaps))
 	for _, g := range ve.Gaps {
@@ -255,35 +263,29 @@ func buildNeedsFillEntry(
 		if entry, ok := ve.GapState[g]; ok && entry.Deferred {
 			continue
 		}
+		spec, hasSpec := kindCfg.Gaps[g]
+		if !hasSpec {
+			// Registry doesn't declare this gap for this kind.
+			// Strict-mode skip (#4) — without an explicit registry
+			// entry there's no prompt to surface.
+			continue
+		}
 		// Audience filter: skip fields whose fill_strategy doesn't
 		// match this caller's audience.
-		spec, hasSpec := kindCfg.Gaps[g]
-		if hasSpec {
-			if isOperator && spec.FillStrategy == "agent" {
-				continue
-			}
-			if !isOperator && spec.FillStrategy == "operator" {
-				continue
-			}
+		if isOperator && spec.FillStrategy == "agent" {
+			continue
 		}
-		// The vault frontmatter carries the gap-name list; the AI
-		// prompts originated from the plugin emit and aren't stored
-		// in the vault. The cache-hit ingest path emits empty-string
-		// values as the documented "prompt unavailable" sentinel —
-		// mirror that here so the wire shape stays identical.
-		gaps[g] = ""
-		// Surface typed metadata when the kind config has it. Empty
-		// when the gap has no resolved spec (e.g. plugin-emitted gap
-		// with no canonical-kind config entry).
-		if hasSpec {
-			meta[g] = needsFillGapMeta{
-				Type: spec.Type,
-				FillStrategy: spec.FillStrategy,
-				Range: spec.Range,
-				MaxLength: spec.MaxLength,
-				Values: spec.Values,
-				Kinds: spec.Kinds,
-			}
+		if !isOperator && spec.FillStrategy == "operator" {
+			continue
+		}
+		gaps[g] = spec.Description
+		meta[g] = needsFillGapMeta{
+			Type: spec.Type,
+			FillStrategy: spec.FillStrategy,
+			Range: spec.Range,
+			MaxLength: spec.MaxLength,
+			Values: spec.Values,
+			Kinds: spec.Kinds,
 		}
 	}
 	if len(gaps) == 0 {
