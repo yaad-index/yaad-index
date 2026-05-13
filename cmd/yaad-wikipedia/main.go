@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/yaad-index/yaad-index/internal/wikipedia"
@@ -129,6 +130,7 @@ type capabilitiesDoc struct {
 	EdgeKinds []kindSpecJSON `json:"edge_kinds"`
 	CanonicalKindsEmitted []string `json:"canonical_kinds_emitted,omitempty"`
 	CanonicalEdgeTypesEmitted []string `json:"canonical_edge_types_emitted,omitempty"`
+	SupportsSearch bool `json:"supports_search,omitempty"`
 	// SourceNamespace declares the per-plugin vault path prefix
 	// and entity-ID namespace under the ADR-0021 universal `kind:
 	// source` contract. Daemon derives `<source_namespace>:<slug.
@@ -182,6 +184,10 @@ func runInit(stdout io.Writer) error {
 			wikipedia.CanonicalEdgeType,
 			wikipedia.SourceTypeEdgeType,
 		},
+		// SupportsSearch declares opt-in to /v1/search/upstream per
+		// yaad-index #2. yaad-wikipedia delegates to the action API's
+		// `?list=search` endpoint via wikipedia.Plugin.Search.
+		SupportsSearch: true,
 		// Plugin-level cache TTL declaration per yaad-index (and
 		//: 365 days. Wikipedia article cadence is
 		// slow enough that a yearly default is the right hands-off
@@ -200,6 +206,19 @@ func runInit(stdout io.Writer) error {
 type fetchRequest struct {
 	Operation string `json:"operation"`
 	URL string `json:"url"`
+	// Query + Limit carry the search-operation parameters per
+	// yaad-index #2. Ignored on operation=ingest.
+	Query string `json:"query,omitempty"`
+	Limit int `json:"limit,omitempty"`
+}
+
+// searchResponseDoc is the stdout JSON shape for operation=search
+// per yaad-index #2. Mirrors yaad-index's subprocess.searchResponse
+// — single object, no NDJSON wrap.
+type searchResponseDoc struct {
+	OK bool `json:"ok"`
+	Candidates []wikipedia.SearchResultCandidate `json:"candidates,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
 }
 
 type fetchResponse struct {
@@ -304,8 +323,13 @@ func runFetch(ctx context.Context, p *wikipedia.Plugin, stdin io.Reader, stdout 
 	if err := json.Unmarshal(body, &req); err != nil {
 		return fmt.Errorf("parse request: %w", err)
 	}
-	if req.Operation != "ingest" {
-		return fmt.Errorf("unsupported operation %q (only \"ingest\" is implemented)", req.Operation)
+	switch req.Operation {
+	case "ingest":
+		// fall through to the existing ingest path below
+	case "search":
+		return runSearch(ctx, p, req, stdout)
+	default:
+		return fmt.Errorf("unsupported operation %q (supported: \"ingest\", \"search\")", req.Operation)
 	}
 	if req.URL == "" {
 		return errors.New("request missing `url`")
@@ -383,6 +407,39 @@ func runFetch(ctx context.Context, p *wikipedia.Plugin, stdin io.Reader, stdout 
 	// for the same rationale): single-line JSON + trailing `\n`,
 	// no SetIndent.
 	return json.NewEncoder(stdout).Encode(resp)
+}
+
+// runSearch handles the operation=search subprocess call per
+// yaad-index #2. Reads the operator/agent query from the
+// fetchRequest's Query field, dispatches to wikipedia.Plugin.Search,
+// and emits the searchResponseDoc shape on stdout.
+//
+// Empty query → ok:false with an error_message; the daemon's
+// federation handler surfaces this on the per_plugin_status block
+// without failing the federated call.
+//
+// Network / upstream errors → ok:false + error_message (the
+// federation handler logs the message verbatim). Successful empty
+// results → ok:true + empty candidates list.
+func runSearch(ctx context.Context, p *wikipedia.Plugin, req fetchRequest, stdout io.Writer) error {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		return json.NewEncoder(stdout).Encode(searchResponseDoc{
+			OK:           false,
+			ErrorMessage: "request missing `query`",
+		})
+	}
+	candidates, err := p.Search(ctx, query, req.Limit)
+	if err != nil {
+		return json.NewEncoder(stdout).Encode(searchResponseDoc{
+			OK:           false,
+			ErrorMessage: err.Error(),
+		})
+	}
+	return json.NewEncoder(stdout).Encode(searchResponseDoc{
+		OK:         true,
+		Candidates: candidates,
+	})
 }
 
 // marshalEdges translates the plugin's internal edges map into

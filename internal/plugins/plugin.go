@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/yaad-index/yaad-index/internal/store"
@@ -93,7 +94,59 @@ type Plugin interface {
 	// kinds (e.g. fixture plugins in tests) may return a zero value;
 	// the kinds handler treats that as "no kinds contributed."
 	Capabilities() Capabilities
+
+	// Search dispatches an upstream query against the plugin per
+	// yaad-index #2's POST /v1/search/upstream federation surface.
+	// Returns a candidate list the daemon merges with results from
+	// other opted-in plugins (Capabilities.SupportsSearch=true).
+	//
+	// Plugins that don't opt in (SupportsSearch=false): daemon never
+	// calls Search on them; implementations may return
+	// ErrSearchNotSupported or any other error since the surface
+	// isn't reached.
+	//
+	// Contract:
+	//   - ctx carries the per-plugin timeout the federation handler
+	//     applies; implementations must respect cancellation.
+	//   - query is the operator/agent search string; whitespace-
+	//     trimmed by the daemon before dispatch but otherwise
+	//     unmodified (no daemon-side query rewriting).
+	//   - limit is the operator/agent-requested cap on returned
+	//     candidates. Plugins SHOULD respect it as an upper bound
+	//     but may return fewer; returning more is allowed and the
+	//     daemon truncates on merge.
+	//
+	// On success returns the candidate slice and nil. On failure
+	// returns nil + a non-nil error the daemon surfaces in the
+	// per_plugin_status block of the federated response.
+	Search(ctx context.Context, query string, limit int) ([]SearchCandidate, error)
 }
+
+// SearchCandidate is one entry returned by a plugin's Search
+// implementation per yaad-index #2. Surfaces verbatim on the
+// federated /v1/search/upstream response (daemon adds the
+// `plugin` attribution field at merge time).
+type SearchCandidate struct {
+	// ID is the plugin-specific candidate identifier the operator /
+	// agent can re-feed to /v1/ingest to fetch the candidate's
+	// full source-shape entity. For yaad-wikipedia that's the
+	// Wikipedia article shorthand (`wikipedia: <title>`); for
+	// yaad-bgg it'd be the numeric thing-id.
+	ID string `json:"id"`
+	// Label is the operator-readable display name.
+	Label string `json:"label"`
+	// Summary is an optional one-line human description the agent
+	// surfaces under the label. Omit when the plugin doesn't have a
+	// cheap summary available; daemon doesn't compute it.
+	Summary string `json:"summary,omitempty"`
+}
+
+// ErrSearchNotSupported is the canonical error a plugin's Search
+// returns when SupportsSearch=false. The daemon's federation
+// handler avoids dispatching to plugins with SupportsSearch=false,
+// so this error normally doesn't surface; it exists for defensive
+// implementations + test fixtures.
+var ErrSearchNotSupported = errors.New("plugin does not support search")
 
 // Capabilities mirrors the JSON document a plugin binary writes to
 // stdout in response to `--init` (ADR-0005 §"Discovery"). Defined on

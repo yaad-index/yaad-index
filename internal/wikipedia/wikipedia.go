@@ -683,6 +683,44 @@ func (p *Plugin) fetchExtract(ctx context.Context, requestHost, escapedTitle str
 	return mediaWikiHeadingsToMarkdown(doc.Query.Pages[0].Extract), nil
 }
 
+// Search is the public entry point for upstream-federated search
+// per yaad-index #2. Wraps searchArticles + trims the result list
+// to the caller's limit. SearchCandidate output uses the article
+// title as the ID — operators can re-feed `wikipedia: <title>`
+// to /v1/ingest to fetch the full article.
+//
+// limit=0 falls back to whatever searchArticles returns (which
+// upstream's `srlimit=10` already caps). Negative limit treated
+// the same.
+func (p *Plugin) Search(ctx context.Context, query string, limit int) ([]SearchResultCandidate, error) {
+	results, err := p.searchArticles(ctx, "", query)
+	if err != nil {
+		return nil, err
+	}
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	out := make([]SearchResultCandidate, 0, len(results))
+	for _, r := range results {
+		out = append(out, SearchResultCandidate{
+			ID:      r.Title,
+			Label:   r.Title,
+			Summary: stripSnippetMarkup(r.Snippet),
+		})
+	}
+	return out, nil
+}
+
+// SearchResultCandidate is the per-result wire shape the plugin's
+// binary emits on the `--operation=search` path. Mirrors the
+// plugins.SearchCandidate fields one-for-one — defined here so the
+// wikipedia package stays plugins-import-free.
+type SearchResultCandidate struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Summary string `json:"summary,omitempty"`
+}
+
 // searchArticles queries Wikipedia's action API for candidate
 // articles matching the input query. Used as the disambiguation
 // surface (per ADR-0006 +): when a query is ambiguous, search
