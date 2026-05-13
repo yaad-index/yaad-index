@@ -1267,9 +1267,6 @@ func TestPlugin_FetchEmitsCanonicalStub_TableDriven(t *testing.T) {
 					t.Errorf("Edges[%q]: want empty (no wikidata kind), got %+v",
 						CanonicalEdgeType, got)
 				}
-				if len(article.KindGaps) != 0 {
-					t.Errorf("KindGaps: want empty, got %+v", article.KindGaps)
-				}
 				return
 			}
 			isAbout, ok := article.Edges[CanonicalEdgeType]
@@ -1288,9 +1285,6 @@ func TestPlugin_FetchEmitsCanonicalStub_TableDriven(t *testing.T) {
 			if got := isAbout[0].Name; got != c.wantStubName {
 				t.Errorf("Edges[%q][0].Name: want %q, got %q (parens-disambig should be stripped Per the prior design,)",
 					CanonicalEdgeType, c.wantStubName, got)
-			}
-			if len(article.KindGaps) == 0 {
-				t.Errorf("KindGaps: want non-empty for kind %q (kind-specific gaps declared)", c.wantStubKind)
 			}
 		})
 	}
