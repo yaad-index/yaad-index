@@ -123,15 +123,31 @@ func (p *Poller) Tick(ctx context.Context) (ingested int, errs []error) {
 
 		isSent := folder == p.SentFolder
 		for _, fm := range fetched {
+			// Body-stream read failure from FetchMessages (io.ReadAll
+			// on the FETCH BODY[] reader returning an err). Pre-#58
+			// the err was discarded and the message fell through with
+			// an empty Body, producing a downstream "missing
+			// Message-ID" that hid the real cause. Surface it WARN-
+			// level so the operator sees the actual class; skip parse
+			// + emit + mark — the message stays uningested, so the
+			// next polling cycle re-issues a fetch (implicit retry).
+			if fm.ReadErr != nil {
+				p.Logger.Warn("gmail poll: body read failed; skipping message",
+					"folder", folder, "uid", fm.UID, "err", fm.ReadErr)
+				errs = append(errs, fmt.Errorf("read %s uid=%d: %w", folder, fm.UID, fm.ReadErr))
+				continue
+			}
 			pm, err := ParseMessage(fm.Body, fm.Labels, isSent)
 			if err != nil {
 				if errors.Is(err, ErrMissingMessageID) {
 					p.Logger.Debug("gmail poll: skipping message with no Message-ID",
-						"folder", folder, "uid", fm.UID)
+						"folder", folder, "uid", fm.UID,
+						"body_preview", bodyPreview(fm.Body))
 					continue
 				}
 				p.Logger.Debug("gmail poll: parse failed",
-					"folder", folder, "uid", fm.UID, "err", err)
+					"folder", folder, "uid", fm.UID, "err", err,
+					"body_preview", bodyPreview(fm.Body))
 				errs = append(errs, fmt.Errorf("parse %s uid=%d: %w", folder, fm.UID, err))
 				continue
 			}
@@ -217,6 +233,19 @@ func (p *Poller) Run(ctx context.Context, interval time.Duration) error {
 			}
 		}
 	}
+}
+
+// bodyPreview returns a bounded, %q-quoted slice of body for debug
+// logs on parse-error branches. The cap (96 bytes) keeps the line
+// short enough to scan while still surfacing typical RFC-822 header
+// prefixes like `Message-ID:` / `From:` that diagnose body-content
+// shape. Empty input renders as `""`.
+func bodyPreview(body []byte) string {
+	const cap = 96
+	if len(body) <= cap {
+		return fmt.Sprintf("%q", body)
+	}
+	return fmt.Sprintf("%q…", body[:cap])
 }
 
 func (p *Poller) runOneTick(ctx context.Context) error {
