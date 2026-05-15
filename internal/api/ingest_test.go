@@ -289,6 +289,97 @@ func Test_Ingest_PluginMatch_NotAffected(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "matched-plugin URL body=%s", rec.Body.String())
 }
 
+// Test_Ingest_CommandShapeDispatchesToNamedPlugin pins the fix for
+// issue #52: a command-shape input (`<plugin>: !<command>`) where the
+// plugin advertises empty url_patterns must reach the named plugin
+// via LookupByName, NOT via the Match-based registry.Lookup walk.
+// Pre-fix the gmail plugin (URLPatterns=[], Commands=["fetch"]) was
+// invisible at dispatch — the same surface validateRouting had
+// already approved — and ingest returned 422 unsupported_url.
+func Test_Ingest_CommandShapeDispatchesToNamedPlugin(t *testing.T) {
+	t.Parallel()
+
+	registry := plugins.NewRegistry()
+	registry.Register(&fixture.Plugin{
+		NameValue: "gmail",
+		// Empty url_patterns mirror the real gmail plugin's shape —
+		// Match must NOT be the route here.
+		MatchFunc: func(string) bool { return false },
+		CapabilitiesValue: plugins.Capabilities{
+			Name: "gmail",
+			SourceNamespace: "gmail",
+			EntityKinds: []plugins.KindSpec{{Name: "boardgame"}},
+			Commands: []string{"fetch"},
+		},
+		FetchValue: &plugins.FetchResult{
+			Entity: &store.Entity{
+				ID: "gmail:fetch-result",
+				Kind: "boardgame", // satisfies bootstrap-kind constraint per fakeWikipediaResult
+				Data: map[string]any{"title": "fetched"},
+			},
+			Provenance: []store.ProvenanceEntry{
+				{Source: "fixture:gmail", OK: true},
+			},
+		},
+	})
+	h, _ := newAPIWithRegistry(t, registry)
+
+	rec := postIngest(t, h, map[string]any{
+		"url": "gmail: !fetch",
+		"wait_seconds": 2,
+	})
+
+	require.Equal(t, http.StatusOK, rec.Code,
+		"command-shape input must reach the named plugin; body=%s", rec.Body.String())
+	got := decodeComplete(t, rec)
+	assert.Equal(t, "gmail:fetch-result", got.Entity.ID,
+		"the gmail plugin's FetchResult must surface through dispatch")
+}
+
+// Test_Ingest_CommandShape_UnknownPluginReturns404 pins the
+// validateRouting rejection path: a command-shape input naming an
+// unregistered plugin must fail at validation with 404
+// plugin_not_found, never reaching the dispatch fork.
+func Test_Ingest_CommandShape_UnknownPluginReturns404(t *testing.T) {
+	t.Parallel()
+	h := newAPI(t)
+	rec := postIngest(t, h, map[string]any{
+		"url": "no-such-plugin: !fetch",
+		"wait_seconds": 0,
+	})
+	require.Equal(t, http.StatusNotFound, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "plugin_not_found")
+}
+
+// Test_Ingest_CommandShape_UnknownCommandReturns400 pins the
+// validateRouting rejection for a registered plugin that doesn't
+// advertise the named command. 400 invalid_input is the existing
+// validator contract (input-shape error); the dispatch fix doesn't
+// change this — it only routes the inputs validateRouting passes.
+func Test_Ingest_CommandShape_UnknownCommandReturns400(t *testing.T) {
+	t.Parallel()
+	registry := plugins.NewRegistry()
+	registry.Register(&fixture.Plugin{
+		NameValue: "gmail",
+		MatchFunc: func(string) bool { return false },
+		CapabilitiesValue: plugins.Capabilities{
+			Name: "gmail",
+			SourceNamespace: "gmail",
+			EntityKinds: []plugins.KindSpec{{Name: "source"}},
+			Commands: []string{"fetch"},
+		},
+	})
+	h, _ := newAPIWithRegistry(t, registry)
+
+	rec := postIngest(t, h, map[string]any{
+		"url": "gmail: !unknown",
+		"wait_seconds": 0,
+	})
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "invalid_input")
+	assert.Contains(t, rec.Body.String(), "no command")
+}
+
 func Test_Ingest_MissingURL(t *testing.T) {
 	t.Parallel()
 	rec := postIngest(t, newAPI(t), map[string]any{"wait_seconds": 0})
