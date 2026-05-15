@@ -61,6 +61,11 @@ const (
 	EnvPollingInterval = "YAAD_GMAIL_POLLING_INTERVAL"
 	EnvIMAPHost = "YAAD_GMAIL_IMAP_HOST"
 	EnvIMAPPort = "YAAD_GMAIL_IMAP_PORT"
+	// EnvLogLevel tunes the slog handler's minimum level. Accepts
+	// debug / info / warn / error (case-insensitive). Defaults to
+	// info; unknown values fall back to info rather than fail-loud
+	// (operator misconfiguration shouldn't block a fetch cycle).
+	EnvLogLevel = "YAAD_GMAIL_LOG_LEVEL"
 )
 
 // requestTimeout caps the wall-clock budget for one ingest
@@ -290,7 +295,9 @@ func runCommandFetch(ctx context.Context, stdout, stderr io.Writer) error {
 	ingestedLabel := envOrDefault(EnvIngestedLabel, gmail.DefaultIngestedLabel)
 	skipLabel := envOrDefault(EnvSkipLabel, gmail.DefaultSkipLabel)
 
-	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{
+		Level: parseLogLevel(envOrDefault(EnvLogLevel, "info")),
+	}))
 
 	client, err := gmail.Dial(ctx, cfg)
 	if err != nil {
@@ -513,6 +520,24 @@ func envOrDefault(env, def string) string {
 		return v
 	}
 	return def
+}
+
+// parseLogLevel maps an operator-supplied log-level string to the
+// slog.Level constant. Case-insensitive. Unknown values fall back
+// to info (rather than fail loud) so a typo in the env var doesn't
+// block a fetch cycle — the worst case is "operator gets info-level
+// instead of the level they wanted."
+func parseLogLevel(s string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 func formatRFC3339(t time.Time) string {

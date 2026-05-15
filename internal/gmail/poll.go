@@ -107,6 +107,8 @@ func (p *Poller) Tick(ctx context.Context) (ingested int, errs []error) {
 			errs = append(errs, fmt.Errorf("search %s: %w", folder, err))
 			continue
 		}
+		p.Logger.Debug("gmail poll: search result",
+			"folder", folder, "uid_count", len(uids))
 		if len(uids) == 0 {
 			continue
 		}
@@ -116,6 +118,8 @@ func (p *Poller) Tick(ctx context.Context) (ingested int, errs []error) {
 			errs = append(errs, fmt.Errorf("fetch %s: %w", folder, err))
 			continue
 		}
+		p.Logger.Debug("gmail poll: fetch result",
+			"folder", folder, "requested_count", len(uids), "fetched_count", len(fetched))
 
 		isSent := folder == p.SentFolder
 		for _, fm := range fetched {
@@ -126,9 +130,15 @@ func (p *Poller) Tick(ctx context.Context) (ingested int, errs []error) {
 						"folder", folder, "uid", fm.UID)
 					continue
 				}
+				p.Logger.Debug("gmail poll: parse failed",
+					"folder", folder, "uid", fm.UID, "err", err)
 				errs = append(errs, fmt.Errorf("parse %s uid=%d: %w", folder, fm.UID, err))
 				continue
 			}
+			p.Logger.Debug("gmail poll: parsed message",
+				"folder", folder, "uid", fm.UID,
+				"message_id", pm.MessageID,
+				"subject_len", len(pm.Subject))
 
 			// MIME walk for ADR-0014 attachment emission per #12. Errors
 			// here are non-fatal: a message whose MIME tree the walker
@@ -155,9 +165,13 @@ func (p *Poller) Tick(ctx context.Context) (ingested int, errs []error) {
 			}
 
 			if err := p.Emit(ctx, env); err != nil {
+				p.Logger.Debug("gmail poll: emit failed",
+					"folder", folder, "uid", fm.UID, "err", err)
 				errs = append(errs, fmt.Errorf("emit %s uid=%d: %w", folder, fm.UID, err))
 				continue
 			}
+			p.Logger.Debug("gmail poll: emitted envelope",
+				"folder", folder, "uid", fm.UID, "source_id", env.SourceID)
 
 			if err := p.Client.MarkIngested(ctx, fm.UID, p.IngestedLabel); err != nil {
 				// Mark-ingested failure is non-fatal — the
@@ -170,6 +184,8 @@ func (p *Poller) Tick(ctx context.Context) (ingested int, errs []error) {
 				errs = append(errs, fmt.Errorf("mark-ingested %s uid=%d: %w", folder, fm.UID, err))
 				continue
 			}
+			p.Logger.Debug("gmail poll: marked ingested",
+				"folder", folder, "uid", fm.UID)
 			ingested++
 		}
 	}
