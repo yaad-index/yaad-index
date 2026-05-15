@@ -28,6 +28,7 @@ import (
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
+	"github.com/emersion/go-imap/responses"
 )
 
 // gmailLabelsItem is the FETCH attribute key for Gmail's
@@ -158,7 +159,7 @@ func (c *realClient) SelectFolder(_ context.Context, folder string) error {
 	return nil
 }
 
-// SearchUningested issues a SEARCH with the X-GM-RAW negative-
+// SearchUningested issues a UID SEARCH with the X-GM-RAW negative-
 // label predicate. Gmail's IMAP search recognises `-label:<name>`
 // as the absence-of-label predicate; combining two with whitespace
 // AND-joins them.
@@ -168,22 +169,62 @@ func (c *realClient) SelectFolder(_ context.Context, folder string) error {
 // label-based gating and the poll loop re-emits the whole folder
 // every cycle (per the spec's empty-string-disables note on the
 // IngestedLabel knob).
+//
+// Why not SearchCriteria.Header (per #56): go-imap v1's
+// SearchCriteria.Header serializes as `HEADER "<key>" "<value>"`
+// for non-canonical headers, which is the RFC 3501 header-search
+// criterion — Gmail reads it as "find messages whose X-GM-RAW
+// header matches" (no such header) and returns 0. The correct
+// wire shape for the vendor extension is the top-level
+// `X-GM-RAW "<predicate>"` criterion, which we emit via a custom
+// commander rather than fighting the SearchCriteria abstraction.
 func (c *realClient) SearchUningested(_ context.Context, ingestedLabel, skipLabel string) ([]uint32, error) {
-	criteria := imap.NewSearchCriteria()
 	predicate := buildSearchPredicate(ingestedLabel, skipLabel)
-	if predicate != "" {
-		// Gmail's X-GM-RAW search criterion accepts the
-		// search-syntax string operators recognise on the
-		// gmail.com web UI ("-label:foo bar" etc.). v1's
-		// SearchCriteria carries arbitrary header criteria via
-		// the Header map; X-GM-RAW is keyed there.
-		criteria.Header = map[string][]string{"X-GM-RAW": {predicate}}
+	if predicate == "" {
+		// Both labels disabled: bare ALL search through the
+		// standard path. No vendor extension needed.
+		uids, err := c.conn.UidSearch(imap.NewSearchCriteria())
+		if err != nil {
+			return nil, fmt.Errorf("gmail: imap search: %w", err)
+		}
+		return uids, nil
 	}
-	uids, err := c.conn.UidSearch(criteria)
+
+	cmd := &xGMRawSearchCommand{Predicate: predicate}
+	res := &responses.Search{}
+	status, err := c.conn.Execute(cmd, res)
 	if err != nil {
 		return nil, fmt.Errorf("gmail: imap search: %w", err)
 	}
-	return uids, nil
+	if err := status.Err(); err != nil {
+		return nil, fmt.Errorf("gmail: imap search status: %w", err)
+	}
+	return res.Ids, nil
+}
+
+// xGMRawSearchCommand emits `UID SEARCH X-GM-RAW "<predicate>"`
+// directly on the wire. go-imap v1's SearchCriteria has no escape
+// hatch for vendor criteria — Format() walks RFC-shaped fields
+// only — so we bypass it with a custom Commander per #56.
+//
+// The Predicate is a string (not RawString): IMAP serialization
+// quotes it (or switches to literal form for embedded specials),
+// matching Python imaplib's `mail.uid('search', None, 'X-GM-RAW',
+// '"<predicate>"')` wire shape that Gmail accepts.
+type xGMRawSearchCommand struct {
+	Predicate string
+}
+
+// Command implements imap.Commander.
+func (cmd *xGMRawSearchCommand) Command() *imap.Command {
+	return &imap.Command{
+		Name: "UID",
+		Arguments: []interface{}{
+			imap.RawString("SEARCH"),
+			imap.RawString("X-GM-RAW"),
+			cmd.Predicate,
+		},
+	}
 }
 
 // buildSearchPredicate composes the X-GM-RAW search string from

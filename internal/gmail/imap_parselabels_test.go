@@ -111,3 +111,55 @@ func TestBuildSearchPredicate(t *testing.T) {
 		})
 	}
 }
+
+// TestXGMRawSearchCommand_WireShape pins the fix for #56:
+// the command emits `UID SEARCH X-GM-RAW "<predicate>"` rather
+// than the broken `UID SEARCH HEADER "X-GM-RAW" "<predicate>"`
+// shape that go-imap v1's SearchCriteria.Header would produce.
+// Validating at the Commander.Command() level avoids needing
+// a live IMAP server while still pinning the over-the-wire
+// argument vector that determines Gmail's response.
+func TestXGMRawSearchCommand_WireShape(t *testing.T) {
+	cmd := &xGMRawSearchCommand{Predicate: "-label:yaad-ingested -label:yaad-skip"}
+	out := cmd.Command()
+
+	if out.Name != "UID" {
+		t.Fatalf("Command().Name: want %q, got %q", "UID", out.Name)
+	}
+	if len(out.Arguments) != 3 {
+		t.Fatalf("Command().Arguments: want 3 fields, got %d (%v)", len(out.Arguments), out.Arguments)
+	}
+
+	// First two must be RawString so the IMAP writer emits them
+	// unquoted as IMAP atoms (verbs / criteria keywords). Quoting
+	// these would break Gmail's parser.
+	if raw, ok := out.Arguments[0].(imap.RawString); !ok || raw != "SEARCH" {
+		t.Errorf("Arguments[0]: want imap.RawString(%q), got %T %v", "SEARCH", out.Arguments[0], out.Arguments[0])
+	}
+	if raw, ok := out.Arguments[1].(imap.RawString); !ok || raw != "X-GM-RAW" {
+		t.Errorf("Arguments[1]: want imap.RawString(%q), got %T %v", "X-GM-RAW", out.Arguments[1], out.Arguments[1])
+	}
+	// Predicate is a plain string so IMAP serialization quotes it
+	// (matching Python imaplib's `'"<predicate>"'`). RawString
+	// would emit it unquoted + Gmail's parser would choke on the
+	// embedded space.
+	if s, ok := out.Arguments[2].(string); !ok || s != "-label:yaad-ingested -label:yaad-skip" {
+		t.Errorf("Arguments[2]: want plain string predicate, got %T %v", out.Arguments[2], out.Arguments[2])
+	}
+}
+
+// TestXGMRawSearchCommand_EmptyPredicate_StillEmitsShape pins
+// that the commander doesn't special-case empty predicates — the
+// caller is responsible for branching to the standard ALL path
+// when both labels are disabled. SearchUningested upstream owns
+// that decision.
+func TestXGMRawSearchCommand_EmptyPredicate_StillEmitsShape(t *testing.T) {
+	cmd := &xGMRawSearchCommand{Predicate: ""}
+	out := cmd.Command()
+	if len(out.Arguments) != 3 {
+		t.Fatalf("Command().Arguments: want 3 fields even for empty predicate, got %d", len(out.Arguments))
+	}
+	if s, ok := out.Arguments[2].(string); !ok || s != "" {
+		t.Errorf("Arguments[2]: want empty string, got %T %v", out.Arguments[2], out.Arguments[2])
+	}
+}
