@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/emersion/go-imap"
@@ -276,13 +277,17 @@ func (c *realClient) FetchMessages(_ context.Context, uids []uint32) ([]FetchedM
 		gmailLabelsItem,
 	}
 
-	msgCh := make(chan *imap.Message, len(uids))
+	// Buffered for >1 response per UID (Gmail double-emit, see
+	// dedupFetchedByUID note below). Headroom (2×) absorbs the
+	// observed 11-responses-for-8-UIDs ratio without blocking the
+	// UidFetch goroutine.
+	msgCh := make(chan *imap.Message, len(uids)*2)
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- c.conn.UidFetch(seqSet, items, msgCh)
 	}()
 
-	out := make([]FetchedMessage, 0, len(uids))
+	raws := make([]FetchedMessage, 0, len(uids)*2)
 	for msg := range msgCh {
 		fm := FetchedMessage{UID: msg.Uid}
 		// Body bytes from the BODY[] section. v1's Body map keys
@@ -315,12 +320,87 @@ func (c *realClient) FetchMessages(_ context.Context, uids []uint32) ([]FetchedM
 		if raw, ok := msg.Items[gmailLabelsItem]; ok {
 			fm.Labels = parseLabels(raw)
 		}
-		out = append(out, fm)
+		raws = append(raws, fm)
 	}
 	if err := <-errCh; err != nil {
 		return nil, fmt.Errorf("gmail: imap fetch: %w", err)
 	}
-	return out, nil
+	return dedupFetchedByUID(uids, raws), nil
+}
+
+// dedupFetchedByUID collapses per-UID duplicate FETCH responses into
+// one FetchedMessage per UID, preserving the input `uids` slice's
+// order on output.
+//
+// **Why this exists.** Gmail's IMAP server emits MORE THAN ONE FETCH
+// response per UID when X-GM-LABELS is requested alongside BODY[] —
+// typically one response carrying BODY[] (+ labels), one carrying
+// only labels (no BODY[] section). The naive 1-FetchedMessage-per-
+// msgCh-msg shape produced phantom empty-body entries that then
+// failed downstream ParseMessage with EOF (yaad-index #60).
+//
+// Merge rules:
+//   - Body: first non-empty wins. Phantom responses with empty Body
+//     don't overwrite a previously captured body.
+//   - ReadErr: cleared when a later response yields non-empty Body
+//     (transient-then-recovery in the same cycle); otherwise the
+//     first observed ReadErr is preserved.
+//   - Labels: set-union across all responses. Defensive — Gmail's
+//     second response may carry the full label snapshot OR only a
+//     subset; set-merge tolerates both without dropping labels on
+//     a split-snapshot edge case. Sorted for deterministic output.
+//
+// UIDs the server returned nothing for are skipped. Duplicates
+// within the input `uids` slice are also de-duplicated on output.
+func dedupFetchedByUID(uids []uint32, raws []FetchedMessage) []FetchedMessage {
+	type accumulator struct {
+		body    []byte
+		readErr error
+		labels  map[string]struct{}
+	}
+	byUID := make(map[uint32]*accumulator, len(uids))
+	for _, r := range raws {
+		acc, ok := byUID[r.UID]
+		if !ok {
+			acc = &accumulator{labels: map[string]struct{}{}}
+			byUID[r.UID] = acc
+		}
+		if len(acc.body) == 0 {
+			if len(r.Body) > 0 {
+				acc.body = r.Body
+				acc.readErr = nil
+			} else if r.ReadErr != nil && acc.readErr == nil {
+				acc.readErr = r.ReadErr
+			}
+		}
+		for _, l := range r.Labels {
+			acc.labels[l] = struct{}{}
+		}
+	}
+
+	out := make([]FetchedMessage, 0, len(byUID))
+	seen := make(map[uint32]struct{}, len(byUID))
+	for _, uid := range uids {
+		if _, dup := seen[uid]; dup {
+			continue
+		}
+		seen[uid] = struct{}{}
+		acc, ok := byUID[uid]
+		if !ok {
+			continue
+		}
+		fm := FetchedMessage{UID: uid, Body: acc.body, ReadErr: acc.readErr}
+		if len(acc.labels) > 0 {
+			labels := make([]string, 0, len(acc.labels))
+			for l := range acc.labels {
+				labels = append(labels, l)
+			}
+			sort.Strings(labels)
+			fm.Labels = labels
+		}
+		out = append(out, fm)
+	}
+	return out
 }
 
 // parseLabels normalizes the X-GM-LABELS response value into a
