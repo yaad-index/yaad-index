@@ -21,6 +21,11 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Each job sets `cache: false` on setup-go because the self-hosted
+  # runners persist the Go build/module cache on local disk across
+  # jobs naturally — the GH Actions Cache layer adds no speedup but
+  # introduces a recurring stuck cache-save failure on the upload
+  # step (yaad-index #62).
   test:
     name: test
     runs-on: self-hosted
@@ -29,7 +34,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
       - name: go test (race + coverage profile)
         run: go test -race -count=1 -timeout 2m -coverprofile=coverage.out -covermode=atomic ./...
       - name: Upload coverage profile
@@ -47,7 +52,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.11.4
@@ -62,7 +67,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
       - name: make build
         run: make build
 
@@ -76,7 +81,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
       - name: make e2e
         run: make e2e
 
@@ -90,7 +95,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
       - name: Download coverage profile
         uses: actions/download-artifact@v8
         with:
