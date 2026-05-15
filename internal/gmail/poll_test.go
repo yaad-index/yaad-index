@@ -10,6 +10,7 @@ package gmail
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -370,4 +371,166 @@ func TestPoller_Tick_EmptyIngestedLabel_DisablesAutoWrite(t *testing.T) {
 	assert.Equal(t, 1, count1)
 	assert.Equal(t, 1, count2, "every cycle re-ingests when ingested_label disabled")
 	assert.Empty(t, fc.markIngestedLog, "MarkIngested no-op when label disabled")
+}
+
+// captureHandler is a slog.Handler that records every Record it
+// receives into a thread-safe slice. Tests use it to assert the
+// presence + attribute content of the debug-level log lines Tick
+// emits on the success path.
+type captureHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+	level   slog.Level
+}
+
+func (h *captureHandler) Enabled(_ context.Context, lvl slog.Level) bool {
+	return lvl >= h.level
+}
+
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+
+func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }
+
+func (h *captureHandler) snapshot() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]slog.Record, len(h.records))
+	copy(out, h.records)
+	return out
+}
+
+// findRecord returns the first captured record whose Message equals
+// msg, or nil if no match. Used by debug-log assertions below.
+func findRecord(records []slog.Record, msg string) *slog.Record {
+	for i, r := range records {
+		if r.Message == msg {
+			return &records[i]
+		}
+	}
+	return nil
+}
+
+// recordAttrs returns the attribute set of r as a map keyed by name.
+// Helper for assertions that need to spot-check specific attrs.
+func recordAttrs(r slog.Record) map[string]any {
+	out := map[string]any{}
+	r.Attrs(func(a slog.Attr) bool {
+		out[a.Key] = a.Value.Any()
+		return true
+	})
+	return out
+}
+
+// TestPoller_Tick_DebugLogsSuccessPath pins the new debug lines on
+// the happy path: search-result, fetch-result, parsed-message,
+// emitted-envelope, marked-ingested all fire with the expected
+// folder + uid + count attributes. Issue #54 — operator can't
+// diagnose empty-result cycles without these checkpoints.
+func TestPoller_Tick_DebugLogsSuccessPath(t *testing.T) {
+	t.Parallel()
+	fc := newFakeClient(
+		&fakeMessage{UID: 7, MessageID: "msg-7@x", Subject: "hello", From: "a@b.com", Folder: InboxFolderName},
+	)
+	h := &captureHandler{level: slog.LevelDebug}
+	logger := slog.New(h)
+	rec := &recordingEmit{}
+	p := NewPoller(fc, "yaad-ingested", "yaad-skip", rec.emit, logger)
+
+	count, errs := p.Tick(context.Background())
+	require.Empty(t, errs)
+	require.Equal(t, 1, count)
+
+	recs := h.snapshot()
+
+	search := findRecord(recs, "gmail poll: search result")
+	require.NotNil(t, search, "search-result debug line missing; got=%v", recs)
+	sa := recordAttrs(*search)
+	assert.Equal(t, InboxFolderName, sa["folder"])
+	assert.Equal(t, int64(1), sa["uid_count"], "uid_count should reflect the 1-message INBOX")
+
+	fetch := findRecord(recs, "gmail poll: fetch result")
+	require.NotNil(t, fetch, "fetch-result debug line missing")
+	fa := recordAttrs(*fetch)
+	assert.Equal(t, int64(1), fa["requested_count"])
+	assert.Equal(t, int64(1), fa["fetched_count"])
+
+	parse := findRecord(recs, "gmail poll: parsed message")
+	require.NotNil(t, parse, "parsed-message debug line missing")
+	pa := recordAttrs(*parse)
+	assert.Equal(t, uint64(7), pa["uid"])
+	assert.Equal(t, "msg-7@x", pa["message_id"])
+	assert.Equal(t, int64(len("hello")), pa["subject_len"])
+
+	emit := findRecord(recs, "gmail poll: emitted envelope")
+	require.NotNil(t, emit, "emitted-envelope debug line missing")
+	ea := recordAttrs(*emit)
+	assert.Equal(t, uint64(7), ea["uid"])
+	assert.Contains(t, ea["source_id"], SourceNamespace+":", "source_id must be the gmail:<slug> form")
+
+	mark := findRecord(recs, "gmail poll: marked ingested")
+	require.NotNil(t, mark, "marked-ingested debug line missing")
+	ma := recordAttrs(*mark)
+	assert.Equal(t, uint64(7), ma["uid"])
+}
+
+// TestPoller_Tick_DebugLogsEmptySearchResult pins that an empty
+// search emits the search-result debug line with uid_count=0 and
+// then short-circuits — no fetch / parse / emit / mark lines fire.
+// This is the diagnostic shape that surfaces "predicate matched
+// nothing" vs the post-fetch failure modes.
+func TestPoller_Tick_DebugLogsEmptySearchResult(t *testing.T) {
+	t.Parallel()
+	fc := newFakeClient() // no messages
+	h := &captureHandler{level: slog.LevelDebug}
+	logger := slog.New(h)
+	rec := &recordingEmit{}
+	p := NewPoller(fc, "yaad-ingested", "yaad-skip", rec.emit, logger)
+
+	count, errs := p.Tick(context.Background())
+	require.Empty(t, errs)
+	require.Equal(t, 0, count)
+
+	recs := h.snapshot()
+	require.NotNil(t, findRecord(recs, "gmail poll: search result"),
+		"search-result line must fire even with zero results")
+	assert.Nil(t, findRecord(recs, "gmail poll: fetch result"),
+		"fetch-result must NOT fire after empty search")
+	assert.Nil(t, findRecord(recs, "gmail poll: emitted envelope"))
+}
+
+// TestPoller_Tick_DebugLogsParseFailure pins the new debug line
+// for non-ErrMissingMessageID parse errors. Pre-fix these landed
+// only in the errs slice; operators couldn't see per-message
+// causes at WARN. With the debug log, `LOG_LEVEL=debug` exposes
+// them.
+func TestPoller_Tick_DebugLogsParseFailure(t *testing.T) {
+	t.Parallel()
+	fc := newFakeClient(
+		// MessageID empty → ParseMessage returns ErrMissingMessageID,
+		// which has its OWN debug line ("skipping message with no
+		// Message-ID"). That's already tested elsewhere; here we
+		// verify the missing-Message-ID skip line fires (closest
+		// reachable parse-error path without re-engineering the
+		// fixture).
+		&fakeMessage{UID: 1, MessageID: "", Subject: "no-id", From: "x@y.com", Folder: InboxFolderName},
+	)
+	h := &captureHandler{level: slog.LevelDebug}
+	logger := slog.New(h)
+	rec := &recordingEmit{}
+	p := NewPoller(fc, "yaad-ingested", "yaad-skip", rec.emit, logger)
+
+	count, _ := p.Tick(context.Background())
+	require.Equal(t, 0, count)
+
+	recs := h.snapshot()
+	require.NotNil(t, findRecord(recs, "gmail poll: skipping message with no Message-ID"),
+		"missing-Message-ID skip line must fire")
+	assert.Nil(t, findRecord(recs, "gmail poll: parsed message"),
+		"parsed-message must NOT fire when parse rejected the row")
 }

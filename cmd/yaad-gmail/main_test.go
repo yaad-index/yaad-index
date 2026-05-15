@@ -9,6 +9,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -304,4 +305,37 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestParseLogLevel pins the env-driven log-level mapping per #54.
+// debug / info / warn / warning / error map to the matching
+// slog.Level; unknown / empty / whitespace values fall back to
+// info (lenient: a typo in the env var must NOT block a fetch
+// cycle, the worst case is "operator gets info-level instead of
+// the level they wanted").
+func TestParseLogLevel(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   string
+		want slog.Level
+	}{
+		{"debug", slog.LevelDebug},
+		{"DEBUG", slog.LevelDebug},
+		{"  Debug  ", slog.LevelDebug},
+		{"info", slog.LevelInfo},
+		{"warn", slog.LevelWarn},
+		{"warning", slog.LevelWarn},
+		{"error", slog.LevelError},
+		{"", slog.LevelInfo},
+		{"trace", slog.LevelInfo}, // unknown → fallback
+		{"DEBUG ME", slog.LevelInfo}, // unknown (whitespace inside) → fallback
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got := parseLogLevel(tc.in)
+			if got != tc.want {
+				t.Errorf("parseLogLevel(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
 }
