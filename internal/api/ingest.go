@@ -221,16 +221,37 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 			ttlExpired = expired
 		}
 
-		// Plugin path: the registry walks plugins in registration
-		// order and returns the first one whose Match accepts the URL.
-		// On no match we fall back to the URL-fixture sentinels so
-		// brass-birmingham / queued-test / needs-fill-test still drive
-		// long-poll tests without a network or a registered plugin.
+		// Plugin path. Two dispatch shapes per ADR-0022:
+		//
+		//   - URL-shape: walk the registry in registration order and
+		//     take the first plugin whose Match accepts the input.
+		//     Fixture sentinels are the fallback so brass-birmingham
+		//     / queued-test / needs-fill-test still drive long-poll
+		//     tests without a network or a registered plugin.
+		//
+		//   - Command-shape (`<plugin>: !<command>`): the Match-based
+		//     walk can't see commands — a plugin with empty url_patterns
+		//     but non-empty commands (e.g. gmail) is invisible there.
+		//     validateRouting upstream already confirmed the named
+		//     plugin exists + advertises the command, so the dispatch
+		//     here is a direct LookupByName.
+		//
 		// If neither hits → 422 unsupported_url (ADR-0002 / ADR-0006):
 		// the request is well-formed, just not actionable with the
 		// currently-loaded plugins.
 		var att ingestAttempt
-		if plugin, matched := registry.Lookup(req.URL); matched {
+		inv := plugins.ParseInvocation(req.URL)
+		if inv.Shape == plugins.InvocationCommand {
+			// validateRouting passed → plugin exists. LookupByName
+			// can't miss; the fallthrough is defensive.
+			plugin, ok := registry.LookupByName(inv.Plugin)
+			if !ok {
+				writeError(w, http.StatusUnprocessableEntity, "unsupported_url",
+					fmt.Sprintf("no plugin handles URL %s", req.URL))
+				return
+			}
+			att = ingestAttemptForPlugin(plugin, req.URL)
+		} else if plugin, matched := registry.Lookup(req.URL); matched {
 			att = ingestAttemptForPlugin(plugin, req.URL)
 		} else {
 			fixtureAtt, err := ingestAttemptForURL(req.URL)

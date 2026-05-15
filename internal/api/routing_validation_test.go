@@ -180,9 +180,13 @@ func TestRoutingValidation_ValidURLShapePassesThrough(t *testing.T) {
 
 // TestRoutingValidation_ValidCommandShapePassesThrough pins the
 // happy-path for command-shape: `gmail: !fetch` against a plugin
-// declaring commands=["fetch"] passes validation. The actual
-// dispatch path for command-shape lands in; here we just
-// confirm validation doesn't reject.
+// declaring commands=["fetch"] passes validation. Post-#52 the
+// dispatch fork also routes the input to the named plugin via
+// LookupByName, so the call reaches the gmail fixture. The fixture
+// emits no envelopes, so the tracker surfaces 404 not_found — a
+// DIFFERENT 404 than validateRouting's "plugin_not_found"
+// rejection. This test pins that distinction by checking the
+// error code in the body, not the bare HTTP status.
 func TestRoutingValidation_ValidCommandShapePassesThrough(t *testing.T) {
 	t.Parallel()
 	h, _ := newRoutingValidationFixture(t)
@@ -191,18 +195,15 @@ func TestRoutingValidation_ValidCommandShapePassesThrough(t *testing.T) {
 		"url": "gmail: !fetch",
 		"wait_seconds": 1,
 	})
-	// validateRouting returns nil → the input falls through to the
-	// rest of the dispatch path. Today there's no command-dispatch
-	// surface yet ( lands the CLI), so the input fails downstream
-	// at the registry.Lookup walk (gmail's MatchFunc returns false).
-	// The downstream path returns 422 unsupported_url. The point of
-	// this test is that we DIDN'T return 400/404 from routing
-	// validation — anything other than those two codes confirms
-	// validation passed.
-	assert.NotEqual(t, http.StatusBadRequest, rec.Code,
-		"valid command-shape must not reject at routing-time (body=%s)", rec.Body.String())
-	assert.NotEqual(t, http.StatusNotFound, rec.Code,
-		"valid command-shape must not reject at routing-time (body=%s)", rec.Body.String())
+	// validateRouting must not reject. Both validator-side codes
+	// (invalid_input @ 400, plugin_not_found @ 404) would mean the
+	// validator wrongly rejected a valid command-shape. The dispatch
+	// fork's downstream behavior (here: 404 not_found because the
+	// fixture emits zero envelopes) is unrelated to validation.
+	assert.NotContains(t, rec.Body.String(), "invalid_input",
+		"valid command-shape must not reject at validation (body=%s)", rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "plugin_not_found",
+		"valid command-shape must not reject at validation (body=%s)", rec.Body.String())
 }
 
 // TestRoutingValidation_PlainURLPassesThrough pins that inputs
