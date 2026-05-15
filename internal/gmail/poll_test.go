@@ -36,6 +36,11 @@ type fakeMessage struct {
 	// (e.g. INBOX + [Gmail]/All Mail) but for this fake we keep
 	// it single-placement to keep tests simple.
 	Folder string
+	// ReadErr, when non-nil, simulates a body-stream read failure
+	// (io.ReadAll on the FETCH BODY[] reader returning an err).
+	// FetchMessages threads it through to FetchedMessage.ReadErr so
+	// the #58 body-read-error path can be exercised end-to-end.
+	ReadErr error
 }
 
 // fakeClient is an in-process IMAP client substitute for the
@@ -110,11 +115,16 @@ func (f *fakeClient) FetchMessages(_ context.Context, uids []uint32) ([]FetchedM
 		if msg == nil {
 			continue
 		}
-		out = append(out, FetchedMessage{
-			UID: uid,
-			Body: msg.rawRFC822(),
+		fm := FetchedMessage{
+			UID:    uid,
 			Labels: msg.labelSlice(),
-		})
+		}
+		if msg.ReadErr != nil {
+			fm.ReadErr = msg.ReadErr
+		} else {
+			fm.Body = msg.rawRFC822()
+		}
+		out = append(out, fm)
 	}
 	return out, nil
 }
@@ -502,6 +512,53 @@ func TestPoller_Tick_DebugLogsEmptySearchResult(t *testing.T) {
 	assert.Nil(t, findRecord(recs, "gmail poll: fetch result"),
 		"fetch-result must NOT fire after empty search")
 	assert.Nil(t, findRecord(recs, "gmail poll: emitted envelope"))
+}
+
+// TestPoller_Tick_BodyReadError_SkipsAndAccumulates pins the #58
+// behavior: a FetchedMessage carrying a non-nil ReadErr (body-stream
+// read failure from io.ReadAll on the FETCH BODY[] reader) must not
+// flow into ParseMessage. The Poller WARN-logs the per-message error
+// + accumulates it into the cycle's errs slice + skips emit + skips
+// MarkIngested, so the next polling cycle re-fetches naturally.
+func TestPoller_Tick_BodyReadError_SkipsAndAccumulates(t *testing.T) {
+	t.Parallel()
+	readErr := errors.New("fake: body stream EOF")
+	failing := &fakeMessage{
+		UID: 1, MessageID: "fail@x", Subject: "broken", From: "x@y.com",
+		Folder: InboxFolderName,
+		ReadErr: readErr,
+	}
+	ok := &fakeMessage{
+		UID: 2, MessageID: "ok@x", Subject: "fine", From: "x@y.com",
+		Folder: InboxFolderName,
+	}
+	fc := newFakeClient(failing, ok)
+	h := &captureHandler{level: slog.LevelDebug}
+	logger := slog.New(h)
+	rec := &recordingEmit{}
+	p := NewPoller(fc, "yaad-ingested", "yaad-skip", rec.emit, logger)
+
+	count, errs := p.Tick(context.Background())
+	assert.Equal(t, 1, count, "only the readable message ingested")
+	require.Len(t, errs, 1, "read failure accumulated to errs")
+	assert.ErrorIs(t, errs[0], readErr, "wrapped read err preserved via %%w")
+
+	// Failing message was NOT emitted and NOT marked.
+	require.Len(t, rec.envelopes, 1, "only the readable message emitted")
+	assert.Equal(t, "gmail:fine-ok-x", rec.envelopes[0].SourceID)
+	assert.ElementsMatch(t, []uint32{2}, fc.markIngestedLog,
+		"failing UID must not get the ingested label")
+	assert.NotContains(t, failing.Labels, "yaad-ingested",
+		"failing message stays uningested so next cycle re-fetches")
+
+	// WARN log carries folder + uid + err for the operator.
+	recs := h.snapshot()
+	warn := findRecord(recs, "gmail poll: body read failed; skipping message")
+	require.NotNil(t, warn, "body-read-failure WARN line missing; got=%v", recs)
+	assert.Equal(t, slog.LevelWarn, warn.Level)
+	wa := recordAttrs(*warn)
+	assert.Equal(t, InboxFolderName, wa["folder"])
+	assert.Equal(t, uint64(1), wa["uid"])
 }
 
 // TestPoller_Tick_DebugLogsParseFailure pins the new debug line

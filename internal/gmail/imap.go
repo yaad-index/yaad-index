@@ -48,10 +48,20 @@ const gmailLabelsStoreItem imap.StoreItem = "+X-GM-LABELS"
 // + vault clean_content), the per-message Gmail label list
 // (parsed out of the X-GM-LABELS response attribute), and the
 // IMAP UID (used for the post-ingest STORE +X-GM-LABELS write).
+//
+// ReadErr, when non-nil, names a body-stream read failure
+// (typically io.ReadAll on the FETCH BODY[] reader returning
+// an err). The poll loop checks this BEFORE attempting to parse;
+// downstream parse would just see empty Body and fail with a
+// less informative error class. Recovery is implicit via the
+// polling cycle — the message still doesn't carry ingested_label,
+// so the next SearchUningested returns its UID + the next fetch
+// re-issues against a (hopefully) recovered stream.
 type FetchedMessage struct {
-	UID uint32
-	Body []byte
-	Labels []string
+	UID     uint32
+	Body    []byte
+	Labels  []string
+	ReadErr error
 }
 
 // Client is the surface the poll loop talks to. Production wires
@@ -278,12 +288,24 @@ func (c *realClient) FetchMessages(_ context.Context, uids []uint32) ([]FetchedM
 		// Body bytes from the BODY[] section. v1's Body map keys
 		// are the requested *BodySectionName values; reading any
 		// non-empty section into bytes is enough.
+		//
+		// io.ReadAll errors used to be discarded (pre-#58), which
+		// silently produced empty-body messages on transient stream
+		// failures. The bytes are now captured + the err parked on
+		// FetchedMessage.ReadErr; the poll loop reads it BEFORE
+		// invoking ParseMessage so the operator sees the actual
+		// failure class instead of a downstream "missing Message-ID"
+		// from the empty-body fallout.
 		for _, lit := range msg.Body {
 			if lit == nil {
 				continue
 			}
-			b, _ := io.ReadAll(lit)
-			fm.Body = b
+			b, err := io.ReadAll(lit)
+			if err != nil {
+				fm.ReadErr = err
+			} else {
+				fm.Body = b
+			}
 			break
 		}
 		// X-GM-LABELS extension data lives in Items under the
