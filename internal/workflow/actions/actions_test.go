@@ -172,35 +172,64 @@ func TestRunner_TaskAppend_EmptySection(t *testing.T) {
 // return ErrActionNotImplemented per Phase 4.A's
 // stub-but-reject policy. Phase 4.B / 4.C replace with
 // real impls.
-func TestRunner_StubActions_ReturnNotImplemented(t *testing.T) {
+// TestRunner_PluginDispatch_StillStubbed: plugin_dispatch
+// stays an in-dispatcher stub returning ErrActionNotImplemented
+// in Phase 4.B (Phase 4.C replaces it). The other primitives
+// now route to real runner-side code (with stub writers
+// at the production wiring layer per Path B).
+func TestRunner_PluginDispatch_StillStubbed(t *testing.T) {
 	t.Parallel()
-	w := &fakeTaskWriter{}
-	r := New(Options{TaskWriter: w})
+	r := New(Options{TaskWriter: &fakeTaskWriter{}})
+	wf := wfWithActions("wf",
+		parser.Action{PluginDispatch: &parser.PluginDispatchAction{Plugin: "yaad-bgg", Command: "fetch"}},
+	)
+	results := r.Run(context.Background(), wf, Decision{Workflow: "wf"}, Activation{})
+	require.Len(t, results, 1)
+	assert.Equal(t, "plugin_dispatch", results[0].Type)
+	require.Error(t, results[0].Err)
+	assert.ErrorIs(t, results[0].Err, ErrActionNotImplemented)
+}
 
-	cases := []struct {
-		name   string
-		action parser.Action
-		typ    string
-	}{
-		{"add_comment", parser.Action{AddComment: &parser.AddCommentAction{Content: "x"}}, "add_comment"},
-		{"plugin_dispatch", parser.Action{PluginDispatch: &parser.PluginDispatchAction{Plugin: "yaad-bgg", Command: "fetch"}}, "plugin_dispatch"},
-		{"add_gap", parser.Action{AddGap: &parser.AddGapAction{Gap: "is_interesting"}}, "add_gap"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			wf := wfWithActions("wf", tc.action)
-			results := r.Run(context.Background(), wf, Decision{Workflow: "wf"}, Activation{})
-			require.Len(t, results, 1)
-			assert.Equal(t, tc.typ, results[0].Type)
-			require.Error(t, results[0].Err)
-			assert.ErrorIs(t, results[0].Err, ErrActionNotImplemented)
-		})
-	}
+// TestRunner_NoCommentWriter_ConfigError: a dispatcher
+// constructed without a CommentWriter surfaces a clear
+// config-error message on add_comment actions — not
+// ErrActionNotImplemented (those come from the
+// production StubCommentWriter that ships in Phase 4.B).
+func TestRunner_NoCommentWriter_ConfigError(t *testing.T) {
+	t.Parallel()
+	r := New(Options{})
+	wf := wfWithActions("wf",
+		parser.Action{AddComment: &parser.AddCommentAction{Content: "hi"}},
+	)
+	results := r.Run(context.Background(), wf, Decision{Workflow: "wf", EntityID: "e1"}, Activation{})
+	require.Len(t, results, 1)
+	assert.Equal(t, "add_comment", results[0].Type)
+	require.Error(t, results[0].Err)
+	assert.Contains(t, results[0].Err.Error(), "no CommentWriter wired")
+}
+
+// TestRunner_NoGapWriter_ConfigError: same shape for
+// add_gap when GapWriter is nil.
+func TestRunner_NoGapWriter_ConfigError(t *testing.T) {
+	t.Parallel()
+	r := New(Options{})
+	wf := wfWithActions("wf",
+		parser.Action{AddGap: &parser.AddGapAction{Gap: "g"}},
+	)
+	wf.AddableGaps = []string{"g"}
+	results := r.Run(context.Background(), wf, Decision{Workflow: "wf", EntityID: "e1"}, Activation{})
+	require.Len(t, results, 1)
+	assert.Equal(t, "add_gap", results[0].Type)
+	require.Error(t, results[0].Err)
+	assert.Contains(t, results[0].Err.Error(), "no GapWriter wired")
 }
 
 // TestRunner_MultipleActions_AllRun: a workflow with
 // multiple actions has each run in order; failures in one
-// don't block subsequent actions.
+// don't block subsequent actions. Uses plugin_dispatch
+// (the only remaining in-dispatcher stub in Phase 4.B) as
+// the mid-list error to exercise the continue-past-failure
+// path.
 func TestRunner_MultipleActions_AllRun(t *testing.T) {
 	t.Parallel()
 	w := &fakeTaskWriter{}
@@ -208,13 +237,13 @@ func TestRunner_MultipleActions_AllRun(t *testing.T) {
 
 	wf := wfWithActions("multi",
 		parser.Action{TaskAppend: &parser.TaskAppendAction{Section: "a", Content: "1"}},
-		parser.Action{AddComment: &parser.AddCommentAction{Content: "stub"}},
+		parser.Action{PluginDispatch: &parser.PluginDispatchAction{Plugin: "yaad-bgg", Command: "fetch"}},
 		parser.Action{TaskAppend: &parser.TaskAppendAction{Section: "b", Content: "2"}},
 	)
 	results := r.Run(context.Background(), wf, Decision{Workflow: "multi"}, Activation{})
 	require.Len(t, results, 3)
 	assert.NoError(t, results[0].Err, "first task_append succeeds")
-	assert.ErrorIs(t, results[1].Err, ErrActionNotImplemented, "stub add_comment errors mid-list")
+	assert.ErrorIs(t, results[1].Err, ErrActionNotImplemented, "stub plugin_dispatch errors mid-list")
 	assert.NoError(t, results[2].Err, "later task_append still runs after stub error")
 	require.Len(t, w.snapshot(), 2)
 }

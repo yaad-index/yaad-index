@@ -127,33 +127,48 @@ type TaskWriter interface {
 	) error
 }
 
-// Options configures a Runner. TaskWriter is required for
-// task_append; nil makes task_append actions fail with a
-// configuration-error result so the engine doesn't silently
-// drop them.
+// Options configures a Runner. Each writer field is
+// optional; nil writers produce clear configuration-error
+// results on the matching action type so the engine doesn't
+// silently drop them.
 type Options struct {
+	// TaskWriter backs task_append. Production wires a
+	// FileTaskWriter rooted at the vault path.
 	TaskWriter TaskWriter
+
+	// CommentWriter backs add_comment. Production wires a
+	// stub (Phase 4.B) → vault-backed impl (Phase 4.B.2).
+	CommentWriter CommentWriter
+
+	// GapWriter backs add_gap. Same Phase 4.B stub → 4.B.2
+	// vault-backed shape as CommentWriter.
+	GapWriter GapWriter
 }
 
 // New constructs a Runner with the given options. The
-// returned Runner dispatches per-action by Type:
+// returned Runner dispatches per-action by primitive:
 //   - task_append → taskAppendRunner backed by
 //     opts.TaskWriter.
-//   - add_comment / plugin_dispatch / add_gap → stub
-//     runners returning ErrActionNotImplemented (Phase
-//     4.B / 4.C replaces).
+//   - add_comment → addCommentRunner backed by
+//     opts.CommentWriter.
+//   - add_gap → addGapRunner backed by opts.GapWriter.
+//   - plugin_dispatch → stub returning
+//     ErrActionNotImplemented (Phase 4.C replaces).
 func New(opts Options) Runner {
 	return &dispatcher{
-		taskWriter: opts.TaskWriter,
+		taskWriter:    opts.TaskWriter,
+		commentWriter: opts.CommentWriter,
+		gapWriter:     opts.GapWriter,
 	}
 }
 
-// dispatcher routes per-action work by Type. Holds the
-// per-primitive runner dependencies; per-action runners
-// are pure functions that close over the dispatcher's
-// fields.
+// dispatcher routes per-action work by primitive. Holds the
+// per-primitive writer dependencies; per-action runners are
+// methods that close over the dispatcher's fields.
 type dispatcher struct {
-	taskWriter TaskWriter
+	taskWriter    TaskWriter
+	commentWriter CommentWriter
+	gapWriter     GapWriter
 }
 
 func (d *dispatcher) Run(ctx context.Context, wf *parser.Workflow, dec Decision, act Activation) []ActionResult {
@@ -179,14 +194,12 @@ func (d *dispatcher) runOne(ctx context.Context, idx int, wf *parser.Workflow, a
 	case a.TaskAppend != nil:
 		return d.runTaskAppend(ctx, idx, wf, a.TaskAppend, dec, act)
 	case a.AddComment != nil:
-		return ActionResult{ActionIdx: idx, Type: "add_comment",
-			Err: fmt.Errorf("%w: add_comment (lands in Phase 4.B)", ErrActionNotImplemented)}
+		return d.runAddComment(ctx, idx, wf, a.AddComment, dec, act)
+	case a.AddGap != nil:
+		return d.runAddGap(ctx, idx, wf, a.AddGap, dec, act)
 	case a.PluginDispatch != nil:
 		return ActionResult{ActionIdx: idx, Type: "plugin_dispatch",
 			Err: fmt.Errorf("%w: plugin_dispatch (lands in Phase 4.C)", ErrActionNotImplemented)}
-	case a.AddGap != nil:
-		return ActionResult{ActionIdx: idx, Type: "add_gap",
-			Err: fmt.Errorf("%w: add_gap (lands in Phase 4.B)", ErrActionNotImplemented)}
 	default:
 		return ActionResult{ActionIdx: idx, Type: "unknown",
 			Err: fmt.Errorf("actions[%d]: no primitive set (workflow parser should have rejected)", idx)}
