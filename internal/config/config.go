@@ -22,11 +22,23 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// kindOrFieldName is the shape rule for canonical-kind names AND for
-// gap field names within a kind (per ADR-0013 §1 + a prior PR's
-// validation list). Lowercase ASCII + digits + underscore; must
-// start with a letter.
+// kindOrFieldName is the shape rule for gap field names within a
+// canonical kind. Lowercase ASCII + digits + underscore; must
+// start with a letter. Field names are CEL-accessible identifiers
+// so hyphens stay out — `entity.foo-bar` parses as a subtraction
+// expression in CEL, not as a field access.
 var kindOrFieldName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// canonicalKindName is the shape rule for canonical-kind names
+// (e.g. `boardgame`, `tv-show`, `email-address`). Looser than
+// kindOrFieldName: hyphens are permitted between alphanumeric
+// groups so operator config can extend gaps on plugin-emitted
+// kinds with hyphenated names (`tv-show`, `email-address`,
+// `film-series`, `video-game`, …). The grouped-hyphen pattern
+// `[a-z][a-z0-9_]*(-[a-z0-9_]+)*` forbids trailing hyphens
+// (`foo-`) and consecutive hyphens (`foo--bar`) — the natural
+// URL-slug shape.
+var canonicalKindName = regexp.MustCompile(`^[a-z][a-z0-9_]*(-[a-z0-9_]+)*$`)
 
 // DefaultPath is the location yaad-index reads its config from when
 // the operator hasn't set --config / YAAD_INDEX_CONFIG.
@@ -590,8 +602,8 @@ func validateUserContentFrontmatterEdges(m map[string]UserContentFrontmatterEdge
 // failure can navigate directly to the offending key.
 func validateCanonicalKinds(reg map[string]CanonicalKindConfig) error {
 	for kind, cfg := range reg {
-		if !kindOrFieldName.MatchString(kind) {
-			return fmt.Errorf("canonical_kinds.%s: invalid kind name; must match [a-z][a-z0-9_]*", kind)
+		if !canonicalKindName.MatchString(kind) {
+			return fmt.Errorf("canonical_kinds.%s: invalid kind name; must match [a-z][a-z0-9_]*(-[a-z0-9_]+)* (hyphens allowed between alphanumeric groups; no trailing or consecutive hyphens)", kind)
 		}
 		if err := validateCanonicalKindConfig(fmt.Sprintf("canonical_kinds.%s", kind), cfg); err != nil {
 			return err
