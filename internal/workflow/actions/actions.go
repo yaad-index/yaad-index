@@ -179,6 +179,13 @@ type Options struct {
 	// a stub (Phase 4.C) → registry-backed impl (Phase 4.C.2).
 	PluginDispatcher PluginDispatcher
 
+	// ErrTaskWriter backs the err-task pattern per ADR-0024
+	// §"Runtime errors". Production wires
+	// FileErrTaskWriter. Nil → StubErrTaskWriter discards
+	// failures (test/dev path); the engine continues to
+	// log per-failure WARN lines regardless.
+	ErrTaskWriter ErrTaskWriter
+
 	// Logger receives drift-warning lines when an action
 	// runner falls back to a raw template field because the
 	// engine's pre-rendered Activation.RenderedTemplates map
@@ -202,11 +209,16 @@ func New(opts Options) Runner {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	errTaskWriter := opts.ErrTaskWriter
+	if errTaskWriter == nil {
+		errTaskWriter = StubErrTaskWriter{}
+	}
 	return &dispatcher{
 		taskWriter:       opts.TaskWriter,
 		commentWriter:    opts.CommentWriter,
 		gapWriter:        opts.GapWriter,
 		pluginDispatcher: opts.PluginDispatcher,
+		errTaskWriter:    errTaskWriter,
 		logger:           logger,
 	}
 }
@@ -219,7 +231,24 @@ type dispatcher struct {
 	commentWriter    CommentWriter
 	gapWriter        GapWriter
 	pluginDispatcher PluginDispatcher
+	errTaskWriter    ErrTaskWriter
 	logger           *slog.Logger
+}
+
+// ErrTaskWriterFor exposes the runner's configured
+// ErrTaskWriter to the engine via a same-package surface.
+// Engine wires this to record systemic failures (condition-
+// eval, subject-render, action-runner non-MissingRef errors)
+// per ADR-0024 §"Runtime errors — the err-task pattern".
+//
+// Defined as a method on Runner instead of the dispatcher
+// directly so the actions package surface stays the public
+// shape — engine consumes only Runner + this accessor.
+func ErrTaskWriterFor(r Runner) ErrTaskWriter {
+	if d, ok := r.(*dispatcher); ok {
+		return d.errTaskWriter
+	}
+	return StubErrTaskWriter{}
 }
 
 // rendered returns the engine's pre-rendered value for

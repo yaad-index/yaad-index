@@ -408,6 +408,11 @@ func (s *ServeCmd) Run() error {
 			CommentWriter:    actions.NewVaultCommentWriter(wfWriterBackend),
 			GapWriter:        actions.NewVaultGapWriter(wfWriterBackend),
 			PluginDispatcher: wfPluginDispatcher,
+			// Phase 5.B err-task pattern — systemic failures
+			// (condition-eval, subject-render, action-runner
+			// non-MissingRef errors) accumulate into the
+			// workflow's err task at tasks/<workflow>-err.md.
+			ErrTaskWriter: actions.NewFileErrTaskWriter(cfg.Vault.Path),
 			// Receives the rendered-template drift Warn when
 			// the engine ships a non-nil RenderedTemplates map
 			// that lacks an expected (idx, field) entry —
