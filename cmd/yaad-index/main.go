@@ -333,6 +333,17 @@ func (s *ServeCmd) Run() error {
 			return fmt.Errorf("init attachments dispatcher (plugin_staging_dir=%s): %w", stagingDir, err)
 		}
 		handlerOpts = append(handlerOpts, api.WithAttachmentsDispatcher(dispatcher))
+
+		// Shared SyncIngester per ADR-0024 §"workflow.trigger(input)
+		// input semantics". One tracker drives both /v1/ingest and
+		// the workflow engine's URL-shape input path so job-map
+		// dedup + cache-TTL gate coordinate across surfaces.
+		syncIngester := api.NewSyncIngester(
+			logger, st, registry, writer, reader,
+			guard, cfg.CacheTTLSeconds, dispatcher, wfWriteLocks, bus,
+		)
+		handlerOpts = append(handlerOpts, api.WithSyncIngester(syncIngester))
+
 		// Propagate the staging dir to subprocess plugins via
 		// YAAD_PLUGIN_STAGING_DIR (per ADR-0014 §6 PR-B). Mirrors
 		// clock.SetLocation's plumbing — package-level set-once at
@@ -405,10 +416,11 @@ func (s *ServeCmd) Run() error {
 			Logger: logger,
 		})
 		wfEngine, err := engine.New(engine.Options{
-			Bus:      bus,
-			Resolver: wfResolver,
-			Runner:   wfRunner,
-			Logger:   logger,
+			Bus:          bus,
+			Resolver:     wfResolver,
+			Runner:       wfRunner,
+			IngestRouter: syncIngester,
+			Logger:       logger,
 		})
 		if err != nil {
 			return fmt.Errorf("init workflow engine: %w", err)

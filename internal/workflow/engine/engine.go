@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,6 +45,27 @@ import (
 // rather than an err-task.
 type EntityResolver interface {
 	Resolve(ctx context.Context, id string) (map[string]any, error)
+}
+
+// IngestRouter is the URL-shape input resolution surface the
+// engine uses for Dispatch per ADR-0024 §"workflow.trigger(input)
+// input semantics" — when the manual-trigger input is a URL
+// rather than a canonical entity id, the engine routes
+// through the daemon's plugin pipeline before attaching the
+// workflow.
+//
+// Production wires an adapter around api.SyncIngester so the
+// HTTP /v1/ingest path + workflow URL routing share one
+// tracker (job-map dedup, cache-TTL gate, persistence). Tests
+// substitute in-memory fakes that return canned id-or-error
+// pairs.
+//
+// IngestURL returns the canonical entity id after the ingest
+// pipeline reaches a terminal state. timeout caps the wait;
+// a tracker still in progress when timeout fires surfaces as
+// context.DeadlineExceeded.
+type IngestRouter interface {
+	IngestURL(ctx context.Context, url string, timeout time.Duration) (entityID string, err error)
 }
 
 // Decision captures one workflow's evaluation against one
@@ -108,6 +130,21 @@ type Options struct {
 	// primitives to their implementations.
 	Runner actions.Runner
 
+	// IngestRouter resolves URL-shape Dispatch inputs to a
+	// canonical entity id via the daemon's plugin pipeline
+	// per ADR-0024 §"workflow.trigger(input) input
+	// semantics". Nil → URL-shape Dispatch inputs return
+	// ErrURLInputNotSupported (preserves legacy entity-id +
+	// empty-input paths for tests / dev binaries without a
+	// plugin pipeline).
+	IngestRouter IngestRouter
+
+	// IngestTimeout caps the per-call wait on IngestRouter.
+	// Zero → DefaultIngestTimeout. Maps to the tracker's
+	// long-poll budget; a URL still being ingested when the
+	// budget fires surfaces as context.DeadlineExceeded.
+	IngestTimeout time.Duration
+
 	// Logger receives the per-decision Info line + any
 	// engine-internal warnings. Nil → discarding handler.
 	Logger *slog.Logger
@@ -117,6 +154,13 @@ type Options struct {
 	// Zero → DefaultDecisionRingSize.
 	DecisionRingSize int
 }
+
+// DefaultIngestTimeout caps Engine.Dispatch's wait on the
+// configured IngestRouter when Options.IngestTimeout is unset.
+// Sized to cover ADR-0022's 30s plugin-dispatch budget plus
+// modest tracker overhead. Production main.go can override
+// per its operator-config.
+const DefaultIngestTimeout = 60 * time.Second
 
 // DefaultDecisionRingSize bounds the engine's in-memory
 // decision history when DecisionRingSize is unset. Sized to
@@ -130,11 +174,13 @@ const DefaultDecisionRingSize = 1024
 // Reconcile(workflows); use Decisions() to inspect the
 // recorded history.
 type Engine struct {
-	bus      eventbus.Bus
-	resolver EntityResolver
-	runner   actions.Runner
-	logger   *slog.Logger
-	ringSize int
+	bus           eventbus.Bus
+	resolver      EntityResolver
+	runner        actions.Runner
+	ingestRouter  IngestRouter
+	ingestTimeout time.Duration
+	logger        *slog.Logger
+	ringSize      int
 
 	mu        sync.Mutex
 	workflows map[string]*registeredWorkflow
@@ -189,13 +235,19 @@ func New(opts Options) (*Engine, error) {
 	if runner == nil {
 		runner = actions.NopRunner{}
 	}
+	ingestTimeout := opts.IngestTimeout
+	if ingestTimeout <= 0 {
+		ingestTimeout = DefaultIngestTimeout
+	}
 	return &Engine{
-		bus:       opts.Bus,
-		resolver:  opts.Resolver,
-		runner:    runner,
-		logger:    logger,
-		ringSize:  ring,
-		workflows: make(map[string]*registeredWorkflow),
+		bus:           opts.Bus,
+		resolver:      opts.Resolver,
+		runner:        runner,
+		ingestRouter:  opts.IngestRouter,
+		ingestTimeout: ingestTimeout,
+		logger:        logger,
+		ringSize:      ring,
+		workflows:     make(map[string]*registeredWorkflow),
 	}, nil
 }
 
@@ -757,6 +809,13 @@ var ErrUnknownWorkflow = errors.New("engine: workflow not registered")
 // workflows (e.g. daily-summary).
 var ErrEmptyInputNotAllowed = errors.New("engine: workflow requires a non-empty input")
 
+// ErrURLInputNotSupported is returned by Dispatch when the
+// input is URL-shape but no IngestRouter is wired. Production
+// main.go wires one when the daemon's plugin pipeline is
+// available; tests / dev binaries without that wiring keep
+// URL-shape input rejecting cleanly.
+var ErrURLInputNotSupported = errors.New("engine: URL-shape input requires an IngestRouter; none wired")
+
 // Dispatch is the manual-trigger entry point per ADR-0024
 // §"workflow.trigger(input) input semantics". Disambiguates
 // input by syntactic shape:
@@ -765,17 +824,29 @@ var ErrEmptyInputNotAllowed = errors.New("engine: workflow requires a non-empty 
 //     for trigger.type=manual). Activation.Entity is the
 //     empty map; predicates that access entity fields see
 //     has()==false.
+//   - URL — routes through the configured IngestRouter
+//     (plugin pipeline) per ADR-0024 §"workflow.trigger(input)
+//     input semantics". On success the returned canonical
+//     entity id becomes the workflow's target. On routing
+//     failure (no plugin handles, malformed URL,
+//     disambiguation required) Dispatch returns a typed
+//     error to the caller before any workflow run starts —
+//     no Decision is recorded.
 //   - Anything else — treated as an entity ID
 //     (`<kind>:<slug>` per ADR-0017). Resolver lookup
 //     populates Activation.Entity; an unresolved id
 //     produces a Decision with MissingRefs rather than a
 //     hard Dispatch error.
 //
-// URL → ingest-or-lookup route is a Phase 3.C+ follow-up
-// (requires coupling to the ingest tracker). The current
-// v1 cut handles entity-ID + empty, covering the
-// already-resolved-entity + daily-summary shapes the ADR
-// names as primary.
+// URL detection: a `://` substring in the input is the
+// canonical mark (`https://...`, `http://...`,
+// `bgg://...`). Plugin shorthand (`<plugin>: <pattern>`
+// without `://`) is intentionally NOT URL-shape — operators
+// who want plugin-shorthand input use the plugin's URL
+// pattern that includes `://`, or pre-resolve to entity-id.
+// This narrows the v1 disambiguation surface; future
+// iterations can widen to plugin-shorthand if the use case
+// surfaces.
 //
 // The resulting Decision is appended to the engine's ring
 // buffer + returned to the caller. HTTP / CLI handlers
@@ -800,22 +871,45 @@ func (e *Engine) Dispatch(ctx context.Context, name, input string) (Decision, er
 		// target-less to NOT produce a MissingRef). Inline
 		// the empty-target path here:
 		e.runEvaluation(ctx, reg, "", map[string]any{}, nil)
-	} else {
-		e.evaluateAndRecord(ctx, reg, input, nil)
+		return e.findRecentDecision(name, ""), nil
 	}
 
-	// Return the most-recent decision matching (name,
-	// entityID). evaluateAndRecord just appended it; the
-	// reverse-scan finds it without a deep struct comparison.
+	target := input
+	if strings.Contains(input, "://") {
+		// URL-shape input — route through the IngestRouter
+		// to get the canonical entity id. Per ADR-0024, the
+		// trigger call itself fails synchronously on routing
+		// errors; no Decision is recorded.
+		if e.ingestRouter == nil {
+			return Decision{}, fmt.Errorf("%w: %s", ErrURLInputNotSupported, input)
+		}
+		id, err := e.ingestRouter.IngestURL(ctx, input, e.ingestTimeout)
+		if err != nil {
+			return Decision{}, fmt.Errorf("dispatch %s: ingest %q: %w", name, input, err)
+		}
+		target = id
+	}
+
+	e.evaluateAndRecord(ctx, reg, target, nil)
+	return e.findRecentDecision(name, target), nil
+}
+
+// findRecentDecision returns the most-recent recorded
+// Decision matching (workflow, entityID). The evaluation
+// path just appended it; the reverse-scan finds it without a
+// deep struct comparison. A zero-value Decision (rather than
+// the inserted one) is the defensive fallback for races where
+// the ring buffer evicted the entry between insert + read.
+func (e *Engine) findRecentDecision(name, entityID string) Decision {
 	e.decMu.Lock()
 	defer e.decMu.Unlock()
 	for i := len(e.decisions) - 1; i >= 0; i-- {
 		d := e.decisions[i]
-		if d.Workflow == name && d.EntityID == input {
-			return d, nil
+		if d.Workflow == name && d.EntityID == entityID {
+			return d
 		}
 	}
-	return Decision{Workflow: name, EntityID: input, At: time.Now().UTC()}, nil
+	return Decision{Workflow: name, EntityID: entityID, At: time.Now().UTC()}
 }
 
 // runEvaluation is the inner pipeline used by both
