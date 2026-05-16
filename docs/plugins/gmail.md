@@ -25,9 +25,12 @@ The binary is the only artifact; there are no shared libraries or runtime config
 plugins:
  - name: gmail
  path: /absolute/path/to/yaad-gmail
+ fetch_timeout: 5m   # optional; daemon default is 60s
 ```
 
 After editing the config, restart yaad-index. On startup yaad-index calls `yaad-gmail --init` to discover the plugin's capabilities, then dispatches per-poll-cycle invocations per the configured cadence.
+
+`fetch_timeout` is the wall-clock budget yaad-index enforces per `yaad-gmail fetch` invocation. The default suits a small steady inbox. Operators with large backlogs (initial sync, busy mailboxes) should raise it — a 137-envelope fetch measured ~10s in repro, so a 5-minute budget holds roughly 30× headroom. When the budget is exceeded the subprocess is SIGKILL'd and the error surfaces as `fetchTimeout=<value> exceeded`. Format accepts any `time.ParseDuration` shape (`30s`, `5m`, `1h`).
 
 ## Auth + configuration
 

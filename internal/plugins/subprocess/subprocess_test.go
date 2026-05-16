@@ -735,6 +735,21 @@ func TestPlugin_FetchHonoursTimeout(t *testing.T) {
 	require.Error(t, err, "Fetch with slow plugin: want timeout error")
 	assert.LessOrEqual(t, elapsed, 2500*time.Millisecond,
 		"Fetch elapsed %s — want roughly 1s (WithFetchTimeout)", elapsed)
+	// Error must name the knob that fired so operators don't have
+	// to guess what `signal: killed` means.
+	assert.Contains(t, err.Error(), "fetchTimeout=1s exceeded",
+		"timeout error should name the knob; got %q", err.Error())
+}
+
+// TestPlugin_DefaultFetchTimeoutIsMinute pins the bumped default so
+// future refactors don't accidentally regress to the original 5s.
+// The 5s value SIGKILLed real-world fetches (yaad-gmail against
+// a non-trivial inbox completed in ~10s).
+func TestPlugin_DefaultFetchTimeoutIsMinute(t *testing.T) {
+	assert.Equal(t, 60*time.Second, DefaultFetchTimeout,
+		"DefaultFetchTimeout regressed; see #105")
+	assert.Equal(t, 5*time.Second, DefaultInitTimeout,
+		"DefaultInitTimeout regressed; see #105")
 }
 
 // --- RunVersion + NewWithCapabilities ( capabilities cache) ---

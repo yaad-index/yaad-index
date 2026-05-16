@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -188,6 +189,80 @@ plugins:
 	_, err := Load(cfgPath)
 	require.Error(t, err, "Load with directory path")
 	assert.Contains(t, err.Error(), "directory")
+}
+
+func TestLoad_AcceptsFetchTimeout(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-gmail")
+
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: gmail
+    path: `+bin+`
+    fetch_timeout: 5m
+`)
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	require.Len(t, cfg.Plugins, 1)
+	assert.Equal(t, "5m", cfg.Plugins[0].FetchTimeout)
+	assert.Equal(t, 5*time.Minute, cfg.Plugins[0].FetchTimeoutDuration())
+}
+
+func TestLoad_AbsentFetchTimeoutReturnsZero(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-gmail")
+
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: gmail
+    path: `+bin+`
+`)
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	// Zero signals "no override" so the daemon falls through to
+	// subprocess.DefaultFetchTimeout — explicit so a refactor that
+	// stores the parsed value can't accidentally mean 0s.
+	assert.Equal(t, "", cfg.Plugins[0].FetchTimeout)
+	assert.Equal(t, time.Duration(0), cfg.Plugins[0].FetchTimeoutDuration())
+}
+
+func TestLoad_RejectsUnparseableFetchTimeout(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-gmail")
+
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: gmail
+    path: `+bin+`
+    fetch_timeout: "not-a-duration"
+`)
+	_, err := Load(cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "fetch_timeout")
+	assert.Contains(t, err.Error(), "not-a-duration")
+}
+
+func TestLoad_RejectsNegativeFetchTimeout(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-gmail")
+
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: gmail
+    path: `+bin+`
+    fetch_timeout: -5s
+`)
+	_, err := Load(cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be positive")
 }
 
 func TestLoad_EmptyPluginsListIsValid(t *testing.T) {
