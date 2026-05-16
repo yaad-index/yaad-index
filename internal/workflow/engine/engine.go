@@ -330,23 +330,67 @@ func (e *Engine) makeEdgeHandler(reg *registeredWorkflow) eventbus.Handler {
 		// can't run anyway, so a missing-reference shape
 		// makes more sense than a silent skip.
 		entityID := edge.ToID
+		var toEntity, fromEntity map[string]any
+		toResolved := false
 		if m.TargetKind != "" {
-			toEntity, err := e.resolveEntity(ctx, entityID)
+			got, err := e.resolveEntity(ctx, entityID)
 			if err != nil {
 				e.recordEngineError(reg, entityID, fmt.Errorf("target_kind probe: %w", err))
 				return
 			}
-			if kindOf(toEntity) != m.TargetKind {
+			if kindOf(got) != m.TargetKind {
 				return
 			}
+			toEntity = got
+			toResolved = true
 		}
+		// Build the full edge field set per ADR-0024 §"Decision
+		// logic": type / from / to / from_title / to_title /
+		// timestamp. Title fields are resolved through the
+		// EntityResolver; on missing/empty the title field is
+		// omitted so predicates can use has() to guard.
+		// Timestamp is the event's At (publisher-stamped on
+		// emit, per eventbus contract).
 		edgeMap := map[string]any{
-			"type": edge.EdgeType,
-			"from": edge.FromID,
-			"to":   edge.ToID,
+			"type":      edge.EdgeType,
+			"from":      edge.FromID,
+			"to":        edge.ToID,
+			"timestamp": edge.At,
+		}
+		// Resolve from/to titles. Skip the to-resolve if we
+		// already did it above for the target_kind filter.
+		if !toResolved {
+			toEntity, _ = e.resolveEntity(ctx, edge.ToID)
+		}
+		fromEntity, _ = e.resolveEntity(ctx, edge.FromID)
+		if title := titleOf(fromEntity); title != "" {
+			edgeMap["from_title"] = title
+		}
+		if title := titleOf(toEntity); title != "" {
+			edgeMap["to_title"] = title
 		}
 		e.evaluateAndRecord(ctx, reg, entityID, edgeMap)
 	}
+}
+
+// titleOf reads the "title" field from a resolved entity
+// map. Returns "" when the entity is nil, has no title
+// field, or the title isn't a string. Predicates that need
+// the title check has(edge.to_title) before reading; the
+// empty return lets the engine omit the field cleanly.
+func titleOf(entity map[string]any) string {
+	if entity == nil {
+		return ""
+	}
+	v, ok := entity["title"]
+	if !ok {
+		return ""
+	}
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return s
 }
 
 // makeEntityHandler returns a bus handler for
@@ -526,6 +570,132 @@ func (e *Engine) Decisions() []Decision {
 	out := make([]Decision, len(e.decisions))
 	copy(out, e.decisions)
 	return out
+}
+
+// ErrUnknownWorkflow is returned by Dispatch when no
+// workflow with the requested name is registered. The HTTP
+// + CLI manual-trigger surfaces translate this to a 404
+// so the caller can re-list valid names.
+var ErrUnknownWorkflow = errors.New("engine: workflow not registered")
+
+// ErrEmptyInputNotAllowed is returned by Dispatch when an
+// empty input is passed for an event-driven workflow. Per
+// ADR-0024, empty input is reserved for target-less manual
+// workflows (e.g. daily-summary).
+var ErrEmptyInputNotAllowed = errors.New("engine: workflow requires a non-empty input")
+
+// Dispatch is the manual-trigger entry point per ADR-0024
+// §"workflow.trigger(input) input semantics". Disambiguates
+// input by syntactic shape:
+//
+//   - Empty string — target-less manual fire (allowed only
+//     for trigger.type=manual). Activation.Entity is the
+//     empty map; predicates that access entity fields see
+//     has()==false.
+//   - Anything else — treated as an entity ID
+//     (`<kind>:<slug>` per ADR-0017). Resolver lookup
+//     populates Activation.Entity; an unresolved id
+//     produces a Decision with MissingRefs rather than a
+//     hard Dispatch error.
+//
+// URL → ingest-or-lookup route is a Phase 3.C+ follow-up
+// (requires coupling to the ingest tracker). The current
+// v1 cut handles entity-ID + empty, covering the
+// already-resolved-entity + daily-summary shapes the ADR
+// names as primary.
+//
+// The resulting Decision is appended to the engine's ring
+// buffer + returned to the caller. HTTP / CLI handlers
+// serialize the Decision directly back to the invoker.
+func (e *Engine) Dispatch(ctx context.Context, name, input string) (Decision, error) {
+	e.mu.Lock()
+	reg, ok := e.workflows[name]
+	e.mu.Unlock()
+	if !ok {
+		return Decision{}, fmt.Errorf("%w: %q", ErrUnknownWorkflow, name)
+	}
+
+	if input == "" {
+		if reg.workflow.Trigger.Type != parser.TriggerTypeManual {
+			return Decision{}, fmt.Errorf("%w: workflow %q is event-driven (trigger=%s)",
+				ErrEmptyInputNotAllowed, name, reg.workflow.Trigger.Type)
+		}
+		// Target-less Dispatch: synthesize an empty entity
+		// activation. evaluateAndRecord handles the empty-id
+		// case (resolveEntity returns ErrEntityNotFound,
+		// which surfaces as a MissingRef — but we want
+		// target-less to NOT produce a MissingRef). Inline
+		// the empty-target path here:
+		e.runEvaluation(ctx, reg, "", map[string]any{}, nil)
+	} else {
+		e.evaluateAndRecord(ctx, reg, input, nil)
+	}
+
+	// Return the most-recent decision matching (name,
+	// entityID). evaluateAndRecord just appended it; the
+	// reverse-scan finds it without a deep struct comparison.
+	e.decMu.Lock()
+	defer e.decMu.Unlock()
+	for i := len(e.decisions) - 1; i >= 0; i-- {
+		d := e.decisions[i]
+		if d.Workflow == name && d.EntityID == input {
+			return d, nil
+		}
+	}
+	return Decision{Workflow: name, EntityID: input, At: time.Now().UTC()}, nil
+}
+
+// runEvaluation is the inner pipeline used by both
+// evaluateAndRecord (event-bus path, which pre-resolves the
+// entity) and Dispatch's target-less path (synthesizes an
+// empty entity). Skips the resolve step on the assumption
+// the caller has already populated entity.
+func (e *Engine) runEvaluation(ctx context.Context, reg *registeredWorkflow, entityID string, entity, edge map[string]any) {
+	dec := Decision{
+		Workflow: reg.workflow.Name,
+		EntityID: entityID,
+		At:       time.Now().UTC(),
+	}
+	act := decision.Activation{
+		Entity:   entity,
+		Edge:     edge,
+		Bindings: make(map[string]any, len(reg.contextBinds)),
+	}
+	for _, cb := range reg.contextBinds {
+		val, bres, err := cb.program.EvalDyn(ctx, act)
+		if err != nil {
+			dec.Err = fmt.Errorf("context.%s.via: %w", cb.name, err)
+			e.recordDecision(dec)
+			return
+		}
+		dec.MissingRefs = append(dec.MissingRefs, bres.MissingRefs...)
+		act.Bindings[cb.name] = val
+	}
+	fired := true
+	if reg.condition != nil {
+		got, cres, err := reg.condition.EvalBool(ctx, act)
+		if err != nil {
+			dec.Err = fmt.Errorf("condition: %w", err)
+			e.recordDecision(dec)
+			return
+		}
+		dec.MissingRefs = append(dec.MissingRefs, cres.MissingRefs...)
+		fired = got
+	}
+	dec.Fired = fired
+	dec.MissingRefs = dedupMissingRefs(dec.MissingRefs)
+	if reg.subject != nil {
+		sub, sres, err := reg.subject.EvalString(ctx, act)
+		if err != nil {
+			dec.Err = fmt.Errorf("subject: %w", err)
+			e.recordDecision(dec)
+			return
+		}
+		dec.MissingRefs = append(dec.MissingRefs, sres.MissingRefs...)
+		dec.MissingRefs = dedupMissingRefs(dec.MissingRefs)
+		dec.Subject = sub
+	}
+	e.recordDecision(dec)
 }
 
 // Registered returns the sorted-by-name list of currently-

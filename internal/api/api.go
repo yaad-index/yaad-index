@@ -15,6 +15,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/workflow/engine"
 	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
@@ -139,6 +140,9 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	if cfg.reindexHandler != nil {
 		mux.Handle("POST /v1/reindex", protect(cfg.reindexHandler))
 	}
+	if cfg.workflowEngine != nil {
+		mux.Handle("POST /v1/workflows/trigger", protect(http.HandlerFunc(handleWorkflowTrigger(logger, cfg.workflowEngine))))
+	}
 	return withRequestID(withRecover(logger)(mux))
 }
 
@@ -202,6 +206,12 @@ type handlerConfig struct {
 	// Publish is a no-op in that state, so tests + dev deployments
 	// don't have to wire one explicitly.
 	eventBus eventbus.Bus
+	// workflowEngine, when non-nil, exposes the manual-trigger
+	// endpoint POST /v1/workflows/trigger per ADR-0024 §"Agent
+	// surface". The endpoint stays unregistered (404) when this
+	// option isn't wired — useful for tests + dev binaries
+	// without a vault, where no workflow engine runs.
+	workflowEngine *engine.Engine
 }
 
 // WithReindexHandler registers a handler for POST /v1/reindex. When
@@ -415,4 +425,15 @@ func WithJWKS(keys []auth.JWK) HandlerOption {
 // state, so existing surfaces see no behavior change.
 func WithEventBus(b eventbus.Bus) HandlerOption {
 	return func(c *handlerConfig) { c.eventBus = b }
+}
+
+// WithWorkflowEngine wires the workflow engine into the API
+// so POST /v1/workflows/trigger is registered (per ADR-0024
+// §"Agent surface"). Omitting this option leaves the route
+// unregistered (404) — appropriate for tests + dev binaries
+// that don't run the workflow engine. Production main.go
+// wires this when cfg.Vault.Path is configured (the same
+// gating used for the loader + reconcile loop).
+func WithWorkflowEngine(eng *engine.Engine) HandlerOption {
+	return func(c *handlerConfig) { c.workflowEngine = eng }
 }
