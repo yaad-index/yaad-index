@@ -56,27 +56,31 @@ func SplitLabelID(id string) (kind, slug string, ok bool) {
 // operator-fill values + Data are preserved.
 //
 // label is `<kind>:<slug>`; the helper splits + UpsertEntity-s
-// the thin row. Returns an error wrapping the underlying store
-// failure on UpsertEntity / probe; a malformed label returns an
-// error so callers can log + skip.
+// the thin row. Returns (created, err): `created` is true when
+// this call inserted a new row, false when an existing row was
+// reused; on error `created` is false and the err wraps the
+// underlying store failure (or names the malformed label).
 //
-// AllowKind / source-type-bypass gating is the caller's
-// responsibility: this helper only ensures the row exists.
-func EnsureLabelRow(ctx context.Context, st store.Store, label string, logger *slog.Logger) error {
+// The `created` return lets callers emit lifecycle events (e.g.
+// the workflow-engine eventbus.entity.created event per ADR-0024
+// Phase 2) only on the first-time-seen path. AllowKind /
+// source-type-bypass gating remains the caller's responsibility:
+// this helper only ensures the row exists.
+func EnsureLabelRow(ctx context.Context, st store.Store, label string, logger *slog.Logger) (bool, error) {
 	kind, _, ok := SplitLabelID(label)
 	if !ok {
-		return fmt.Errorf("malformed canonical-label id %q", label)
+		return false, fmt.Errorf("malformed canonical-label id %q", label)
 	}
 	if _, err := st.GetEntity(ctx, label); err == nil {
-		return nil
+		return false, nil
 	} else if !errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("probe %q: %w", label, err)
+		return false, fmt.Errorf("probe %q: %w", label, err)
 	}
 	if err := st.UpsertEntity(ctx, &store.Entity{ID: label, Kind: kind}); err != nil {
-		return fmt.Errorf("upsert thin row %q: %w", label, err)
+		return false, fmt.Errorf("upsert thin row %q: %w", label, err)
 	}
 	if logger != nil {
 		logger.Debug("auto-materialized thin canonical-label row", "id", label, "kind", kind)
 	}
-	return nil
+	return true, nil
 }

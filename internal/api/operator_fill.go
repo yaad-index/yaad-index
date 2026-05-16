@@ -272,7 +272,7 @@ func handleEntityOperatorFill(
 		// are auto-materialized as thin entity rows (mirrors the
 		// ingest-time path from phase B) so the FK on edges
 		// is satisfied.
-		if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, ops, kindCfg.Gaps, logger); err != nil {
+		if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, ops, kindCfg.Gaps, logger, bus, eventbus.SourceOperator); err != nil {
 			logger.ErrorContext(r.Context(), "operator-fill canonical_type edge create/replace",
 				"err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",

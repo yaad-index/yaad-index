@@ -291,7 +291,7 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 		// source, ensures thin label rows for new endpoints, then
 		// CreateEdge for each.
 		if len(canonicalTypeOps) > 0 {
-			if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, canonicalTypeOps, kindCfg.Gaps, logger); err != nil {
+			if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, canonicalTypeOps, kindCfg.Gaps, logger, bus, eventbus.SourceAgent); err != nil {
 				logger.ErrorContext(r.Context(), "fill canonical_type edge create/replace",
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",

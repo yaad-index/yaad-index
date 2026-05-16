@@ -385,7 +385,7 @@ func (r *Reindexer) applyVaultEdges(ctx context.Context, entity *vault.Entity) (
 					}
 					continue
 				}
-				if err := canonical.EnsureLabelRow(ctx, r.store, ve.To, r.logger); err != nil {
+				if _, err := canonical.EnsureLabelRow(ctx, r.store, ve.To, r.logger); err != nil {
 					errs = append(errs,
 						fmt.Sprintf("ensure label row %s [%s] -> %s: %v", entity.ID, edgeType, ve.To, err))
 					continue

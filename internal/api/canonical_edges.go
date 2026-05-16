@@ -18,9 +18,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/slug"
 	"github.com/yaad-index/yaad-index/internal/store"
 )
@@ -53,6 +55,20 @@ import (
 // fire because we pre-create thin rows; if it does anyway the
 // caller surfaces 500 since the edge layer is partway-applied
 // and the caller has no clean rollback.
+//
+// Eventbus emissions (ADR-0024 Phase 2): when bus is non-nil, this
+// helper publishes:
+//
+//   - entity.created on each thin label row that's materialized for
+//     the first time (gated on the `created` return from
+//     ensureCanonicalLabelRow so existing rows don't re-emit).
+//   - entity.edge_added on each canonical-type edge created.
+//
+// The `source` tag flows through to both event types so subscribers
+// can branch on agent-fill vs operator-fill (and future
+// workflow-injected fills via Phase 4+). When bus is nil the helper
+// is silent on emission — used by the UGC paths until UGC eventbus
+// wiring lands as a follow-up.
 func applyCanonicalTypeEdges(
 	ctx context.Context,
 	st store.Store,
@@ -60,6 +76,8 @@ func applyCanonicalTypeEdges(
 	ops []operatorFillOp,
 	gaps map[string]config.GapSpec,
 	logger *slog.Logger,
+	bus eventbus.Bus,
+	source eventbus.Source,
 ) error {
 	for _, op := range ops {
 		spec, ok := gaps[op.Field]
@@ -85,8 +103,23 @@ func applyCanonicalTypeEdges(
 			return fmt.Errorf("canonical_type op %q: expected []string value, got %T", op.Field, op.Value)
 		}
 		for _, label := range labels {
-			if err := ensureCanonicalLabelRow(ctx, st, label, logger); err != nil {
+			created, err := ensureCanonicalLabelRow(ctx, st, label, logger)
+			if err != nil {
 				return fmt.Errorf("ensure label row %q: %w", label, err)
+			}
+			if created && bus != nil {
+				// Thin canonical-label row materialized for the
+				// first time on this fill — publish per ADR-0024
+				// Phase 2. SplitLabelID was already validated
+				// inside EnsureLabelRow, so the kind extraction
+				// here can't fail.
+				kind, _, _ := splitCanonicalLabelID(label)
+				bus.Publish(ctx, eventbus.EntityCreatedEvent{
+					ID:        label,
+					Kind:      kind,
+					SourceTag: source,
+					At:        time.Now().UTC(),
+				})
 			}
 			if err := st.CreateEdge(ctx, &store.Edge{
 				Type: op.Field,
@@ -95,6 +128,19 @@ func applyCanonicalTypeEdges(
 			}); err != nil {
 				return fmt.Errorf("create edge %s -[%s]-> %s: %w",
 					sourceID, op.Field, label, err)
+			}
+			if bus != nil {
+				// One entity.edge_added per canonical-label edge
+				// created — workflow subscribers commonly trigger
+				// on these to surface "this entity got tagged as
+				// X" downstream effects.
+				bus.Publish(ctx, eventbus.EntityEdgeAddedEvent{
+					FromID:    sourceID,
+					ToID:      label,
+					EdgeType:  op.Field,
+					SourceTag: source,
+					At:        time.Now().UTC(),
+				})
 			}
 		}
 	}
@@ -107,7 +153,7 @@ func applyCanonicalTypeEdges(
 // paths. The local thin wrappers keep call sites inside this
 // package readable while making the cross-package extract obvious.
 
-func ensureCanonicalLabelRow(ctx context.Context, st store.Store, label string, logger *slog.Logger) error {
+func ensureCanonicalLabelRow(ctx context.Context, st store.Store, label string, logger *slog.Logger) (bool, error) {
 	return canonical.EnsureLabelRow(ctx, st, label, logger)
 }
 

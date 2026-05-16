@@ -311,7 +311,12 @@ func handleUserContentCreate(
 		// a follow-up issue per yaad's scope direction.
 		if len(ucEdgeOps) > 0 {
 			ucGaps := userContentEdgeGapsFromMappings(frontmatterEdges)
-			if err := applyCanonicalTypeEdges(r.Context(), st, id, ucEdgeOps, ucGaps, logger); err != nil {
+			// UGC eventbus emission is deferred to a follow-up; nil
+			// bus + empty source make applyCanonicalTypeEdges
+			// skip the Publish calls. UGC writes are
+			// operator-authored, so when wired the source will
+			// be eventbus.SourceOperator.
+			if err := applyCanonicalTypeEdges(r.Context(), st, id, ucEdgeOps, ucGaps, logger, nil, ""); err != nil {
 				logger.ErrorContext(r.Context(), "user-content create: canonical-edge derivation",
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",
@@ -695,7 +700,9 @@ func handleUserContentFrontmatterEdit(
 		fullOps := buildFullEditOpsFromMappings(ucEdgeOps, frontmatterEdges, req.Data)
 		if len(fullOps) > 0 {
 			ucGaps := userContentEdgeGapsFromMappings(frontmatterEdges)
-			if err := applyCanonicalTypeEdges(r.Context(), st, id, fullOps, ucGaps, logger); err != nil {
+			// UGC eventbus emission is deferred (see
+			// handleUserContentCreate's call for the same rationale).
+			if err := applyCanonicalTypeEdges(r.Context(), st, id, fullOps, ucGaps, logger, nil, ""); err != nil {
 				logger.ErrorContext(r.Context(), "user-content frontmatter-edit: canonical-edge re-derivation",
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",

@@ -422,6 +422,254 @@ func TestHandler_NoEventBusOption_DefaultsToNoOp(t *testing.T) {
 		"endpoint succeeds with default no-subscriber bus; body=%s", rec.Body.String())
 }
 
+// newCanonicalTypeFixtureWithBus mirrors newCanonicalTypeFixture
+// but wires an eventbus.Bus so canonical-type-edge tests can
+// subscribe before issuing the fill request.
+func newCanonicalTypeFixtureWithBus(t *testing.T, gapKinds []string) (http.Handler, store.Store, string, auth.Signer, eventbus.Bus) {
+	t.Helper()
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	r, err := vault.NewReader(root)
+	require.NoError(t, err)
+
+	keyDir := t.TempDir()
+	require.NoError(t, auth.GenerateKeypair(keyDir, false))
+	signer, err := auth.LoadSigner(keyDir)
+	require.NoError(t, err)
+	verifier, err := auth.LoadVerifier(keyDir)
+	require.NoError(t, err)
+
+	opPerKind := map[string]config.CanonicalKindConfig{
+		"source": {
+			Gaps: map[string]config.GapSpec{
+				"subjects": {
+					Type:         config.CanonicalTypeName,
+					Description:  "Canonical entities mentioned in this source.",
+					FillStrategy: "both",
+					Kinds:        gapKinds,
+				},
+			},
+		},
+		"boardgame": {},
+		"person":    {},
+	}
+	reg := config.MergeCanonicalRegistry(
+		nil, nil,
+		config.CanonicalKindConfig{}, opPerKind,
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	)
+
+	bus := eventbus.NewMemoryBus()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	h := NewHandlerWithRegistry(logger, st, testRegistryWithSeed(),
+		WithVaultIO(w, r),
+		WithAuthVerifier(verifier),
+		WithAuthRequired(true),
+		WithCanonicalKindRegistry(reg),
+		WithEventBus(bus),
+	)
+	return h, st, root, signer, bus
+}
+
+// TestOperatorFill_CanonicalType_EmitsEdgesAndThinRows pins the
+// fill-produces-edges semantic (ADR-0024 §Fill-gap injection
+// "Workflow-injected gap fills are permanent on the entity"):
+// each canonical_type fill entry materializes a thin label row
+// (if not pre-existing) AND creates one edge from the source.
+// Both the entity.created (per new thin row) and entity.edge_added
+// (per edge) events fire with SourceOperator on operator-fill.
+func TestOperatorFill_CanonicalType_EmitsEdgesAndThinRows(t *testing.T) {
+	t.Parallel()
+	h, st, root, signer, bus := newCanonicalTypeFixtureWithBus(t, []string{"person", "boardgame"})
+	tok := mintOperatorToken(t, signer, "alice")
+	const id = "source:newsletter-may"
+	seedSourceForCanonicalTypeFill(t, st, root, id)
+
+	cap := &eventCapture{}
+	defer unsubscribeAll(subscribeAll(bus, cap))
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/entities/"+id+"/operator-fill", tok,
+		map[string]any{
+			"subjects": []any{
+				map[string]any{"name": "Brass: Birmingham", "kind": "boardgame"},
+				map[string]any{"name": "Martin Wallace", "kind": "person"},
+			},
+		}, nil)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	events := cap.snapshot()
+
+	// Expected events: 1 fill.completed (the "subjects" gap fill)
+	// + 2 entity.created (the two new thin label rows) + 2
+	// entity.edge_added (the two new edges) = 5 events.
+	var fills, creates, edges int
+	createdIDs := map[string]string{}  // id -> kind
+	edgeTargets := map[string]string{} // toID -> edgeType
+	for _, e := range events {
+		switch ev := e.(type) {
+		case eventbus.FillCompletedEvent:
+			fills++
+			assert.Equal(t, "subjects", ev.Gap)
+			assert.Equal(t, eventbus.SourceOperator, ev.SourceTag)
+		case eventbus.EntityCreatedEvent:
+			creates++
+			createdIDs[ev.ID] = ev.Kind
+			assert.Equal(t, eventbus.SourceOperator, ev.SourceTag)
+		case eventbus.EntityEdgeAddedEvent:
+			edges++
+			edgeTargets[ev.ToID] = ev.EdgeType
+			assert.Equal(t, id, ev.FromID)
+			assert.Equal(t, eventbus.SourceOperator, ev.SourceTag)
+		}
+	}
+	assert.Equal(t, 1, fills, "one fill.completed for the subjects gap")
+	assert.Equal(t, 2, creates, "one entity.created per new thin label row")
+	assert.Equal(t, 2, edges, "one entity.edge_added per canonical-type edge")
+
+	assert.Equal(t, "boardgame", createdIDs["boardgame:brass-birmingham"])
+	assert.Equal(t, "person", createdIDs["person:martin-wallace"])
+	assert.Equal(t, "subjects", edgeTargets["boardgame:brass-birmingham"])
+	assert.Equal(t, "subjects", edgeTargets["person:martin-wallace"])
+}
+
+// TestOperatorFill_CanonicalType_ExistingThinRow_NoEntityCreated:
+// when the thin label row already exists in the store
+// (pre-materialized by a prior fill or operator-fill on a
+// different source), only entity.edge_added fires — not
+// entity.created. The `created` return from EnsureLabelRow is
+// the load-bearing signal.
+func TestOperatorFill_CanonicalType_ExistingThinRow_NoEntityCreated(t *testing.T) {
+	t.Parallel()
+	h, st, root, signer, bus := newCanonicalTypeFixtureWithBus(t, []string{"boardgame"})
+	tok := mintOperatorToken(t, signer, "alice")
+	const id = "source:reuse-test"
+	seedSourceForCanonicalTypeFill(t, st, root, id)
+
+	// Pre-materialize the target thin row so the next fill skips
+	// the "create" branch.
+	require.NoError(t, st.UpsertEntity(context.Background(), &store.Entity{
+		ID:   "boardgame:brass-birmingham",
+		Kind: "boardgame",
+	}))
+
+	cap := &eventCapture{}
+	defer unsubscribeAll(subscribeAll(bus, cap))
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/entities/"+id+"/operator-fill", tok,
+		map[string]any{
+			"subjects": []any{
+				map[string]any{"name": "Brass: Birmingham", "kind": "boardgame"},
+			},
+		}, nil)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var creates, edges int
+	for _, e := range cap.snapshot() {
+		switch e.(type) {
+		case eventbus.EntityCreatedEvent:
+			creates++
+		case eventbus.EntityEdgeAddedEvent:
+			edges++
+		}
+	}
+	assert.Equal(t, 0, creates,
+		"pre-existing thin row → no entity.created (the `created` return gates this)")
+	assert.Equal(t, 1, edges,
+		"edge still fires regardless of thin-row reuse")
+}
+
+// TestOperatorFill_CanonicalType_ClearOp_DeletesEdges_NoEvents:
+// a Clear op on a canonical_type gap wipes the prior edges
+// (DeleteEdgesByTypeFrom) without creating new ones. No
+// entity.edge_added fires (we only emit on adds, not removes —
+// removal events aren't in the Phase 2 topic set per ADR).
+func TestOperatorFill_CanonicalType_ClearOp_DeletesEdges_NoEvents(t *testing.T) {
+	t.Parallel()
+	h, st, root, signer, bus := newCanonicalTypeFixtureWithBus(t, []string{"boardgame"})
+	tok := mintOperatorToken(t, signer, "alice")
+	const id = "source:clear-edges-test"
+	seedSourceForCanonicalTypeFill(t, st, root, id)
+
+	// Seed: fill produces an edge.
+	rec := ugcReq(t, h, http.MethodPost, "/v1/entities/"+id+"/operator-fill", tok,
+		map[string]any{
+			"subjects": []any{
+				map[string]any{"name": "Brass Birmingham", "kind": "boardgame"},
+			},
+		}, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	cap := &eventCapture{}
+	defer unsubscribeAll(subscribeAll(bus, cap))
+
+	// Clear: empty list wipes the prior edge without creating
+	// new ones.
+	rec = ugcReq(t, h, http.MethodPost, "/v1/entities/"+id+"/operator-fill", tok,
+		map[string]any{
+			"subjects": []any{},
+		}, nil)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	for _, e := range cap.snapshot() {
+		_, isEdge := e.(eventbus.EntityEdgeAddedEvent)
+		assert.False(t, isEdge,
+			"edge-delete path doesn't emit entity.edge_added (no add happened)")
+		_, isCreate := e.(eventbus.EntityCreatedEvent)
+		assert.False(t, isCreate,
+			"clearing edges doesn't create new entities")
+	}
+}
+
+// TestFill_CanonicalType_AgentPath_EmitsSourceAgent verifies the
+// agent-fill canonical_type path (/fill endpoint) emits the
+// canonical-type-edge events with SourceAgent (distinguished from
+// operator-fill's SourceOperator). Uses the same shared
+// applyCanonicalTypeEdges helper so the source plumbing is the
+// only difference.
+func TestFill_CanonicalType_AgentPath_EmitsSourceAgent(t *testing.T) {
+	t.Parallel()
+	h, st, root, signer, bus := newCanonicalTypeFixtureWithBus(t, []string{"boardgame"})
+	const id = "source:agent-path"
+	seedSourceForCanonicalTypeFill(t, st, root, id)
+	tok := mintToken(t, signer, "agent-fixture", "alice")
+
+	cap := &eventCapture{}
+	defer unsubscribeAll(subscribeAll(bus, cap))
+
+	// Agent-fill: agent-conduit auth (Subject != Operator). The
+	// /fill endpoint accepts the {name, kind} object form on
+	// canonical_type gaps; pre-formed `kind:slug` strings are
+	// operator-only.
+	rec := ugcReq(t, h, http.MethodPost, "/v1/entities/"+id+"/fill", tok,
+		map[string]any{
+			"fields": map[string]any{
+				"subjects": []any{
+					map[string]any{"name": "Brass Birmingham", "kind": "boardgame"},
+				},
+			},
+		}, nil)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	for _, e := range cap.snapshot() {
+		switch ev := e.(type) {
+		case eventbus.EntityCreatedEvent:
+			assert.Equal(t, eventbus.SourceAgent, ev.SourceTag,
+				"agent-fill thin-row creates emit SourceAgent")
+		case eventbus.EntityEdgeAddedEvent:
+			assert.Equal(t, eventbus.SourceAgent, ev.SourceTag,
+				"agent-fill canonical-type edges emit SourceAgent")
+		case eventbus.FillCompletedEvent:
+			assert.Equal(t, eventbus.SourceAgent, ev.SourceTag,
+				"agent-fill fill.completed emits SourceAgent")
+		}
+	}
+}
+
 // TestEventbus_Wiring_PublishedAtsRecent pins that the At field
 // stamped by the handler is recent (within a small window of
 // wall-clock now) so subscribers can rely on it for ordering /
