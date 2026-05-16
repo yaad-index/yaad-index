@@ -58,9 +58,9 @@ When an operator-emitted entity has a frontmatter field that references a day (e
 
 #### Mechanism B — daemon-side auto-tag (`ingested_on`)
 
-Independently of reference-following, the daemon may set an `ingested_on` edge on every newly-ingested entity, pointing at the day the ingest happened. This is daemon-internal and doesn't require any frontmatter reference from the plugin — every entity gets a date stamp automatically.
+Independently of reference-following, the daemon **could** set an `ingested_on` edge on every newly-ingested entity, pointing at the day the ingest happened. This would be daemon-internal and wouldn't require any frontmatter reference from the plugin — if shipped, every entity would get a date stamp automatically.
 
-**Open question 3b:** ship `ingested_on` auto-tagging in v1.x, or defer? It's the simplest case (always-on, no per-plugin config) but it's also the most opinionated (every entity gets the edge whether anyone uses it or not).
+**Open question 3b:** ship `ingested_on` auto-tagging in v1.x, or defer? It's the simplest case (always-on, no per-plugin config) but it's also the most opinionated (every entity gets the edge whether anyone uses it or not). The "every entity gets a stamp" framing applies only if Q3b lands "ship in v1.x."
 
 These two mechanisms answer "when does a day entity get created?" but for different reasons. Q3a + Q4 are about the reference path; Q3b is about the auto-tag path. Don't conflate them in the implementation.
 
@@ -102,7 +102,7 @@ Date entities are part of the daemon's core kind set. Operators don't enable the
 Once date entities exist, ADR-0024 workflows benefit naturally:
 
 - A **daily-digest workflow** triggered manually (or by external cron via `yaad-index workflow trigger daily-digest`) targets today's day entity, walks its incoming edges, formats a task or report.
-- A **deadline-watcher workflow** could subscribe to `entity.edge_added` for `due_on` edges and surface a task when a deadline lands within a near window.
+- A **deadline-attached-task workflow** subscribes to `entity.edge_added` for `due_on` edges; when a deadline edge is created, the workflow surfaces a task referencing the deadline-bearing entity. (Note: this fires when the edge is added, not when the date approaches. "Workflow fires when a date is N days away" requires date arithmetic in CEL, which is explicitly out of v1.x scope. Approaching-deadline behavior would either need that v1.x extension or an external scheduled trigger.)
 - A **shipping-day workflow** (the operator's worked example) attaches new shipping-related edges to the day entity as they arrive.
 
 No ADR-0024 changes required to support date entities — they're just another entity kind to the workflow engine. This ADR adds the entity kinds + auto-creation + canonical edges; ADR-0024 already covers how workflows act on them.
