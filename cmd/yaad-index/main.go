@@ -375,16 +375,24 @@ func (s *ServeCmd) Run() error {
 		if err != nil {
 			return fmt.Errorf("init workflow engine: %w", err)
 		}
+		// Synchronous initial Load + Reconcile before launching
+		// the polling goroutines — PR-80 review fold-in. The
+		// prior shape used a 100ms sleep as a hopeful sync,
+		// which races on slow filesystems / large workflow
+		// directories. The loader.Run goroutine ALSO does an
+		// initial Load (per loader.Run's contract); doing it
+		// once here keeps the reconcile fed without depending
+		// on goroutine-startup timing.
+		if err := wfLoader.Load(wfCtx); err != nil {
+			logger.Warn("workflow loader: initial load failed; engine will see empty registry until next tick",
+				"err", err)
+		}
+		if err := wfEngine.Reconcile(wfLoader.Workflows()); err != nil {
+			logger.Warn("workflow engine: initial reconcile failed", "err", err)
+		}
 		go func() {
 			ticker := time.NewTicker(loader.DefaultPollInterval)
 			defer ticker.Stop()
-			// Initial reconcile right after the loader's
-			// initial Load completes; subsequent ticks pick
-			// up hot-reloaded edits.
-			time.Sleep(100 * time.Millisecond)
-			if err := wfEngine.Reconcile(wfLoader.Workflows()); err != nil {
-				logger.Warn("workflow engine: initial reconcile failed", "err", err)
-			}
 			for {
 				select {
 				case <-wfCtx.Done():
@@ -396,8 +404,10 @@ func (s *ServeCmd) Run() error {
 				}
 			}
 		}()
+		handlerOpts = append(handlerOpts, api.WithWorkflowEngine(wfEngine))
 		logger.Info("workflow engine active",
-			"reconcile_interval", loader.DefaultPollInterval.String())
+			"reconcile_interval", loader.DefaultPollInterval.String(),
+			"http_trigger_path", "/v1/workflows/trigger")
 	} else {
 		logger.Info("vault.path not configured; ingest stays DB-only and POST /v1/reindex is unregistered (404)")
 	}
@@ -451,6 +461,7 @@ type CLI struct {
 	IssueToken IssueTokenCmd `cmd:"issue-token" help:"Issue a pair-claim JWT for an operator/agent pair (per yaad-index)."`
 	Command CommandCmd `cmd:"" help:"Dispatch a command-shape plugin invocation against the running daemon (per ADR-0022 +)."`
 	Fetch FetchCmd `cmd:"" help:"Dispatch a URL-shape plugin invocation against the running daemon (per ADR-0022 +)."`
+	Workflow WorkflowCmd `cmd:"" help:"Workflow engine surface — trigger workflows manually (per ADR-0024 §Agent surface)."`
 }
 
 // ReindexCmd implements `yaad-index reindex`. Walks the vault root
