@@ -33,6 +33,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/reindex"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/workflow/actions"
 	"github.com/yaad-index/yaad-index/internal/workflow/decision"
 	"github.com/yaad-index/yaad-index/internal/workflow/engine"
 	"github.com/yaad-index/yaad-index/internal/workflow/loader"
@@ -367,9 +368,13 @@ func (s *ServeCmd) Run() error {
 		// Phase 4 wires action runners against the engine's
 		// decision output.
 		wfResolver := &storeEntityResolver{st: st}
+		wfRunner := actions.New(actions.Options{
+			TaskWriter: actions.NewFileTaskWriter(cfg.Vault.Path),
+		})
 		wfEngine, err := engine.New(engine.Options{
 			Bus:      bus,
 			Resolver: wfResolver,
+			Runner:   wfRunner,
 			Logger:   logger,
 		})
 		if err != nil {
