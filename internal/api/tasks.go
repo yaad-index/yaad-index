@@ -16,7 +16,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/yaad-index/yaad-index/internal/workflow/engine"
 	"github.com/yaad-index/yaad-index/internal/workflow/tasks"
 )
 
@@ -70,6 +72,74 @@ func handleTaskList(logger *slog.Logger, reader *tasks.Reader) http.HandlerFunc 
 			logger.ErrorContext(r.Context(), "encode task list response", "err", err)
 		}
 	}
+}
+
+// handleTaskResolve implements POST /v1/tasks/{id}/resolve.
+// Stamps `resolved_at: <now>` on the task's frontmatter +
+// (when auto-archive applies) moves the file to
+// `tasks/_archive/<id>.md`. Auto-archive rules per ADR-0024:
+// always on for err-tasks; default true for normal tasks
+// (operator opts out via `auto_archive_on_done: false` on
+// the originating workflow). 404 when no file matches the
+// id; 503 when no engine is wired (we need it for the
+// per-workflow auto-archive flag lookup).
+func handleTaskResolve(logger *slog.Logger, reader *tasks.Reader, writer *tasks.Writer, eng *engine.Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if id == "" {
+			writeError(w, http.StatusBadRequest, "invalid_argument", "id is required")
+			return
+		}
+		t, err := reader.Load(id)
+		if err != nil {
+			if errors.Is(err, tasks.ErrTaskNotFound) {
+				writeError(w, http.StatusNotFound, "not_found", err.Error())
+				return
+			}
+			logger.ErrorContext(r.Context(), "task resolve: load failed", "err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"task resolve failed")
+			return
+		}
+		// Err-tasks always auto-archive per ADR-0024
+		// §"Runtime errors — the err-task pattern". Normal
+		// tasks respect the per-workflow opt-out flag (eng
+		// nil → default true, defensive).
+		autoArchive := true
+		if !t.Errored && eng != nil {
+			autoArchive = eng.AutoArchiveOnDoneFor(t.Workflow)
+		}
+		if err := writer.Resolve(id, time.Now().UTC(), autoArchive); err != nil {
+			if errors.Is(err, tasks.ErrTaskNotFound) {
+				writeError(w, http.StatusNotFound, "not_found", err.Error())
+				return
+			}
+			logger.ErrorContext(r.Context(), "task resolve: write failed", "err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"task resolve failed")
+			return
+		}
+		resp := taskResolveResponse{
+			OK:            true,
+			ID:            id,
+			Errored:       t.Errored,
+			AutoArchived:  autoArchive,
+			ResolvedAt:    time.Now().UTC().Format(time.RFC3339),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			logger.ErrorContext(r.Context(), "encode task resolve response", "err", err, "id", id)
+		}
+	}
+}
+
+type taskResolveResponse struct {
+	OK           bool   `json:"ok"`
+	ID           string `json:"id"`
+	Errored      bool   `json:"errored"`
+	AutoArchived bool   `json:"auto_archived"`
+	ResolvedAt   string `json:"resolved_at"`
 }
 
 // handleTaskLoad implements GET /v1/tasks/{id}. Returns the

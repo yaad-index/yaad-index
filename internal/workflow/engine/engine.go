@@ -1433,6 +1433,24 @@ func (e *Engine) Discover(ctx context.Context, entityID string) ([]string, error
 // handler can translate to 404 cleanly.
 var ErrEntityNotFoundForDiscover = errors.New("engine: entity not found for discover")
 
+// AutoArchiveOnDoneFor reports whether the named workflow
+// has auto_archive_on_done enabled per ADR-0024 §"Task"
+// close lifecycle. Default true when the workflow's
+// AutoArchiveOnDone is nil (operator omitted the field) or
+// when the workflow isn't registered (defensive — caller
+// can resolve tasks for workflows that were unloaded since
+// the task was written; the default-true keeps the close
+// path predictable).
+func (e *Engine) AutoArchiveOnDoneFor(workflowName string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	reg, ok := e.workflows[workflowName]
+	if !ok || reg.workflow.AutoArchiveOnDone == nil {
+		return true
+	}
+	return *reg.workflow.AutoArchiveOnDone
+}
+
 // resolverGraphLookup adapts an EntityResolver to
 // decision.GraphLookup so the decision package's CEL
 // graph.get(id) function can dispatch through the engine's

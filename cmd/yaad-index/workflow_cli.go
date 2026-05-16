@@ -59,6 +59,43 @@ func (c *WorkflowDiscoverCmd) Run() error {
 	return runWorkflowGet(u, c.Token, c.Timeout)
 }
 
+// runWorkflowPost is the shared POST helper for body-less
+// mutation subcommands (e.g. task.resolve). Same shape as
+// runWorkflowGet but with the POST method.
+func runWorkflowPost(reqURL string, body []byte, token string, timeoutSec int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+	var reqBody io.Reader
+	if body != nil {
+		reqBody = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, reqBody)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	client := &http.Client{Timeout: time.Duration(timeoutSec) * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("dispatch to %s: %w", reqURL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("daemon returned %d: %s", resp.StatusCode, string(out))
+	}
+	fmt.Println(string(out))
+	return nil
+}
+
 // runWorkflowGet is the shared GET helper for the list +
 // discover CLI subcommands. Builds the request, sends, and
 // pretty-prints the response body to stdout. Non-zero exit

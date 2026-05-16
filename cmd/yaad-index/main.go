@@ -461,11 +461,13 @@ func (s *ServeCmd) Run() error {
 			}
 		}()
 		handlerOpts = append(handlerOpts, api.WithWorkflowEngine(wfEngine))
-		// Phase 6.B task surface — filesystem-walk reader
-		// rooted at the same vault path the action runners
-		// write tasks under. Registers GET /v1/tasks +
-		// GET /v1/tasks/{id} per ADR-0024 §"Agent surface".
+		// Phase 6.B/C task surface — filesystem-walk reader +
+		// writer rooted at the same vault path the action
+		// runners write tasks under. Registers GET /v1/tasks
+		// + GET /v1/tasks/{id} + POST /v1/tasks/{id}/resolve
+		// per ADR-0024 §"Agent surface".
 		handlerOpts = append(handlerOpts, api.WithTasksReader(wftasks.NewReader(cfg.Vault.Path)))
+		handlerOpts = append(handlerOpts, api.WithTasksWriter(wftasks.NewWriter(cfg.Vault.Path)))
 		logger.Info("workflow engine active",
 			"reconcile_interval", loader.DefaultPollInterval.String(),
 			"http_trigger_path", "/v1/workflows/trigger")
