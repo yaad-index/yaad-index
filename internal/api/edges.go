@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/store"
 )
@@ -47,7 +48,7 @@ type edgeResponse struct {
 	Edge edge `json:"edge"`
 }
 
-func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Registry) http.HandlerFunc {
+func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Registry, bus eventbus.Bus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req edgeRequest
 		dec := json.NewDecoder(r.Body)
@@ -100,6 +101,18 @@ func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Reg
 				"failed to create edge")
 			return
 		}
+
+		// Publish entity.edge_added per ADR-0024 Phase 2: a new edge
+		// has landed via the manual-add surface. Source is
+		// SourceAgent — workflow-injected edges (Phase 4+) will
+		// emit via their own dispatch path and carry workflow:<name>.
+		bus.Publish(r.Context(), eventbus.EntityEdgeAddedEvent{
+			FromID:    se.From,
+			ToID:      se.To,
+			EdgeType:  se.Type,
+			SourceTag: eventbus.SourceAgent,
+			At:        se.UpdatedAt.UTC(),
+		})
 
 		// Edge provenance isn't persisted today (the store doesn't write
 		// to the provenance table for edges yet). Synthesize a single

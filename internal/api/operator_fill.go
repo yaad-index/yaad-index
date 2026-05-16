@@ -12,6 +12,7 @@ import (
 
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
 	"github.com/yaad-index/yaad-index/internal/writelocks"
@@ -58,6 +59,7 @@ func handleEntityOperatorFill(
 	vaultWriter *vault.Writer,
 	canonicalKindReg map[string]config.CanonicalKindConfig,
 	writeLocks *writelocks.Manager,
+	bus eventbus.Bus,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -276,6 +278,29 @@ func handleEntityOperatorFill(
 			writeError(w, http.StatusInternalServerError, "internal_error",
 				"failed to materialize canonical_type edges")
 			return
+		}
+
+		// Publish fill.completed per ADR-0024 Phase 2 — one event per
+		// `set` op landed. Clear / defer ops aren't fills (they
+		// remove or postpone, not write), so they're filtered. The
+		// SourceTag is SourceOperator: this is the operator-strategy
+		// endpoint, distinguished from the sibling agent-strategy
+		// /fill endpoint which emits SourceAgent.
+		now := clock.Now().UTC()
+		setOps := make([]string, 0, len(ops))
+		for _, op := range ops {
+			if op.Kind == opSet {
+				setOps = append(setOps, op.Field)
+			}
+		}
+		sort.Strings(setOps)
+		for _, gap := range setOps {
+			bus.Publish(r.Context(), eventbus.FillCompletedEvent{
+				EntityID:  ve.ID,
+				Gap:       gap,
+				SourceTag: eventbus.SourceOperator,
+				At:        now,
+			})
 		}
 
 		fresh, err := st.GetEntity(r.Context(), id)
