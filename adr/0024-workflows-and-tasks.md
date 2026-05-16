@@ -36,6 +36,49 @@ Workflows are markdown files at `workflows/<name>.md` (vault-side default; daemo
 
 **Daemon-side location is reserved** for any future system-shipped workflows (e.g., a workflow that yaad-index needs to bootstrap its own behavior). v1 has none; vault-only is effective today. The schema supports the daemon-side path so it can grow into it without a migration.
 
+**Worked example — minimal complete workflow file.** A boardgame-news workflow that fires on the relevant edge type, pulls the prior edition if present, decides via CEL, and appends to a recurring task:
+
+````markdown
+---
+name: boardgame-news
+version: 1
+status: active
+---
+
+# Boardgame news → review queue
+
+Surfaces news articles about boardgames I own or care about (rating > 7
+on any edition of the series).
+
+```yaml
+trigger:
+  type: edge_created
+  match:
+    edge_type: is_about
+    target_kind: boardgame
+
+subject: '{{ entity.slug }}'
+
+context:
+  - name: editions
+    via: 'graph.get(entity.series_id).editions'   # or operator stores edition IDs on the entity
+
+condition: 'editions.exists(e, e.rating > 7) || entity.owned == true'
+
+dedup:
+  key: 'workflow + entity.id'
+  policy: update
+
+actions:
+  - task_append:
+      section: candidates
+      content: '{{ entity.name }} ({{ entity.year }}) — surfaced via {{ edge.from_title }}'
+      if_already_present: skip
+```
+````
+
+Frontmatter holds metadata (name, version, status) only. Body's prose explains what the workflow is doing in operator-readable terms. The YAML code-fence holds the structured rules the engine parses. Operator can re-read this file in six months and remember why it exists; the engine can re-parse it on reload without ambiguity.
+
 ### Task
 
 A **task** is a workflow's instance — a first-class entity created when a workflow's output produces one.
@@ -59,7 +102,7 @@ Tasks outlive the workflow that spawned them — if a workflow pattern is delete
 ### Trigger types (v1)
 
 1. **Event-driven** — workflow subscribes to internal events emitted by the daemon's event bus. First-class in v1, starting with `edge_created` and growing to the full CRUD set by v1-final.
-2. **Manual** — invoker calls `workflow.trigger(name, input)` (via MCP / HTTP API) or via the equivalent CLI shape `yaad-index workflow trigger <name> [input]`. Input shapes are entity ID, URL, or empty (workflow runs without an entity target). External host cron uses the CLI form for time-based patterns — e.g., a host cron entry firing `yaad-index workflow trigger morning-brief` daily covers the morning-brief / weekly-summary cases without the daemon owning a scheduler.
+2. **Manual** — invoker calls `workflow.trigger(name, input)` (via MCP / HTTP API) or via the equivalent CLI shape `yaad-index workflow trigger <name> [input]`. Input shapes: entity ID, URL, or empty (workflow runs without an entity target). The engine disambiguates ID vs URL via the existing rule documented in the **`workflow.trigger(input)` input semantics** section below — URL pattern triggers ingest-or-lookup; otherwise the input is parsed as a canonical entity ID. Empty input is reserved for workflows that don't take a target (e.g., a daily-summary workflow that aggregates across the index). External host cron uses the CLI form for time-based patterns — e.g., a host cron entry firing `yaad-index workflow trigger morning-brief` daily covers the morning-brief / weekly-summary cases without the daemon owning a scheduler.
 3. **Time-based (internal scheduling)** — **deferred post-v1.** Originally folded into v1; reverted in this revision. External host cron + the manual-trigger CLI cover the immediate need without requiring the daemon to grow scheduling primitives. A future v1.x can fold internal scheduling back in if external cron proves clunky.
 
 ### Internal event bus (v1 core)
@@ -100,9 +143,13 @@ A workflow's output is one of three v1 action primitives:
 
 - **`task_append`** — append content to a section of `tasks/<workflow>-<subject>.md`. Find-or-create semantics: the canonical task path is deterministic (workflow name + operator-defined subject template), so the same workflow firing repeatedly on the same subject lands in the same task file. The action appends to a named section in the task body; sections accumulate over time as the workflow re-fires. This is the default for workflows that surface recurring situations (PR-review, newsletter-of-interest, classified-receipt).
 - **`add_comment`** — attach a comment to an existing entity (the entity that triggered the workflow, or one reached via graph). Reuses the existing entity-comment primitive (the `add_comment` MCP tool). Used when the workflow wants to enrich an entity with workflow-observed context rather than spawning a task.
-- **`plugin_dispatch`** — fire a plugin command (e.g., `bgg.fetch`) from inside the workflow. Used for the "look-something-up-then-decide" shape: a workflow can trigger an ingest of a related entity that isn't yet in the index, wait for it (async), and proceed with the result attached to context.
+- **`plugin_dispatch`** — fire a plugin command (e.g., `bgg.fetch`) from inside the workflow. Used for the "look-something-up-then-decide" shape: a workflow asks the index to go ingest a related entity that isn't yet known, gets the result back, and proceeds with that entity in context.
 
-Out of v1 (deferred — listed below): edge-creation as a workflow action, silent-log shape, emit-notification.
+**Decision rule between `task_append` and `add_comment`:** if the information needs operator queuing (i.e., something to act on later) or accumulates across multiple workflow fires into a recurring surface → `task_append`. If it's entity-local annotation (context observed against an entity, no required operator action) → `add_comment`. A single workflow can use both — e.g., a PR-review workflow can `add_comment` on the PR entity with the review-state delta AND `task_append` the operator's "review needed" line to the running task.
+
+**`plugin_dispatch` execution semantics.** The call is **synchronous from the workflow's point of view**: the workflow blocks on the plugin result up to a configurable timeout (v1 default: 30s). The plugin can do its work async internally (long-poll, queue, etc.), but the workflow does not see "async result later" — it sees the result inline or a timeout. The "async" framing in earlier drafts was misleading; replacing it. On timeout: the workflow's err-task pattern fires (one err task per workflow, error appended); the workflow continues firing on future events but the current evaluation aborts. On plugin error (typed failure surfaced through the unified plugin response envelope per ADR-0023): same path — err task, abort current evaluation.
+
+Out of v1 (deferred — listed below): edge-creation as a workflow action, silent-log shape, emit-notification, `graph.find` lookups, internal time-based trigger.
 
 **Why the smaller set:** the earlier draft listed four output types (create task / mutate entity / add edge / silent log). The v1-reconciled set drops `add edge` and `silent log` as separate primitives — `add edge` becomes a follow-up via `plugin_dispatch` (the plugin emits the edge during ingest) or a manual operator add; `silent log` collapses into `add_comment` (record what the workflow saw, no task surface). `plugin_dispatch` is genuinely new — the earlier draft had no explicit way for a workflow to ask the index to go fetch something.
 
@@ -133,8 +180,10 @@ Settles the "specific pick deferred; not inventing custom" open question from th
 The expression context provides:
 
 - `entity` — the triggering entity (resolved, fetched-if-missing).
-- `edge` — the triggering edge (its from/to/type/timestamp).
-- `graph` — a lookup function (`graph.get(id)`, `graph.find({predicate})`) for pulling related entities.
+- `edge` — the triggering edge (its from/to/type/timestamp). **`edge` is nil/absent for manually-triggered workflows** (the `workflow.trigger(name, input)` path has no triggering edge). CEL predicates that reference `edge.*` on a workflow that supports manual triggers must guard, e.g., `has(edge) && edge.type == 'is_about'`. A future iteration may let the manual-trigger CLI optionally pass an edge ID to populate the slot, but v1 does not.
+- `graph.get(id)` — fetch a specific entity by its canonical ID. Returns the entity or fails the expression evaluation if not found. This is the only graph lookup in v1.
+
+**`graph.find` is out of v1.** The original revision draft mentioned `graph.find({predicate})` for "find me all entities matching X." The predicate shape (CEL nested? schema map? typed filter?) is non-trivial to settle and the in-flight v1 workflows don't need it (each works with a known related-entity ID stored in the triggering entity's frontmatter, retrievable via `graph.get`). Re-introduce post-v1 with a settled predicate spec.
 
 If a decision genuinely needs context-shape understanding beyond what CEL + the cluster query can express, default to **always create the task** and let the operator (or agent at task-load time) decide. Don't push subtle decisions into workflow YAML — that's pseudo-intelligence and the maintenance debt is high.
 
@@ -191,6 +240,12 @@ Workflows declare both the key and the policy. Implementation may extend the key
 - **Action-level dedup (`task_append` skip-if-line-exists)** decides whether a specific line lands inside the task body.
 
 In practice the workflow-level layer handles "should this become a fresh task or update an existing one"; the action-level layer handles "the workflow fired with `update` policy, the existing task is being updated — does this specific content line need to be appended or is it already there?" Belt and suspenders, not redundant.
+
+**Action-level match semantics (v1):** exact-byte match of the assembled line against existing lines in the target section. No trimming, no normalization, no case-folding. Rationale: predictable + cheap; if the operator wants fuzzy match they construct it via CEL in the line template. For template-expanded lines with embedded timestamps or IDs (e.g., `"<timestamp> review pinged"`), exact-match will never fire dedup — that's the intended behavior, and the operator who wants idempotent appends should template the line without time-varying tokens (or set `if_already_present: append-anyway` to explicitly opt into duplicates).
+
+**`if_already_present` scope:** `replace` rewrites the **matching line only**, not the entire section. The section's other lines stay in place. `append-anyway` writes a new copy regardless. `skip` is the default no-op.
+
+**Workflow-level `update` policy semantics:** when `update` is the policy and a duplicate-key event fires, the workflow runs against the existing task — re-evaluating its action steps with the new event context, with the action-level dedup determining what actually lands. Concretely: the workflow's `task_append` steps re-run; lines that already exist in the target section get the configured `if_already_present` treatment (skip by default); new lines append. The task's frontmatter is updated with the latest event context (e.g., last-seen-at timestamp, latest priority signal). `update` does not modify task properties not touched by the workflow (operator-set priority, snooze state, comments).
 
 ## Out of v1 (explicit)
 
@@ -280,3 +335,17 @@ The original PROPOSED draft (2026-05-12) was richer than necessary for a first v
 - **Workflow location: vault-default + daemon-reserved.** Operator-authored vault workflows are the only thing today; daemon-side is reserved as a forward-compatible path for future system-shipped workflows.
 
 Status remains PROPOSED pending operator hard-gate review of this revision.
+
+### 2026-05-16 — pre-review fold-in
+
+Pre-reviewer flagged 9 specification gaps before the hard-gate read. All accepted or deferred:
+
+- `graph.find({predicate})` predicate shape was undefined — **dropped from v1**, ship `graph.get(id)` only. Re-introduce post-v1 with a settled predicate spec.
+- `plugin_dispatch` async/sync semantics were contradictory — clarified as **synchronous bounded-await** (default timeout 30s; err-task on timeout/error).
+- `task_append` skip-if-line-exists match semantics — specified as **exact-byte match, no normalization**; dynamic content needs explicit `if_already_present: append-anyway`.
+- `if_already_present: replace` scope — clarified as **matching line only**, not the entire section.
+- `edge` context for manual triggers — specified as **nil/absent for manual**, CEL must guard with `has(edge)`.
+- `update` dedup policy semantics — concretely specified: workflow re-runs against existing task; action-level dedup handles per-line behavior; task frontmatter updates with latest event context; operator-set properties stay untouched.
+- `add_comment` vs `task_append` decision rule — added one-sentence heuristic.
+- Manual trigger input disambiguation — cross-referenced to the existing `workflow.trigger(input) input semantics` section already in the ADR.
+- YAML code-fence schema — added minimal worked example (boardgame-news workflow) to the workflow location section.
