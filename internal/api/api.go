@@ -16,6 +16,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
 	"github.com/yaad-index/yaad-index/internal/workflow/engine"
+	"github.com/yaad-index/yaad-index/internal/workflow/tasks"
 	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
@@ -157,6 +158,10 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 		mux.Handle("GET /v1/workflows/discover", protect(http.HandlerFunc(handleWorkflowDiscover(logger, cfg.workflowEngine))))
 		mux.Handle("POST /v1/workflows/trigger", protect(http.HandlerFunc(handleWorkflowTrigger(logger, cfg.workflowEngine))))
 	}
+	if cfg.tasksReader != nil {
+		mux.Handle("GET /v1/tasks", protect(http.HandlerFunc(handleTaskList(logger, cfg.tasksReader))))
+		mux.Handle("GET /v1/tasks/{id}", protect(http.HandlerFunc(handleTaskLoad(logger, cfg.tasksReader))))
+	}
 	return withRequestID(withRecover(logger)(mux))
 }
 
@@ -238,6 +243,14 @@ type handlerConfig struct {
 	// tracker — preserves legacy / test paths that don't wire
 	// the shared shape.
 	syncIngester SyncIngester
+
+	// tasksReader, when non-nil, registers GET /v1/tasks +
+	// GET /v1/tasks/{id} per ADR-0024 §"Agent surface" task
+	// list / load. Filesystem-walk against the vault's
+	// tasks/ directory. Omitting this option leaves the
+	// routes unregistered (404) — appropriate for tests
+	// + dev binaries without a vault.
+	tasksReader *tasks.Reader
 }
 
 // WithReindexHandler registers a handler for POST /v1/reindex. When
@@ -462,6 +475,15 @@ func WithEventBus(b eventbus.Bus) HandlerOption {
 // gating used for the loader + reconcile loop).
 func WithWorkflowEngine(eng *engine.Engine) HandlerOption {
 	return func(c *handlerConfig) { c.workflowEngine = eng }
+}
+
+// WithTasksReader wires a workflow tasks reader so the
+// /v1/tasks + /v1/tasks/{id} endpoints register per
+// ADR-0024 §"Agent surface". Omitting this option leaves
+// the routes unregistered (404) — appropriate for tests
+// + dev binaries without a vault.
+func WithTasksReader(r *tasks.Reader) HandlerOption {
+	return func(c *handlerConfig) { c.tasksReader = r }
 }
 
 // WithSyncIngester wires a pre-constructed SyncIngester so the
