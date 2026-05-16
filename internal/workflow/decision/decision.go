@@ -95,9 +95,11 @@ type Result struct {
 	// MissingRefs is the set of graph.get() calls whose ids
 	// didn't resolve during this evaluation. The engine
 	// attaches the corresponding notes to any task spawned.
-	// Order is the order of the misses during evaluation;
-	// duplicates are not de-duplicated by the evaluator (the
-	// engine can de-dup if it wants).
+	// The evaluator de-duplicates by id within one Eval pass
+	// (so a predicate that calls graph.get(same id) twice
+	// produces one MissingRef, not two) and sorts the
+	// result by id for deterministic output. PR-79 review
+	// fold-in.
 	MissingRefs []MissingRef
 }
 

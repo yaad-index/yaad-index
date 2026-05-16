@@ -27,11 +27,14 @@ import (
 	"github.com/yaad-index/yaad-index/internal/auth"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/plugins/subprocess"
 	"github.com/yaad-index/yaad-index/internal/reindex"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/workflow/decision"
+	"github.com/yaad-index/yaad-index/internal/workflow/engine"
 	"github.com/yaad-index/yaad-index/internal/workflow/loader"
 )
 
@@ -45,6 +48,32 @@ type loaderRegistryAdapter struct {
 
 func (a loaderRegistryAdapter) LookupByName(name string) (any, bool) {
 	return a.registry.LookupByName(name)
+}
+
+// storeEntityResolver satisfies engine.EntityResolver against
+// the production store.Store. Returns the entity's Data map
+// plus id + kind fields injected so CEL predicates can
+// reference entity.id and entity.kind without operators
+// having to materialize them inside Data.
+type storeEntityResolver struct {
+	st store.Store
+}
+
+func (r *storeEntityResolver) Resolve(ctx context.Context, id string) (map[string]any, error) {
+	e, err := r.st.GetEntity(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, decision.ErrEntityNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]any, len(e.Data)+2)
+	for k, v := range e.Data {
+		out[k] = v
+	}
+	out["id"] = e.ID
+	out["kind"] = e.Kind
+	return out, nil
 }
 
 // ServeCmd implements `yaad-index serve`.
@@ -119,9 +148,18 @@ func (s *ServeCmd) Run() error {
 		return fmt.Errorf("build plugin registry: %w", err)
 	}
 
+	// Construct the daemon-internal event bus (per ADR-0024
+	// Phase 2). The API mutation handlers publish to + the
+	// workflow engine subscribes from this same bus, so
+	// instance-sharing is essential: a separate default-bus
+	// inside the api package would leave the engine
+	// subscribing to a phantom bus that never sees any
+	// events.
+	bus := eventbus.NewMemoryBus()
+
 	var (
-		handlerOpts []api.HandlerOption
-		guard *config.CanonicalGuard
+		handlerOpts = []api.HandlerOption{api.WithEventBus(bus)}
+		guard       *config.CanonicalGuard
 	)
 	if cfg != nil {
 		// ADR-0016 §4: build the merged effective canonical-kind
@@ -317,6 +355,49 @@ func (s *ServeCmd) Run() error {
 		logger.Info("workflow loader active",
 			"workflow_dir", workflowDir,
 			"poll_interval", loader.DefaultPollInterval.String())
+
+		// Workflow engine (per ADR-0024 Phase 3). Wires the
+		// loader's registry × the shared event bus × the
+		// decision evaluator. The Reconcile goroutine below
+		// polls the loader's current workflow snapshot on
+		// the same cadence as the loader's mtime poll, so
+		// hot-reloaded edits surface as fresh engine
+		// registrations without a daemon restart. Phase 3
+		// records decisions but does NOT execute actions;
+		// Phase 4 wires action runners against the engine's
+		// decision output.
+		wfResolver := &storeEntityResolver{st: st}
+		wfEngine, err := engine.New(engine.Options{
+			Bus:      bus,
+			Resolver: wfResolver,
+			Logger:   logger,
+		})
+		if err != nil {
+			return fmt.Errorf("init workflow engine: %w", err)
+		}
+		go func() {
+			ticker := time.NewTicker(loader.DefaultPollInterval)
+			defer ticker.Stop()
+			// Initial reconcile right after the loader's
+			// initial Load completes; subsequent ticks pick
+			// up hot-reloaded edits.
+			time.Sleep(100 * time.Millisecond)
+			if err := wfEngine.Reconcile(wfLoader.Workflows()); err != nil {
+				logger.Warn("workflow engine: initial reconcile failed", "err", err)
+			}
+			for {
+				select {
+				case <-wfCtx.Done():
+					return
+				case <-ticker.C:
+					if err := wfEngine.Reconcile(wfLoader.Workflows()); err != nil {
+						logger.Warn("workflow engine: reconcile failed; will retry next tick", "err", err)
+					}
+				}
+			}
+		}()
+		logger.Info("workflow engine active",
+			"reconcile_interval", loader.DefaultPollInterval.String())
 	} else {
 		logger.Info("vault.path not configured; ingest stays DB-only and POST /v1/reindex is unregistered (404)")
 	}
