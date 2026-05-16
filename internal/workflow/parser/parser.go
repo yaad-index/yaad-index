@@ -251,6 +251,7 @@ func decode(frontmatter, yamlBody []byte) (*Workflow, error) {
 			wf.Actions[i].TaskAppend.IfAlreadyPresent = IfAlreadyPresentSkip
 		}
 	}
+	applyDedupDefaults(wf)
 	return wf, nil
 }
 
@@ -288,6 +289,26 @@ func dedupFromShape(d *dedupShape) Dedup {
 	return Dedup{
 		Key:    strings.TrimSpace(d.Key),
 		Policy: strings.TrimSpace(d.Policy),
+	}
+}
+
+// applyDedupDefaults stamps the per-pattern dedup defaults
+// per ADR-0024 §"Per-pattern de-duplication":
+//   - Policy defaults to "update".
+//   - Key defaults to `entity.id` (the CEL-compatible portion
+//     of the ADR's `workflow + entity.id` default; the engine
+//     prefixes the workflow name engine-side so the rendered
+//     key is namespaced across workflows without requiring the
+//     CEL env to know its own workflow name).
+//
+// Called from decode AFTER other field-level defaults so the
+// dedup defaults compose with the rest of the workflow shape.
+func applyDedupDefaults(wf *Workflow) {
+	if wf.Dedup.Policy == "" {
+		wf.Dedup.Policy = DedupPolicyUpdate
+	}
+	if wf.Dedup.Key == "" {
+		wf.Dedup.Key = "entity.id"
 	}
 }
 

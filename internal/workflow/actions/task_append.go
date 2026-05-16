@@ -48,6 +48,7 @@ func (d *dispatcher) runTaskAppend(ctx context.Context, idx int, _ *parser.Workf
 		ctx,
 		dec.Workflow,
 		dec.Subject,
+		dec.DedupKey,
 		a.Section,
 		content,
 		ifAlreadyPresent,
