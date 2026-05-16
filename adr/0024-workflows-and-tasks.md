@@ -36,7 +36,9 @@ Workflows are markdown files at `workflows/<name>.md` (vault-side default; daemo
 
 **Daemon-side location is reserved** for any future system-shipped workflows (e.g., a workflow that yaad-index needs to bootstrap its own behavior). v1 has none; vault-only is effective today. The schema supports the daemon-side path so it can grow into it without a migration.
 
-**Worked example — minimal complete workflow file.** A boardgame-news workflow that fires on the relevant edge type, pulls the prior edition if present, decides via CEL, and appends to a recurring task:
+**The `context` stanza.** Workflows can declare named bindings that get evaluated before the `condition`. Each entry has a `name` and a `via` CEL expression; the engine evaluates the `via` expression once and binds the result to `name` in the expression context for `condition` and action templates. Used when the same sub-expression appears in multiple places (DRY) or when the operator wants to give a named handle to a graph-walked entity for readability. `via` failure (e.g., `graph.get` not-found, or the expression itself raises) follows the same missing-reference path as condition-eval: a note attached to the resulting task. `context` is optional; workflows that don't need named pre-bindings omit the stanza entirely.
+
+**Worked example — minimal complete workflow file.** A boardgame-news workflow that fires on the relevant edge type, pulls the prior edition (if the operator has stored its ID on the 2nd edition's frontmatter), decides via CEL, and appends to a recurring task:
 
 ````markdown
 ---
@@ -48,7 +50,8 @@ status: active
 # Boardgame news → review queue
 
 Surfaces news articles about boardgames I own or care about (rating > 7
-on any edition of the series).
+on this game OR on the prior edition stored as `previous_edition_id` in
+frontmatter).
 
 ```yaml
 trigger:
@@ -60,10 +63,15 @@ trigger:
 subject: '{{ entity.slug }}'
 
 context:
-  - name: editions
-    via: 'graph.get(entity.series_id).editions'   # or operator stores edition IDs on the entity
+  # Optional named binding. If the 2nd-edition entity has a previous_edition_id
+  # field, fetch the prior edition entity once and bind it as `prior` for the
+  # condition + action templates. has() guards the optional field; the engine's
+  # graph.get() not-found semantics surface as a missing-reference note if the
+  # ID is set but doesn't resolve.
+  - name: prior
+    via: 'has(entity.previous_edition_id) ? graph.get(entity.previous_edition_id) : null'
 
-condition: 'editions.exists(e, e.rating > 7) || entity.owned == true'
+condition: 'entity.rating > 7 || (prior != null && prior.rating > 7) || entity.owned == true'
 
 dedup:
   key: 'workflow + entity.id'
@@ -78,6 +86,8 @@ actions:
 ````
 
 Frontmatter holds metadata (name, version, status) only. Body's prose explains what the workflow is doing in operator-readable terms. The YAML code-fence holds the structured rules the engine parses. Operator can re-read this file in six months and remember why it exists; the engine can re-parse it on reload without ambiguity.
+
+The example deliberately uses **a single related entity** (one prior edition stored by ID), not a collection. Collection-shaped `context` bindings (`graph.get(...).editions` returning a list of IDs auto-resolved to entities) is the natural next pattern but the resolution semantics for ID-list → entity-list aren't settled in v1; defer to post-v1 alongside `graph.find`. v1 operators who need a multi-related-entity predicate model it with multiple named `context` entries (`prior`, `prior_prior`, etc.) — clunky but explicit.
 
 ### Task
 
@@ -175,13 +185,23 @@ The workflow's decision evaluates deterministically without an LLM call at trigg
 
 Settles the "specific pick deferred; not inventing custom" open question from the original draft.
 
-**Predicate shape — cluster-aware.** Workflow decisions operate over a **cluster** of related entities, not only the single triggering entity. The operator declares the cluster (via a graph query — e.g., "all editions of this series", "all PRs against this repo touched today") and the predicate evaluates across the set. CEL's collection operators (`.exists(...)`, `.all(...)`, `.filter(...)`) carry this natively. Worked example: a boardgame-news workflow firing on the 2nd-edition of a game can pull the 1st-edition via graph, evaluate `editions.exists(e, e.rating > 7)`, and surface even when the immediate target has no rating.
+**Predicate shape.** Workflow decisions can pull related entities into the expression context (via the optional `context` stanza, defined in the Workflow Files section). The triggering entity is always in scope as `entity`; named bindings populated from `graph.get(...)` give the predicate access to specific related entities by ID. The decision predicate then evaluates over the triggering entity, the optional bindings, and any literals. Worked example: a boardgame-news workflow firing on the 2nd-edition can bind the 1st-edition via `context.prior = graph.get(entity.previous_edition_id)` and evaluate `entity.rating > 7 || prior.rating > 7`, surfacing even when the immediate target has no rating but a related one does. Collection-shaped predicates (`editions.exists(e, e.rating > 7)` over a list of related entities) are out of v1 — resolution semantics for ID-list → entity-list aren't settled; deferred alongside `graph.find`.
 
 The expression context provides:
 
 - `entity` — the **triggering entity**, the `this`-like reference for the current workflow fire. Fully resolved (fetched-if-missing). Workflows are generic predicates; `entity` becomes specific at trigger time. The same workflow firing on N different entities sees N different values of `entity` — that's the dynamism. Predicates that key off the triggering entity write `entity.rating > 7`, not a hardcoded ID.
-- `edge` — the triggering edge (its from/to/type/timestamp). **`edge` is nil/absent for manually-triggered workflows** (the `workflow.trigger(name, input)` path has no triggering edge). CEL predicates that reference `edge.*` on a workflow that supports manual triggers must guard, e.g., `has(edge) && edge.type == 'is_about'`. A future iteration may let the manual-trigger CLI optionally pass an edge ID to populate the slot, but v1 does not.
-- `graph.get(id)` — fetch a **related** entity by its canonical ID (per ADR-0017: `<canonical-kind>:<slug>`). For pulling something other than the triggering entity. Returns the entity or fails the expression evaluation if not found. The id is typically an operator-stored field on the triggering entity's frontmatter (e.g., `entity.previous_edition_id`) or a graph-walked target (`edge.target`). This is the only graph lookup in v1.
+- `edge` — the triggering edge. Fields available in expressions: `edge.type` (canonical edge type), `edge.from` (source entity canonical ID), `edge.to` (target entity canonical ID), `edge.from_title` and `edge.to_title` (display-readable titles of the endpoints, resolved from the linked entities), `edge.timestamp` (when the edge was created). The titles are populated by the engine at expression-evaluation time via a single graph lookup per endpoint; not free, but bounded. **`edge` is nil/absent for manually-triggered workflows** (the `workflow.trigger(name, input)` path has no triggering edge). CEL predicates that reference `edge.*` on a workflow that supports manual triggers must guard, e.g., `has(edge) && edge.type == 'is_about'`. A future iteration may let the manual-trigger CLI optionally pass an edge ID to populate the slot, but v1 does not.
+- `graph.get(id)` — fetch a **related** entity by its canonical ID (per ADR-0017: `<canonical-kind>:<slug>`). For pulling something other than the triggering entity. The id is typically an operator-stored field on the triggering entity's frontmatter (e.g., `entity.previous_edition_id`) or a graph-walked target (`edge.target`). This is the only graph lookup in v1.
+
+  **Not-found behavior.** `graph.get(id)` for an absent entity does NOT silently return false, and does NOT fire the err-task pattern. Instead it follows the **missing-reference handling** pattern (see below): the workflow proceeds, the resulting task gets a note attached explaining the unresolved reference, and the task surfaces with that note. The operator decides whether to manually add the missing edge / ingest the missing entity, at which point the workflow re-evaluates with the now-complete context.
+
+  This means there are three distinct failure modes the operator should keep clear:
+
+  1. **Missing reference during context-load** (regex finds no key, frontmatter field absent before evaluation starts) — note on task, task surfaces with note, no err-task.
+  2. **Missing reference during CEL condition evaluation** (`graph.get(id)` for an entity not in the graph) — same missing-reference path: note on task, task surfaces, no err-task. Not silent-false.
+  3. **Systemic failure** (plugin timeout, malformed payload, store IO error) — err-task pattern (one per workflow, accumulating).
+
+  Operators who want to guard explicitly in CEL — e.g., to make condition=false a real path the workflow author chose — use `has()`: `has(entity.previous_edition_id) && graph.get(entity.previous_edition_id).rating > 7`. The `has()` short-circuit lets them distinguish "the field is absent" (don't surface) from "the field is set but resolves to nothing" (surface as missing-ref).
 
 **Concrete example — what `entity` vs `graph.get` look like in a predicate:**
 
@@ -358,6 +378,10 @@ Status remains PROPOSED pending operator hard-gate review of this revision.
 Pre-reviewer flagged 9 specification gaps before the hard-gate read. All accepted or deferred:
 
 - `graph.find({predicate})` predicate shape was undefined — **dropped from v1**, ship `graph.get(id)` only. Re-introduce post-v1 with a settled predicate spec.
+- **Collection-shaped predicates also deferred.** ID-list → entity-list auto-resolution semantics aren't settled in v1; workflows that want multi-related-entity predicates use multiple named `context` entries instead. Re-introduce alongside `graph.find`.
+- `context` stanza spec added — what it binds, when it evaluates, what `via` failure means (missing-reference path).
+- `edge.from_title` / `edge.to_title` added to the edge shape spec as display-readable convenience fields populated by the engine.
+- `graph.get` not-found behavior clarified — follows missing-reference path (note on task), not silent-false and not err-task.
 - `plugin_dispatch` async/sync semantics were contradictory — clarified as **synchronous bounded-await** (default timeout 30s; err-task on timeout/error).
 - `task_append` skip-if-line-exists match semantics — specified as **exact-byte match, no normalization**; dynamic content needs explicit `if_already_present: append-anyway`.
 - `if_already_present: replace` scope — clarified as **matching line only**, not the entire section.
