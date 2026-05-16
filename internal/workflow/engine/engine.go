@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/yaad-index/yaad-index/internal/eventbus"
+	"github.com/yaad-index/yaad-index/internal/workflow/actions"
 	"github.com/yaad-index/yaad-index/internal/workflow/decision"
 	"github.com/yaad-index/yaad-index/internal/workflow/parser"
 )
@@ -99,6 +100,13 @@ type Options struct {
 	// useful for tests where the entity body doesn't matter).
 	Resolver EntityResolver
 
+	// Runner executes the workflow's action list when
+	// Fired=true. Nil → actions.NopRunner (records the
+	// action types without running side effects). The
+	// production-wired Runner (Phase 4) routes per-action
+	// primitives to their implementations.
+	Runner actions.Runner
+
 	// Logger receives the per-decision Info line + any
 	// engine-internal warnings. Nil → discarding handler.
 	Logger *slog.Logger
@@ -123,6 +131,7 @@ const DefaultDecisionRingSize = 1024
 type Engine struct {
 	bus      eventbus.Bus
 	resolver EntityResolver
+	runner   actions.Runner
 	logger   *slog.Logger
 	ringSize int
 
@@ -167,9 +176,14 @@ func New(opts Options) (*Engine, error) {
 	if ring <= 0 {
 		ring = DefaultDecisionRingSize
 	}
+	runner := opts.Runner
+	if runner == nil {
+		runner = actions.NopRunner{}
+	}
 	return &Engine{
 		bus:       opts.Bus,
 		resolver:  opts.Resolver,
+		runner:    runner,
 		logger:    logger,
 		ringSize:  ring,
 		workflows: make(map[string]*registeredWorkflow),
@@ -506,6 +520,49 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 	}
 
 	e.recordDecision(dec)
+
+	// Phase 4 hook: when the workflow fired, dispatch its
+	// actions to the configured Runner. Failures from
+	// individual actions log at WARN; the engine doesn't
+	// roll a single failing action back into the Decision
+	// (Phase 5's err-task pattern absorbs that surface).
+	if dec.Fired && e.runner != nil {
+		e.runActions(ctx, reg, dec, entity, edge, act.Bindings)
+	}
+}
+
+// runActions dispatches the workflow's action list to the
+// configured Runner. Shared between evaluateAndRecord
+// (event-bus path) and runEvaluation (Dispatch target-less
+// path) so both surface the same per-action logs +
+// stay in sync when Phase 5 adds err-task routing.
+func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec Decision, entity, edge, bindings map[string]any) {
+	results := e.runner.Run(ctx, reg.workflow,
+		actions.Decision{
+			Workflow: dec.Workflow,
+			EntityID: dec.EntityID,
+			Subject:  dec.Subject,
+			At:       dec.At,
+		},
+		actions.Activation{
+			Entity:   entity,
+			Edge:     edge,
+			Bindings: bindings,
+		})
+	for _, r := range results {
+		if r.Err != nil {
+			e.logger.Warn("workflow action failed",
+				"workflow", dec.Workflow,
+				"action_idx", r.ActionIdx,
+				"type", r.Type,
+				"err", r.Err.Error())
+			continue
+		}
+		e.logger.Info("workflow action executed",
+			"workflow", dec.Workflow,
+			"action_idx", r.ActionIdx,
+			"type", r.Type)
+	}
 }
 
 // resolveEntity wraps the configured EntityResolver +
@@ -696,6 +753,14 @@ func (e *Engine) runEvaluation(ctx context.Context, reg *registeredWorkflow, ent
 		dec.Subject = sub
 	}
 	e.recordDecision(dec)
+
+	// Phase 4 hook: when the workflow fired, dispatch its
+	// actions to the configured Runner via the shared
+	// runActions helper (also called by evaluateAndRecord
+	// for event-bus-driven decisions).
+	if dec.Fired && e.runner != nil {
+		e.runActions(ctx, reg, dec, entity, edge, act.Bindings)
+	}
 }
 
 // Registered returns the sorted-by-name list of currently-

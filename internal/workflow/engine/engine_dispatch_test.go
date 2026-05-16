@@ -7,6 +7,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/yaad-index/yaad-index/internal/eventbus"
+	"github.com/yaad-index/yaad-index/internal/workflow/actions"
 	"github.com/yaad-index/yaad-index/internal/workflow/parser"
 )
 
@@ -247,6 +249,125 @@ func TestEngine_EdgeFields_TimestampAvailable(t *testing.T) {
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
 	assert.True(t, decs[0].Fired, "edge.timestamp populated")
+}
+
+// recordingRunner records every Run call for engine
+// action-hook integration tests. Used to assert
+// Engine.runEvaluation dispatches to the runner when
+// Fired=true and skips it on Fired=false.
+type recordingRunner struct {
+	mu    sync.Mutex
+	calls []recordedRun
+}
+
+type recordedRun struct {
+	workflow string
+	entityID string
+	subject  string
+	actions  []parser.Action
+}
+
+func (r *recordingRunner) Run(_ context.Context, wf *parser.Workflow, dec actions.Decision, _ actions.Activation) []actions.ActionResult {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, recordedRun{
+		workflow: wf.Name,
+		entityID: dec.EntityID,
+		subject:  dec.Subject,
+		actions:  wf.Actions,
+	})
+	out := make([]actions.ActionResult, len(wf.Actions))
+	for i := range wf.Actions {
+		out[i] = actions.ActionResult{ActionIdx: i, Type: "task_append"}
+	}
+	return out
+}
+
+func (r *recordingRunner) snapshot() []recordedRun {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]recordedRun, len(r.calls))
+	copy(out, r.calls)
+	return out
+}
+
+// TestEngine_RunsActionsOnFired: when a workflow's
+// condition evaluates true, the engine dispatches the
+// workflow's action list to the configured Runner.
+func TestEngine_RunsActionsOnFired(t *testing.T) {
+	t.Parallel()
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"boardgame:b": {"id": "boardgame:b", "rating": int64(9)},
+	})
+	runner := &recordingRunner{}
+	eng, err := New(Options{
+		Bus:      bus,
+		Resolver: resolver,
+		Runner:   runner,
+		Logger:   quietLogger(),
+	})
+	require.NoError(t, err)
+	wf := &parser.Workflow{
+		Name:           "act-on-fire",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger: parser.Trigger{
+			Type:  parser.TriggerTypeEdgeCreated,
+			Match: parser.TriggerMatch{EdgeType: "is_about"},
+		},
+		Condition: "entity.rating > 7",
+		Subject:   "entity.id",
+		Actions: []parser.Action{
+			{TaskAppend: &parser.TaskAppendAction{Section: "candidates", Content: "x"}},
+		},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	bus.Publish(context.Background(), eventbus.EntityEdgeAddedEvent{
+		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
+		SourceTag: eventbus.SourceAgent, At: time.Now(),
+	})
+
+	calls := runner.snapshot()
+	require.Len(t, calls, 1, "runner.Run called once on Fired=true")
+	assert.Equal(t, "act-on-fire", calls[0].workflow)
+	assert.Equal(t, "boardgame:b", calls[0].entityID)
+	assert.Equal(t, "boardgame:b", calls[0].subject)
+	require.Len(t, calls[0].actions, 1)
+	require.NotNil(t, calls[0].actions[0].TaskAppend)
+}
+
+// TestEngine_SkipsActionsOnFiredFalse: when the predicate
+// rejects, the runner is NOT invoked.
+func TestEngine_SkipsActionsOnFiredFalse(t *testing.T) {
+	t.Parallel()
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"boardgame:b": {"rating": int64(3)},
+	})
+	runner := &recordingRunner{}
+	eng, err := New(Options{Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger()})
+	require.NoError(t, err)
+
+	wf := &parser.Workflow{
+		Name:           "no-act",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger: parser.Trigger{
+			Type:  parser.TriggerTypeEdgeCreated,
+			Match: parser.TriggerMatch{EdgeType: "is_about"},
+		},
+		Condition: "entity.rating > 7",
+		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	bus.Publish(context.Background(), eventbus.EntityEdgeAddedEvent{
+		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
+		SourceTag: eventbus.SourceAgent, At: time.Now(),
+	})
+
+	assert.Empty(t, runner.snapshot(),
+		"Fired=false: runner not invoked")
 }
 
 // TestErrors_ExportedSentinels_Match: the public error
