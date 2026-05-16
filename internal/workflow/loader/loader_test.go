@@ -304,6 +304,66 @@ func TestLoader_NameCollision(t *testing.T) {
 	assert.Contains(t, logBuf.String(), "name collision")
 }
 
+// TestLoader_CollisionRecoversAfterPriorRemoved: a
+// collision-rejected file's mtime is not cached, so when the
+// prior-registrant file is removed the next Load re-attempts
+// registration on the rejected file and succeeds. Without
+// this behavior, the rejected file's unchanged mtime would
+// short-circuit re-parse and the file would never recover.
+func TestLoader_CollisionRecoversAfterPriorRemoved(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	priorPath := writeWorkflow(t, dir, "first", minimalWorkflowMarkdown("shared-name", "yaad-gmail"))
+	writeWorkflow(t, dir, "second", minimalWorkflowMarkdown("shared-name", "yaad-gmail"))
+
+	l := New(Options{
+		Paths:          []string{dir},
+		PluginRegistry: newFakeRegistry("yaad-gmail"),
+		Logger:         slog.New(slog.DiscardHandler),
+	})
+
+	// First scan: collision rejected on the second file.
+	require.NoError(t, l.Load(context.Background()))
+	require.Len(t, l.Workflows(), 1)
+
+	// Remove the prior-registrant file. The second file's
+	// mtime is unchanged on disk — but the loader didn't
+	// cache it on rejection, so the next scan re-parses.
+	require.NoError(t, os.Remove(priorPath))
+	require.NoError(t, l.Load(context.Background()))
+	wfs := l.Workflows()
+	require.Len(t, wfs, 1, "previously-collision-rejected file now registered")
+	assert.Equal(t, "shared-name", wfs[0].Name)
+}
+
+// TestLoader_CollisionWarnsOnce: while the collision persists
+// (both files present), repeated polls don't re-log the WARN.
+// First poll logs once; subsequent polls stay silent.
+func TestLoader_CollisionWarnsOnce(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "first", minimalWorkflowMarkdown("shared-name", "yaad-gmail"))
+	writeWorkflow(t, dir, "second", minimalWorkflowMarkdown("shared-name", "yaad-gmail"))
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	l := New(Options{
+		Paths:          []string{dir},
+		PluginRegistry: newFakeRegistry("yaad-gmail"),
+		Logger:         logger,
+	})
+
+	require.NoError(t, l.Load(context.Background()))
+	require.NoError(t, l.Load(context.Background()))
+	require.NoError(t, l.Load(context.Background()))
+
+	// Count the collision-warning lines: should be exactly 1
+	// across the three Load calls.
+	count := strings.Count(logBuf.String(), "name collision")
+	assert.Equal(t, 1, count, "collision logged once, not per-poll")
+}
+
 // TestLoader_NonMarkdownFilesIgnored: only `*.md` files in the
 // scan dir are considered. README, dotfiles, subdirectories
 // pass through silently.
