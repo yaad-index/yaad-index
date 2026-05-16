@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/store"
 )
 
@@ -48,7 +47,7 @@ type searchResponse struct {
 // the summary because the summary is mirrored into the data column;
 // no FTS5 schema change is required for v1. A future ADR may swap to
 // a real FTS index keyed on summary + body.
-func handleSearch(logger *slog.Logger, st store.Store, registry *plugins.Registry) http.HandlerFunc {
+func handleSearch(logger *slog.Logger, st store.Store) http.HandlerFunc {
 	maxChars := readSnippetMaxChars()
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -64,12 +63,17 @@ func handleSearch(logger *slog.Logger, st store.Store, registry *plugins.Registr
 			return
 		}
 
-		if kind != "" && !isRegisteredEntityKind(registry, kind) {
-			writeError(w, http.StatusBadRequest, "invalid_argument",
-				fmt.Sprintf("kind %q is not in the registered entity_kinds", kind))
-			return
-		}
-
+		// The kind value passes through to the store query
+		// unchanged. Previously this rejected any kind not advertised
+		// by registered plugins' EntityKinds, but that allowlist
+		// excluded both source-shape kinds (`gmail`, `wikipedia`,
+		// …) and plugin-emitted canonical kinds that the operator
+		// hadn't added to `canonical_kinds:` — entities of those
+		// kinds are persisted and full-text searchable but were
+		// invisible via the kind filter. Anything the DB doesn't
+		// have returns an empty result set rather than a 400; the
+		// kind filter is a discovery surface, not an operator-config
+		// gate.
 		limit, err := parseBoundedInt(q.Get("limit"), searchDefaultLimit, 1, searchMaxLimit)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_argument",
@@ -207,16 +211,3 @@ func boundInt(n, min, max int) (int, error) {
 	return n, nil
 }
 
-// isRegisteredEntityKind reports whether name is advertised by any
-// registered plugin's Capabilities().EntityKinds. Mirror of
-// isRegisteredEdgeKind in edges.go.
-func isRegisteredEntityKind(registry *plugins.Registry, name string) bool {
-	for _, p := range registry.Plugins() {
-		for _, k := range p.Capabilities().EntityKinds {
-			if k.Name == name {
-				return true
-			}
-		}
-	}
-	return false
-}

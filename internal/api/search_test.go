@@ -117,14 +117,23 @@ func Test_Search_OffsetSkipsResults(t *testing.T) {
 	assert.Equal(t, "boardgame:off-2", got.Results[0].ID, "results[0] after offset=1")
 }
 
-func Test_Search_UnknownKindFilter(t *testing.T) {
+// Test_Search_UnknownKindReturnsEmpty pins the #110 contract: the
+// kind filter is a discovery surface, not an operator-config gate.
+// A kind the DB has no rows for returns 200 + empty results (same
+// shape as any other no-hit query), NOT a 400 — pre-#110 this path
+// rejected the request and blocked legitimate source-shape /
+// plugin-emitted-not-enabled kinds from being queryable.
+func Test_Search_UnknownKindReturnsEmpty(t *testing.T) {
 	t.Parallel()
 
 	req, rec := searchRequest("/v1/search?q=brass&kind=alien")
 	newAPI(t).ServeHTTP(rec, req)
 
-	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_argument",
-		"not in the registered entity_kinds")
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	got := decodeSearch(t, rec)
+	assert.True(t, got.OK)
+	assert.Empty(t, got.Results, "kind=alien matches no DB rows")
+	assert.Equal(t, 0, got.Total)
 }
 
 func Test_Search_MissingQAndKind(t *testing.T) {
@@ -328,18 +337,55 @@ func Test_Search_KindOnly_ListsAllOfKind(t *testing.T) {
 	}
 }
 
-// Test_Search_KindOnly_RejectsUnknownKind asserts the kind-validation
-// path is exercised on the kind-only branch — a bogus kind in a
-// kind-only request must still produce 400 invalid_argument, not a
-// silent empty result.
-func Test_Search_KindOnly_RejectsUnknownKind(t *testing.T) {
+// Test_Search_KindOnly_UnknownKindReturnsEmpty pins the kind-only
+// branch of the #110 contract: a kind with no DB rows returns 200 +
+// empty rather than 400. Same shape as the q+kind branch.
+func Test_Search_KindOnly_UnknownKindReturnsEmpty(t *testing.T) {
 	t.Parallel()
 
 	req, rec := searchRequest("/v1/search?kind=not-a-real-kind")
 	newAPI(t).ServeHTTP(rec, req)
 
-	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_argument",
-		"not in the registered entity_kinds")
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	got := decodeSearch(t, rec)
+	assert.True(t, got.OK)
+	assert.Empty(t, got.Results)
+	assert.Equal(t, 0, got.Total)
+}
+
+// Test_Search_KindFilter_FindsSourceShape pins the #110 fix: an
+// entity persisted with a source-shape kind (`gmail`, `wikipedia`,
+// etc — derived from a plugin's source_namespace, NOT advertised in
+// Capabilities().EntityKinds) is queryable via the kind filter
+// even though no plugin's EntityKinds includes that name. Pre-#110
+// the request 400'd; post-fix the rows the DB has come back.
+func Test_Search_KindFilter_FindsSourceShape(t *testing.T) {
+	t.Parallel()
+
+	h, st := newAPIWithStore(t)
+	// "gmail" is the source_namespace for a gmail plugin's
+	// source-shape entities; the test fixture's plugin
+	// (EntityKinds=boardgame/book/person) doesn't declare it.
+	fetched := mustParseTime(t, "2026-05-16T22:00:00Z")
+	e := &store.Entity{
+		ID: "gmail:hello-world",
+		Kind: "gmail",
+		Data: map[string]any{"title": "hello world"},
+		Provenance: []store.ProvenanceEntry{
+			{Source: "gmail:fetch", FetchedAt: &fetched, OK: true},
+		},
+		Edges: []store.EdgeRef{},
+	}
+	require.NoError(t, st.SaveEntity(context.Background(), e))
+
+	req, rec := searchRequest("/v1/search?kind=gmail")
+	h.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	got := decodeSearch(t, rec)
+	require.Len(t, got.Results, 1, "want 1 row for kind=gmail; got=%+v", got)
+	assert.Equal(t, "gmail:hello-world", got.Results[0].ID)
+	assert.Equal(t, "gmail", got.Results[0].Kind)
 }
 
 // Test_Search_Snippet_FromSummary pins the post-a prior PR contract: the
