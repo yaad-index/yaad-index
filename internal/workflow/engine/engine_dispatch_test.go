@@ -590,6 +590,132 @@ func (r *recordingRunner) snapshot() []recordedRun {
 	return out
 }
 
+// TestEngine_Backstop_TripsAfterThreshold: per ADR-0024
+// §"Self-loop detection", more than N fires on the same
+// (workflow, entity) pair within the sliding window
+// suppresses further fires + writes a single err-task entry.
+// Test uses a tight threshold (3) + a long window so the
+// sliding-window prune doesn't interfere.
+func TestEngine_Backstop_TripsAfterThreshold(t *testing.T) {
+	t.Parallel()
+	errWriter := &fakeErrTaskWriter{}
+	rec := &recordingRunner{}
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"e:1": {"id": "e:1"},
+	})
+	runner := actions.New(actions.Options{
+		TaskWriter:    &noopTaskWriter{},
+		ErrTaskWriter: errWriter,
+	})
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger(),
+		BackstopThreshold: 3,
+		BackstopWindow:    time.Minute,
+	})
+	require.NoError(t, err)
+	// Use the recordingRunner via a second wf that's NOT
+	// the one we're spamming so we can keep track. Actually
+	// we just use the engine's Decisions() ring to verify.
+	_ = rec
+
+	wf := &parser.Workflow{
+		Name:           "loop",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Subject:        "entity.id",
+		Actions: []parser.Action{{TaskAppend: &parser.TaskAppendAction{
+			Section: "s", Content: "'x'",
+		}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	// Fire 5 times — threshold is 3, so fires 4 + 5 trip the
+	// backstop.
+	for i := 0; i < 5; i++ {
+		_, err = eng.Dispatch(context.Background(), "loop", "e:1")
+		require.NoError(t, err)
+	}
+
+	decs := eng.Decisions()
+	require.Len(t, decs, 5)
+	// First three fires: normal evaluation.
+	for i := 0; i < 3; i++ {
+		assert.False(t, decs[i].SuppressedByBackstop,
+			"fire %d should be below threshold", i+1)
+	}
+	// Fires 4 + 5: suppressed.
+	assert.True(t, decs[3].SuppressedByBackstop, "fire 4 suppressed (just over threshold)")
+	assert.True(t, decs[4].SuppressedByBackstop, "fire 5 still suppressed")
+
+	// Err-task fired ONCE on the first trip — subsequent
+	// suppressed fires don't re-spam.
+	errCalls := errWriter.snapshot()
+	require.Len(t, errCalls, 1)
+	assert.Equal(t, "loop", errCalls[0].workflow)
+	assert.Equal(t, "e:1", errCalls[0].entityID)
+	assert.Contains(t, errCalls[0].errMsg, "backstop")
+	assert.Contains(t, errCalls[0].errMsg, "suppressed")
+}
+
+// TestEngine_Backstop_DistinctEntitiesIndependent: the
+// counter is per-(workflow, entity), so two different
+// entities firing on the same workflow each have their own
+// budget.
+func TestEngine_Backstop_DistinctEntitiesIndependent(t *testing.T) {
+	t.Parallel()
+	errWriter := &fakeErrTaskWriter{}
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"e:a": {"id": "e:a"},
+		"e:b": {"id": "e:b"},
+	})
+	runner := actions.New(actions.Options{
+		TaskWriter:    &noopTaskWriter{},
+		ErrTaskWriter: errWriter,
+	})
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger(),
+		BackstopThreshold: 2,
+		BackstopWindow:    time.Minute,
+	})
+	require.NoError(t, err)
+
+	wf := &parser.Workflow{
+		Name:           "loop",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Subject:        "entity.id",
+		Actions: []parser.Action{{TaskAppend: &parser.TaskAppendAction{
+			Section: "s", Content: "'x'",
+		}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	// 2 fires on each entity = at threshold, none tripped.
+	for i := 0; i < 2; i++ {
+		_, err = eng.Dispatch(context.Background(), "loop", "e:a")
+		require.NoError(t, err)
+		_, err = eng.Dispatch(context.Background(), "loop", "e:b")
+		require.NoError(t, err)
+	}
+	assert.Empty(t, errWriter.snapshot(),
+		"each entity at threshold but not over → no trip")
+}
+
+// noopTaskWriter is a no-error TaskWriter for backstop +
+// dedup tests that need the action runner to succeed
+// without exercising real writer side effects.
+type noopTaskWriter struct{}
+
+func (*noopTaskWriter) AppendTaskSection(_ context.Context, _, _, _, _, _, _ string) error {
+	return nil
+}
+
+func (*noopTaskWriter) EnsureMissingRefsSection(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
 // fakeErrTaskWriter records every AppendErrTask invocation
 // so engine-level tests can assert the err-task pattern
 // fired with the right workflow / entity / error message.
