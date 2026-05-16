@@ -22,7 +22,7 @@ func TestFileTaskWriter_FreshCreate(t *testing.T) {
 	w := NewFileTaskWriter(vault)
 
 	err := w.AppendTaskSection(context.Background(),
-		"review-queue", "boardgame-brass", "candidates",
+		"review-queue", "boardgame-brass", "", "candidates",
 		"Brass: Birmingham (2018)", parser.IfAlreadyPresentSkip)
 	require.NoError(t, err)
 
@@ -44,9 +44,9 @@ func TestFileTaskWriter_AppendsToExistingSection(t *testing.T) {
 	w := NewFileTaskWriter(vault)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
-		"wf", "subj", "candidates", "first", parser.IfAlreadyPresentSkip))
+		"wf", "subj", "", "candidates", "first", parser.IfAlreadyPresentSkip))
 	require.NoError(t, w.AppendTaskSection(context.Background(),
-		"wf", "subj", "candidates", "second", parser.IfAlreadyPresentSkip))
+		"wf", "subj", "", "candidates", "second", parser.IfAlreadyPresentSkip))
 
 	got := readTask(t, vault, "wf-subj.md")
 	headerCount := strings.Count(got, "## candidates")
@@ -65,9 +65,9 @@ func TestFileTaskWriter_SkipDedupes(t *testing.T) {
 	w := NewFileTaskWriter(vault)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
-		"wf", "subj", "candidates", "same", parser.IfAlreadyPresentSkip))
+		"wf", "subj", "", "candidates", "same", parser.IfAlreadyPresentSkip))
 	require.NoError(t, w.AppendTaskSection(context.Background(),
-		"wf", "subj", "candidates", "same", parser.IfAlreadyPresentSkip))
+		"wf", "subj", "", "candidates", "same", parser.IfAlreadyPresentSkip))
 
 	got := readTask(t, vault, "wf-subj.md")
 	count := strings.Count(got, "same")
@@ -82,9 +82,9 @@ func TestFileTaskWriter_AppendAnyway(t *testing.T) {
 	w := NewFileTaskWriter(vault)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
-		"wf", "subj", "s", "line", parser.IfAlreadyPresentSkip))
+		"wf", "subj", "", "s", "line", parser.IfAlreadyPresentSkip))
 	require.NoError(t, w.AppendTaskSection(context.Background(),
-		"wf", "subj", "s", "line", parser.IfAlreadyPresentAppendAnyway))
+		"wf", "subj", "", "s", "line", parser.IfAlreadyPresentAppendAnyway))
 
 	got := readTask(t, vault, "wf-subj.md")
 	assert.Equal(t, 2, strings.Count(got, "line"))
@@ -100,12 +100,12 @@ func TestFileTaskWriter_Replace(t *testing.T) {
 	w := NewFileTaskWriter(vault)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
-		"wf", "subj", "s", "match", parser.IfAlreadyPresentSkip))
+		"wf", "subj", "", "s", "match", parser.IfAlreadyPresentSkip))
 	require.NoError(t, w.AppendTaskSection(context.Background(),
-		"wf", "subj", "s", "other", parser.IfAlreadyPresentSkip))
+		"wf", "subj", "", "s", "other", parser.IfAlreadyPresentSkip))
 	// Replace "match" with itself — should remain 1 occurrence.
 	require.NoError(t, w.AppendTaskSection(context.Background(),
-		"wf", "subj", "s", "match", parser.IfAlreadyPresentReplace))
+		"wf", "subj", "", "s", "match", parser.IfAlreadyPresentReplace))
 
 	got := readTask(t, vault, "wf-subj.md")
 	assert.Equal(t, 1, strings.Count(got, "match"))
@@ -122,9 +122,9 @@ func TestFileTaskWriter_NewSection_InExistingFile(t *testing.T) {
 	w := NewFileTaskWriter(vault)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
-		"wf", "subj", "a", "alpha", parser.IfAlreadyPresentSkip))
+		"wf", "subj", "", "a", "alpha", parser.IfAlreadyPresentSkip))
 	require.NoError(t, w.AppendTaskSection(context.Background(),
-		"wf", "subj", "b", "beta", parser.IfAlreadyPresentSkip))
+		"wf", "subj", "", "b", "beta", parser.IfAlreadyPresentSkip))
 
 	got := readTask(t, vault, "wf-subj.md")
 	assert.Contains(t, got, "## a")
@@ -144,7 +144,7 @@ func TestFileTaskWriter_Slugify_HandlesUnsafeChars(t *testing.T) {
 	w := NewFileTaskWriter(vault)
 
 	err := w.AppendTaskSection(context.Background(),
-		"My Workflow", "Brass: Birmingham (2018)", "s", "c", parser.IfAlreadyPresentSkip)
+		"My Workflow", "Brass: Birmingham (2018)", "", "s", "c", parser.IfAlreadyPresentSkip)
 	require.NoError(t, err)
 
 	// File should exist at the slugified path.
@@ -163,10 +163,10 @@ func TestFileTaskWriter_UnknownPolicy(t *testing.T) {
 
 	// First write so the section exists.
 	require.NoError(t, w.AppendTaskSection(context.Background(),
-		"wf", "subj", "s", "first", parser.IfAlreadyPresentSkip))
+		"wf", "subj", "", "s", "first", parser.IfAlreadyPresentSkip))
 
 	err := w.AppendTaskSection(context.Background(),
-		"wf", "subj", "s", "first", "merge") // unknown policy
+		"wf", "subj", "", "s", "first", "merge") // unknown policy
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not one of")
 }
@@ -178,7 +178,7 @@ func TestFileTaskWriter_EmptyWorkflow_Rejected(t *testing.T) {
 	vault := t.TempDir()
 	w := NewFileTaskWriter(vault)
 	err := w.AppendTaskSection(context.Background(),
-		"", "subj", "s", "c", parser.IfAlreadyPresentSkip)
+		"", "subj", "", "s", "c", parser.IfAlreadyPresentSkip)
 	require.Error(t, err)
 }
 
@@ -190,10 +190,49 @@ func TestFileTaskWriter_EmptySubject_Allowed(t *testing.T) {
 	vault := t.TempDir()
 	w := NewFileTaskWriter(vault)
 	err := w.AppendTaskSection(context.Background(),
-		"daily-summary", "", "s", "c", parser.IfAlreadyPresentSkip)
+		"daily-summary", "", "", "s", "c", parser.IfAlreadyPresentSkip)
 	require.NoError(t, err)
 	_, err = os.Stat(filepath.Join(vault, "tasks", "daily-summary.md"))
 	assert.NoError(t, err)
+}
+
+// TestFileTaskWriter_DedupKeyStampedOnFirstCreate: when
+// dedupKey is non-empty on first create, the frontmatter
+// includes `dedup_key: <value>` so the task identity is
+// inspectable by future surfaces (per ADR-0024 §"Per-pattern
+// de-duplication"). Subsequent appends don't re-stamp.
+func TestFileTaskWriter_DedupKeyStampedOnFirstCreate(t *testing.T) {
+	t.Parallel()
+	vault := t.TempDir()
+	w := NewFileTaskWriter(vault)
+
+	require.NoError(t, w.AppendTaskSection(context.Background(),
+		"wf", "subj", "wf|entity:1", "s", "first", parser.IfAlreadyPresentSkip))
+	got := readTask(t, vault, "wf-subj.md")
+	assert.Contains(t, got, "dedup_key: wf|entity:1\n")
+
+	// Subsequent append doesn't change the dedup_key line.
+	require.NoError(t, w.AppendTaskSection(context.Background(),
+		"wf", "subj", "wf|entity:1", "s", "second", parser.IfAlreadyPresentSkip))
+	got = readTask(t, vault, "wf-subj.md")
+	assert.Equal(t, 1, strings.Count(got, "dedup_key:"),
+		"dedup_key stamped once on create; not re-stamped on append")
+}
+
+// TestFileTaskWriter_EmptyDedupKey_Omitted: empty dedupKey
+// omits the frontmatter field entirely — preserves the
+// shape from before Phase 5.A for workflows without
+// dedup.key configured.
+func TestFileTaskWriter_EmptyDedupKey_Omitted(t *testing.T) {
+	t.Parallel()
+	vault := t.TempDir()
+	w := NewFileTaskWriter(vault)
+
+	require.NoError(t, w.AppendTaskSection(context.Background(),
+		"wf", "subj", "", "s", "c", parser.IfAlreadyPresentSkip))
+	got := readTask(t, vault, "wf-subj.md")
+	assert.NotContains(t, got, "dedup_key:",
+		"empty dedupKey omits the frontmatter field")
 }
 
 func readTask(t *testing.T, vault, filename string) string {

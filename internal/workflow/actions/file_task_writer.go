@@ -72,8 +72,12 @@ func NewFileTaskWriter(vaultRoot string) *FileTaskWriter {
 // AppendTaskSection finds-or-creates the task file at the
 // canonical path + appends content to the named section
 // per the if_already_present policy. See package doc for
-// the full semantics.
-func (w *FileTaskWriter) AppendTaskSection(_ context.Context, workflow, subject, section, content, ifAlreadyPresent string) error {
+// the full semantics. dedupKey is written to the
+// frontmatter on first create per ADR-0024 §"Per-pattern
+// de-duplication"; subsequent appends to the same file
+// don't re-stamp (the existing frontmatter is preserved
+// verbatim by mergeSection).
+func (w *FileTaskWriter) AppendTaskSection(_ context.Context, workflow, subject, dedupKey, section, content, ifAlreadyPresent string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -93,7 +97,7 @@ func (w *FileTaskWriter) AppendTaskSection(_ context.Context, workflow, subject,
 	if os.IsNotExist(err) {
 		// First write — create the file with frontmatter +
 		// section header + content line.
-		return w.writeFile(path, freshTaskBody(workflow, subject, section, content))
+		return w.writeFile(path, freshTaskBody(workflow, subject, dedupKey, section, content))
 	}
 	if err != nil {
 		return fmt.Errorf("read existing task %q: %w", path, err)
@@ -140,14 +144,20 @@ func slugify(s string) string {
 }
 
 // freshTaskBody renders the initial task file body —
-// frontmatter + section header + content line.
-func freshTaskBody(workflow, subject, section, content string) []byte {
+// frontmatter + section header + content line. dedupKey,
+// when non-empty, is stamped as `dedup_key: <value>` so
+// cross-fire identity stays inspectable per ADR-0024
+// §"Per-pattern de-duplication".
+func freshTaskBody(workflow, subject, dedupKey, section, content string) []byte {
 	var b strings.Builder
 	b.WriteString("---\n")
 	b.WriteString("kind: task\n")
 	b.WriteString("workflow: " + workflow + "\n")
 	if subject != "" {
 		b.WriteString("subject: " + subject + "\n")
+	}
+	if dedupKey != "" {
+		b.WriteString("dedup_key: " + dedupKey + "\n")
 	}
 	b.WriteString("created_at: " + time.Now().UTC().Format(time.RFC3339) + "\n")
 	b.WriteString("---\n\n")

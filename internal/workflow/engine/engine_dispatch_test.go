@@ -286,6 +286,148 @@ func TestDispatch_RecordsInRingBuffer(t *testing.T) {
 	assert.Equal(t, "boardgame:b", decs[0].EntityID)
 }
 
+// TestDispatch_DedupKeyRendered_DefaultsToEntityID: a
+// workflow with no explicit dedup.key gets the parser
+// default `entity.id`; the engine renders it + stamps it on
+// the Decision + passes it through to the action runner.
+func TestDispatch_DedupKeyRendered_DefaultsToEntityID(t *testing.T) {
+	t.Parallel()
+	rec := &recordingRunner{}
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"boardgame:b": {"id": "boardgame:b", "rating": int64(9)},
+	})
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: rec, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+	wf := &parser.Workflow{
+		Name:           "wf",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Subject:        "entity.id",
+		Dedup:          parser.Dedup{Key: "entity.id", Policy: parser.DedupPolicyUpdate},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	dec, err := eng.Dispatch(context.Background(), "wf", "boardgame:b")
+	require.NoError(t, err)
+	assert.Equal(t, "boardgame:b", dec.DedupKey)
+	assert.Equal(t, parser.DedupPolicyUpdate, dec.DedupPolicyApplied)
+
+	calls := rec.snapshot()
+	require.Len(t, calls, 1, "policy=update dispatches actions")
+}
+
+// TestDispatch_DedupPolicySkip_SuppressesSecondDispatch:
+// policy=skip lets the FIRST fire dispatch but suppresses
+// subsequent fires with the same (workflow, dedup-key). The
+// Decision is still recorded for both with
+// DedupPolicyApplied="skip"; only the action runner is
+// gated.
+func TestDispatch_DedupPolicySkip_SuppressesSecondDispatch(t *testing.T) {
+	t.Parallel()
+	rec := &recordingRunner{}
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"boardgame:b": {"id": "boardgame:b", "rating": int64(9)},
+	})
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: rec, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+	wf := &parser.Workflow{
+		Name:           "wf",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Subject:        "entity.id",
+		Dedup:          parser.Dedup{Key: "entity.id", Policy: parser.DedupPolicySkip},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	d1, err := eng.Dispatch(context.Background(), "wf", "boardgame:b")
+	require.NoError(t, err)
+	d2, err := eng.Dispatch(context.Background(), "wf", "boardgame:b")
+	require.NoError(t, err)
+
+	assert.Equal(t, "boardgame:b", d1.DedupKey)
+	assert.Equal(t, "boardgame:b", d2.DedupKey)
+	assert.Equal(t, parser.DedupPolicySkip, d1.DedupPolicyApplied)
+	assert.Equal(t, parser.DedupPolicySkip, d2.DedupPolicyApplied)
+	require.Len(t, rec.snapshot(), 1, "first dispatch runs; second is suppressed by policy=skip")
+}
+
+// TestDispatch_DedupPolicySkip_DifferentEntitiesProceed:
+// the dedup is per-(workflow, rendered-key), so different
+// entities yielding different keys all dispatch under
+// policy=skip.
+func TestDispatch_DedupPolicySkip_DifferentEntitiesProceed(t *testing.T) {
+	t.Parallel()
+	rec := &recordingRunner{}
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"boardgame:a": {"id": "boardgame:a", "rating": int64(9)},
+		"boardgame:b": {"id": "boardgame:b", "rating": int64(8)},
+	})
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: rec, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+	wf := &parser.Workflow{
+		Name:           "wf",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Subject:        "entity.id",
+		Dedup:          parser.Dedup{Key: "entity.id", Policy: parser.DedupPolicySkip},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	_, err = eng.Dispatch(context.Background(), "wf", "boardgame:a")
+	require.NoError(t, err)
+	_, err = eng.Dispatch(context.Background(), "wf", "boardgame:b")
+	require.NoError(t, err)
+	require.Len(t, rec.snapshot(), 2, "two distinct keys → two dispatches")
+}
+
+// TestDispatch_DedupPolicyReplace_LogsNotImplemented:
+// policy=replace is documented as a Phase 5.A carry-over;
+// the engine logs a Warn + falls through to update behavior.
+// Pinned here so when 5.A.2 wires real replace semantics,
+// this test changes intent (suppression of the warn line +
+// new task-close behavior) rather than silently no-oping.
+func TestDispatch_DedupPolicyReplace_LogsNotImplemented(t *testing.T) {
+	t.Parallel()
+	rec := &recordingRunner{}
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"boardgame:b": {"id": "boardgame:b", "rating": int64(9)},
+	})
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: rec, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+	wf := &parser.Workflow{
+		Name:           "wf",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Subject:        "entity.id",
+		Dedup:          parser.Dedup{Key: "entity.id", Policy: parser.DedupPolicyReplace},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	_, err = eng.Dispatch(context.Background(), "wf", "boardgame:b")
+	require.NoError(t, err)
+	_, err = eng.Dispatch(context.Background(), "wf", "boardgame:b")
+	require.NoError(t, err)
+	// Both fires dispatch (replace falls through to update
+	// for v1; carry-over to 5.A.2 real semantics).
+	assert.Len(t, rec.snapshot(), 2, "replace falls through to update behavior in 5.A")
+}
+
 // TestEngine_EdgeFields_FullSet covers the PR-80 fold-in:
 // the edge map populated by makeEdgeHandler now includes
 // from_title / to_title / timestamp in addition to

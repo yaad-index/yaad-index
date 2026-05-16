@@ -28,17 +28,19 @@ type fakeTaskWriter struct {
 type taskWriterCall struct {
 	workflow         string
 	subject          string
+	dedupKey         string
 	section          string
 	content          string
 	ifAlreadyPresent string
 }
 
-func (f *fakeTaskWriter) AppendTaskSection(_ context.Context, workflow, subject, section, content, ifAlreadyPresent string) error {
+func (f *fakeTaskWriter) AppendTaskSection(_ context.Context, workflow, subject, dedupKey, section, content, ifAlreadyPresent string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, taskWriterCall{
 		workflow:         workflow,
 		subject:          subject,
+		dedupKey:         dedupKey,
 		section:          section,
 		content:          content,
 		ifAlreadyPresent: ifAlreadyPresent,

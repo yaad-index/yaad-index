@@ -109,6 +109,24 @@ type Decision struct {
 	// At is the wall-clock instant this decision was
 	// recorded. Phase 5 ordering / debounce reads this.
 	At time.Time
+
+	// DedupKey is the rendered per-pattern dedup key from
+	// workflow.Dedup.Key per ADR-0024 §"Per-pattern
+	// de-duplication". Stamped on the resulting task's
+	// frontmatter so cross-fire identity stays
+	// inspectable. Empty when the workflow's Dedup.Key
+	// rendered to empty / failed to render — the engine
+	// proceeds with action dispatch but doesn't stamp.
+	DedupKey string
+
+	// DedupPolicyApplied names the per-pattern dedup policy
+	// the engine applied for this fire — one of "update"
+	// (default; action runner dispatched normally),
+	// "skip" (action runner SKIPPED because the dedup key
+	// was already seen), or "replace" (Phase 5.A: not yet
+	// implemented; logged + dispatched as update). Empty
+	// when no dedup applied (Fired=false or err-path).
+	DedupPolicyApplied string
 }
 
 // Options configures an Engine.
@@ -187,6 +205,18 @@ type Engine struct {
 
 	decMu     sync.Mutex
 	decisions []Decision
+
+	// dedupMu guards dedupSeen — the set of namespaced
+	// dedup keys this engine has already produced a fire
+	// against. Used by policy=skip to short-circuit
+	// repeated fires of the same (workflow, dedup-key)
+	// pair. policy=update + policy=replace also stamp here
+	// so a switch from update→skip on a hot-reloaded
+	// workflow doesn't lose track. Restart-bounded: a
+	// daemon restart resets the set; the next fire treats
+	// every key as fresh.
+	dedupMu   sync.Mutex
+	dedupSeen map[string]struct{}
 }
 
 // registeredWorkflow holds the per-workflow runtime state:
@@ -197,6 +227,7 @@ type registeredWorkflow struct {
 	evaluator    *decision.Evaluator
 	condition    *decision.Program // nil when workflow.Condition is empty (always-fire)
 	subject      *template.Template
+	dedupKey     *template.Template // compiled dedup.Key template; nil iff workflow.Dedup.Key empty
 	contextBinds []compiledBinding
 	// actionTemplates is the per-action map of compiled
 	// template fields. Indexed by action position →
@@ -248,6 +279,7 @@ func New(opts Options) (*Engine, error) {
 		logger:        logger,
 		ringSize:      ring,
 		workflows:     make(map[string]*registeredWorkflow),
+		dedupSeen:     make(map[string]struct{}),
 	}, nil
 }
 
@@ -336,6 +368,13 @@ func (e *Engine) registerLocked(wf *parser.Workflow) error {
 			return fmt.Errorf("compile subject: %w", err)
 		}
 		reg.subject = tpl
+	}
+	if wf.Dedup.Key != "" {
+		tpl, err := template.Compile(wf.Dedup.Key, ev)
+		if err != nil {
+			return fmt.Errorf("compile dedup.key: %w", err)
+		}
+		reg.dedupKey = tpl
 	}
 	for _, cb := range wf.Context {
 		prog, err := ev.Compile(cb.Via, "dyn")
@@ -594,16 +633,97 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 		dec.Subject = sub
 	}
 
+	// Phase 5.A: workflow-level dedup. Render the key,
+	// stamp it on the Decision, apply the policy to decide
+	// whether to dispatch actions. Done BEFORE
+	// recordDecision so the recorded entry carries the
+	// dedup attribution.
+	dispatch := true
+	if dec.Fired {
+		dec.DedupKey, dec.DedupPolicyApplied, dispatch = e.applyDedupPolicy(ctx, reg, act)
+	}
 	e.recordDecision(dec)
 
-	// Phase 4 hook: when the workflow fired, dispatch its
-	// actions to the configured Runner. Failures from
-	// individual actions log at WARN; the engine doesn't
-	// roll a single failing action back into the Decision
-	// (Phase 5's err-task pattern absorbs that surface).
-	if dec.Fired && e.runner != nil {
+	// Dispatch actions to the configured Runner when the
+	// workflow fired AND the dedup policy didn't short-
+	// circuit. Failures from individual actions log at
+	// WARN; Phase 5's err-task pattern absorbs the per-
+	// failure surface (5.B+).
+	if dec.Fired && e.runner != nil && dispatch {
 		e.runActions(ctx, reg, dec, entity, edge, act)
 	}
+}
+
+// applyDedupPolicy renders the workflow's dedup key against
+// the activation, looks up the (workflow, key) pair in the
+// engine's seen-set, and decides whether the action runner
+// should dispatch this fire per workflow.Dedup.Policy. Returns
+// the rendered key (or "" on render failure / no key),
+// the policy actually applied (one of "update" / "skip" /
+// "replace"), and a bool indicating whether the action
+// runner should dispatch.
+//
+// Per ADR-0024 §"Per-pattern de-duplication":
+//   - update (default): always dispatch; the task_append +
+//     line-level dedup do the actual write coalescing.
+//   - skip: dispatch only on the FIRST fire (key not yet
+//     seen). Subsequent fires with the same key short-
+//     circuit cleanly.
+//   - replace: Phase 5.A first cut — logs a notice + falls
+//     through to update behavior. Real replace semantics
+//     (close existing task + create new) deferred; tracked
+//     as a Phase 5 carry-over.
+//
+// The seen-set is in-memory + restart-bounded — a daemon
+// restart resets it, and the next fire treats every key as
+// fresh. Acceptable for v1; future iteration can swap in a
+// store-backed lookup if persistence is needed.
+func (e *Engine) applyDedupPolicy(ctx context.Context, reg *registeredWorkflow, act decision.Activation) (key, policy string, dispatch bool) {
+	policy = reg.workflow.Dedup.Policy
+	if policy == "" {
+		policy = parser.DedupPolicyUpdate
+	}
+	if reg.dedupKey == nil {
+		return "", policy, true
+	}
+	rendered, _, err := reg.dedupKey.Render(ctx, act)
+	if err != nil {
+		e.logger.Warn("workflow dedup: key render failed; dispatching with empty key",
+			"workflow", reg.workflow.Name, "err", err.Error())
+		return "", policy, true
+	}
+	if strings.TrimSpace(rendered) == "" {
+		return "", policy, true
+	}
+	namespaced := reg.workflow.Name + "|" + rendered
+
+	e.dedupMu.Lock()
+	_, seen := e.dedupSeen[namespaced]
+	switch policy {
+	case parser.DedupPolicySkip:
+		if seen {
+			e.dedupMu.Unlock()
+			return rendered, parser.DedupPolicySkip, false
+		}
+		e.dedupSeen[namespaced] = struct{}{}
+	case parser.DedupPolicyReplace:
+		// Phase 5.A first cut: real replace-semantics (close
+		// old + create new) is a Phase 5 carry-over. For
+		// now log + treat as update so the dispatch shape
+		// stays predictable + the operator sees the
+		// "policy=replace, treated as update" surface.
+		if seen {
+			e.logger.Warn("workflow dedup: policy=replace not yet implemented; falling through to update behavior",
+				"workflow", reg.workflow.Name, "dedup_key", rendered)
+		}
+		e.dedupSeen[namespaced] = struct{}{}
+	default:
+		// update (and any unrecognized policy — parser-level
+		// validation already rejects out-of-vocab values).
+		e.dedupSeen[namespaced] = struct{}{}
+	}
+	e.dedupMu.Unlock()
+	return rendered, policy, true
 }
 
 // runActions dispatches the workflow's action list to the
@@ -630,6 +750,7 @@ func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec De
 			EntityID: dec.EntityID,
 			Subject:  dec.Subject,
 			At:       dec.At,
+			DedupKey: dec.DedupKey,
 		},
 		actions.Activation{
 			Entity:            entity,
@@ -962,13 +1083,19 @@ func (e *Engine) runEvaluation(ctx context.Context, reg *registeredWorkflow, ent
 		dec.MissingRefs = dedupMissingRefs(dec.MissingRefs)
 		dec.Subject = sub
 	}
+	// Phase 5.A dedup attribution — see evaluateAndRecord
+	// for the matching shape.
+	dispatch := true
+	if dec.Fired {
+		dec.DedupKey, dec.DedupPolicyApplied, dispatch = e.applyDedupPolicy(ctx, reg, act)
+	}
 	e.recordDecision(dec)
 
-	// Phase 4 hook: when the workflow fired, dispatch its
-	// actions to the configured Runner via the shared
-	// runActions helper (also called by evaluateAndRecord
-	// for event-bus-driven decisions).
-	if dec.Fired && e.runner != nil {
+	// Dispatch actions to the configured Runner when the
+	// workflow fired AND the dedup policy didn't short-
+	// circuit. shared runActions helper is also called by
+	// evaluateAndRecord for event-bus-driven decisions.
+	if dec.Fired && e.runner != nil && dispatch {
 		e.runActions(ctx, reg, dec, entity, edge, act)
 	}
 }

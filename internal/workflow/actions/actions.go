@@ -55,6 +55,15 @@ type Decision struct {
 	EntityID string
 	Subject  string
 	At       time.Time
+
+	// DedupKey is the rendered per-pattern dedup key from
+	// workflow.Dedup.Key per ADR-0024 §"Per-pattern
+	// de-duplication". TaskWriter stamps it on the task's
+	// frontmatter so a future "look up task by dedup key"
+	// surface (or operator inspection) can match this
+	// fire's identity. Empty when the workflow has no
+	// dedup.key or the render failed.
+	DedupKey string
 }
 
 // Activation carries the per-fire CEL-evaluation context
@@ -133,12 +142,16 @@ type Runner interface {
 // file at `tasks/<workflow>-<subject>.md`, appends the
 // given content line to the named section, and applies
 // the ifAlreadyPresent policy (skip / replace / append-
-// anyway) on duplicate content lines.
+// anyway) on duplicate content lines. dedupKey, when
+// non-empty, is stamped into the task's frontmatter on
+// first create so cross-fire identity stays inspectable
+// per ADR-0024 §"Per-pattern de-duplication".
 type TaskWriter interface {
 	AppendTaskSection(
 		ctx context.Context,
 		workflow string,
 		subject string,
+		dedupKey string,
 		section string,
 		content string,
 		ifAlreadyPresent string,
