@@ -388,15 +388,15 @@ func (s *ServeCmd) Run() error {
 			WriteLocks:  wfWriteLocks,
 			Logger:      logger,
 		}
+		wfPluginDispatcher, err := actions.NewRegistryPluginDispatcher(registry)
+		if err != nil {
+			return fmt.Errorf("init workflow plugin dispatcher: %w", err)
+		}
 		wfRunner := actions.New(actions.Options{
-			TaskWriter:    actions.NewFileTaskWriter(cfg.Vault.Path),
-			CommentWriter: actions.NewVaultCommentWriter(wfWriterBackend),
-			GapWriter:     actions.NewVaultGapWriter(wfWriterBackend),
-			// plugin_dispatch stub stays in place until
-			// Phase 4.C.2 wires the plugins.Registry-backed
-			// impl that drives the ADR-0022 command protocol
-			// over the ADR-0023 unified plugin response wire.
-			PluginDispatcher: actions.StubPluginDispatcher{},
+			TaskWriter:       actions.NewFileTaskWriter(cfg.Vault.Path),
+			CommentWriter:    actions.NewVaultCommentWriter(wfWriterBackend),
+			GapWriter:        actions.NewVaultGapWriter(wfWriterBackend),
+			PluginDispatcher: wfPluginDispatcher,
 			// Receives the rendered-template drift Warn when
 			// the engine ships a non-nil RenderedTemplates map
 			// that lacks an expected (idx, field) entry —
