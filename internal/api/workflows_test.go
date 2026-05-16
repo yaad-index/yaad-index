@@ -89,7 +89,7 @@ func TestWorkflowTrigger_HappyPath(t *testing.T) {
 		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
 		Condition:      "entity.rating > 7",
 		Subject:        "entity.id",
-		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	h := newTriggerFixture(t, wf, map[string]map[string]any{
 		"boardgame:b": {"id": "boardgame:b", "rating": int64(9)},
@@ -131,7 +131,7 @@ func TestWorkflowTrigger_EmptyInputOnEventDriven(t *testing.T) {
 			Type:  parser.TriggerTypeEdgeCreated,
 			Match: parser.TriggerMatch{EdgeType: "is_about"},
 		},
-		Actions: []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions: []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	h := newTriggerFixture(t, wf, nil)
 	rec := postWorkflowTrigger(t, h, "evt", "")
@@ -149,7 +149,7 @@ func TestWorkflowTrigger_MissingEntity_SurfacesAsMissingRef(t *testing.T) {
 		Name:           "miss",
 		AllowedPlugins: []string{"yaad-gmail"},
 		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
-		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	h := newTriggerFixture(t, wf, nil)
 	rec := postWorkflowTrigger(t, h, "miss", "boardgame:none")
@@ -212,7 +212,7 @@ func TestWorkflowTrigger_FiredFalse_RecordsDecision(t *testing.T) {
 		AllowedPlugins: []string{"yaad-gmail"},
 		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
 		Condition:      "entity.rating > 7",
-		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	h := newTriggerFixture(t, wf, map[string]map[string]any{
 		"boardgame:b": {"rating": int64(3)},

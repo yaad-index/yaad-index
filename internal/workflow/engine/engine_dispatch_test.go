@@ -42,7 +42,7 @@ func TestDispatch_EmptyInputOnEventDriven(t *testing.T) {
 			Type:  parser.TriggerTypeEdgeCreated,
 			Match: parser.TriggerMatch{EdgeType: "is_about"},
 		},
-		Actions: []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions: []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -63,7 +63,7 @@ func TestDispatch_ManualEmptyInput(t *testing.T) {
 		AllowedPlugins: []string{"yaad-gmail"},
 		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
 		Subject:        `"daily"`,
-		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -88,7 +88,7 @@ func TestDispatch_EntityIDInput_Resolves(t *testing.T) {
 		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
 		Condition:      "entity.rating > 7",
 		Subject:        "entity.id",
-		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -110,7 +110,7 @@ func TestDispatch_UnresolvedEntityID_SurfacesMissingRef(t *testing.T) {
 		Name:           "miss",
 		AllowedPlugins: []string{"yaad-gmail"},
 		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
-		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -133,7 +133,7 @@ func TestDispatch_RecordsInRingBuffer(t *testing.T) {
 		Name:           "ring",
 		AllowedPlugins: []string{"yaad-gmail"},
 		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
-		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -153,7 +153,7 @@ func TestDispatch_RecordsInRingBuffer(t *testing.T) {
 func TestEngine_EdgeFields_FullSet(t *testing.T) {
 	t.Parallel()
 	eng, bus := newEngineWithBus(t, map[string]map[string]any{
-		"source:newsletter":         {"title": "May Newsletter"},
+		"source:newsletter":          {"title": "May Newsletter"},
 		"boardgame:brass-birmingham": {"title": "Brass: Birmingham", "rating": int64(9)},
 	})
 	wf := &parser.Workflow{
@@ -167,7 +167,7 @@ func TestEngine_EdgeFields_FullSet(t *testing.T) {
 		// missing or have the wrong type, evaluation either
 		// fails or returns false.
 		Condition: `edge.from_title == "May Newsletter" && edge.to_title == "Brass: Birmingham" && edge.type == "is_about"`,
-		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -205,7 +205,7 @@ func TestEngine_EdgeFields_MissingTitle_OmittedGracefully(t *testing.T) {
 			Match: parser.TriggerMatch{EdgeType: "is_about"},
 		},
 		Condition: `!has(edge.from_title) && !has(edge.to_title)`,
-		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -238,7 +238,7 @@ func TestEngine_EdgeFields_TimestampAvailable(t *testing.T) {
 		// Just assert the timestamp field is present; CEL's
 		// has() returns true when the map key exists.
 		Condition: `has(edge.timestamp)`,
-		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -265,16 +265,33 @@ type recordedRun struct {
 	entityID string
 	subject  string
 	actions  []parser.Action
+	// rendered captures act.RenderedTemplates for tests that
+	// assert the engine's per-action template renderings.
+	// Cloned at record time so subsequent runner calls don't
+	// race with the test's reads.
+	rendered map[int]map[string]string
 }
 
-func (r *recordingRunner) Run(_ context.Context, wf *parser.Workflow, dec actions.Decision, _ actions.Activation) []actions.ActionResult {
+func (r *recordingRunner) Run(_ context.Context, wf *parser.Workflow, dec actions.Decision, act actions.Activation) []actions.ActionResult {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	var rendered map[int]map[string]string
+	if act.RenderedTemplates != nil {
+		rendered = make(map[int]map[string]string, len(act.RenderedTemplates))
+		for i, fields := range act.RenderedTemplates {
+			fcopy := make(map[string]string, len(fields))
+			for k, v := range fields {
+				fcopy[k] = v
+			}
+			rendered[i] = fcopy
+		}
+	}
 	r.calls = append(r.calls, recordedRun{
 		workflow: wf.Name,
 		entityID: dec.EntityID,
 		subject:  dec.Subject,
 		actions:  wf.Actions,
+		rendered: rendered,
 	})
 	out := make([]actions.ActionResult, len(wf.Actions))
 	for i := range wf.Actions {
@@ -318,7 +335,7 @@ func TestEngine_RunsActionsOnFired(t *testing.T) {
 		Condition: "entity.rating > 7",
 		Subject:   "entity.id",
 		Actions: []parser.Action{
-			{TaskAppend: &parser.TaskAppendAction{Section: "candidates", Content: "x"}},
+			{TaskAppend: &parser.TaskAppendAction{Section: "candidates", Content: "'x'"}},
 		},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
@@ -357,7 +374,7 @@ func TestEngine_SkipsActionsOnFiredFalse(t *testing.T) {
 			Match: parser.TriggerMatch{EdgeType: "is_about"},
 		},
 		Condition: "entity.rating > 7",
-		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -384,7 +401,7 @@ func TestErrors_ExportedSentinels_Match(t *testing.T) {
 		Name:           "wf",
 		AllowedPlugins: []string{"yaad-gmail"},
 		Trigger:        parser.Trigger{Type: parser.TriggerTypeEntityCreated},
-		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "x"}}},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
