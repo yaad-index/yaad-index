@@ -98,7 +98,7 @@ Server start runs once per process; all plugins resolve here. From `cmd/yaad-ind
 
  ADR-0006's shorthand input shape (`<plugin>: <id>`, e.g. `wikipedia: Tehran`) is dispatched the same way — no URL-shape validation runs before the matcher (a prior PR removed an http/https-only scheme check that was rejecting legitimate disambiguation re-invocations).
 
-5. **Begin attempt + dispatch to plugin.** The tracker (`ingestTracker.beginAttempt`) registers a record keyed by the attempt id. A goroutine invokes `plugin.Fetch(ctx, rawURL)` with a per-fetch timeout (subprocess-side, typically 5s; configurable). The handler then either:
+5. **Begin attempt + dispatch to plugin.** The tracker (`ingestTracker.beginAttempt`) registers a record keyed by the attempt id. A goroutine invokes `plugin.Fetch(ctx, rawURL)` with a per-fetch timeout (subprocess-side, default 60s; per-plugin override via `PluginEntry.FetchTimeout`). When the timeout fires the daemon sends `SIGTERM` and waits `FetchTimeoutGrace` (2s) before escalating to `SIGKILL`; plugins that trap `SIGTERM` and flush any buffered stdout get their pre-cancel envelopes dispatched via write-as-you-go partial-commit. The handler then either:
 
  - **Long-polls** for up to `wait_seconds` via `tracker.wait`, OR
  - **Returns `queued` immediately** if `wait_seconds == 0` — the goroutine continues in the background, persistence happens regardless of caller presence.

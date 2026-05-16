@@ -1,6 +1,7 @@
 package subprocess
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,7 +11,9 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -18,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/yaad-index/yaad-index/internal/clock"
+	"github.com/yaad-index/yaad-index/internal/plugins"
 )
 
 // The fake-plugin pattern: the test binary itself doubles as the
@@ -48,6 +52,15 @@ const (
 	fakeModeFetchNonZero = "fetch-nonzero-exit"
 	fakeModeFetchMalformedJSON = "fetch-malformed-json"
 	fakeModeFetchSlow = "fetch-slow"
+	// fakeModeFetchBufferedThenHangOnSigterm exercises the #106
+	// partial-commit-on-timeout contract: plugin writes two envelopes
+	// through a bufio.Writer (the default 4KB capacity holds them —
+	// they don't auto-flush) then blocks until SIGTERM. The SIGTERM
+	// handler flushes + exits 0, so the bytes reach the daemon's
+	// pipe-reader during the FetchTimeoutGrace window the daemon
+	// allows between cancel and SIGKILL. Pre-#106 the daemon sent
+	// SIGKILL immediately and these envelopes were lost.
+	fakeModeFetchBufferedThenHangOnSigterm = "fetch-buffered-hang-on-sigterm"
 	fakeModeVersionOKBare = "version-ok-bare"
 	fakeModeVersionOKJSON = "version-ok-json"
 	fakeModeVersionNonZero = "version-nonzero-exit"
@@ -236,6 +249,26 @@ func runFakePlugin(mode string) {
 		}
 		_, _ = io.Copy(io.Discard, os.Stdin)
 		time.Sleep(3 * time.Second)
+		os.Exit(0)
+
+	case fakeModeFetchBufferedThenHangOnSigterm:
+		if isInit {
+			caps := Capabilities{Name: "fake", URLPatterns: []string{`.*`}, SourceNamespace: "fake"}
+			_ = json.NewEncoder(os.Stdout).Encode(caps)
+			os.Exit(0)
+		}
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		w := bufio.NewWriter(os.Stdout)
+		_, _ = fmt.Fprint(w, `{"ok":true,"structured":{"kind":"source","name":"first","data":{},"provenance":[{"source":"fake","ok":true}]}}`+"\n")
+		_, _ = fmt.Fprint(w, `{"ok":true,"structured":{"kind":"source","name":"second","data":{},"provenance":[{"source":"fake","ok":true}]}}`+"\n")
+		// Bytes are sitting in the bufio.Writer; the kernel pipe is
+		// still empty. Block on SIGTERM. Daemon's cmd.Cancel sends
+		// SIGTERM on context deadline; the handler flushes + exits
+		// before WaitDelay escalates to SIGKILL.
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGTERM)
+		<-sigCh
+		_ = w.Flush()
 		os.Exit(0)
 
 	case fakeModeFetchWithEdgesAndCanonical:
@@ -750,6 +783,38 @@ func TestPlugin_DefaultFetchTimeoutIsMinute(t *testing.T) {
 		"DefaultFetchTimeout regressed; see #105")
 	assert.Equal(t, 5*time.Second, DefaultInitTimeout,
 		"DefaultInitTimeout regressed; see #105")
+}
+
+// TestPlugin_StreamDrainsBufferedEnvelopesOnTimeout pins the #106
+// contract: when the fetch timeout fires, plugins that trap SIGTERM
+// and flush their bufio.Writer on the way out commit those
+// previously-buffered envelopes via onEnvelope (write-as-you-go
+// partial commit). Pre-fix the daemon SIGKILL'd immediately and
+// the buffered bytes never reached our pipe-reader, so
+// envelopes_committed=0 even when the plugin had pages of in-flight
+// output (the dogfooded gmail-fetch failure mode).
+func TestPlugin_StreamDrainsBufferedEnvelopesOnTimeout(t *testing.T) {
+	// 500ms is enough to land past the daemon-side wall-clock cancel;
+	// FetchTimeoutGrace (2s) covers the SIGTERM handler's flush+exit.
+	p, err := newFakePlugin(t, fakeModeFetchBufferedThenHangOnSigterm,
+		WithFetchTimeout(500*time.Millisecond))
+	require.NoError(t, err, "New")
+
+	var got []*plugins.FetchResult
+	streamErr := p.Stream(context.Background(), "https://example.test/x",
+		func(env *plugins.FetchResult) error {
+			got = append(got, env)
+			return nil
+		},
+		nil,
+	)
+	require.Error(t, streamErr, "Stream surfaces the timeout")
+	assert.Contains(t, streamErr.Error(), "fetchTimeout=500ms exceeded",
+		"timeout error names the knob; got %q", streamErr.Error())
+	require.Len(t, got, 2,
+		"both pre-cancel envelopes must reach onEnvelope (partial commit on SIGTERM-grace)")
+	assert.Equal(t, "fake:first", got[0].Entity.ID)
+	assert.Equal(t, "fake:second", got[1].Entity.ID)
 }
 
 // --- RunVersion + NewWithCapabilities ( capabilities cache) ---

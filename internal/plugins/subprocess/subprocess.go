@@ -30,6 +30,7 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/yaad-index/yaad-index/internal/clock"
@@ -50,6 +51,15 @@ const DefaultInitTimeout = 5 * time.Second
 // dogfood run of `yaad-gmail fetch` against a 137-envelope inbox
 // completed in ~10s, so 60s holds ~6× headroom.
 const DefaultFetchTimeout = 60 * time.Second
+
+// FetchTimeoutGrace is the wall-clock window between context-cancel
+// (SIGTERM to the plugin) and SIGKILL escalation. Plugins that
+// trap SIGTERM use this window to flush bufio.Writers + emit a
+// final `_summary` packet so any envelopes mid-write survive the
+// daemon-imposed timeout. Plugins that ignore the signal get
+// SIGKILL'd after this delay so a hung plugin can't park the
+// orchestrator forever.
+const FetchTimeoutGrace = 2 * time.Second
 
 // Capabilities is the canonical type from the plugins package, re-
 // exposed under this name so existing subprocess-internal callers
@@ -365,6 +375,17 @@ func (p *Plugin) Stream(ctx context.Context, rawURL string, onEnvelope plugins.E
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// On ctx cancel/timeout, ask the plugin to wind down (SIGTERM)
+	// instead of the os/exec default (SIGKILL). Plugins that emit
+	// envelopes through a bufio.Writer need a moment to flush
+	// before their pre-kill stdout reaches our pipe — without the
+	// grace, mid-stream timeouts surface `envelopes_committed=0`
+	// even when the plugin had pages of in-flight output. WaitDelay
+	// caps the grace so a plugin that ignores SIGTERM can't park
+	// the daemon: after FetchTimeoutGrace elapses the runtime
+	// escalates to SIGKILL and reaps the I/O goroutines.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = FetchTimeoutGrace
 
 	runErr := cmd.Run()
 
