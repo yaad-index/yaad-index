@@ -26,25 +26,43 @@ Add date entity kinds, default-enabled at the daemon level (no plugin gates them
 
 **Granularity — v1.x: day only.** First cut ships **`day:<YYYY-MM-DD>`** (e.g., `day:2026-11-11`). Week / month / year are deferred to a later layer once day-aggregation patterns are established.
 
-When week/month/year arrive later, they'll be separate kinds connected to days via `belongs_to` edges (day→week→month→year). Operators who need week-level digests in the interim can build them from day edges in workflow CEL (multi-day aggregation via repeated `graph.get(day:YYYY-MM-DD)` calls, or a future `graph.find` predicate over a date range).
+When week/month/year arrive later, they'll be separate kinds connected to days via some hierarchical edge (`belongs_to`, `contains`, or whatever shape lands at that point). Operators who need week-level digests in the interim can build them from day edges in workflow CEL (multi-day aggregation via repeated `graph.get(day:YYYY-MM-DD)` calls, or a future `graph.find` predicate over a date range).
 
 Settled: **day-first, others later**.
 
-**Open question 2:** timezone handling. `day:2026-11-11` in whose timezone? Daemon-configured default (operator picks one zone at deployment), per-entity (each date carries its TZ context), or fixed UTC at the canonical-ID layer with display-time conversion?
+**Open question 2:** timezone handling. The canonical ID embeds a calendar-date string — but in whose timezone? Options:
 
-### Auto-creation on first reference
+- Daemon-configured default (operator picks one zone at deployment; canonical ID is the day in that zone)
+- Per-entity (each date carries its TZ context as a separate frontmatter field)
+- Fixed UTC at the canonical-ID layer with display-time conversion
 
-The daemon detects date references in inbound entities (frontmatter fields matching a date-canonical-ID shape) and creates the referenced date entities if they don't already exist.
+**This question is entangled with the canonical ID format itself.** The `day:<YYYY-MM-DD>` examples throughout this DRAFT assume the question is settled; they are illustrative-only until Q2 lands. The format may shift (e.g., `day:2026-11-11Z` for UTC-tagged, `day:2026-11-11@Europe/Berlin` for TZ-embedded, or `day:2026-11-11` with the TZ implicit per daemon config). Don't anchor downstream design on the exact form shown here until Q2 settles.
 
-**Open question 3:** where does detection live?
-- Daemon-side validator on ingest (every plugin gets it for free; one canonical implementation)
-- Plugin-side (each plugin declares its date fields; verbose but explicit)
-- Hybrid (daemon scans canonical-ID-shape strings; plugins can be explicit about date-fields for richer typing)
+### Auto-creation: two distinct mechanisms
 
-**Open question 4:** does auto-creation happen at:
+Two different paths create day entities. They're separate concerns and should be treated as such:
+
+#### Mechanism A — reference-driven creation
+
+When an operator-emitted entity has a frontmatter field that references a day (e.g., `deadline: day:2026-11-11`), the day entity is created if it doesn't already exist. This is reference-following: the daemon (or plugin) sees a `day:` canonical-ID reference and ensures the target exists.
+
+**Open question 3a:** where does the reference detection live?
+- Daemon-side validator on ingest (every plugin gets it for free; one canonical implementation; daemon scans canonical-ID-shape strings)
+- Plugin-side (each plugin declares which of its frontmatter fields are date references; verbose but explicit)
+- Hybrid (daemon scans by shape; plugins can be explicit for richer typing or to opt fields out)
+
+**Open question 4:** when does reference-driven creation happen?
 - Ingest time (cheapest; creates the day node as soon as anything references it)
 - First query (lazy; creates only when something asks for the day node)
 - Both / configurable
+
+#### Mechanism B — daemon-side auto-tag (`ingested_on`)
+
+Independently of reference-following, the daemon may set an `ingested_on` edge on every newly-ingested entity, pointing at the day the ingest happened. This is daemon-internal and doesn't require any frontmatter reference from the plugin — every entity gets a date stamp automatically.
+
+**Open question 3b:** ship `ingested_on` auto-tagging in v1.x, or defer? It's the simplest case (always-on, no per-plugin config) but it's also the most opinionated (every entity gets the edge whether anyone uses it or not).
+
+These two mechanisms answer "when does a day entity get created?" but for different reasons. Q3a + Q4 are about the reference path; Q3b is about the auto-tag path. Don't conflate them in the implementation.
 
 ### Edge types
 
@@ -59,9 +77,14 @@ Time-bound entities connect to dates via canonical edges. Examples:
 
 ### Date entity content
 
-A date entity is mostly an anchor — its value comes from its inbound edges. The entity itself probably has minimal frontmatter (the date, the kind) and optional body for operator notes / journal entries on that day.
+A date entity is mostly an anchor — its value comes from its inbound edges. Beyond that, the content shape is still open:
 
-**Open question 6:** day-as-journal — should a daily note (hand-written reflection for a given day) be the day entity's body, or a separate journal entity that links to the day via edge? Operator vaults that already keep daily-note files will need a migration path either way; the path differs depending on which model.
+**Open question 6:** day-as-journal — what (if anything) lives in the day entity's body? Options:
+- **Body holds the daily note** (operator's hand-written reflection for that day; day entity is both anchor + journal)
+- **Body stays empty / metadata-only** (separate journal entities link to the day via edge; day entity is anchor-only)
+- **Hybrid** (body may hold operator notes but isn't required; journal-as-edge is also valid)
+
+Both anchor-only and body-as-journal have downstream consequences for migration of pre-existing daily-note conventions; deferring picks until Q6 lands.
 
 ### Default-enabled
 
@@ -100,15 +123,17 @@ No ADR-0024 changes required to support date entities — they're just another e
 **Migration:**
 - v1.x ingest-time creation is forward-only. Backfill is a separate one-shot if wanted.
 - Migration path for pre-existing daily-note conventions depends on Open Q 6 (day-as-journal body vs separate-journal-entity model); out of scope for the v1.x cut.
+- **Plain-date-string fields.** Existing entities with frontmatter like `deadline: 2026-11-11` (raw string, not `day:2026-11-11` canonical reference) won't auto-convert. A migration script could rewrite them; out of scope here. Workflows / queries that want to reach day entities from plain-string fields will need either the migration or a forward-compat shim that accepts both forms.
 
 ## Open questions (consolidated)
 
-1. ~~Granularity model — separate kinds with `belongs_to` edges, or one `date:` kind, or day-only-first?~~ **Settled 2026-05-16: day-first, week/month/year deferred to later layer.**
-2. Timezone — operator-default, per-entity, or fixed UTC?
-3. Auto-creation detection — daemon-side, plugin-side, or hybrid?
-4. Auto-creation timing — ingest-time, lazy-on-query, or both?
+1. ~~Granularity model — separate kinds with hierarchical edges, or one `date:` kind, or day-only-first?~~ **Settled 2026-05-16: day-first, week/month/year deferred to later layer.**
+2. Timezone — daemon-default, per-entity, or fixed UTC? (Entangled with canonical ID format; examples in this DRAFT are illustrative until this settles.)
+3a. Reference-driven creation detection — daemon-side, plugin-side, or hybrid?
+3b. `ingested_on` auto-tag in v1.x, or defer?
+4. Reference-driven creation timing — ingest-time, lazy-on-query, or both?
 5. Edge type vocabulary — closed set or plugin-extensible?
-6. Day-as-journal — body holds the daily note, or separate journal entity with edge?
+6. Day-as-journal — body holds the daily note, anchor-only, or hybrid?
 
 ## References
 
