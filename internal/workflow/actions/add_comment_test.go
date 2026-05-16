@@ -23,14 +23,15 @@ type fakeCommentWriter struct {
 }
 
 type commentCall struct {
+	workflow string
 	entityID string
 	body     string
 }
 
-func (f *fakeCommentWriter) AppendComment(_ context.Context, entityID, body string) error {
+func (f *fakeCommentWriter) AppendComment(_ context.Context, workflow, entityID, body string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, commentCall{entityID: entityID, body: body})
+	f.calls = append(f.calls, commentCall{workflow: workflow, entityID: entityID, body: body})
 	return f.writeErr
 }
 
@@ -123,14 +124,34 @@ func TestAddComment_WriterError(t *testing.T) {
 	assert.Contains(t, results[0].Err.Error(), "vault unavailable")
 }
 
-// TestStubCommentWriter_ReturnsNotImplemented: the
-// production-default writer (Phase 4.B stub) returns
-// ErrActionNotImplemented with the attempted entity + body
+// TestStubCommentWriter_ReturnsNotImplemented: the stub
+// CommentWriter (test/dev default) returns
+// ErrActionNotImplemented with the workflow + entity + body
 // length surfaced for operator debugging.
 func TestStubCommentWriter_ReturnsNotImplemented(t *testing.T) {
 	t.Parallel()
-	err := StubCommentWriter{}.AppendComment(context.Background(), "pr:1", "review")
+	err := StubCommentWriter{}.AppendComment(context.Background(), "wf", "pr:1", "review")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrActionNotImplemented)
+	assert.Contains(t, err.Error(), "wf")
 	assert.Contains(t, err.Error(), "pr:1")
+}
+
+// TestAddComment_WorkflowAttribution: the workflow name from
+// the recorded Decision flows through to the CommentWriter
+// as the first arg, so the production vault impl can stamp
+// the Comment.Author as `workflow:<name>` per ADR-0024's
+// Source vocabulary.
+func TestAddComment_WorkflowAttribution(t *testing.T) {
+	t.Parallel()
+	w := &fakeCommentWriter{}
+	r := New(Options{CommentWriter: w})
+	wf := wfWithActions("bgg-news",
+		parser.Action{AddComment: &parser.AddCommentAction{Content: "found a match"}},
+	)
+	results := r.Run(context.Background(), wf, Decision{Workflow: "bgg-news", EntityID: "pr:1"}, Activation{})
+	require.Len(t, results, 1)
+	assert.NoError(t, results[0].Err)
+	require.Len(t, w.snapshot(), 1)
+	assert.Equal(t, "bgg-news", w.snapshot()[0].workflow)
 }

@@ -35,8 +35,11 @@ type GapWriter interface {
 	// AddGap appends the named gap to the entity's vault
 	// frontmatter Gaps list. EntityID is the canonical id
 	// (`<kind>:<slug>`). Idempotent — adding the same gap
-	// twice should not duplicate.
-	AddGap(ctx context.Context, entityID, gap string) error
+	// twice should not duplicate. workflow names the
+	// originating workflow so the production vault impl can
+	// stamp the commit author as `workflow:<name>` per the
+	// ADR-0024 Source vocabulary.
+	AddGap(ctx context.Context, workflow, entityID, gap string) error
 }
 
 // runAddGap executes one add_gap action: enforces the
@@ -95,7 +98,7 @@ func (d *dispatcher) runAddGap(ctx context.Context, idx int, wf *parser.Workflow
 		}
 	}
 
-	if err := d.gapWriter.AddGap(ctx, target, gap); err != nil {
+	if err := d.gapWriter.AddGap(ctx, dec.Workflow, target, gap); err != nil {
 		return ActionResult{
 			ActionIdx: idx,
 			Type:      "add_gap",

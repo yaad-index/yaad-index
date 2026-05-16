@@ -20,24 +20,28 @@ import (
 	"fmt"
 )
 
-// StubCommentWriter is the production-default CommentWriter
-// for Phase 4.B. Returns a wrapped ErrActionNotImplemented
-// so operators see "vault-backed add_comment pending
-// (Phase 4.B.2)" instead of a silent skip.
+// StubCommentWriter is the Phase 4.B production-default
+// CommentWriter retained for tests + dev binaries running
+// without a vault. Returns a wrapped ErrActionNotImplemented
+// so operators see "vault-backed add_comment pending" instead
+// of a silent skip. Phase 4.B.2 replaces this with
+// VaultCommentWriter at the production wiring layer; this
+// stub stays on as the zero-config default.
 type StubCommentWriter struct{}
 
-func (StubCommentWriter) AppendComment(_ context.Context, entityID, body string) error {
-	return fmt.Errorf("%w: vault-backed add_comment pending (Phase 4.B.2); attempted entity=%s body_len=%d",
-		ErrActionNotImplemented, entityID, len(body))
+func (StubCommentWriter) AppendComment(_ context.Context, workflow, entityID, body string) error {
+	return fmt.Errorf("%w: vault-backed add_comment not wired; attempted workflow=%s entity=%s body_len=%d",
+		ErrActionNotImplemented, workflow, entityID, len(body))
 }
 
-// StubGapWriter is the production-default GapWriter for
-// Phase 4.B. Same stub-reject shape as StubCommentWriter.
+// StubGapWriter is the Phase 4.B production-default GapWriter
+// retained for tests + dev binaries running without a vault.
+// Same stub-reject shape as StubCommentWriter.
 type StubGapWriter struct{}
 
-func (StubGapWriter) AddGap(_ context.Context, entityID, gap string) error {
-	return fmt.Errorf("%w: vault-backed add_gap pending (Phase 4.B.2); attempted entity=%s gap=%s",
-		ErrActionNotImplemented, entityID, gap)
+func (StubGapWriter) AddGap(_ context.Context, workflow, entityID, gap string) error {
+	return fmt.Errorf("%w: vault-backed add_gap not wired; attempted workflow=%s entity=%s gap=%s",
+		ErrActionNotImplemented, workflow, entityID, gap)
 }
 
 // StubPluginDispatcher is the production-default

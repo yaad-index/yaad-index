@@ -37,6 +37,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/workflow/decision"
 	"github.com/yaad-index/yaad-index/internal/workflow/engine"
 	"github.com/yaad-index/yaad-index/internal/workflow/loader"
+	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
 // loaderRegistryAdapter bridges *plugins.Registry to
@@ -310,6 +311,14 @@ func (s *ServeCmd) Run() error {
 			return fmt.Errorf("init vault reader (vault.path=%s): %w", cfg.Vault.Path, err)
 		}
 		handlerOpts = append(handlerOpts, api.WithVaultIO(writer, reader))
+		// Per-entity write-lock manager shared between the
+		// HTTP handlers (operator-fill etc.) and the workflow
+		// vault-backed writers (Phase 4.B.2). Sharing the same
+		// Manager means concurrent operator + workflow writes
+		// against the same entity respect each other's locks
+		// rather than racing on the vault file.
+		wfWriteLocks := writelocks.New()
+		handlerOpts = append(handlerOpts, api.WithWriteLocks(wfWriteLocks))
 		logger.Info("vault wiring active", "vault_path", cfg.Vault.Path, "auto_commit", autoCommitOn)
 
 		// Attachments dispatcher (per ADR-0014). Plugins emitting
@@ -368,16 +377,25 @@ func (s *ServeCmd) Run() error {
 		// Phase 4 wires action runners against the engine's
 		// decision output.
 		wfResolver := &storeEntityResolver{st: st}
+		// Phase 4.B.2 vault-backed writers. Share the same
+		// writelocks.Manager wired into the api handlers above
+		// so operator + workflow writes against the same
+		// entity coordinate on a single lock map.
+		wfWriterBackend := &actions.VaultWriterBackend{
+			Store:       st,
+			VaultReader: reader,
+			VaultWriter: writer,
+			WriteLocks:  wfWriteLocks,
+			Logger:      logger,
+		}
 		wfRunner := actions.New(actions.Options{
-			TaskWriter: actions.NewFileTaskWriter(cfg.Vault.Path),
-			// Phase 4.B / 4.C stubs — surface clear "real impl
-			// pending" errors so operators see the gap at
-			// execute time. Phase 4.B.2 swaps the writer stubs
-			// for vault.Writer-backed impls; Phase 4.C.2 swaps
-			// the dispatcher stub for the plugins.Registry-
-			// backed impl.
-			CommentWriter:    actions.StubCommentWriter{},
-			GapWriter:        actions.StubGapWriter{},
+			TaskWriter:    actions.NewFileTaskWriter(cfg.Vault.Path),
+			CommentWriter: actions.NewVaultCommentWriter(wfWriterBackend),
+			GapWriter:     actions.NewVaultGapWriter(wfWriterBackend),
+			// plugin_dispatch stub stays in place until
+			// Phase 4.C.2 wires the plugins.Registry-backed
+			// impl that drives the ADR-0022 command protocol
+			// over the ADR-0023 unified plugin response wire.
 			PluginDispatcher: actions.StubPluginDispatcher{},
 			// Receives the rendered-template drift Warn when
 			// the engine ships a non-nil RenderedTemplates map

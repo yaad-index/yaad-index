@@ -30,7 +30,13 @@ type CommentWriter interface {
 	// AppendComment appends a comment with the given body
 	// to the entity's vault frontmatter Comments table.
 	// EntityID is the canonical id (`<kind>:<slug>`).
-	AppendComment(ctx context.Context, entityID, body string) error
+	// workflow names the originating workflow so the
+	// production vault impl can stamp the Comment.Author as
+	// `workflow:<name>` per the ADR-0024 Source vocabulary,
+	// keeping operator-readable attribution consistent with
+	// the bus-event source-tag (`workflow:<name>` is the
+	// same vocabulary fill.completed events use).
+	AppendComment(ctx context.Context, workflow, entityID, body string) error
 }
 
 // runAddComment executes one add_comment action by
@@ -72,7 +78,7 @@ func (d *dispatcher) runAddComment(ctx context.Context, idx int, _ *parser.Workf
 		}
 	}
 
-	if err := d.commentWriter.AppendComment(ctx, target, content); err != nil {
+	if err := d.commentWriter.AppendComment(ctx, dec.Workflow, target, content); err != nil {
 		return ActionResult{
 			ActionIdx: idx,
 			Type:      "add_comment",
