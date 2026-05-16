@@ -161,6 +161,9 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	if cfg.tasksReader != nil {
 		mux.Handle("GET /v1/tasks", protect(http.HandlerFunc(handleTaskList(logger, cfg.tasksReader))))
 		mux.Handle("GET /v1/tasks/{id}", protect(http.HandlerFunc(handleTaskLoad(logger, cfg.tasksReader))))
+		if cfg.tasksWriter != nil {
+			mux.Handle("POST /v1/tasks/{id}/resolve", protect(http.HandlerFunc(handleTaskResolve(logger, cfg.tasksReader, cfg.tasksWriter, cfg.workflowEngine))))
+		}
 	}
 	return withRequestID(withRecover(logger)(mux))
 }
@@ -251,6 +254,16 @@ type handlerConfig struct {
 	// routes unregistered (404) — appropriate for tests
 	// + dev binaries without a vault.
 	tasksReader *tasks.Reader
+
+	// tasksWriter, when non-nil, registers POST /v1/tasks/
+	// {id}/resolve per ADR-0024 §"Task" close lifecycle.
+	// Auto-archive on resolve respects the originating
+	// workflow's `auto_archive_on_done` (default true);
+	// err-tasks always auto-archive per ADR-0024 §"Runtime
+	// errors". Pairs with tasksReader + workflowEngine; if
+	// any of the three is missing the resolve route stays
+	// unregistered.
+	tasksWriter *tasks.Writer
 }
 
 // WithReindexHandler registers a handler for POST /v1/reindex. When
@@ -484,6 +497,15 @@ func WithWorkflowEngine(eng *engine.Engine) HandlerOption {
 // + dev binaries without a vault.
 func WithTasksReader(r *tasks.Reader) HandlerOption {
 	return func(c *handlerConfig) { c.tasksReader = r }
+}
+
+// WithTasksWriter wires a workflow tasks writer so POST
+// /v1/tasks/{id}/resolve registers per ADR-0024 §"Task"
+// close lifecycle. Requires WithTasksReader +
+// WithWorkflowEngine alongside (the resolve handler
+// looks up auto_archive_on_done via the engine).
+func WithTasksWriter(w *tasks.Writer) HandlerOption {
+	return func(c *handlerConfig) { c.tasksWriter = w }
 }
 
 // WithSyncIngester wires a pre-constructed SyncIngester so the
