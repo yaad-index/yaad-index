@@ -30,6 +30,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/workflow/actions"
 	"github.com/yaad-index/yaad-index/internal/workflow/decision"
 	"github.com/yaad-index/yaad-index/internal/workflow/parser"
+	"github.com/yaad-index/yaad-index/internal/workflow/template"
 )
 
 // EntityResolver is the entity-fetching surface the engine
@@ -146,12 +147,20 @@ type Engine struct {
 // the parsed Workflow, its compiled programs, and its bus
 // subscriptions. Released atomically on Unregister.
 type registeredWorkflow struct {
-	workflow      *parser.Workflow
-	evaluator     *decision.Evaluator
-	condition     *decision.Program // nil when workflow.Condition is empty (always-fire)
-	subject       *decision.Program
-	contextBinds  []compiledBinding
-	subscriptions []eventbus.Subscription
+	workflow     *parser.Workflow
+	evaluator    *decision.Evaluator
+	condition    *decision.Program // nil when workflow.Condition is empty (always-fire)
+	subject      *template.Template
+	contextBinds []compiledBinding
+	// actionTemplates is the per-action map of compiled
+	// template fields. Indexed by action position →
+	// fieldName ("target" / "content" / "entity") →
+	// compiled template. Built once at registration time;
+	// each event-fire renders the templates against the
+	// activation and ships the rendered values to the
+	// action runner via actions.Activation.RenderedTemplates.
+	actionTemplates []map[string]*template.Template
+	subscriptions   []eventbus.Subscription
 }
 
 // compiledBinding ties a workflow's context entry to its
@@ -270,11 +279,11 @@ func (e *Engine) registerLocked(wf *parser.Workflow) error {
 		reg.condition = prog
 	}
 	if wf.Subject != "" {
-		prog, err := ev.Compile(wf.Subject, "string")
+		tpl, err := template.Compile(wf.Subject, ev)
 		if err != nil {
 			return fmt.Errorf("compile subject: %w", err)
 		}
-		reg.subject = prog
+		reg.subject = tpl
 	}
 	for _, cb := range wf.Context {
 		prog, err := ev.Compile(cb.Via, "dyn")
@@ -285,6 +294,20 @@ func (e *Engine) registerLocked(wf *parser.Workflow) error {
 			name:    cb.Name,
 			program: prog,
 		})
+	}
+
+	// Compile per-action template fields once at register
+	// time. Each entry in actionTemplates is the rendered-
+	// field map for the action at the same index; fields not
+	// applicable to the action's primitive (e.g. "target" on
+	// a task_append) stay absent.
+	reg.actionTemplates = make([]map[string]*template.Template, len(wf.Actions))
+	for i, a := range wf.Actions {
+		tpls, err := compileActionTemplates(ev, a)
+		if err != nil {
+			return fmt.Errorf("compile actions[%d]: %w", i, err)
+		}
+		reg.actionTemplates[i] = tpls
 	}
 
 	// Subscribe to bus topics per Trigger.Type. Manual
@@ -508,7 +531,7 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 	// for task naming when Fired=true, and tests inspect it
 	// when Fired=false to verify the eval pipeline ran.
 	if reg.subject != nil {
-		sub, sres, err := reg.subject.EvalString(ctx, act)
+		sub, sres, err := reg.subject.Render(ctx, act)
 		if err != nil {
 			dec.Err = fmt.Errorf("subject: %w", err)
 			e.recordDecision(dec)
@@ -527,16 +550,28 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 	// roll a single failing action back into the Decision
 	// (Phase 5's err-task pattern absorbs that surface).
 	if dec.Fired && e.runner != nil {
-		e.runActions(ctx, reg, dec, entity, edge, act.Bindings)
+		e.runActions(ctx, reg, dec, entity, edge, act)
 	}
 }
 
 // runActions dispatches the workflow's action list to the
-// configured Runner. Shared between evaluateAndRecord
-// (event-bus path) and runEvaluation (Dispatch target-less
-// path) so both surface the same per-action logs +
-// stay in sync when Phase 5 adds err-task routing.
-func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec Decision, entity, edge, bindings map[string]any) {
+// configured Runner. Renders the per-action CEL template
+// fields against the activation up front (so a render error
+// on any field aborts the whole action list with a clear
+// engine-side log line) and ships the rendered values into
+// the runner via actions.Activation.RenderedTemplates. Shared
+// between evaluateAndRecord (event-bus path) and
+// runEvaluation (Dispatch target-less path) so both surface
+// the same per-action logs + stay in sync when Phase 5 adds
+// err-task routing.
+func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec Decision, entity, edge map[string]any, act decision.Activation) {
+	rendered, err := e.renderActionTemplates(ctx, reg, act)
+	if err != nil {
+		e.logger.Warn("workflow action templates render failed; skipping action dispatch",
+			"workflow", dec.Workflow,
+			"err", err.Error())
+		return
+	}
 	results := e.runner.Run(ctx, reg.workflow,
 		actions.Decision{
 			Workflow: dec.Workflow,
@@ -545,9 +580,10 @@ func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec De
 			At:       dec.At,
 		},
 		actions.Activation{
-			Entity:   entity,
-			Edge:     edge,
-			Bindings: bindings,
+			Entity:            entity,
+			Edge:              edge,
+			Bindings:          act.Bindings,
+			RenderedTemplates: rendered,
 		})
 	for _, r := range results {
 		if r.Err != nil {
@@ -563,6 +599,86 @@ func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec De
 			"action_idx", r.ActionIdx,
 			"type", r.Type)
 	}
+}
+
+// compileActionTemplates picks out the CEL-templated fields
+// of a single action by primitive and compiles each via
+// template.Compile against the workflow's evaluator. Returns
+// a fieldName → compiled-template map keyed by the action's
+// field shape ("target" / "content" / "entity"). Skips empty
+// fields — an action with no Target leaves the "target"
+// entry unset so the runner's rendered-or-fallback helper
+// hits its empty path cleanly. plugin_dispatch's args
+// templating is deferred to Phase 4.C.
+func compileActionTemplates(ev *decision.Evaluator, a parser.Action) (map[string]*template.Template, error) {
+	tpls := make(map[string]*template.Template)
+	switch {
+	case a.TaskAppend != nil:
+		if a.TaskAppend.Content != "" {
+			tpl, err := template.Compile(a.TaskAppend.Content, ev)
+			if err != nil {
+				return nil, fmt.Errorf("task_append.content: %w", err)
+			}
+			tpls["content"] = tpl
+		}
+	case a.AddComment != nil:
+		if a.AddComment.Target != "" {
+			tpl, err := template.Compile(a.AddComment.Target, ev)
+			if err != nil {
+				return nil, fmt.Errorf("add_comment.target: %w", err)
+			}
+			tpls["target"] = tpl
+		}
+		if a.AddComment.Content != "" {
+			tpl, err := template.Compile(a.AddComment.Content, ev)
+			if err != nil {
+				return nil, fmt.Errorf("add_comment.content: %w", err)
+			}
+			tpls["content"] = tpl
+		}
+	case a.AddGap != nil:
+		if a.AddGap.Entity != "" {
+			tpl, err := template.Compile(a.AddGap.Entity, ev)
+			if err != nil {
+				return nil, fmt.Errorf("add_gap.entity: %w", err)
+			}
+			tpls["entity"] = tpl
+		}
+	case a.PluginDispatch != nil:
+		// Phase 4.C — plugin_dispatch.args templating not yet
+		// wired. Returning an empty map keeps the runner-side
+		// drift-warn quiet for this action (no templated
+		// fields → no rendered keys expected).
+	}
+	return tpls, nil
+}
+
+// renderActionTemplates evaluates every compiled per-action
+// template against the activation and builds the map shipped
+// into actions.Activation.RenderedTemplates. A render error
+// on any field aborts with the wrapped error — the runner
+// won't run with partially-rendered state.
+func (e *Engine) renderActionTemplates(ctx context.Context, reg *registeredWorkflow, act decision.Activation) (map[int]map[string]string, error) {
+	if len(reg.actionTemplates) == 0 {
+		return nil, nil
+	}
+	out := make(map[int]map[string]string, len(reg.actionTemplates))
+	for i, tpls := range reg.actionTemplates {
+		if len(tpls) == 0 {
+			out[i] = map[string]string{}
+			continue
+		}
+		fields := make(map[string]string, len(tpls))
+		for name, tpl := range tpls {
+			val, _, err := tpl.Render(ctx, act)
+			if err != nil {
+				return nil, fmt.Errorf("actions[%d].%s: %w", i, name, err)
+			}
+			fields[name] = val
+		}
+		out[i] = fields
+	}
+	return out, nil
 }
 
 // resolveEntity wraps the configured EntityResolver +
@@ -742,7 +858,7 @@ func (e *Engine) runEvaluation(ctx context.Context, reg *registeredWorkflow, ent
 	dec.Fired = fired
 	dec.MissingRefs = dedupMissingRefs(dec.MissingRefs)
 	if reg.subject != nil {
-		sub, sres, err := reg.subject.EvalString(ctx, act)
+		sub, sres, err := reg.subject.Render(ctx, act)
 		if err != nil {
 			dec.Err = fmt.Errorf("subject: %w", err)
 			e.recordDecision(dec)
@@ -759,7 +875,7 @@ func (e *Engine) runEvaluation(ctx context.Context, reg *registeredWorkflow, ent
 	// runActions helper (also called by evaluateAndRecord
 	// for event-bus-driven decisions).
 	if dec.Fired && e.runner != nil {
-		e.runActions(ctx, reg, dec, entity, edge, act.Bindings)
+		e.runActions(ctx, reg, dec, entity, edge, act)
 	}
 }
 

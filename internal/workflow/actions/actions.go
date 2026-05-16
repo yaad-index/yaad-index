@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/yaad-index/yaad-index/internal/workflow/parser"
@@ -50,21 +51,38 @@ var ErrActionAuthorBug = errors.New("actions: workflow-author error")
 // import the engine (avoiding the import cycle: engine
 // imports actions to dispatch).
 type Decision struct {
-	Workflow  string
-	EntityID  string
-	Subject   string
-	At        time.Time
+	Workflow string
+	EntityID string
+	Subject  string
+	At       time.Time
 }
 
 // Activation carries the per-fire CEL-evaluation context
-// (entity / edge / bindings) so action template fields can
-// re-render against it. Same shape as
-// decision.Activation but re-declared locally to avoid a
-// cross-package import in either direction.
+// (entity / edge / bindings) plus the engine's pre-rendered
+// values for each action's CEL template fields. Same Entity /
+// Edge / Bindings shape as decision.Activation; re-declared
+// locally to avoid a cross-package import in either direction.
 type Activation struct {
 	Entity   map[string]any
 	Edge     map[string]any
 	Bindings map[string]any
+
+	// RenderedTemplates carries the engine's pre-rendered
+	// values for action-level CEL templates (per ADR-0024
+	// §"Workflow" — action `target` / `content` / `entity`
+	// fields). Indexed by action position (0-based) → field
+	// name → rendered string.
+	//
+	// The map is nil when no template renderer is wired
+	// (legacy / test paths) — action runners fall back to the
+	// raw action.<Field> string verbatim. The map is non-nil
+	// in production: engines wire a renderer at register
+	// time, and a non-nil map whose entry lacks an expected
+	// field logs a Warn (drift signal) before falling back,
+	// so an engine that forgets to populate a templated field
+	// surfaces the gap at execute time instead of silently
+	// running with unrendered CEL source.
+	RenderedTemplates map[int]map[string]string
 }
 
 // ActionResult names one action attempt's outcome. One
@@ -143,6 +161,14 @@ type Options struct {
 	// GapWriter backs add_gap. Same Phase 4.B stub → 4.B.2
 	// vault-backed shape as CommentWriter.
 	GapWriter GapWriter
+
+	// Logger receives drift-warning lines when an action
+	// runner falls back to a raw template field because the
+	// engine's pre-rendered Activation.RenderedTemplates map
+	// is missing the expected key. Nil → discarding handler
+	// (test-friendly default; production wires the daemon's
+	// slog).
+	Logger *slog.Logger
 }
 
 // New constructs a Runner with the given options. The
@@ -155,10 +181,15 @@ type Options struct {
 //   - plugin_dispatch → stub returning
 //     ErrActionNotImplemented (Phase 4.C replaces).
 func New(opts Options) Runner {
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	return &dispatcher{
 		taskWriter:    opts.TaskWriter,
 		commentWriter: opts.CommentWriter,
 		gapWriter:     opts.GapWriter,
+		logger:        logger,
 	}
 }
 
@@ -169,6 +200,31 @@ type dispatcher struct {
 	taskWriter    TaskWriter
 	commentWriter CommentWriter
 	gapWriter     GapWriter
+	logger        *slog.Logger
+}
+
+// rendered returns the engine's pre-rendered value for
+// (actionIdx, field) from act.RenderedTemplates, or the raw
+// fallback. When the map is non-nil but lacks the expected
+// (idx, field) entry, logs a Warn before falling back —
+// surfacing engine drift (a templated field the engine forgot
+// to render). When the map is nil entirely, falls back
+// silently (legacy / test path).
+func (d *dispatcher) rendered(act Activation, idx int, field, raw string) string {
+	if act.RenderedTemplates == nil {
+		return raw
+	}
+	if fields, ok := act.RenderedTemplates[idx]; ok {
+		if v, ok := fields[field]; ok {
+			return v
+		}
+	}
+	d.logger.Warn(
+		"workflow action: rendered-template missing; engine drift — falling back to raw field",
+		"action_idx", idx,
+		"field", field,
+	)
+	return raw
 }
 
 func (d *dispatcher) Run(ctx context.Context, wf *parser.Workflow, dec Decision, act Activation) []ActionResult {
@@ -198,11 +254,15 @@ func (d *dispatcher) runOne(ctx context.Context, idx int, wf *parser.Workflow, a
 	case a.AddGap != nil:
 		return d.runAddGap(ctx, idx, wf, a.AddGap, dec, act)
 	case a.PluginDispatch != nil:
-		return ActionResult{ActionIdx: idx, Type: "plugin_dispatch",
-			Err: fmt.Errorf("%w: plugin_dispatch (lands in Phase 4.C)", ErrActionNotImplemented)}
+		return ActionResult{
+			ActionIdx: idx, Type: "plugin_dispatch",
+			Err: fmt.Errorf("%w: plugin_dispatch (lands in Phase 4.C)", ErrActionNotImplemented),
+		}
 	default:
-		return ActionResult{ActionIdx: idx, Type: "unknown",
-			Err: fmt.Errorf("actions[%d]: no primitive set (workflow parser should have rejected)", idx)}
+		return ActionResult{
+			ActionIdx: idx, Type: "unknown",
+			Err: fmt.Errorf("actions[%d]: no primitive set (workflow parser should have rejected)", idx),
+		}
 	}
 }
 

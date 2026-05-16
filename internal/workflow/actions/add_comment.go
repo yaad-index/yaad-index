@@ -34,10 +34,12 @@ type CommentWriter interface {
 }
 
 // runAddComment executes one add_comment action by
-// resolving the target entity id from the action
-// (defaulting to the triggering entity's id when omitted)
-// + invoking the CommentWriter.
-func (d *dispatcher) runAddComment(ctx context.Context, idx int, _ *parser.Workflow, a *parser.AddCommentAction, dec Decision, _ Activation) ActionResult {
+// resolving the target entity id and content from the engine's
+// pre-rendered template values (or the raw action fields when
+// no renderer is wired), then invoking the CommentWriter. The
+// triggering entity id is the target fallback when the
+// rendered/raw target is empty.
+func (d *dispatcher) runAddComment(ctx context.Context, idx int, _ *parser.Workflow, a *parser.AddCommentAction, dec Decision, act Activation) ActionResult {
 	if d.commentWriter == nil {
 		return ActionResult{
 			ActionIdx: idx,
@@ -45,7 +47,8 @@ func (d *dispatcher) runAddComment(ctx context.Context, idx int, _ *parser.Workf
 			Err:       fmt.Errorf("add_comment: no CommentWriter wired (engine constructed without actions.Options.CommentWriter)"),
 		}
 	}
-	if strings.TrimSpace(a.Content) == "" {
+	content := d.rendered(act, idx, "content", a.Content)
+	if strings.TrimSpace(content) == "" {
 		return ActionResult{
 			ActionIdx: idx,
 			Type:      "add_comment",
@@ -53,14 +56,11 @@ func (d *dispatcher) runAddComment(ctx context.Context, idx int, _ *parser.Workf
 		}
 	}
 
-	// Target resolution: Phase 4.B passes the action's
-	// Target verbatim when set, otherwise falls back to the
-	// triggering entity's id. CEL-template rendering for
-	// the Target + Content fields is a carry-over from
-	// PR-82 review — lands alongside Phase 4.C / 4.B.2
-	// once the engine's program cache is exposed to action
-	// runners.
-	target := strings.TrimSpace(a.Target)
+	// Target resolution: prefer the engine's rendered Target
+	// (or the raw action.Target as a fallback when no renderer
+	// is wired), then default to the triggering entity's id
+	// when neither is set.
+	target := strings.TrimSpace(d.rendered(act, idx, "target", a.Target))
 	if target == "" {
 		target = dec.EntityID
 	}
@@ -72,7 +72,7 @@ func (d *dispatcher) runAddComment(ctx context.Context, idx int, _ *parser.Workf
 		}
 	}
 
-	if err := d.commentWriter.AppendComment(ctx, target, a.Content); err != nil {
+	if err := d.commentWriter.AppendComment(ctx, target, content); err != nil {
 		return ActionResult{
 			ActionIdx: idx,
 			Type:      "add_comment",

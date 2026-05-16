@@ -42,7 +42,7 @@ type GapWriter interface {
 // runAddGap executes one add_gap action: enforces the
 // workflow's addable_gaps vocabulary + invokes the
 // GapWriter against the resolved entity id.
-func (d *dispatcher) runAddGap(ctx context.Context, idx int, wf *parser.Workflow, a *parser.AddGapAction, dec Decision, _ Activation) ActionResult {
+func (d *dispatcher) runAddGap(ctx context.Context, idx int, wf *parser.Workflow, a *parser.AddGapAction, dec Decision, act Activation) ActionResult {
 	if d.gapWriter == nil {
 		return ActionResult{
 			ActionIdx: idx,
@@ -79,13 +79,11 @@ func (d *dispatcher) runAddGap(ctx context.Context, idx int, wf *parser.Workflow
 		}
 	}
 
-	// Target resolution: a.Entity is a CEL expression
-	// (Phase 4.B+ — the engine layer renders it before
-	// invoking the runner); the current cut treats the
-	// raw string verbatim when set, otherwise falls back
-	// to the triggering entity. CEL rendering is a
-	// carry-over from PR-82 review.
-	target := strings.TrimSpace(a.Entity)
+	// Target resolution: prefer the engine's rendered Entity
+	// template (or the raw action.Entity as a fallback when no
+	// renderer is wired), then default to the triggering
+	// entity's id when neither is set.
+	target := strings.TrimSpace(d.rendered(act, idx, "entity", a.Entity))
 	if target == "" {
 		target = dec.EntityID
 	}

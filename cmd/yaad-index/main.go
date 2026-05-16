@@ -376,6 +376,12 @@ func (s *ServeCmd) Run() error {
 			// these with real vault.Writer-backed impls.
 			CommentWriter: actions.StubCommentWriter{},
 			GapWriter:     actions.StubGapWriter{},
+			// Receives the rendered-template drift Warn when
+			// the engine ships a non-nil RenderedTemplates map
+			// that lacks an expected (idx, field) entry —
+			// surfaces engine drift at execute time rather
+			// than silently using raw CEL source.
+			Logger: logger,
 		})
 		wfEngine, err := engine.New(engine.Options{
 			Bus:      bus,

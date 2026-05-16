@@ -1,8 +1,10 @@
 package actions
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 
@@ -258,6 +260,98 @@ func TestRunner_EmptyActions_NilResult(t *testing.T) {
 	wf := wfWithActions("empty")
 	results := r.Run(context.Background(), wf, Decision{Workflow: "empty"}, Activation{})
 	assert.Nil(t, results)
+}
+
+// TestRunner_RenderedTemplates_UsedWhenPresent: when the
+// engine ships a populated RenderedTemplates entry for an
+// action, the runner uses the rendered value rather than the
+// raw action.<Field>. Exercises add_comment's target +
+// content fields together.
+func TestRunner_RenderedTemplates_UsedWhenPresent(t *testing.T) {
+	t.Parallel()
+	cw := &fakeCommentWriter{}
+	r := New(Options{CommentWriter: cw})
+	wf := wfWithActions("wf",
+		parser.Action{AddComment: &parser.AddCommentAction{
+			Target:  "entity.id",
+			Content: "rating={{ entity.rating }}",
+		}},
+	)
+	act := Activation{
+		RenderedTemplates: map[int]map[string]string{
+			0: {
+				"target":  "pr:99",
+				"content": "rating=9",
+			},
+		},
+	}
+	results := r.Run(context.Background(), wf,
+		Decision{Workflow: "wf", EntityID: "fallback:1"}, act)
+	require.Len(t, results, 1)
+	require.NoError(t, results[0].Err)
+	require.Len(t, cw.snapshot(), 1)
+	assert.Equal(t, "pr:99", cw.snapshot()[0].entityID)
+	assert.Equal(t, "rating=9", cw.snapshot()[0].body)
+}
+
+// TestRunner_RenderedTemplates_FallbackOnNilMap: when
+// Activation.RenderedTemplates is nil, the runner reads the
+// raw action.<Field> verbatim and does NOT log a warning
+// (legacy / no-renderer path is expected for tests).
+func TestRunner_RenderedTemplates_FallbackOnNilMap(t *testing.T) {
+	t.Parallel()
+	cw := &fakeCommentWriter{}
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	r := New(Options{CommentWriter: cw, Logger: logger})
+	wf := wfWithActions("wf",
+		parser.Action{AddComment: &parser.AddCommentAction{
+			Target:  "pr:55",
+			Content: "raw content",
+		}},
+	)
+	results := r.Run(context.Background(), wf, Decision{Workflow: "wf"}, Activation{})
+	require.Len(t, results, 1)
+	require.NoError(t, results[0].Err)
+	assert.Equal(t, "pr:55", cw.snapshot()[0].entityID)
+	assert.Equal(t, "raw content", cw.snapshot()[0].body)
+	assert.NotContains(t, logBuf.String(), "rendered-template missing",
+		"nil RenderedTemplates is the silent legacy path; no Warn expected")
+}
+
+// TestRunner_RenderedTemplates_DriftWarnsOnMissingKey: when
+// Activation.RenderedTemplates is non-nil but lacks the
+// expected (idx, field) entry, the runner falls back to raw +
+// logs a drift Warn. Production engines wire this signal so
+// "engine forgot to populate" surfaces at execute time.
+func TestRunner_RenderedTemplates_DriftWarnsOnMissingKey(t *testing.T) {
+	t.Parallel()
+	cw := &fakeCommentWriter{}
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	r := New(Options{CommentWriter: cw, Logger: logger})
+	wf := wfWithActions("wf",
+		parser.Action{AddComment: &parser.AddCommentAction{
+			Target:  "fallback:target",
+			Content: "fallback content",
+		}},
+	)
+	// Engine "rendered" only `target` but forgot `content`.
+	act := Activation{
+		RenderedTemplates: map[int]map[string]string{
+			0: {"target": "pr:42"},
+		},
+	}
+	results := r.Run(context.Background(), wf, Decision{Workflow: "wf"}, act)
+	require.Len(t, results, 1)
+	require.NoError(t, results[0].Err)
+	// target uses rendered, content falls back to raw.
+	assert.Equal(t, "pr:42", cw.snapshot()[0].entityID)
+	assert.Equal(t, "fallback content", cw.snapshot()[0].body)
+	logStr := logBuf.String()
+	assert.Contains(t, logStr, "rendered-template missing")
+	assert.Contains(t, logStr, `field=content`)
+	assert.Contains(t, logStr, "action_idx=0")
 }
 
 // TestNopRunner_RecordsTypes: the NopRunner reports per-
