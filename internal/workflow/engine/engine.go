@@ -215,8 +215,23 @@ type Engine struct {
 	// workflow doesn't lose track. Restart-bounded: a
 	// daemon restart resets the set; the next fire treats
 	// every key as fresh.
+	//
+	// Keyed by a (workflow-name, rendered-key) struct so
+	// arbitrary characters in either side can't collide
+	// across distinct pairs (a string-join scheme with `|`
+	// or similar separators is injective only when neither
+	// side contains the separator; struct-key avoids the
+	// constraint).
 	dedupMu   sync.Mutex
-	dedupSeen map[string]struct{}
+	dedupSeen map[dedupID]struct{}
+}
+
+// dedupID names the engine-internal dedup-set key — the
+// (workflow, rendered-key) pair under policy-suppression
+// tracking.
+type dedupID struct {
+	workflow string
+	key      string
 }
 
 // registeredWorkflow holds the per-workflow runtime state:
@@ -279,7 +294,7 @@ func New(opts Options) (*Engine, error) {
 		logger:        logger,
 		ringSize:      ring,
 		workflows:     make(map[string]*registeredWorkflow),
-		dedupSeen:     make(map[string]struct{}),
+		dedupSeen:     make(map[dedupID]struct{}),
 	}, nil
 }
 
@@ -695,17 +710,17 @@ func (e *Engine) applyDedupPolicy(ctx context.Context, reg *registeredWorkflow, 
 	if strings.TrimSpace(rendered) == "" {
 		return "", policy, true
 	}
-	namespaced := reg.workflow.Name + "|" + rendered
+	id := dedupID{workflow: reg.workflow.Name, key: rendered}
 
 	e.dedupMu.Lock()
-	_, seen := e.dedupSeen[namespaced]
+	_, seen := e.dedupSeen[id]
 	switch policy {
 	case parser.DedupPolicySkip:
 		if seen {
 			e.dedupMu.Unlock()
 			return rendered, parser.DedupPolicySkip, false
 		}
-		e.dedupSeen[namespaced] = struct{}{}
+		e.dedupSeen[id] = struct{}{}
 	case parser.DedupPolicyReplace:
 		// Phase 5.A first cut: real replace-semantics (close
 		// old + create new) is a Phase 5 carry-over. For
@@ -716,11 +731,11 @@ func (e *Engine) applyDedupPolicy(ctx context.Context, reg *registeredWorkflow, 
 			e.logger.Warn("workflow dedup: policy=replace not yet implemented; falling through to update behavior",
 				"workflow", reg.workflow.Name, "dedup_key", rendered)
 		}
-		e.dedupSeen[namespaced] = struct{}{}
+		e.dedupSeen[id] = struct{}{}
 	default:
 		// update (and any unrecognized policy — parser-level
 		// validation already rejects out-of-vocab values).
-		e.dedupSeen[namespaced] = struct{}{}
+		e.dedupSeen[id] = struct{}{}
 	}
 	e.dedupMu.Unlock()
 	return rendered, policy, true
