@@ -1,8 +1,12 @@
-// POST /v1/workflows/trigger — the manual-trigger entry
-// point per ADR-0024 §"Agent surface". Maps the workflow
-// engine's Dispatch path to an HTTP envelope so agents
-// (via MCP / HTTP) and operators (via CLI / curl) can fire
-// workflows by name.
+// /v1/workflows surface per ADR-0024 §"Agent surface":
+//   - GET /v1/workflows — list registered workflows.
+//   - GET /v1/workflows/discover?entity=<id> — list
+//     workflows whose condition matches the given entity.
+//   - POST /v1/workflows/trigger — manual-trigger entry
+//     point.
+//
+// Wire shapes mirror the engine's Decision / WorkflowSummary
+// types with JSON-friendly field names + RFC3339 timestamps.
 
 package api
 
@@ -93,6 +97,75 @@ func handleWorkflowTrigger(logger *slog.Logger, eng *engine.Engine) http.Handler
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
 			logger.ErrorContext(r.Context(), "encode workflow trigger response",
 				"err", err, "name", req.Name)
+		}
+	}
+}
+
+// workflowListResponse + workflowDiscoverResponse are the
+// wire envelopes for GET /v1/workflows + GET
+// /v1/workflows/discover per ADR-0024 §"Agent surface".
+type workflowListResponse struct {
+	OK        bool                      `json:"ok"`
+	Workflows []engine.WorkflowSummary  `json:"workflows"`
+}
+
+type workflowDiscoverResponse struct {
+	OK        bool     `json:"ok"`
+	EntityID  string   `json:"entity_id"`
+	Workflows []string `json:"workflows"`
+}
+
+// handleWorkflowList implements GET /v1/workflows — returns
+// every currently-registered workflow with metadata
+// (name / version / status / trigger type / dedup policy).
+func handleWorkflowList(logger *slog.Logger, eng *engine.Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		resp := workflowListResponse{OK: true, Workflows: eng.List()}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			logger.ErrorContext(r.Context(), "encode workflow list response", "err", err)
+		}
+	}
+}
+
+// handleWorkflowDiscover implements GET
+// /v1/workflows/discover?entity=<id>. Returns the names of
+// workflows whose condition matches the given entity per
+// ADR-0024 §"workflow.discover(entity_id) performance note".
+// Required query param `entity` is the canonical entity id.
+// Unknown entity returns 404 not_found; engine without a
+// resolver returns 503 service_unavailable.
+func handleWorkflowDiscover(logger *slog.Logger, eng *engine.Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		entityID := r.URL.Query().Get("entity")
+		if entityID == "" {
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				"entity query parameter is required")
+			return
+		}
+		matches, err := eng.Discover(r.Context(), entityID)
+		if err != nil {
+			if errors.Is(err, engine.ErrEntityNotFoundForDiscover) {
+				writeError(w, http.StatusNotFound, "not_found", err.Error())
+				return
+			}
+			logger.ErrorContext(r.Context(), "workflow discover failed",
+				"err", err, "entity_id", entityID)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"workflow discover failed")
+			return
+		}
+		resp := workflowDiscoverResponse{
+			OK:        true,
+			EntityID:  entityID,
+			Workflows: matches,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			logger.ErrorContext(r.Context(), "encode workflow discover response",
+				"err", err, "entity_id", entityID)
 		}
 	}
 }
