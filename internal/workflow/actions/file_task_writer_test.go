@@ -196,6 +196,88 @@ func TestFileTaskWriter_EmptySubject_Allowed(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestFileTaskWriter_MissingRefs_AppendsSection: a fresh
+// task gets a `## Missing references` section after
+// EnsureMissingRefsSection runs with non-empty refs.
+func TestFileTaskWriter_MissingRefs_AppendsSection(t *testing.T) {
+	t.Parallel()
+	vault := t.TempDir()
+	w := NewFileTaskWriter(vault)
+
+	require.NoError(t, w.AppendTaskSection(context.Background(),
+		"wf", "subj", "", "candidates", "first", parser.IfAlreadyPresentSkip))
+	require.NoError(t, w.EnsureMissingRefsSection(context.Background(),
+		"wf", "subj", []string{"boardgame:absent", "person:gone"}))
+
+	got := readTask(t, vault, "wf-subj.md")
+	assert.Contains(t, got, "## Missing references\n")
+	assert.Contains(t, got, "- boardgame:absent\n")
+	assert.Contains(t, got, "- person:gone\n")
+}
+
+// TestFileTaskWriter_MissingRefs_SyncsOnReFire: a second
+// EnsureMissingRefsSection call with a different ref list
+// replaces the section body — refs that resolved on the
+// re-eval don't linger in the task body.
+func TestFileTaskWriter_MissingRefs_SyncsOnReFire(t *testing.T) {
+	t.Parallel()
+	vault := t.TempDir()
+	w := NewFileTaskWriter(vault)
+
+	require.NoError(t, w.AppendTaskSection(context.Background(),
+		"wf", "subj", "", "candidates", "first", parser.IfAlreadyPresentSkip))
+	require.NoError(t, w.EnsureMissingRefsSection(context.Background(),
+		"wf", "subj", []string{"id:a", "id:b"}))
+	require.NoError(t, w.EnsureMissingRefsSection(context.Background(),
+		"wf", "subj", []string{"id:c"}))
+
+	got := readTask(t, vault, "wf-subj.md")
+	assert.Contains(t, got, "- id:c\n")
+	assert.NotContains(t, got, "- id:a")
+	assert.NotContains(t, got, "- id:b")
+	// Section still exists, just with new refs.
+	assert.Equal(t, 1, strings.Count(got, "## Missing references"))
+}
+
+// TestFileTaskWriter_MissingRefs_EmptyRemovesSection: a
+// re-eval that resolves all refs (refs=empty) removes the
+// `## Missing references` section entirely (self-heal per
+// ADR-0024 §"Missing-reference handling").
+func TestFileTaskWriter_MissingRefs_EmptyRemovesSection(t *testing.T) {
+	t.Parallel()
+	vault := t.TempDir()
+	w := NewFileTaskWriter(vault)
+
+	require.NoError(t, w.AppendTaskSection(context.Background(),
+		"wf", "subj", "", "candidates", "first", parser.IfAlreadyPresentSkip))
+	require.NoError(t, w.EnsureMissingRefsSection(context.Background(),
+		"wf", "subj", []string{"id:a"}))
+	require.NoError(t, w.EnsureMissingRefsSection(context.Background(),
+		"wf", "subj", nil))
+
+	got := readTask(t, vault, "wf-subj.md")
+	assert.NotContains(t, got, "## Missing references",
+		"section gone after refs resolved")
+	assert.Contains(t, got, "## candidates", "operator's section preserved")
+	assert.Contains(t, got, "first")
+}
+
+// TestFileTaskWriter_MissingRefs_FileAbsent_NoOp: calling
+// EnsureMissingRefsSection on a (workflow, subject) without
+// a task file does nothing — no error, no file created.
+// task_append owns the file-create responsibility.
+func TestFileTaskWriter_MissingRefs_FileAbsent_NoOp(t *testing.T) {
+	t.Parallel()
+	vault := t.TempDir()
+	w := NewFileTaskWriter(vault)
+
+	require.NoError(t, w.EnsureMissingRefsSection(context.Background(),
+		"wf", "subj", []string{"id:a"}))
+	_, err := os.Stat(filepath.Join(vault, "tasks", "wf-subj.md"))
+	require.Error(t, err, "no file created when task absent")
+	assert.True(t, os.IsNotExist(err))
+}
+
 // TestFileTaskWriter_DedupKeyStampedOnFirstCreate: when
 // dedupKey is non-empty on first create, the frontmatter
 // includes `dedup_key: <value>` so the task identity is

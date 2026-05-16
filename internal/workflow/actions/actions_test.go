@@ -20,9 +20,10 @@ import (
 // invocation. Returns an injected error if WriteErr is
 // non-nil.
 type fakeTaskWriter struct {
-	mu       sync.Mutex
-	calls    []taskWriterCall
-	writeErr error
+	mu           sync.Mutex
+	calls        []taskWriterCall
+	missingCalls []missingRefsCall
+	writeErr     error
 }
 
 type taskWriterCall struct {
@@ -32,6 +33,12 @@ type taskWriterCall struct {
 	section          string
 	content          string
 	ifAlreadyPresent string
+}
+
+type missingRefsCall struct {
+	workflow string
+	subject  string
+	refs     []string
 }
 
 func (f *fakeTaskWriter) AppendTaskSection(_ context.Context, workflow, subject, dedupKey, section, content, ifAlreadyPresent string) error {
@@ -46,6 +53,25 @@ func (f *fakeTaskWriter) AppendTaskSection(_ context.Context, workflow, subject,
 		ifAlreadyPresent: ifAlreadyPresent,
 	})
 	return f.writeErr
+}
+
+func (f *fakeTaskWriter) EnsureMissingRefsSection(_ context.Context, workflow, subject string, refs []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.missingCalls = append(f.missingCalls, missingRefsCall{
+		workflow: workflow,
+		subject:  subject,
+		refs:     append([]string(nil), refs...),
+	})
+	return nil
+}
+
+func (f *fakeTaskWriter) missingSnapshot() []missingRefsCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]missingRefsCall, len(f.missingCalls))
+	copy(out, f.missingCalls)
+	return out
 }
 
 func (f *fakeTaskWriter) snapshot() []taskWriterCall {
@@ -65,6 +91,37 @@ func wfWithActions(name string, acts ...parser.Action) *parser.Workflow {
 		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
 		Actions:        acts,
 	}
+}
+
+// TestRunner_TaskAppend_MissingRefsThreadedToWriter: the
+// task_append runner invokes EnsureMissingRefsSection
+// after writing content, threading dec.MissingRefs through
+// so the section stays in sync. Empty refs still result in
+// the call (the writer's no-op-if-section-absent semantics
+// handle the empty case cleanly).
+func TestRunner_TaskAppend_MissingRefsThreadedToWriter(t *testing.T) {
+	t.Parallel()
+	w := &fakeTaskWriter{}
+	r := New(Options{TaskWriter: w})
+	wf := wfWithActions("wf",
+		parser.Action{TaskAppend: &parser.TaskAppendAction{
+			Section: "candidates", Content: "x",
+		}},
+	)
+	dec := Decision{
+		Workflow:    "wf",
+		Subject:     "s",
+		MissingRefs: []string{"id:a", "id:b"},
+	}
+	results := r.Run(context.Background(), wf, dec, Activation{})
+	require.Len(t, results, 1)
+	require.NoError(t, results[0].Err)
+
+	missingCalls := w.missingSnapshot()
+	require.Len(t, missingCalls, 1, "EnsureMissingRefsSection runs after AppendTaskSection")
+	assert.Equal(t, "wf", missingCalls[0].workflow)
+	assert.Equal(t, "s", missingCalls[0].subject)
+	assert.Equal(t, []string{"id:a", "id:b"}, missingCalls[0].refs)
 }
 
 // TestRunner_TaskAppend_HappyPath: a task_append action

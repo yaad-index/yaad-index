@@ -59,5 +59,20 @@ func (d *dispatcher) runTaskAppend(ctx context.Context, idx int, _ *parser.Workf
 			Err:       fmt.Errorf("task_append: %w", err),
 		}
 	}
+	// Phase 5.C — keep the task's `## Missing references`
+	// section in sync with the current dec.MissingRefs.
+	// Idempotent rewrite per ADR-0024 §"Missing-reference
+	// handling": refs empty + section present → section
+	// removed (self-heal on edge-add re-eval); refs non-
+	// empty → section reflects current refs.
+	if err := d.taskWriter.EnsureMissingRefsSection(
+		ctx, dec.Workflow, dec.Subject, dec.MissingRefs,
+	); err != nil {
+		return ActionResult{
+			ActionIdx: idx,
+			Type:      "task_append",
+			Err:       fmt.Errorf("task_append missing-refs section: %w", err),
+		}
+	}
 	return ActionResult{ActionIdx: idx, Type: "task_append"}
 }
