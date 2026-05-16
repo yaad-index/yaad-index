@@ -153,6 +153,8 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 		mux.Handle("POST /v1/reindex", protect(cfg.reindexHandler))
 	}
 	if cfg.workflowEngine != nil {
+		mux.Handle("GET /v1/workflows", protect(http.HandlerFunc(handleWorkflowList(logger, cfg.workflowEngine))))
+		mux.Handle("GET /v1/workflows/discover", protect(http.HandlerFunc(handleWorkflowDiscover(logger, cfg.workflowEngine))))
 		mux.Handle("POST /v1/workflows/trigger", protect(http.HandlerFunc(handleWorkflowTrigger(logger, cfg.workflowEngine))))
 	}
 	return withRequestID(withRecover(logger)(mux))

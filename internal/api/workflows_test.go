@@ -78,6 +78,149 @@ func postWorkflowTrigger(t *testing.T, h http.Handler, name, input string) *http
 	return rec
 }
 
+func getWorkflowList(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/v1/workflows", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func getWorkflowDiscover(t *testing.T, h http.Handler, entityID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/v1/workflows/discover?entity="+entityID, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestWorkflowList_HappyPath: returns every registered
+// workflow with name/version/status/trigger_type/dedup_policy.
+func TestWorkflowList_HappyPath(t *testing.T) {
+	t.Parallel()
+	wf := &parser.Workflow{
+		Name:           "alpha",
+		Version:        1,
+		Status:         parser.StatusActive,
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Subject:        "entity.id",
+		Dedup:          parser.Dedup{Policy: parser.DedupPolicyUpdate, Key: "entity.id"},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+	}
+	h := newTriggerFixture(t, wf, nil)
+	rec := getWorkflowList(t, h)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp struct {
+		OK        bool `json:"ok"`
+		Workflows []struct {
+			Name        string `json:"name"`
+			Version     int    `json:"version"`
+			Status      string `json:"status"`
+			TriggerType string `json:"trigger_type"`
+			DedupPolicy string `json:"dedup_policy"`
+		} `json:"workflows"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.True(t, resp.OK)
+	require.Len(t, resp.Workflows, 1)
+	assert.Equal(t, "alpha", resp.Workflows[0].Name)
+	assert.Equal(t, 1, resp.Workflows[0].Version)
+	assert.Equal(t, "active", resp.Workflows[0].Status)
+	assert.Equal(t, "manual", resp.Workflows[0].TriggerType)
+	assert.Equal(t, "update", resp.Workflows[0].DedupPolicy)
+}
+
+// TestWorkflowList_Empty: no workflows registered → empty
+// list, ok=true.
+func TestWorkflowList_Empty(t *testing.T) {
+	t.Parallel()
+	h := newTriggerFixture(t, nil, nil)
+	rec := getWorkflowList(t, h)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"workflows":[]`)
+}
+
+// TestWorkflowDiscover_MatchByCondition: a workflow whose
+// condition evaluates true against the entity is returned;
+// one whose condition is false is excluded.
+func TestWorkflowDiscover_MatchByCondition(t *testing.T) {
+	t.Parallel()
+	// Two workflows. yes-match condition is true for the
+	// entity; no-match condition is false.
+	yes := &parser.Workflow{
+		Name:           "yes-match",
+		Version:        1,
+		Status:         parser.StatusActive,
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Condition:      "entity.rating > 7",
+		Subject:        "entity.id",
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+	}
+	no := &parser.Workflow{
+		Name:           "no-match",
+		Version:        1,
+		Status:         parser.StatusActive,
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Condition:      "entity.rating < 0",
+		Subject:        "entity.id",
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+	}
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	bus := eventbus.NewMemoryBus()
+	eng, err := engine.New(engine.Options{
+		Bus: bus,
+		Resolver: &triggerFakeResolver{entities: map[string]map[string]any{
+			"boardgame:b": {"id": "boardgame:b", "rating": int64(9)},
+		}},
+		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{yes, no}))
+
+	h := NewHandlerWithRegistry(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		st, testRegistryWithSeed(),
+		WithEventBus(bus), WithWorkflowEngine(eng),
+	)
+	rec := getWorkflowDiscover(t, h, "boardgame:b")
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp struct {
+		OK        bool     `json:"ok"`
+		EntityID  string   `json:"entity_id"`
+		Workflows []string `json:"workflows"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.True(t, resp.OK)
+	assert.Equal(t, "boardgame:b", resp.EntityID)
+	assert.Equal(t, []string{"yes-match"}, resp.Workflows)
+}
+
+// TestWorkflowDiscover_UnknownEntity: missing entity → 404.
+func TestWorkflowDiscover_UnknownEntity(t *testing.T) {
+	t.Parallel()
+	h := newTriggerFixture(t, nil, nil)
+	rec := getWorkflowDiscover(t, h, "boardgame:absent")
+	require.Equal(t, http.StatusNotFound, rec.Code, "body=%s", rec.Body.String())
+}
+
+// TestWorkflowDiscover_MissingEntityParam: missing query
+// param → 400 invalid_argument.
+func TestWorkflowDiscover_MissingEntityParam(t *testing.T) {
+	t.Parallel()
+	h := newTriggerFixture(t, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/workflows/discover", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 // TestWorkflowTrigger_HappyPath: a manual workflow fired
 // against a resolvable entity-id returns Fired=true + the
 // rendered subject.

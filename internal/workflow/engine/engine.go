@@ -1320,6 +1320,119 @@ func (e *Engine) Registered() []string {
 	return out
 }
 
+// WorkflowSummary is the per-workflow metadata returned by
+// List() for the workflow.list HTTP / MCP / CLI surface per
+// ADR-0024 §"Agent surface". Keeps the wire shape narrow:
+// what an agent or operator needs to identify + classify a
+// workflow without re-parsing the source file.
+type WorkflowSummary struct {
+	Name        string `json:"name"`
+	Version     int    `json:"version"`
+	Status      string `json:"status"`
+	TriggerType string `json:"trigger_type"`
+	DedupPolicy string `json:"dedup_policy,omitempty"`
+}
+
+// List returns a snapshot of every currently-registered
+// workflow with its metadata for the workflow.list surface.
+// Sorted by name for deterministic output. Safe for
+// concurrent calls; the returned slice is freshly
+// allocated so callers can mutate without affecting
+// subsequent snapshots.
+func (e *Engine) List() []WorkflowSummary {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]WorkflowSummary, 0, len(e.workflows))
+	for _, reg := range e.workflows {
+		out = append(out, WorkflowSummary{
+			Name:        reg.workflow.Name,
+			Version:     reg.workflow.Version,
+			Status:      reg.workflow.Status,
+			TriggerType: reg.workflow.Trigger.Type,
+			DedupPolicy: reg.workflow.Dedup.Policy,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// Discover returns the sorted-by-name list of workflows
+// whose condition predicate evaluates true against the
+// given entity per ADR-0024 §"workflow.discover(entity_id)
+// performance note". Walks every registered workflow + runs
+// the condition; workflows without a condition (always-fire)
+// are included unconditionally. A predicate that fails to
+// evaluate (e.g. references a binding that depends on a
+// graph.get miss) is treated as non-matching — Discover is a
+// best-effort surface for operator inspection, not a fire
+// commitment.
+//
+// Cost is O(W × T) where W is registered count + T is per-
+// condition eval cost; per the ADR the W is single-digit in
+// v1, so this is fine. Future iteration could memoize by
+// workflow's trigger-match shape for cheaper filtering
+// before evaluating the condition.
+func (e *Engine) Discover(ctx context.Context, entityID string) ([]string, error) {
+	if e.resolver == nil {
+		return nil, fmt.Errorf("engine: Discover requires a configured Resolver")
+	}
+	entity, err := e.resolver.Resolve(ctx, entityID)
+	if err != nil {
+		if errors.Is(err, decision.ErrEntityNotFound) {
+			return nil, fmt.Errorf("%w: %s", ErrEntityNotFoundForDiscover, entityID)
+		}
+		return nil, fmt.Errorf("resolve entity %q: %w", entityID, err)
+	}
+
+	e.mu.Lock()
+	regs := make([]*registeredWorkflow, 0, len(e.workflows))
+	for _, reg := range e.workflows {
+		regs = append(regs, reg)
+	}
+	e.mu.Unlock()
+
+	var matches []string
+	for _, reg := range regs {
+		act := decision.Activation{Entity: entity}
+		// Pre-evaluate context bindings so the condition has
+		// the same activation shape as a real fire.
+		ok := true
+		for _, cb := range reg.contextBinds {
+			val, _, err := cb.program.EvalDyn(ctx, act)
+			if err != nil {
+				ok = false
+				break
+			}
+			if act.Bindings == nil {
+				act.Bindings = make(map[string]any, len(reg.contextBinds))
+			}
+			act.Bindings[cb.name] = val
+		}
+		if !ok {
+			continue
+		}
+		if reg.condition == nil {
+			matches = append(matches, reg.workflow.Name)
+			continue
+		}
+		fired, _, err := reg.condition.EvalBool(ctx, act)
+		if err != nil {
+			continue
+		}
+		if fired {
+			matches = append(matches, reg.workflow.Name)
+		}
+	}
+	sort.Strings(matches)
+	return matches, nil
+}
+
+// ErrEntityNotFoundForDiscover is returned by Discover when
+// the entity-id has no store row. Distinct from
+// ErrUnknownWorkflow + ErrEmptyInputNotAllowed so the HTTP
+// handler can translate to 404 cleanly.
+var ErrEntityNotFoundForDiscover = errors.New("engine: entity not found for discover")
+
 // resolverGraphLookup adapts an EntityResolver to
 // decision.GraphLookup so the decision package's CEL
 // graph.get(id) function can dispatch through the engine's
