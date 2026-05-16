@@ -195,6 +195,7 @@ type Engine struct {
 	bus           eventbus.Bus
 	resolver      EntityResolver
 	runner        actions.Runner
+	errTaskWriter actions.ErrTaskWriter
 	ingestRouter  IngestRouter
 	ingestTimeout time.Duration
 	logger        *slog.Logger
@@ -289,6 +290,7 @@ func New(opts Options) (*Engine, error) {
 		bus:           opts.Bus,
 		resolver:      opts.Resolver,
 		runner:        runner,
+		errTaskWriter: actions.ErrTaskWriterFor(runner),
 		ingestRouter:  opts.IngestRouter,
 		ingestTimeout: ingestTimeout,
 		logger:        logger,
@@ -780,6 +782,21 @@ func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec De
 				"action_idx", r.ActionIdx,
 				"type", r.Type,
 				"err", r.Err.Error())
+			// Phase 5.B: per-action failure → err-task
+			// append. Includes ErrActionAuthorBug (workflow-
+			// author errors) + production runtime failures
+			// (vault write, plugin timeout, etc.) — both are
+			// "this workflow can't complete its fire," which
+			// is the err-task pattern's scope per ADR-0024.
+			if e.errTaskWriter != nil {
+				msg := fmt.Sprintf("action[%d] %s: %s", r.ActionIdx, r.Type, r.Err.Error())
+				if err := e.errTaskWriter.AppendErrTask(
+					ctx, dec.Workflow, dec.At, dec.EntityID, msg,
+				); err != nil {
+					e.logger.Warn("workflow err-task append failed",
+						"workflow", dec.Workflow, "err", err.Error())
+				}
+			}
 			continue
 		}
 		e.logger.Info("workflow action executed",
@@ -916,6 +933,20 @@ func (e *Engine) recordDecision(d Decision) {
 	if d.Err != nil {
 		attrs = append(attrs, "err", d.Err.Error())
 		e.logger.Warn("workflow decision: errored", attrs...)
+		// Phase 5.B: systemic failure → err-task append.
+		// ADR-0024 §"Runtime errors — the err-task pattern":
+		// one err task per workflow accumulates failure
+		// details; MissingRefs are handled separately by
+		// the missing-ref note path (Phase 5.C).
+		if e.errTaskWriter != nil {
+			if err := e.errTaskWriter.AppendErrTask(
+				context.Background(),
+				d.Workflow, d.At, d.EntityID, d.Err.Error(),
+			); err != nil {
+				e.logger.Warn("workflow err-task append failed",
+					"workflow", d.Workflow, "err", err.Error())
+			}
+		}
 		return
 	}
 	e.logger.Info("workflow decision", attrs...)

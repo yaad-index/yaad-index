@@ -590,6 +590,121 @@ func (r *recordingRunner) snapshot() []recordedRun {
 	return out
 }
 
+// fakeErrTaskWriter records every AppendErrTask invocation
+// so engine-level tests can assert the err-task pattern
+// fired with the right workflow / entity / error message.
+type fakeErrTaskWriter struct {
+	mu    sync.Mutex
+	calls []errTaskCall
+}
+
+type errTaskCall struct {
+	workflow string
+	when     time.Time
+	entityID string
+	errMsg   string
+}
+
+func (f *fakeErrTaskWriter) AppendErrTask(_ context.Context, workflow string, when time.Time, entityID, errMsg string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, errTaskCall{workflow: workflow, when: when, entityID: entityID, errMsg: errMsg})
+	return nil
+}
+
+func (f *fakeErrTaskWriter) snapshot() []errTaskCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]errTaskCall, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+// TestEngine_SystemicFailure_AppendsErrTask: a condition
+// that fails at runtime (e.g. `1 / 0`) records the failure
+// via the configured ErrTaskWriter — per ADR-0024 §"Runtime
+// errors". Both event-bus + Dispatch paths share recordDecision
+// so this test covers both via the manual-trigger path.
+func TestEngine_SystemicFailure_AppendsErrTask(t *testing.T) {
+	t.Parallel()
+	errWriter := &fakeErrTaskWriter{}
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"e:1": {"id": "e:1"},
+	})
+	// Wire a real actions.Runner with the fake err writer so
+	// engine.New's actions.ErrTaskWriterFor(runner) pulls
+	// the fake.
+	runner := actions.New(actions.Options{
+		TaskWriter:    nil,
+		ErrTaskWriter: errWriter,
+	})
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+
+	wf := &parser.Workflow{
+		Name:           "fail-on-condition",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		// CEL division-by-zero is a runtime failure (not a
+		// compile-time error).
+		Condition: "(1 / 0) > 0",
+		Subject:   "entity.id",
+		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	_, err = eng.Dispatch(context.Background(), "fail-on-condition", "e:1")
+	require.NoError(t, err, "Dispatch returns Decision with Err; not a hard error")
+
+	calls := errWriter.snapshot()
+	require.Len(t, calls, 1)
+	assert.Equal(t, "fail-on-condition", calls[0].workflow)
+	assert.Equal(t, "e:1", calls[0].entityID)
+	assert.Contains(t, calls[0].errMsg, "condition")
+}
+
+// TestEngine_ActionFailure_AppendsErrTask: a per-action
+// failure (e.g. add_comment with no writer wired) routes
+// to the err-task pattern alongside the WARN log line.
+func TestEngine_ActionFailure_AppendsErrTask(t *testing.T) {
+	t.Parallel()
+	errWriter := &fakeErrTaskWriter{}
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"e:1": {"id": "e:1"},
+	})
+	// CommentWriter is intentionally nil → add_comment errors
+	// at execute time. ErrTaskWriter records the failure.
+	runner := actions.New(actions.Options{
+		ErrTaskWriter: errWriter,
+	})
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+
+	wf := &parser.Workflow{
+		Name:           "no-comment-writer",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Subject:        "entity.id",
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	_, err = eng.Dispatch(context.Background(), "no-comment-writer", "e:1")
+	require.NoError(t, err)
+
+	calls := errWriter.snapshot()
+	require.Len(t, calls, 1)
+	assert.Equal(t, "no-comment-writer", calls[0].workflow)
+	assert.Contains(t, calls[0].errMsg, "action[0] add_comment")
+	assert.Contains(t, calls[0].errMsg, "no CommentWriter wired")
+}
+
 // TestEngine_RunsActionsOnFired: when a workflow's
 // condition evaluates true, the engine dispatches the
 // workflow's action list to the configured Runner.
