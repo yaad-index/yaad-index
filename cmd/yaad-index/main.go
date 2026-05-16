@@ -785,8 +785,9 @@ func reprobePlugins(ctx context.Context, logger *slog.Logger, st store.Store, co
 		// Per-plugin config env (#7) threaded through so reprobe
 		// matches the boot path.
 		p, err := subprocess.New(entry.Name, entry.Path,
-			subprocess.WithLogger(logger),
-			subprocess.WithConfigEnv(config.PluginConfigEnvVars(entry.Name, entry.Config)))
+			appendFetchTimeoutOpt(entry,
+				subprocess.WithLogger(logger),
+				subprocess.WithConfigEnv(config.PluginConfigEnvVars(entry.Name, entry.Config)))...)
 		if err != nil {
 			_, _ = fmt.Fprintf(out, "%s: ERROR --init failed: %v\n", entry.Name, err)
 			failures = append(failures, entry.Name)
@@ -858,6 +859,19 @@ func sameCapabilitiesShape(oldJSON, newJSON []byte) bool {
 		return false
 	}
 	return string(oldRe) == string(newRe)
+}
+
+// appendFetchTimeoutOpt extends the caller's subprocess.Option slice
+// with WithFetchTimeout only when the operator set fetch_timeout on
+// the PluginEntry. Unset / zero-duration entries get the daemon
+// default (DefaultFetchTimeout) untouched. Centralizes the override
+// decision so registerPlugin's cache-hit and --init paths and the
+// reprobePlugins re-init path stay in sync.
+func appendFetchTimeoutOpt(entry config.PluginEntry, opts ...subprocess.Option) []subprocess.Option {
+	if d := entry.FetchTimeoutDuration(); d > 0 {
+		opts = append(opts, subprocess.WithFetchTimeout(d))
+	}
+	return opts
 }
 
 // pluginEntryNames extracts plugin names from a config slice for
@@ -1112,8 +1126,9 @@ func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, en
 				outcome = cacheFailure
 			} else {
 				p, ctorErr := subprocess.NewWithCapabilities(name, path, caps,
-				subprocess.WithLogger(logger),
-				subprocess.WithConfigEnv(configEnv))
+				appendFetchTimeoutOpt(entry,
+					subprocess.WithLogger(logger),
+					subprocess.WithConfigEnv(configEnv))...)
 				if ctorErr != nil {
 					logger.Error("Plugin construction from cached caps failed, ignoring cache",
 						"err", ctorErr, "name", name)
@@ -1140,8 +1155,9 @@ func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, en
 
 	// Fall-through: full --init load + cache upsert.
 	p, err := subprocess.New(name, path,
-		subprocess.WithLogger(logger),
-		subprocess.WithConfigEnv(configEnv))
+		appendFetchTimeoutOpt(entry,
+			subprocess.WithLogger(logger),
+			subprocess.WithConfigEnv(configEnv))...)
 	if err != nil {
 		return nil, outcome, err
 	}

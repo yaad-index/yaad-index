@@ -412,9 +412,31 @@ type VaultEntry struct {
 // The two `*_api_key` forms produce the same env var so the
 // operator can pick whichever reads cleanest in their yaml.
 type PluginEntry struct {
-	Name   string         `yaml:"name"`
-	Path   string         `yaml:"path"`
-	Config map[string]any `yaml:"config,omitempty"`
+	Name string `yaml:"name"`
+	Path string `yaml:"path"`
+	// FetchTimeout, when set, overrides DefaultFetchTimeout on the
+	// subprocess wrapper for this plugin's per-request fetches.
+	// Format is anything `time.ParseDuration` accepts (e.g. `30s`,
+	// `5m`, `1h`). Validate enforces positive parse on non-empty
+	// values; empty means "use the daemon default."
+	FetchTimeout string         `yaml:"fetch_timeout,omitempty"`
+	Config       map[string]any `yaml:"config,omitempty"`
+}
+
+// FetchTimeoutDuration returns the parsed FetchTimeout, or 0 when the
+// operator did not set one (caller falls through to
+// subprocess.DefaultFetchTimeout). Safe to call without an error
+// check after Validate has passed — Validate rejects any non-empty
+// FetchTimeout that does not parse.
+func (e PluginEntry) FetchTimeoutDuration() time.Duration {
+	if e.FetchTimeout == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(e.FetchTimeout)
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 // Load reads and validates the config at path. Returns ErrFileMissing
@@ -472,6 +494,17 @@ func (c *Config) Validate() error {
 		}
 		if err := validatePluginConfig(entry.Name, entry.Config); err != nil {
 			return err
+		}
+		if entry.FetchTimeout != "" {
+			d, err := time.ParseDuration(entry.FetchTimeout)
+			if err != nil {
+				return fmt.Errorf("plugin %q: fetch_timeout %q: %w",
+					entry.Name, entry.FetchTimeout, err)
+			}
+			if d <= 0 {
+				return fmt.Errorf("plugin %q: fetch_timeout %q must be positive",
+					entry.Name, entry.FetchTimeout)
+			}
 		}
 	}
 	if c.Vault.Path != "" {

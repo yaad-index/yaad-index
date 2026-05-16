@@ -12,8 +12,9 @@
 // stderr+exit-code), and translates into a plugins.FetchResult.
 //
 // The binary is invoked subprocess-per-request — no pooling, no
-// long-lived stdio (per ADR-0005). A 5-second wall-clock timeout
-// caps each invocation.
+// long-lived stdio (per ADR-0005). A wall-clock timeout caps each
+// invocation: 5s for --init, 60s for fetch (operator-overridable via
+// PluginEntry.FetchTimeout).
 package subprocess
 
 import (
@@ -37,10 +38,18 @@ import (
 	"github.com/yaad-index/yaad-index/internal/store"
 )
 
-// DefaultTimeout caps each subprocess invocation (init or fetch).
-// Matches the upstream-fetch budget the in-process Wikipedia plugin
-// used in a prior PR — a default 60s wait_seconds has 12× headroom.
-const DefaultTimeout = 5 * time.Second
+// DefaultInitTimeout caps the `<path> --init` handshake. Plugins
+// only print their capabilities document at --init, so the budget
+// stays small.
+const DefaultInitTimeout = 5 * time.Second
+
+// DefaultFetchTimeout caps each per-request fetch invocation when
+// the operator hasn't set `fetch_timeout` on the PluginEntry.
+// Sized to cover real upstream work (mailbox crawls, paginated API
+// calls) rather than just the synthetic happy-path fixtures. A
+// dogfood run of `yaad-gmail fetch` against a 137-envelope inbox
+// completed in ~10s, so 60s holds ~6× headroom.
+const DefaultFetchTimeout = 60 * time.Second
 
 // Capabilities is the canonical type from the plugins package, re-
 // exposed under this name so existing subprocess-internal callers
@@ -75,9 +84,10 @@ type Plugin struct {
 type Option func(*Plugin)
 
 // WithTimeout sets BOTH the --init and per-Fetch wall-clock timeouts
-// to d. Production code uses the default (5s for both); tests that
-// want different windows for init vs fetch use the more granular
-// WithInitTimeout / WithFetchTimeout below.
+// to d. Tests use this to pin a uniform short window; production
+// code reaches for the split defaults (DefaultInitTimeout /
+// DefaultFetchTimeout) via WithInitTimeout / WithFetchTimeout
+// instead, since real fetches need more headroom than --init.
 func WithTimeout(d time.Duration) Option {
 	return func(p *Plugin) {
 		p.initTimeout = d
@@ -164,7 +174,7 @@ func VersionCacheKey(v string) string {
 // --init load.
 func RunVersion(ctx context.Context, path string, timeout time.Duration) (string, error) {
 	if timeout <= 0 {
-		timeout = DefaultTimeout
+		timeout = DefaultInitTimeout
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -214,8 +224,8 @@ func NewWithCapabilities(name, path string, caps plugins.Capabilities, opts ...O
 		name: name,
 		path: path,
 		capabilities: caps,
-		initTimeout: DefaultTimeout,
-		fetchTimeout: DefaultTimeout,
+		initTimeout: DefaultInitTimeout,
+		fetchTimeout: DefaultFetchTimeout,
 		logger: slog.Default(),
 	}
 	for _, o := range opts {
@@ -246,8 +256,8 @@ func New(name, path string, opts ...Option) (*Plugin, error) {
 	p := &Plugin{
 		name: name,
 		path: path,
-		initTimeout: DefaultTimeout,
-		fetchTimeout: DefaultTimeout,
+		initTimeout: DefaultInitTimeout,
+		fetchTimeout: DefaultFetchTimeout,
 		logger: slog.Default(),
 	}
 	for _, o := range opts {
@@ -386,6 +396,13 @@ func (p *Plugin) Stream(ctx context.Context, rawURL string, onEnvelope plugins.E
 		stderrPeek := bytes.TrimSpace(stderr.Bytes())
 		if len(stderrPeek) > peek {
 			stderrPeek = stderrPeek[:peek]
+		}
+		// Distinguish "wall-clock budget exceeded" (operator knob)
+		// from generic non-zero exit so the operator-facing error
+		// names the knob that fired instead of just "signal: killed".
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("subprocess(%s): fetchTimeout=%s exceeded: %w: %s",
+				p.name, p.fetchTimeout, runErr, string(stderrPeek))
 		}
 		return fmt.Errorf("subprocess(%s): %w: %s", p.name, runErr, string(stderrPeek))
 	}
@@ -677,6 +694,10 @@ func (p *Plugin) runInit() (Capabilities, error) {
 		const peek = 512
 		if len(stderrPeek) > peek {
 			stderrPeek = stderrPeek[:peek]
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return Capabilities{}, fmt.Errorf("initTimeout=%s exceeded: %w: %s",
+				p.initTimeout, err, string(stderrPeek))
 		}
 		return Capabilities{}, fmt.Errorf("%w: %s", err, string(stderrPeek))
 	}
