@@ -111,7 +111,9 @@ func TestParse_HappyPath_ADRExample(t *testing.T) {
 // TestParse_DefaultsApplied: version + status default when the
 // operator omits them; auto_archive_on_done stays nil so the
 // engine can distinguish "operator wanted the default" from
-// "operator set false explicitly".
+// "operator set false explicitly". Subject defaults to
+// `entity.id` per ADR-0024 §"Workflow" (symmetric with the
+// other defaults; PR-77 fold-in).
 func TestParse_DefaultsApplied(t *testing.T) {
 	t.Parallel()
 	md := "---\nname: minimal\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: manual\nactions:\n  - add_comment:\n      content: 'hi'\n```\n"
@@ -120,7 +122,46 @@ func TestParse_DefaultsApplied(t *testing.T) {
 	assert.Equal(t, "minimal", wf.Name)
 	assert.Equal(t, 1, wf.Version, "version defaults to 1 when omitted")
 	assert.Equal(t, StatusActive, wf.Status, "status defaults to active when omitted")
+	assert.Equal(t, "entity.id", wf.Subject, "subject defaults to entity.id when omitted")
 	assert.Nil(t, wf.AutoArchiveOnDone, "auto_archive_on_done stays nil (engine treats as default-true)")
+}
+
+// TestParse_TaskAppendIfAlreadyPresentDefault: task_append's
+// if_already_present defaults to "skip" per ADR-0024 §"Action-
+// level match semantics". Applied at parse time for symmetry
+// with version=1 / status=active / subject=entity.id defaults.
+// PR-77 fold-in.
+func TestParse_TaskAppendIfAlreadyPresentDefault(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: ta-default\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: manual\nactions:\n  - task_append:\n      section: s\n      content: c\n```\n"
+	wf, err := Parse([]byte(md))
+	require.NoError(t, err)
+	require.Len(t, wf.Actions, 1)
+	require.NotNil(t, wf.Actions[0].TaskAppend)
+	assert.Equal(t, IfAlreadyPresentSkip, wf.Actions[0].TaskAppend.IfAlreadyPresent,
+		"if_already_present defaults to skip when operator omits it")
+}
+
+// TestParse_TaskAppendIfAlreadyPresentExplicit: when the
+// operator sets a non-empty value, the parser preserves it
+// verbatim (no overwrite to default).
+func TestParse_TaskAppendIfAlreadyPresentExplicit(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: ta-explicit\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: manual\nactions:\n  - task_append:\n      section: s\n      content: c\n      if_already_present: append-anyway\n```\n"
+	wf, err := Parse([]byte(md))
+	require.NoError(t, err)
+	assert.Equal(t, IfAlreadyPresentAppendAnyway, wf.Actions[0].TaskAppend.IfAlreadyPresent,
+		"explicit value preserved over default")
+}
+
+// TestParse_SubjectExplicit: explicit subject preserved over
+// the entity.id default.
+func TestParse_SubjectExplicit(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: subj\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: manual\nsubject: '{{ entity.slug }}'\nactions:\n  - add_comment: {content: hi}\n```\n"
+	wf, err := Parse([]byte(md))
+	require.NoError(t, err)
+	assert.Equal(t, "{{ entity.slug }}", wf.Subject, "explicit subject preserved over default")
 }
 
 // TestParse_NoFrontmatter rejects a workflow file that doesn't

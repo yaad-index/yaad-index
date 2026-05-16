@@ -233,6 +233,24 @@ func decode(frontmatter, yamlBody []byte) (*Workflow, error) {
 	if wf.Status == "" {
 		wf.Status = StatusActive
 	}
+	// Subject defaults to `entity.id` per ADR-0024 §"Workflow"
+	// ("workflows that omit it default to entity.id"). Apply at
+	// parse time so the engine consumer doesn't have to re-check
+	// for empty + apply the same default — symmetric with the
+	// version=1 / status=active defaults above. PR-77 review
+	// note fold-in.
+	if wf.Subject == "" {
+		wf.Subject = "entity.id"
+	}
+	// task_append.if_already_present defaults to "skip" per
+	// ADR-0024 §"Action-level match semantics". Apply at parse
+	// time for the same symmetry reason. PR-77 review note
+	// fold-in.
+	for i := range wf.Actions {
+		if wf.Actions[i].TaskAppend != nil && wf.Actions[i].TaskAppend.IfAlreadyPresent == "" {
+			wf.Actions[i].TaskAppend.IfAlreadyPresent = IfAlreadyPresentSkip
+		}
+	}
 	return wf, nil
 }
 

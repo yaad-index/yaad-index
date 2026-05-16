@@ -32,7 +32,20 @@ import (
 	"github.com/yaad-index/yaad-index/internal/reindex"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/workflow/loader"
 )
+
+// loaderRegistryAdapter bridges *plugins.Registry to
+// loader.PluginRegistry — the loader's interface deliberately
+// returns `any` so internal/workflow/loader doesn't depend on
+// internal/plugins. The adapter is a one-method passthrough.
+type loaderRegistryAdapter struct {
+	registry *plugins.Registry
+}
+
+func (a loaderRegistryAdapter) LookupByName(name string) (any, bool) {
+	return a.registry.LookupByName(name)
+}
 
 // ServeCmd implements `yaad-index serve`.
 type ServeCmd struct {
@@ -278,6 +291,32 @@ func (s *ServeCmd) Run() error {
 		// boot, lock-free read on every subprocess spawn.
 		subprocess.SetStagingDir(stagingDir)
 		logger.Info("attachments dispatcher active", "plugin_staging_dir", stagingDir)
+
+		// Workflow loader (per ADR-0024 Phase 1.B). Scans
+		// <vault>/workflows/ for operator-authored workflow files,
+		// validates them, builds an in-memory registry, and
+		// hot-reloads on mtime change. The loader uses the live
+		// plugin registry to validate each workflow's
+		// allowed_plugins list at load time. Phase 1 ships only
+		// the parser + registry — Phase 3+ wires the registry's
+		// workflows into the event-bus subscriber path.
+		workflowDir := filepath.Join(cfg.Vault.Path, "workflows")
+		wfLoader := loader.New(loader.Options{
+			Paths:          []string{workflowDir},
+			PluginRegistry: loaderRegistryAdapter{registry: registry},
+			PollInterval:   loader.DefaultPollInterval,
+			Logger:         logger,
+		})
+		wfCtx, wfCancel := context.WithCancel(context.Background())
+		defer wfCancel()
+		go func() {
+			if err := wfLoader.Run(wfCtx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Error("workflow loader: run terminated unexpectedly", "err", err)
+			}
+		}()
+		logger.Info("workflow loader active",
+			"workflow_dir", workflowDir,
+			"poll_interval", loader.DefaultPollInterval.String())
 	} else {
 		logger.Info("vault.path not configured; ingest stays DB-only and POST /v1/reindex is unregistered (404)")
 	}
