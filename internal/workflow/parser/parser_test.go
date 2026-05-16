@@ -1,0 +1,507 @@
+package parser
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// validWorkflowMarkdown is the ADR-0024 worked-example
+// boardgame-news file verbatim. The parser must accept it +
+// preserve every field semantically.
+const validWorkflowMarkdown = "---\n" +
+	"name: boardgame-news\n" +
+	"version: 1\n" +
+	"status: active\n" +
+	"---\n" +
+	"\n" +
+	"# Boardgame news → review queue\n" +
+	"\n" +
+	"Surfaces news articles about boardgames I own or care about.\n" +
+	"\n" +
+	"```yaml\n" +
+	"allowed_plugins:\n" +
+	"  - yaad-gmail\n" +
+	"\n" +
+	"trigger:\n" +
+	"  type: edge_created\n" +
+	"  match:\n" +
+	"    edge_type: is_about\n" +
+	"    target_kind: boardgame\n" +
+	"\n" +
+	"subject: '{{ entity.slug }}'\n" +
+	"\n" +
+	"context:\n" +
+	"  - name: prior\n" +
+	"    via: 'has(entity.previous_edition_id) ? graph.get(entity.previous_edition_id) : null'\n" +
+	"\n" +
+	"condition: 'entity.rating > 7 || (prior != null && prior.rating > 7) || entity.owned == true'\n" +
+	"\n" +
+	"dedup:\n" +
+	"  key: 'workflow + entity.id'\n" +
+	"  policy: update\n" +
+	"\n" +
+	"actions:\n" +
+	"  - task_append:\n" +
+	"      section: candidates\n" +
+	"      content: '{{ entity.name }} ({{ entity.year }}) — surfaced via {{ edge.from_title }}'\n" +
+	"      if_already_present: skip\n" +
+	"```\n"
+
+// TestParse_HappyPath_ADRExample verifies that the ADR-0024
+// worked-example parses cleanly and every field round-trips
+// (frontmatter metadata + YAML-body engine rules + the single
+// action primitive). This is the load-bearing test: if it
+// breaks, the parser doesn't match the documented schema.
+func TestParse_HappyPath_ADRExample(t *testing.T) {
+	t.Parallel()
+	wf, err := Parse([]byte(validWorkflowMarkdown))
+	require.NoError(t, err, "parse should succeed on the ADR worked example")
+
+	// Frontmatter
+	assert.Equal(t, "boardgame-news", wf.Name)
+	assert.Equal(t, 1, wf.Version)
+	assert.Equal(t, "active", wf.Status)
+
+	// Body — allowed_plugins
+	assert.Equal(t, []string{"yaad-gmail"}, wf.AllowedPlugins)
+
+	// Trigger
+	assert.Equal(t, TriggerTypeEdgeCreated, wf.Trigger.Type)
+	assert.Equal(t, "is_about", wf.Trigger.Match.EdgeType)
+	assert.Equal(t, "boardgame", wf.Trigger.Match.TargetKind)
+	assert.Empty(t, wf.Trigger.Match.Gap, "edge_created trigger has no gap filter")
+
+	// Subject (CEL template) preserved verbatim
+	assert.Equal(t, "{{ entity.slug }}", wf.Subject)
+
+	// Context binding round-trip
+	require.Len(t, wf.Context, 1)
+	assert.Equal(t, "prior", wf.Context[0].Name)
+	assert.Equal(t,
+		"has(entity.previous_edition_id) ? graph.get(entity.previous_edition_id) : null",
+		wf.Context[0].Via)
+
+	// Condition preserved verbatim
+	assert.Equal(t,
+		"entity.rating > 7 || (prior != null && prior.rating > 7) || entity.owned == true",
+		wf.Condition)
+
+	// Dedup
+	assert.Equal(t, "workflow + entity.id", wf.Dedup.Key)
+	assert.Equal(t, DedupPolicyUpdate, wf.Dedup.Policy)
+
+	// Action — task_append populated, others nil
+	require.Len(t, wf.Actions, 1)
+	require.NotNil(t, wf.Actions[0].TaskAppend)
+	assert.Nil(t, wf.Actions[0].AddComment)
+	assert.Nil(t, wf.Actions[0].PluginDispatch)
+	assert.Nil(t, wf.Actions[0].AddGap)
+	assert.Equal(t, "candidates", wf.Actions[0].TaskAppend.Section)
+	assert.Equal(t,
+		"{{ entity.name }} ({{ entity.year }}) — surfaced via {{ edge.from_title }}",
+		wf.Actions[0].TaskAppend.Content)
+	assert.Equal(t, IfAlreadyPresentSkip, wf.Actions[0].TaskAppend.IfAlreadyPresent)
+}
+
+// TestParse_DefaultsApplied: version + status default when the
+// operator omits them; auto_archive_on_done stays nil so the
+// engine can distinguish "operator wanted the default" from
+// "operator set false explicitly".
+func TestParse_DefaultsApplied(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: minimal\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: manual\nactions:\n  - add_comment:\n      content: 'hi'\n```\n"
+	wf, err := Parse([]byte(md))
+	require.NoError(t, err)
+	assert.Equal(t, "minimal", wf.Name)
+	assert.Equal(t, 1, wf.Version, "version defaults to 1 when omitted")
+	assert.Equal(t, StatusActive, wf.Status, "status defaults to active when omitted")
+	assert.Nil(t, wf.AutoArchiveOnDone, "auto_archive_on_done stays nil (engine treats as default-true)")
+}
+
+// TestParse_NoFrontmatter rejects a workflow file that doesn't
+// open with `---\n`.
+func TestParse_NoFrontmatter(t *testing.T) {
+	t.Parallel()
+	md := "# no frontmatter\n```yaml\nname: x\n```\n"
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrFrontmatterMissing)
+}
+
+// TestParse_NoYAMLBody rejects a workflow file with frontmatter
+// but no engine-rules code-fence — a documentation stub, not a
+// workflow.
+func TestParse_NoYAMLBody(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: docs-only\n---\n\n# just prose, no yaml fence\n"
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrYAMLBodyMissing)
+}
+
+// TestParse_DuplicateYAMLBody rejects a file with more than one
+// yaml code-fence in the body. Single canonical block is
+// required so merge semantics don't have to exist.
+func TestParse_DuplicateYAMLBody(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: dup\n---\n\n```yaml\nallowed_plugins: [a]\n```\n\n```yaml\nallowed_plugins: [b]\n```\n"
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrYAMLBodyDuplicated)
+}
+
+// TestParse_UnknownFrontmatterField fails strict-mode decode so
+// operator typos surface at parse time. (yaml.v3 with
+// KnownFields(true).)
+func TestParse_UnknownFrontmatterField(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: x\nverison: 1\n---\n\n```yaml\nallowed_plugins: [a]\ntrigger: {type: manual}\nactions:\n  - add_comment: {content: hi}\n```\n"
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "verison",
+		"unknown field should appear in the error message")
+}
+
+// TestParse_UnknownBodyField: same strict-mode behavior on the
+// YAML body half.
+func TestParse_UnknownBodyField(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: x\n---\n\n```yaml\nallowed_plugins: [a]\ntrigger: {type: manual}\nactions:\n  - add_comment: {content: hi}\nbogus_field: yes\n```\n"
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bogus_field")
+}
+
+// TestValidate_NameRequired pins the load-bearing required
+// field. The loader uses Name for dedup; missing it breaks
+// registry semantics.
+func TestValidate_NameRequired(t *testing.T) {
+	t.Parallel()
+	wf := &Workflow{
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        Trigger{Type: TriggerTypeManual},
+		Actions:        []Action{{AddComment: &AddCommentAction{Content: "x"}}},
+	}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "name is required")
+}
+
+// TestValidate_AllowedPluginsRequired: per ADR, every workflow
+// declares its plugin scope. Empty list is a workflow-shape
+// error.
+func TestValidate_AllowedPluginsRequired(t *testing.T) {
+	t.Parallel()
+	wf := &Workflow{
+		Name:    "x",
+		Trigger: Trigger{Type: TriggerTypeManual},
+		Actions: []Action{{AddComment: &AddCommentAction{Content: "x"}}},
+	}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "allowed_plugins")
+}
+
+// TestValidate_AllowedPluginsDuplicated catches the same plugin
+// listed twice (operator typo / merge artifact).
+func TestValidate_AllowedPluginsDuplicated(t *testing.T) {
+	t.Parallel()
+	wf := &Workflow{
+		Name:           "x",
+		AllowedPlugins: []string{"yaad-gmail", "yaad-gmail"},
+		Trigger:        Trigger{Type: TriggerTypeManual},
+		Actions:        []Action{{AddComment: &AddCommentAction{Content: "x"}}},
+	}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicated")
+}
+
+// TestValidate_TriggerTypeRequired
+func TestValidate_TriggerTypeRequired(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Trigger.Type = ""
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trigger.type is required")
+}
+
+// TestValidate_TriggerTypeUnknown
+func TestValidate_TriggerTypeUnknown(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Trigger.Type = "scheduled" // post-v1
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is not one of")
+}
+
+// TestValidate_EdgeCreatedRequiresEdgeType
+func TestValidate_EdgeCreatedRequiresEdgeType(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Trigger = Trigger{Type: TriggerTypeEdgeCreated}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "edge_type is required")
+}
+
+// TestValidate_EdgeCreatedRejectsKindFilter: edge_created uses
+// target_kind, not kind (kind is the entity_created filter).
+// Operators who put the wrong filter on the wrong trigger get
+// a clear error.
+func TestValidate_EdgeCreatedRejectsKindFilter(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Trigger = Trigger{
+		Type: TriggerTypeEdgeCreated,
+		Match: TriggerMatch{
+			EdgeType: "is_about",
+			Kind:     "boardgame",
+		},
+	}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "kind=")
+	assert.Contains(t, err.Error(), "not valid for this trigger.type")
+}
+
+// TestValidate_FillCompletedAcceptsGap
+func TestValidate_FillCompletedAcceptsGap(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Trigger = Trigger{
+		Type:  TriggerTypeFillCompleted,
+		Match: TriggerMatch{Gap: "is_interesting_to_me", Source: "operator"},
+	}
+	require.NoError(t, Validate(wf))
+}
+
+// TestValidate_ManualRejectsAnyMatch: manual trigger has no
+// event match shape.
+func TestValidate_ManualRejectsAnyMatch(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Trigger = Trigger{
+		Type:  TriggerTypeManual,
+		Match: TriggerMatch{EdgeType: "x"},
+	}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not valid for this trigger.type")
+}
+
+// TestValidate_ContextDuplicateName
+func TestValidate_ContextDuplicateName(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Context = []ContextBinding{
+		{Name: "prior", Via: "graph.get(entity.x)"},
+		{Name: "prior", Via: "graph.get(entity.y)"},
+	}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicated")
+}
+
+// TestValidate_DedupPolicyUnknown
+func TestValidate_DedupPolicyUnknown(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Dedup = Dedup{Policy: "merge"}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "dedup.policy")
+}
+
+// TestValidate_ActionsRequired
+func TestValidate_ActionsRequired(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Actions = nil
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "actions is required")
+}
+
+// TestValidate_ActionMultiplePrimitives rejects a list entry
+// that sets more than one action shape.
+func TestValidate_ActionMultiplePrimitives(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Actions = []Action{{
+		TaskAppend: &TaskAppendAction{Section: "x", Content: "y"},
+		AddComment: &AddCommentAction{Content: "z"},
+	}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sets 2 primitives")
+}
+
+// TestValidate_ActionNoPrimitive: empty action entry.
+func TestValidate_ActionNoPrimitive(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Actions = []Action{{}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sets no primitive")
+}
+
+// TestValidate_TaskAppendRequiresSection
+func TestValidate_TaskAppendRequiresSection(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Actions = []Action{{TaskAppend: &TaskAppendAction{Content: "x"}}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "section is required")
+}
+
+// TestValidate_TaskAppendIfAlreadyPresentUnknown
+func TestValidate_TaskAppendIfAlreadyPresentUnknown(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Actions = []Action{{TaskAppend: &TaskAppendAction{
+		Section: "s", Content: "c", IfAlreadyPresent: "merge",
+	}}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "if_already_present")
+}
+
+// TestValidate_PluginDispatchUnknownPlugin: plugin not in
+// allowed_plugins is rejected.
+func TestValidate_PluginDispatchUnknownPlugin(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.AllowedPlugins = []string{"yaad-gmail"}
+	wf.Actions = []Action{{PluginDispatch: &PluginDispatchAction{
+		Plugin: "yaad-bgg", Command: "fetch",
+	}}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not in the workflow's allowed_plugins")
+}
+
+// TestValidate_PluginDispatchNegativeTimeout
+func TestValidate_PluginDispatchNegativeTimeout(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.AllowedPlugins = []string{"yaad-bgg"}
+	wf.Actions = []Action{{PluginDispatch: &PluginDispatchAction{
+		Plugin: "yaad-bgg", Command: "fetch", TimeoutSeconds: -1,
+	}}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "negative")
+}
+
+// TestValidate_AddGapMustBeInAddableGaps pins the load-bearing
+// add_gap constraint per ADR-0024 §"Constraints on add_gap":
+// the gap name MUST appear in the workflow's addable_gaps
+// vocabulary. Single source of truth.
+func TestValidate_AddGapMustBeInAddableGaps(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.AddableGaps = []string{"is_interesting_to_me"}
+	wf.Actions = []Action{{AddGap: &AddGapAction{
+		Gap: "owned_status", // NOT in addable_gaps
+	}}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "addable_gaps vocabulary")
+
+	// Positive path: gap that IS in the vocabulary validates.
+	wf.Actions = []Action{{AddGap: &AddGapAction{Gap: "is_interesting_to_me"}}}
+	require.NoError(t, Validate(wf))
+}
+
+// TestValidate_AddableGapsDuplicate
+func TestValidate_AddableGapsDuplicate(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.AddableGaps = []string{"is_interesting_to_me", "is_interesting_to_me"}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicated")
+}
+
+// TestValidate_StatusUnknown
+func TestValidate_StatusUnknown(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Status = "archived"
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "status")
+}
+
+// TestParseFile_RoundTrip writes the worked-example to disk
+// and parses through the file entry-point.
+func TestParseFile_RoundTrip(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "boardgame-news.md")
+	require.NoError(t, writeFile(path, validWorkflowMarkdown))
+	wf, err := ParseFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "boardgame-news", wf.Name)
+}
+
+// TestParseFile_PathInError ensures the file path appears in
+// the error so the loader can produce structured logs without
+// re-wrapping.
+func TestParseFile_PathInError(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "broken.md")
+	require.NoError(t, writeFile(path, "no frontmatter here\n"))
+	_, err := ParseFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), path)
+}
+
+// TestParseFile_ReadError wraps a non-existent path's error so
+// the loader can branch on the underlying type.
+func TestParseFile_ReadError(t *testing.T) {
+	t.Parallel()
+	_, err := ParseFile("/does/not/exist/workflow.md")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does/not/exist")
+}
+
+// minimalWorkflow constructs a Workflow that passes Validate
+// — used as the baseline for negative tests that mutate one
+// field at a time.
+func minimalWorkflow() *Workflow {
+	return &Workflow{
+		Name:           "test",
+		Version:        1,
+		Status:         StatusActive,
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        Trigger{Type: TriggerTypeManual},
+		Actions:        []Action{{AddComment: &AddCommentAction{Content: "x"}}},
+	}
+}
+
+func writeFile(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+// TestParse_CRLF_Frontmatter tolerates Windows-style CRLF line
+// endings in the frontmatter envelope — common when operators
+// edit on Windows / Notion / etc. and paste into the vault.
+func TestParse_CRLF_Frontmatter(t *testing.T) {
+	t.Parallel()
+	md := strings.ReplaceAll(validWorkflowMarkdown, "\n", "\r\n")
+	wf, err := Parse([]byte(md))
+	require.NoError(t, err, "CRLF should parse same as LF")
+	assert.Equal(t, "boardgame-news", wf.Name)
+}
