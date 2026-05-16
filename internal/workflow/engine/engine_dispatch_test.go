@@ -121,6 +121,146 @@ func TestDispatch_UnresolvedEntityID_SurfacesMissingRef(t *testing.T) {
 	assert.Equal(t, "boardgame:none", dec.MissingRefs[0].ID)
 }
 
+// fakeIngestRouter is the in-memory IngestRouter for the
+// URL-routing Dispatch tests. Records every IngestURL call so
+// the test can assert routing-time behavior.
+type fakeIngestRouter struct {
+	mu        sync.Mutex
+	calls     []ingestRouterCall
+	returnID  string
+	returnErr error
+}
+
+type ingestRouterCall struct {
+	url     string
+	timeout time.Duration
+}
+
+func (f *fakeIngestRouter) IngestURL(_ context.Context, url string, timeout time.Duration) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, ingestRouterCall{url: url, timeout: timeout})
+	if f.returnErr != nil {
+		return "", f.returnErr
+	}
+	return f.returnID, nil
+}
+
+func (f *fakeIngestRouter) snapshot() []ingestRouterCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]ingestRouterCall, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+// newEngineWithIngestRouter mirrors newEngineWithBus but wires
+// the URL-routing IngestRouter dep + a custom IngestTimeout
+// (short to keep tests snappy).
+func newEngineWithIngestRouter(t *testing.T, entities map[string]map[string]any, router IngestRouter) (*Engine, eventbus.Bus) {
+	t.Helper()
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(entities)
+	eng, err := New(Options{
+		Bus:           bus,
+		Resolver:      resolver,
+		IngestRouter:  router,
+		IngestTimeout: time.Second,
+		Logger:        quietLogger(),
+	})
+	require.NoError(t, err)
+	return eng, bus
+}
+
+// TestDispatch_URLInput_RoutesThroughIngestRouter: a URL-shape
+// input (contains `://`) routes through the IngestRouter to
+// resolve the canonical entity id; the workflow then fires
+// against that id.
+func TestDispatch_URLInput_RoutesThroughIngestRouter(t *testing.T) {
+	t.Parallel()
+	router := &fakeIngestRouter{returnID: "boardgame:brass-birmingham"}
+	eng, _ := newEngineWithIngestRouter(t, map[string]map[string]any{
+		"boardgame:brass-birmingham": {"id": "boardgame:brass-birmingham", "rating": int64(9)},
+	}, router)
+	wf := &parser.Workflow{
+		Name:           "by-url",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Condition:      "entity.rating > 7",
+		Subject:        "entity.id",
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	dec, err := eng.Dispatch(context.Background(), "by-url",
+		"https://boardgamegeek.com/boardgame/224517/brass-birmingham")
+	require.NoError(t, err)
+	assert.Equal(t, "boardgame:brass-birmingham", dec.EntityID,
+		"workflow fires against the IngestRouter-resolved id, not the URL")
+	assert.True(t, dec.Fired)
+	require.Len(t, router.snapshot(), 1)
+	assert.Equal(t, "https://boardgamegeek.com/boardgame/224517/brass-birmingham",
+		router.snapshot()[0].url)
+	assert.Equal(t, time.Second, router.snapshot()[0].timeout,
+		"engine's IngestTimeout flows through to the router call")
+}
+
+// TestDispatch_URLInput_NoRouter_RejectsCleanly: when no
+// IngestRouter is wired, URL-shape input returns the typed
+// ErrURLInputNotSupported synchronously before any workflow
+// runs — no Decision is recorded.
+func TestDispatch_URLInput_NoRouter_RejectsCleanly(t *testing.T) {
+	t.Parallel()
+	eng, _ := newEngineWithBus(t, nil) // no IngestRouter
+	wf := manualWorkflow("by-url-no-router")
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	_, err := eng.Dispatch(context.Background(), "by-url-no-router", "https://example.org/x")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrURLInputNotSupported)
+	assert.Empty(t, eng.Decisions(), "no Decision recorded on routing failure")
+}
+
+// TestDispatch_URLInput_IngestFailure_PropagatesError: a
+// router that returns an error surfaces synchronously to the
+// caller; no Decision is recorded.
+func TestDispatch_URLInput_IngestFailure_PropagatesError(t *testing.T) {
+	t.Parallel()
+	router := &fakeIngestRouter{returnErr: errors.New("no plugin handles this URL")}
+	eng, _ := newEngineWithIngestRouter(t, nil, router)
+	wf := manualWorkflow("ingest-fail")
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	_, err := eng.Dispatch(context.Background(), "ingest-fail", "https://no-plugin-for-this/x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no plugin handles this URL")
+	assert.Empty(t, eng.Decisions(), "no Decision recorded on routing failure")
+}
+
+// TestDispatch_EntityIDLooksLikeURL_BypassesRouter: an
+// entity-id input that doesn't contain `://` is treated as an
+// id — the router isn't invoked. Disambiguation rule per
+// engine.Dispatch's docstring.
+func TestDispatch_EntityIDLooksLikeURL_BypassesRouter(t *testing.T) {
+	t.Parallel()
+	router := &fakeIngestRouter{returnErr: errors.New("should not be called")}
+	eng, _ := newEngineWithIngestRouter(t, map[string]map[string]any{
+		"boardgame:b": {"rating": int64(9)},
+	}, router)
+	wf := &parser.Workflow{
+		Name:           "id-shape",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	dec, err := eng.Dispatch(context.Background(), "id-shape", "boardgame:b")
+	require.NoError(t, err)
+	assert.Equal(t, "boardgame:b", dec.EntityID)
+	assert.Empty(t, router.snapshot(), "router NOT called for entity-id-shape input")
+}
+
 // TestDispatch_RecordsInRingBuffer: Dispatch's result is
 // also appended to the ring buffer (same as event-bus
 // decisions).

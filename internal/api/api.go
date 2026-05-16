@@ -71,7 +71,19 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	}
 
 	mux := http.NewServeMux()
-	tracker := newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks, cfg.eventBus)
+	// Prefer the SyncIngester's tracker when one was supplied
+	// via WithSyncIngester so /v1/ingest + the workflow engine's
+	// URL-shape input path coordinate on a single tracker
+	// (job-map dedup + cache-TTL gate). Falls back to a fresh
+	// tracker when no SyncIngester is wired — legacy / test
+	// paths.
+	var tracker *ingestTracker
+	if si, ok := cfg.syncIngester.(*syncIngester); ok {
+		tracker = si.trackerHandle()
+	}
+	if tracker == nil {
+		tracker = newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks, cfg.eventBus)
+	}
 
 	// Per yaad-index a prior PR: the protect wrapper enforces Bearer-JWT
 	// auth on every protected route. When auth.required=false the
@@ -212,6 +224,18 @@ type handlerConfig struct {
 	// option isn't wired — useful for tests + dev binaries
 	// without a vault, where no workflow engine runs.
 	workflowEngine *engine.Engine
+
+	// syncIngester, when non-nil, supplies the shared ingest
+	// tracker the /v1/ingest HTTP handler should use. The
+	// workflow engine's URL-shape input path (per ADR-0024
+	// §"workflow.trigger(input) input semantics") also uses
+	// this SyncIngester so HTTP + workflow URL routes
+	// coordinate on the same job-map + cache-TTL state.
+	//
+	// When nil, NewHandlerWithRegistry constructs a fresh
+	// tracker — preserves legacy / test paths that don't wire
+	// the shared shape.
+	syncIngester SyncIngester
 }
 
 // WithReindexHandler registers a handler for POST /v1/reindex. When
@@ -436,4 +460,19 @@ func WithEventBus(b eventbus.Bus) HandlerOption {
 // gating used for the loader + reconcile loop).
 func WithWorkflowEngine(eng *engine.Engine) HandlerOption {
 	return func(c *handlerConfig) { c.workflowEngine = eng }
+}
+
+// WithSyncIngester wires a pre-constructed SyncIngester so the
+// /v1/ingest HTTP handler shares its tracker with the
+// workflow engine's URL-shape input path per ADR-0024
+// §"workflow.trigger(input) input semantics". Pass the same
+// SyncIngester into the workflow engine's IngestRouter
+// adapter so both surfaces coordinate on a single tracker
+// (job-map dedup, cache-TTL gate, persistence pipeline).
+//
+// Omitting this option leaves NewHandlerWithRegistry to
+// construct its own tracker — preserves legacy / test paths
+// that don't wire the shared shape.
+func WithSyncIngester(s SyncIngester) HandlerOption {
+	return func(c *handlerConfig) { c.syncIngester = s }
 }
