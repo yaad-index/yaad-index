@@ -20,14 +20,15 @@ type fakeGapWriter struct {
 }
 
 type gapCall struct {
+	workflow string
 	entityID string
 	gap      string
 }
 
-func (f *fakeGapWriter) AddGap(_ context.Context, entityID, gap string) error {
+func (f *fakeGapWriter) AddGap(_ context.Context, workflow, entityID, gap string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, gapCall{entityID: entityID, gap: gap})
+	f.calls = append(f.calls, gapCall{workflow: workflow, entityID: entityID, gap: gap})
 	return f.writeErr
 }
 
@@ -139,14 +140,33 @@ func TestAddGap_WriterError(t *testing.T) {
 	assert.Contains(t, results[0].Err.Error(), "vault unavailable")
 }
 
-// TestStubGapWriter_ReturnsNotImplemented: the
-// production-default writer (Phase 4.B stub) returns
-// ErrActionNotImplemented with the attempted entity + gap.
+// TestStubGapWriter_ReturnsNotImplemented: the stub
+// GapWriter (test/dev default) returns
+// ErrActionNotImplemented with the workflow + entity + gap.
 func TestStubGapWriter_ReturnsNotImplemented(t *testing.T) {
 	t.Parallel()
-	err := StubGapWriter{}.AddGap(context.Background(), "email:m1", "is_interesting_to_me")
+	err := StubGapWriter{}.AddGap(context.Background(), "wf", "email:m1", "is_interesting_to_me")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrActionNotImplemented)
+	assert.Contains(t, err.Error(), "wf")
 	assert.Contains(t, err.Error(), "email:m1")
 	assert.Contains(t, err.Error(), "is_interesting_to_me")
+}
+
+// TestAddGap_WorkflowAttribution: the workflow name from the
+// recorded Decision flows through to the GapWriter as the
+// first arg, mirroring the add_comment attribution pattern.
+func TestAddGap_WorkflowAttribution(t *testing.T) {
+	t.Parallel()
+	w := &fakeGapWriter{}
+	r := New(Options{GapWriter: w})
+	wf := wfWithActions("classify",
+		parser.Action{AddGap: &parser.AddGapAction{Gap: "is_interesting_to_me"}},
+	)
+	wf.AddableGaps = []string{"is_interesting_to_me"}
+	results := r.Run(context.Background(), wf, Decision{Workflow: "classify", EntityID: "email:m1"}, Activation{})
+	require.Len(t, results, 1)
+	assert.NoError(t, results[0].Err)
+	require.Len(t, w.snapshot(), 1)
+	assert.Equal(t, "classify", w.snapshot()[0].workflow)
 }

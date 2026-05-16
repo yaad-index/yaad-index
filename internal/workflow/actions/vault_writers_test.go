@@ -1,0 +1,433 @@
+package actions
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/yaad-index/yaad-index/internal/store"
+	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/writelocks"
+)
+
+// fakeEntityStore is an in-memory EntityStore for the vault-
+// writer tests. GetEntity returns store.ErrNotFound for ids
+// not in the seeded map; UpsertEntity records the upsert.
+type fakeEntityStore struct {
+	mu        sync.Mutex
+	entities  map[string]*store.Entity
+	upserts   []*store.Entity
+	upsertErr error
+}
+
+func newFakeEntityStore(seed map[string]*store.Entity) *fakeEntityStore {
+	if seed == nil {
+		seed = map[string]*store.Entity{}
+	}
+	return &fakeEntityStore{entities: seed}
+}
+
+func (f *fakeEntityStore) GetEntity(_ context.Context, id string) (*store.Entity, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	e, ok := f.entities[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return e, nil
+}
+
+func (f *fakeEntityStore) UpsertEntity(_ context.Context, e *store.Entity) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.upsertErr != nil {
+		return f.upsertErr
+	}
+	cp := *e
+	f.upserts = append(f.upserts, &cp)
+	return nil
+}
+
+func (f *fakeEntityStore) upsertSnapshot() []*store.Entity {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*store.Entity, len(f.upserts))
+	copy(out, f.upserts)
+	return out
+}
+
+// fakeVaultReader returns the seeded entity per (kind, id),
+// or fs.ErrNotExist for unknowns (matching vault.IsNotExist).
+type fakeVaultReader struct {
+	mu       sync.Mutex
+	entities map[string]*vault.Entity // keyed by id
+}
+
+func newFakeVaultReader(seed map[string]*vault.Entity) *fakeVaultReader {
+	if seed == nil {
+		seed = map[string]*vault.Entity{}
+	}
+	return &fakeVaultReader{entities: seed}
+}
+
+func (f *fakeVaultReader) ReadByID(_ string, id string) (*vault.Entity, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	e, ok := f.entities[id]
+	if !ok {
+		return nil, &fs.PathError{Op: "open", Path: id, Err: fs.ErrNotExist}
+	}
+	// Return a deep-ish copy of the slices so the writer can
+	// append without leaking back into the seeded shape.
+	cp := *e
+	cp.Comments = append([]vault.Comment(nil), e.Comments...)
+	cp.Gaps = append([]string(nil), e.Gaps...)
+	if e.GapState != nil {
+		cp.GapState = make(map[string]vault.GapStateEntry, len(e.GapState))
+		for k, v := range e.GapState {
+			cp.GapState[k] = v
+		}
+	}
+	return &cp, nil
+}
+
+// fakeVaultWriter records the latest WriteWithCommit call.
+type fakeVaultWriter struct {
+	mu       sync.Mutex
+	writes   []vaultWrite
+	writeErr error
+}
+
+type vaultWrite struct {
+	entity  *vault.Entity
+	message string
+	author  string
+}
+
+func (f *fakeVaultWriter) WriteWithCommit(_ context.Context, e *vault.Entity, message, author string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.writeErr != nil {
+		return f.writeErr
+	}
+	cp := *e
+	cp.Comments = append([]vault.Comment(nil), e.Comments...)
+	cp.Gaps = append([]string(nil), e.Gaps...)
+	if e.GapState != nil {
+		cp.GapState = make(map[string]vault.GapStateEntry, len(e.GapState))
+		for k, v := range e.GapState {
+			cp.GapState[k] = v
+		}
+	}
+	f.writes = append(f.writes, vaultWrite{entity: &cp, message: message, author: author})
+	return nil
+}
+
+func (f *fakeVaultWriter) snapshot() []vaultWrite {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]vaultWrite, len(f.writes))
+	copy(out, f.writes)
+	return out
+}
+
+// newVaultWriterBackend assembles a backend for the tests
+// with seeded fakes + a fresh writelocks.Manager + a
+// fixed-clock so timestamps are deterministic.
+func newVaultWriterBackend(t *testing.T, storeSeed map[string]*store.Entity, vaultSeed map[string]*vault.Entity, fixedTime time.Time) (*VaultWriterBackend, *fakeEntityStore, *fakeVaultReader, *fakeVaultWriter) {
+	t.Helper()
+	es := newFakeEntityStore(storeSeed)
+	vr := newFakeVaultReader(vaultSeed)
+	vw := &fakeVaultWriter{}
+	b := &VaultWriterBackend{
+		Store:       es,
+		VaultReader: vr,
+		VaultWriter: vw,
+		WriteLocks:  writelocks.New(),
+		Clock:       func() time.Time { return fixedTime },
+	}
+	return b, es, vr, vw
+}
+
+// TestVaultCommentWriter_HappyPath: a comment lands as
+// vault.Comment with workflow:<name> author + commit author
+// + DB upsert reflecting the comments_text column.
+func TestVaultCommentWriter_HappyPath(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	b, es, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"pr:1": {ID: "pr:1", Kind: "pr", CreatedAt: now},
+		},
+		map[string]*vault.Entity{
+			"pr:1": {ID: "pr:1", Kind: "pr", Data: map[string]any{"title": "fix things"}},
+		},
+		now,
+	)
+	w := NewVaultCommentWriter(b)
+	err := w.AppendComment(context.Background(), "bgg-news", "pr:1", "found a related entity")
+	require.NoError(t, err)
+
+	writes := vw.snapshot()
+	require.Len(t, writes, 1)
+	require.Len(t, writes[0].entity.Comments, 1)
+	assert.Equal(t, "found a related entity", writes[0].entity.Comments[0].Text)
+	assert.Equal(t, "workflow:bgg-news", writes[0].entity.Comments[0].Author)
+	assert.Equal(t, now, writes[0].entity.Comments[0].Date)
+	assert.Equal(t, "workflow:bgg-news", writes[0].author, "commit author")
+	assert.Contains(t, writes[0].message, "workflow comment on pr:1")
+
+	upserts := es.upsertSnapshot()
+	require.Len(t, upserts, 1)
+	assert.Equal(t, "found a related entity", upserts[0].Data["comments_text"])
+	assert.Equal(t, "pr:1", upserts[0].ID)
+}
+
+// TestVaultCommentWriter_EntityNotFound: workflows targeting
+// an unknown entity surface ErrEntityNotFound (the runner's
+// caller propagates it through ActionResult.Err).
+func TestVaultCommentWriter_EntityNotFound(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	b, _, _, _ := newVaultWriterBackend(t, nil, nil, now)
+	w := NewVaultCommentWriter(b)
+	err := w.AppendComment(context.Background(), "wf", "pr:absent", "hi")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEntityNotFound)
+}
+
+// TestVaultCommentWriter_VaultFileMissing: store row exists
+// but vault file doesn't — surfaces ErrEntityNotFound too
+// (workflows don't auto-materialize per ADR-0021 amendment).
+func TestVaultCommentWriter_VaultFileMissing(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	b, _, _, _ := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"pr:thin": {ID: "pr:thin", Kind: "pr", CreatedAt: now},
+		},
+		nil, // no vault file
+		now,
+	)
+	w := NewVaultCommentWriter(b)
+	err := w.AppendComment(context.Background(), "wf", "pr:thin", "hi")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEntityNotFound)
+	assert.Contains(t, err.Error(), "vault file missing")
+}
+
+// TestVaultCommentWriter_WriteLockConflict: a concurrent
+// holder of the entity's write-lock returns a ConflictError
+// the workflow surfaces verbatim.
+func TestVaultCommentWriter_WriteLockConflict(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	b, _, _, _ := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"pr:1": {ID: "pr:1", Kind: "pr"},
+		},
+		map[string]*vault.Entity{
+			"pr:1": {ID: "pr:1", Kind: "pr"},
+		},
+		now,
+	)
+	// Acquire the lock first; the writer's Acquire should
+	// then 409.
+	release, err := b.WriteLocks.Acquire("pr:1", "test-holder")
+	require.NoError(t, err)
+	defer release()
+
+	w := NewVaultCommentWriter(b)
+	err = w.AppendComment(context.Background(), "wf", "pr:1", "hi")
+	require.Error(t, err)
+	assert.True(t, writelocks.IsConflict(unwrapToConflict(err)),
+		"writelocks.IsConflict on the unwrapped writer error")
+}
+
+// TestVaultCommentWriter_UpsertErrorDegradesGracefully: a
+// store.UpsertEntity failure logs a Warn but the write itself
+// still returns nil (vault is source of truth per ADR-0008;
+// DB is a search-mirror).
+func TestVaultCommentWriter_UpsertErrorDegradesGracefully(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	b, es, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"pr:1": {ID: "pr:1", Kind: "pr"},
+		},
+		map[string]*vault.Entity{
+			"pr:1": {ID: "pr:1", Kind: "pr"},
+		},
+		now,
+	)
+	es.upsertErr = errors.New("db down")
+	w := NewVaultCommentWriter(b)
+	err := w.AppendComment(context.Background(), "wf", "pr:1", "hi")
+	assert.NoError(t, err, "vault write succeeded; DB-mirror failure doesn't fail the call")
+	require.Len(t, vw.snapshot(), 1, "vault write still landed")
+}
+
+// TestVaultGapWriter_HappyPath: a fresh gap lands in Gaps +
+// GapState (zero-value entry → pending), commit + DB upsert
+// fire.
+func TestVaultGapWriter_HappyPath(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	b, es, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"email:m1": {ID: "email:m1", Kind: "email"},
+		},
+		map[string]*vault.Entity{
+			"email:m1": {ID: "email:m1", Kind: "email"},
+		},
+		now,
+	)
+	w := NewVaultGapWriter(b)
+	err := w.AddGap(context.Background(), "classify", "email:m1", "is_interesting_to_me")
+	require.NoError(t, err)
+
+	writes := vw.snapshot()
+	require.Len(t, writes, 1)
+	assert.Equal(t, []string{"is_interesting_to_me"}, writes[0].entity.Gaps)
+	require.Contains(t, writes[0].entity.GapState, "is_interesting_to_me")
+	// Zero-value entry: not filled, not deferred (pending).
+	entry := writes[0].entity.GapState["is_interesting_to_me"]
+	assert.Empty(t, entry.Source)
+	assert.Nil(t, entry.FilledAt)
+	assert.False(t, entry.Deferred)
+	assert.Equal(t, "workflow:classify", writes[0].author)
+	assert.Contains(t, writes[0].message, "workflow add_gap is_interesting_to_me")
+
+	upserts := es.upsertSnapshot()
+	require.Len(t, upserts, 1)
+	require.Contains(t, upserts[0].GapState, "is_interesting_to_me")
+}
+
+// TestVaultGapWriter_Idempotent: adding a gap already present
+// in Gaps is a no-op success (no vault write, no upsert).
+func TestVaultGapWriter_Idempotent(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	b, es, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"email:m1": {ID: "email:m1", Kind: "email"},
+		},
+		map[string]*vault.Entity{
+			"email:m1": {
+				ID:   "email:m1",
+				Kind: "email",
+				Gaps: []string{"is_interesting_to_me"},
+				GapState: map[string]vault.GapStateEntry{
+					"is_interesting_to_me": {},
+				},
+			},
+		},
+		now,
+	)
+	w := NewVaultGapWriter(b)
+	err := w.AddGap(context.Background(), "classify", "email:m1", "is_interesting_to_me")
+	assert.NoError(t, err)
+	assert.Empty(t, vw.snapshot(), "no vault write on idempotent add")
+	assert.Empty(t, es.upsertSnapshot(), "no DB upsert on idempotent add")
+}
+
+// TestVaultGapWriter_EntityNotFound: same shape as the
+// comment-writer not-found path.
+func TestVaultGapWriter_EntityNotFound(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	b, _, _, _ := newVaultWriterBackend(t, nil, nil, now)
+	w := NewVaultGapWriter(b)
+	err := w.AddGap(context.Background(), "wf", "pr:absent", "g")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEntityNotFound)
+}
+
+// TestVaultGapWriter_PreservesExistingGapState: an existing
+// GapState entry for an unrelated gap is preserved on a new
+// gap add.
+func TestVaultGapWriter_PreservesExistingGapState(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	filledAt := time.Date(2026, 5, 10, 8, 0, 0, 0, time.UTC)
+	b, _, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"email:m1": {ID: "email:m1", Kind: "email"},
+		},
+		map[string]*vault.Entity{
+			"email:m1": {
+				ID:   "email:m1",
+				Kind: "email",
+				Gaps: []string{},
+				GapState: map[string]vault.GapStateEntry{
+					"existing_gap": {Source: "operator", FilledAt: &filledAt},
+				},
+			},
+		},
+		now,
+	)
+	w := NewVaultGapWriter(b)
+	err := w.AddGap(context.Background(), "wf", "email:m1", "new_gap")
+	require.NoError(t, err)
+
+	writes := vw.snapshot()
+	require.Len(t, writes, 1)
+	require.Contains(t, writes[0].entity.GapState, "existing_gap")
+	require.Contains(t, writes[0].entity.GapState, "new_gap")
+	existing := writes[0].entity.GapState["existing_gap"]
+	assert.Equal(t, "operator", existing.Source, "operator-filled gap retained")
+}
+
+// TestVaultGapWriter_VaultWriteError: vault write failure
+// propagates with the entity-id context wrapped.
+func TestVaultGapWriter_VaultWriteError(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	b, _, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"email:m1": {ID: "email:m1", Kind: "email"},
+		},
+		map[string]*vault.Entity{
+			"email:m1": {ID: "email:m1", Kind: "email"},
+		},
+		now,
+	)
+	vw.writeErr = errors.New("disk full")
+	w := NewVaultGapWriter(b)
+	err := w.AddGap(context.Background(), "wf", "email:m1", "g")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "disk full")
+}
+
+// TestWorkflowAuthor_EmptyWorkflowName: defensive — an empty
+// workflow name falls back to "workflow:unknown" rather than
+// stamping an unattributed "workflow:" prefix.
+func TestWorkflowAuthor_EmptyWorkflowName(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "workflow:unknown", workflowAuthor(""))
+	assert.Equal(t, "workflow:unknown", workflowAuthor("   "))
+	assert.Equal(t, "workflow:foo", workflowAuthor("foo"))
+}
+
+// unwrapToConflict walks the err chain to find a writelocks
+// ConflictError so the test can assert via IsConflict.
+func unwrapToConflict(err error) error {
+	for err != nil {
+		var ce *writelocks.ConflictError
+		if errors.As(err, &ce) {
+			return ce
+		}
+		err = errors.Unwrap(err)
+		if err == nil {
+			break
+		}
+	}
+	return fmt.Errorf("no conflict in chain")
+}
