@@ -47,6 +47,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/auth"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
 	"github.com/yaad-index/yaad-index/internal/writelocks"
@@ -129,6 +130,7 @@ func handleUserContentCreate(
 	canonicalKindReg map[string]config.CanonicalKindConfig,
 	frontmatterEdges map[string]config.UserContentFrontmatterEdgeMapping,
 	writeLocks *writelocks.Manager,
+	bus eventbus.Bus,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if vaultWriter == nil || vaultReader == nil {
@@ -296,6 +298,22 @@ func handleUserContentCreate(
 			return
 		}
 
+		// Phase 2.2.C: emit entity.created on UGC create. UGC
+		// IS a fresh-ingest equivalent — a new entity authored
+		// by the operator. The earlier slug-collision check
+		// returns 409 before reaching here, so the row is
+		// guaranteed fresh on this code path (no cache-hit
+		// pre-upsert probe needed). SourceOperator per
+		// ADR-0012 (UGC is operator-authored).
+		if bus != nil {
+			bus.Publish(r.Context(), eventbus.EntityCreatedEvent{
+				ID:        id,
+				Kind:      userContentKind,
+				SourceTag: eventbus.SourceOperator,
+				At:        time.Now().UTC(),
+			})
+		}
+
 		// Frontmatter-edge derivation per yaad-index (re-impl
 		// of on the ADR-0021 contract). Walks the parsed
 		// canonical-label ops and creates edges from the UGC
@@ -311,12 +329,12 @@ func handleUserContentCreate(
 		// a follow-up issue per yaad's scope direction.
 		if len(ucEdgeOps) > 0 {
 			ucGaps := userContentEdgeGapsFromMappings(frontmatterEdges)
-			// UGC eventbus emission is deferred to a follow-up; nil
-			// bus + empty source make applyCanonicalTypeEdges
-			// skip the Publish calls. UGC writes are
-			// operator-authored, so when wired the source will
-			// be eventbus.SourceOperator.
-			if err := applyCanonicalTypeEdges(r.Context(), st, id, ucEdgeOps, ucGaps, logger, nil, ""); err != nil {
+			// Phase 2.2.C wires the bus + SourceOperator
+			// (UGC is operator-authored per ADR-0012). The
+			// helper publishes entity.created on each thin
+			// canonical-label row materialized for the first
+			// time + entity.edge_added on each derived edge.
+			if err := applyCanonicalTypeEdges(r.Context(), st, id, ucEdgeOps, ucGaps, logger, bus, eventbus.SourceOperator); err != nil {
 				logger.ErrorContext(r.Context(), "user-content create: canonical-edge derivation",
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",
@@ -539,6 +557,7 @@ func handleUserContentFrontmatterEdit(
 	vaultWriter *vault.Writer,
 	canonicalKindReg map[string]config.CanonicalKindConfig,
 	frontmatterEdges map[string]config.UserContentFrontmatterEdgeMapping,
+	bus eventbus.Bus,
 	writeLocks *writelocks.Manager,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -700,9 +719,13 @@ func handleUserContentFrontmatterEdit(
 		fullOps := buildFullEditOpsFromMappings(ucEdgeOps, frontmatterEdges, req.Data)
 		if len(fullOps) > 0 {
 			ucGaps := userContentEdgeGapsFromMappings(frontmatterEdges)
-			// UGC eventbus emission is deferred (see
-			// handleUserContentCreate's call for the same rationale).
-			if err := applyCanonicalTypeEdges(r.Context(), st, id, fullOps, ucGaps, logger, nil, ""); err != nil {
+			// Phase 2.2.C: SourceOperator (UGC is operator-
+			// authored per ADR-0012). No entity.created here —
+			// this is the edit path; the entity already exists.
+			// The helper still emits entity.edge_added on each
+			// new edge (and entity.created on any newly-
+			// materialized thin canonical-label rows).
+			if err := applyCanonicalTypeEdges(r.Context(), st, id, fullOps, ucGaps, logger, bus, eventbus.SourceOperator); err != nil {
 				logger.ErrorContext(r.Context(), "user-content frontmatter-edit: canonical-edge re-derivation",
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",

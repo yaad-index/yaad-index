@@ -16,17 +16,19 @@
 // carries the per-action timeout per the Phase 4.C runner).
 //
 // **Args + result handling — deliberately narrow in v1.** The
-// PluginDispatchAction.Args map exists in the parser but the
-// ADR-0022 wire shape doesn't yet specify a structured-args
-// serialization — plugin authors carry per-plugin args via
-// stdin / env per the subprocess plugin protocol. This impl
-// passes the args map opaquely (logged for operator
-// debugging) but does NOT concatenate them into the
-// invocation URL. The plugin.Fetch result is consumed by the
-// dispatcher — Phase 5+ threads the response back into
-// Activation.Bindings for downstream actions referencing the
-// dispatched result; v1 fire-and-success semantics keep the
-// runner contract narrow.
+// PluginDispatchAction.Args map exists in the parser but
+// ADR-0022 doesn't yet specify a structured-args wire format
+// — plugin authors carry per-plugin args via stdin / env per
+// the subprocess plugin protocol. This impl DROPS the args
+// map (no logging, no invocation-URL concatenation); a future
+// ADR-0022 extension will define the wire format + the
+// dispatcher gains the threading then. The TestArgsAreOpaque
+// test pins the current behavior so a future change has to
+// touch the contract explicitly. The plugin.Fetch result is
+// consumed by the dispatcher — Phase 5+ threads the response
+// back into Activation.Bindings for downstream actions
+// referencing the dispatched result; v1 fire-and-success
+// semantics keep the runner contract narrow.
 
 package actions
 
