@@ -11,6 +11,7 @@ import (
 
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
 	"github.com/yaad-index/yaad-index/internal/writelocks"
@@ -85,7 +86,7 @@ type fillConflictResponse struct {
 // case that the agent flow targets. A stale DB → 404 not_found is
 // acceptable behavior — operator runs `yaad-index reindex` to
 // repair drift.
-func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, canonicalKindReg map[string]config.CanonicalKindConfig, writeLocks *writelocks.Manager) http.HandlerFunc {
+func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, canonicalKindReg map[string]config.CanonicalKindConfig, writeLocks *writelocks.Manager, bus eventbus.Bus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Decode once into json.RawMessage values so canonical_type
 		// fields per yaad-index can re-decode against the
@@ -310,6 +311,27 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 		if err := st.MarkGapCallDone(r.Context(), ve.ID); err != nil {
 			logger.WarnContext(r.Context(), "store.MarkGapCallDone after fill (best-effort)",
 				"err", err, "id", id)
+		}
+
+		// Publish fill.completed for every gap that landed (per
+		// ADR-0024 Phase 2). One event per gap so subscribers can
+		// trigger on a specific gap surfacing. SourceAgent is the
+		// agent-strategy fill path — operator-strategy is the
+		// sibling /operator-fill endpoint and emits
+		// SourceOperator.
+		fillAt := clock.Now().UTC()
+		filledGaps := make([]string, 0, len(rawReq.Fields))
+		for k := range rawReq.Fields {
+			filledGaps = append(filledGaps, k)
+		}
+		sort.Strings(filledGaps)
+		for _, gap := range filledGaps {
+			bus.Publish(r.Context(), eventbus.FillCompletedEvent{
+				EntityID:  ve.ID,
+				Gap:       gap,
+				SourceTag: eventbus.SourceAgent,
+				At:        fillAt,
+			})
 		}
 
 		// Re-read the merged entity so the response includes the

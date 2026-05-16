@@ -11,6 +11,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/attachments"
 	"github.com/yaad-index/yaad-index/internal/auth"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
@@ -59,6 +60,14 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	if cfg.writeLocks == nil {
 		cfg.writeLocks = writelocks.New()
 	}
+	// Default-init the event bus when no opt provided. Every mutation
+	// handler expects a non-nil bus to publish events on; a fresh
+	// in-memory bus with zero subscribers is the right zero-value
+	// (Publish is a no-op when nothing subscribes — see
+	// internal/eventbus per ADR-0024 Phase 2.1).
+	if cfg.eventBus == nil {
+		cfg.eventBus = eventbus.NewMemoryBus()
+	}
 
 	mux := http.NewServeMux()
 	tracker := newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks)
@@ -101,14 +110,14 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("POST /v1/entities/{id}/restore", protect(http.HandlerFunc(handleEntityRestore(logger, st, cfg.vaultWriter, cfg.writeLocks))))
 	mux.Handle("GET /v1/entities/{id}/context", protect(http.HandlerFunc(handleEntityContext(logger, st, cfg.vaultReader))))
 	mux.Handle("GET /v1/entities/{id}/attachments/{name}", protect(http.HandlerFunc(handleEntityAttachment(logger, st, cfg.vaultReader))))
-	mux.Handle("POST /v1/edges", protect(http.HandlerFunc(handleCreateEdge(logger, st, registry))))
+	mux.Handle("POST /v1/edges", protect(http.HandlerFunc(handleCreateEdge(logger, st, registry, cfg.eventBus))))
 	mux.Handle("GET /v1/edges", protect(http.HandlerFunc(handleListEdges(logger, st))))
 	mux.Handle("GET /v1/search", protect(http.HandlerFunc(handleSearch(logger, st, registry))))
 	mux.Handle("POST /v1/search/upstream", protect(http.HandlerFunc(handleSearchUpstream(logger, registry))))
 	mux.Handle("POST /v1/ingest", protect(http.HandlerFunc(handleIngest(logger, st, tracker, registry, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg))))
 	mux.Handle("GET /v1/needs-fill", protect(http.HandlerFunc(handleNeedsFill(logger, st, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg))))
-	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks))))
-	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks))))
+	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
+	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
 	mux.Handle("POST /v1/entities/{id}/comments", protect(http.HandlerFunc(handleComments(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg))))
 
 	// User-content (UGC) read + write surface per yaad-index
@@ -185,6 +194,14 @@ type handlerConfig struct {
 	// Manager when this is nil so tests + dev deployments don't
 	// have to wire one explicitly.
 	writeLocks *writelocks.Manager
+	// eventBus is the daemon-internal pub-sub substrate per ADR-0024
+	// (workflow engine Phase 2). Mutation handlers publish events
+	// here so workflow subscribers (Phases 3-6) can react to graph
+	// changes without coupling to the API layer. Default-constructed
+	// to an in-memory bus with no subscribers when no opt provided —
+	// Publish is a no-op in that state, so tests + dev deployments
+	// don't have to wire one explicitly.
+	eventBus eventbus.Bus
 }
 
 // WithReindexHandler registers a handler for POST /v1/reindex. When
@@ -384,4 +401,18 @@ func WithJWKS(keys []auth.JWK) HandlerOption {
 	return func(c *handlerConfig) {
 		c.jwks = keys
 	}
+}
+
+// WithEventBus wires the daemon-internal pub-sub substrate (per
+// ADR-0024 workflow engine Phase 2) into the API mutation
+// handlers. POST /v1/edges, POST /v1/entities/{id}/fill, and POST
+// /v1/entities/{id}/operator-fill publish entity.edge_added and
+// fill.completed events for any subscriber the operator has
+// registered (workflow engine, future audit log, etc.).
+//
+// Omitting this option leaves the handlers wired to a fresh
+// in-memory Bus with no subscribers — Publish is a no-op in that
+// state, so existing surfaces see no behavior change.
+func WithEventBus(b eventbus.Bus) HandlerOption {
+	return func(c *handlerConfig) { c.eventBus = b }
 }
