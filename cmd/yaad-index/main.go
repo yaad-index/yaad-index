@@ -37,6 +37,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/workflow/decision"
 	"github.com/yaad-index/yaad-index/internal/workflow/engine"
 	"github.com/yaad-index/yaad-index/internal/workflow/loader"
+	wftasks "github.com/yaad-index/yaad-index/internal/workflow/tasks"
 	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
@@ -460,6 +461,11 @@ func (s *ServeCmd) Run() error {
 			}
 		}()
 		handlerOpts = append(handlerOpts, api.WithWorkflowEngine(wfEngine))
+		// Phase 6.B task surface — filesystem-walk reader
+		// rooted at the same vault path the action runners
+		// write tasks under. Registers GET /v1/tasks +
+		// GET /v1/tasks/{id} per ADR-0024 §"Agent surface".
+		handlerOpts = append(handlerOpts, api.WithTasksReader(wftasks.NewReader(cfg.Vault.Path)))
 		logger.Info("workflow engine active",
 			"reconcile_interval", loader.DefaultPollInterval.String(),
 			"http_trigger_path", "/v1/workflows/trigger")
@@ -517,6 +523,7 @@ type CLI struct {
 	Command CommandCmd `cmd:"" help:"Dispatch a command-shape plugin invocation against the running daemon (per ADR-0022 +)."`
 	Fetch FetchCmd `cmd:"" help:"Dispatch a URL-shape plugin invocation against the running daemon (per ADR-0022 +)."`
 	Workflow WorkflowCmd `cmd:"" help:"Workflow engine surface — trigger workflows manually (per ADR-0024 §Agent surface)."`
+	Task     TaskCmd     `cmd:"" help:"Task surface — list / load workflow-produced tasks (per ADR-0024 §Agent surface)."`
 }
 
 // ReindexCmd implements `yaad-index reindex`. Walks the vault root
