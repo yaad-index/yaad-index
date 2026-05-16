@@ -110,8 +110,8 @@ Tasks outlive the workflow that spawned them — if a workflow pattern is delete
 The daemon emits internal events that workflows can subscribe to:
 
 - `entity.created` — new entity added by any plugin (fresh-ingest only; not re-fetch of an already-known entity).
-- `entity.edge_added` — new edge attached to an entity. Fires on every ingest that produces a new connection — including cache-hit re-fetches of a known entity that surface new edges, and operator-side manual edge adds.
-- `fill.completed` — a gap-fill landed on an entity. Fires on every fill, including workflow-injected gap-fills evaluating during re-fetch. Carries a `source` tag identifying who initiated the fill (`agent`, `operator`, or `workflow:<name>` for workflow-injected fills).
+- `entity.edge_added` — new edge attached to an entity. Fires whenever an edge is added regardless of origin: fresh-ingest, cache-hit re-fetch surfacing a new connection, operator-side manual edge add, **and fill-gap operations that produce edges** (e.g., an `agent` strategy fills a `series_id?` gap with a value that resolves to an entity, creating a `belongs_to_series` edge; the edge fires `entity.edge_added` separately from the `fill.completed` event the same operation produces). Workflows subscribed to `edge_added` see all of these uniformly — the trigger semantics are "an edge exists now that didn't a moment ago," not "an ingest cycle ran." A node can be ingested without any edges and later acquire them via fill-gap; both cases reach the same `edge_added` subscribers.
+- `fill.completed` — a gap-fill landed on an entity. Fires on every fill, including workflow-injected gap-fills evaluating during re-fetch. Carries a `source` tag identifying who initiated the fill (`agent`, `operator`, or `workflow:<name>` for workflow-injected fills). Note: when a fill produces an edge, both events fire — `fill.completed` for the gap closure and `entity.edge_added` for each emerged edge. Workflows can subscribe to whichever is the more natural match for the rule they're expressing.
 
 This is the load-bearing piece. Without an internal event bus, workflows can only react to "new external thing came in via ingest" and the fill-gap integration described below collapses. With it, workflows become reactive to the index itself, not just external input — which is what differentiates a workflow from a glorified gmail rule.
 
@@ -179,9 +179,26 @@ Settles the "specific pick deferred; not inventing custom" open question from th
 
 The expression context provides:
 
-- `entity` — the triggering entity (resolved, fetched-if-missing).
+- `entity` — the **triggering entity**, the `this`-like reference for the current workflow fire. Fully resolved (fetched-if-missing). Workflows are generic predicates; `entity` becomes specific at trigger time. The same workflow firing on N different entities sees N different values of `entity` — that's the dynamism. Predicates that key off the triggering entity write `entity.rating > 7`, not a hardcoded ID.
 - `edge` — the triggering edge (its from/to/type/timestamp). **`edge` is nil/absent for manually-triggered workflows** (the `workflow.trigger(name, input)` path has no triggering edge). CEL predicates that reference `edge.*` on a workflow that supports manual triggers must guard, e.g., `has(edge) && edge.type == 'is_about'`. A future iteration may let the manual-trigger CLI optionally pass an edge ID to populate the slot, but v1 does not.
-- `graph.get(id)` — fetch a specific entity by its canonical ID. Returns the entity or fails the expression evaluation if not found. This is the only graph lookup in v1.
+- `graph.get(id)` — fetch a **related** entity by its canonical ID (per ADR-0017: `<canonical-kind>:<slug>`). For pulling something other than the triggering entity. Returns the entity or fails the expression evaluation if not found. The id is typically an operator-stored field on the triggering entity's frontmatter (e.g., `entity.previous_edition_id`) or a graph-walked target (`edge.target`). This is the only graph lookup in v1.
+
+**Concrete example — what `entity` vs `graph.get` look like in a predicate:**
+
+```cel
+# triggering entity IS a boardgame; check its own rating
+entity.rating > 7
+
+# triggering entity is a news article ABOUT a boardgame;
+# the boardgame is on the edge target
+graph.get(edge.target).rating > 7
+
+# triggering entity is a 2nd-edition boardgame with an
+# operator-stored field pointing at the 1st edition
+graph.get(entity.previous_edition_id).rating > 7
+```
+
+The same workflow file might use `entity.X` and `graph.get(...)` together — `entity` for the trigger context, `graph.get` for any related entity the predicate needs.
 
 **`graph.find` is out of v1.** The original revision draft mentioned `graph.find({predicate})` for "find me all entities matching X." The predicate shape (CEL nested? schema map? typed filter?) is non-trivial to settle and the in-flight v1 workflows don't need it (each works with a known related-entity ID stored in the triggering entity's frontmatter, retrievable via `graph.get`). Re-introduce post-v1 with a settled predicate spec.
 
