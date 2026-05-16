@@ -28,7 +28,7 @@ Add date entity kinds, default-enabled at the daemon level (no plugin gates them
 
 When week/month/year arrive later, they'll be separate kinds connected to days via `belongs_to` edges (day→week→month→year). Operators who need week-level digests in the interim can build them from day edges in workflow CEL (multi-day aggregation via repeated `graph.get(day:YYYY-MM-DD)` calls, or a future `graph.find` predicate over a date range).
 
-Settled (lean 3 from the granularity options): **day-first, others later**.
+Settled: **day-first, others later**.
 
 **Open question 2:** timezone handling. `day:2026-11-11` in whose timezone? Daemon-configured default (operator picks one zone at deployment), per-entity (each date carries its TZ context), or fixed UTC at the canonical-ID layer with display-time conversion?
 
