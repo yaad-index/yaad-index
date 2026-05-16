@@ -35,6 +35,20 @@ import (
 const (
 	needsFillDefaultLimit = 50
 	needsFillMaxLimit = 200
+	// needsFillCandidateBatch is how many DB rows the handler asks
+	// for in one ListGapCallableCandidates call when it's still
+	// hunting for fillable entities. Sized larger than typical agent
+	// limits so DBs full of non-fillable thin labels don't force an
+	// extra DB round-trip per page of vault-filtered emptiness.
+	needsFillCandidateBatch = 200
+	// needsFillMaxCandidateScan bounds the total DB rows the handler
+	// examines per HTTP call. When the agent's `limit` is small and
+	// the DB has long runs of non-fillable rows, the handler keeps
+	// fetching batches until it fills the page OR scans this many
+	// rows. The cap makes each response bounded — a 325-entity DB
+	// resolves to one round-trip end-to-end; a 100k DB caps at this
+	// many rows per call, with the cursor advancing the rest.
+	needsFillMaxCandidateScan = 1000
 )
 
 // needsFillGapMeta carries the typed metadata for one gap per
@@ -133,15 +147,6 @@ func handleNeedsFill(
 			return
 		}
 
-		candidates, err := st.ListGapCallableCandidates(r.Context(), afterID, limit)
-		if err != nil {
-			logger.ErrorContext(r.Context(), "store.ListGapCallableCandidates",
-				"err", err, "after_id", afterID, "limit", limit)
-			writeError(w, http.StatusInternalServerError, "internal_error",
-				"failed to enumerate gap-callable entities")
-			return
-		}
-
 		// ADR-0019 step 6: auth-aware filtering. Operator caller
 		// (Subject == Operator) skips agent-only fields; agent caller
 		// (Subject != Operator) skips operator-only fields.
@@ -155,48 +160,85 @@ func handleNeedsFill(
 			isOperator = true
 		}
 
-		entries := make([]needsFillEntry, 0, len(candidates))
-		// lastConsidered tracks the id of the last DB candidate we
-		// looked at — the cursor advances past it regardless of
-		// whether vault filtering kept it. This means subsequent
-		// pages don't re-consider the same id and pagination always
-		// makes forward progress.
+		// Scan-until-found-or-exhausted: a DB full of source-shape
+		// and thin-canonical rows can have long runs where every
+		// candidate fails the vault-side gaps filter or the
+		// audience-aware buildNeedsFillEntry filter. Pre-#112 each
+		// such run cost the client one HTTP call per `limit` rows
+		// returning `entities: []` with an advancing cursor. The
+		// inner loop now batches at needsFillCandidateBatch and
+		// keeps pulling until it fills the agent's `limit`, scans
+		// needsFillMaxCandidateScan rows total (the per-request
+		// bound), or the DB stream exhausts.
+		entries := make([]needsFillEntry, 0, limit)
 		lastConsidered := afterID
-		for i := range candidates {
-			cand := candidates[i]
-			lastConsidered = cand.ID
-
-			ve, err := vaultReader.ReadByID(cand.Kind, cand.ID)
+		scanned := 0
+		exhausted := false
+		for len(entries) < limit && scanned < needsFillMaxCandidateScan {
+			batch := needsFillCandidateBatch
+			if remaining := needsFillMaxCandidateScan - scanned; remaining < batch {
+				batch = remaining
+			}
+			candidates, err := st.ListGapCallableCandidates(r.Context(), lastConsidered, batch)
 			if err != nil {
-				logger.WarnContext(r.Context(),
-					"vault read for needs-fill candidate errored; skipping",
-					"id", cand.ID, "err", err)
-				continue
+				logger.ErrorContext(r.Context(), "store.ListGapCallableCandidates",
+					"err", err, "after_id", lastConsidered, "batch", batch)
+				writeError(w, http.StatusInternalServerError, "internal_error",
+					"failed to enumerate gap-callable entities")
+				return
 			}
-			if len(ve.Gaps) == 0 {
-				continue
+			if len(candidates) == 0 {
+				exhausted = true
+				break
 			}
-			entry, ok := buildNeedsFillEntry(
-				cand.ID, cand.Kind, ve, fillInstruction, canonicalKindReg, isOperator)
-			if !ok {
-				// All gaps for this entity were filtered out
-				// (deferred or wrong fill_strategy for caller).
-				continue
+			earlyBreak := false
+			for i := range candidates {
+				cand := candidates[i]
+				lastConsidered = cand.ID
+				scanned++
+
+				ve, err := vaultReader.ReadByID(cand.Kind, cand.ID)
+				if err != nil {
+					logger.WarnContext(r.Context(),
+						"vault read for needs-fill candidate errored; skipping",
+						"id", cand.ID, "err", err)
+					continue
+				}
+				if len(ve.Gaps) == 0 {
+					continue
+				}
+				entry, ok := buildNeedsFillEntry(
+					cand.ID, cand.Kind, ve, fillInstruction, canonicalKindReg, isOperator)
+				if !ok {
+					// All gaps for this entity were filtered out
+					// (deferred or wrong fill_strategy for caller).
+					continue
+				}
+				entries = append(entries, entry)
+				if len(entries) >= limit {
+					earlyBreak = true
+					break
+				}
 			}
-			entries = append(entries, entry)
+			// Exhaustion only when we walked every candidate in the
+			// batch (no early break) AND the batch came back short
+			// (fewer rows than requested = SQLite drained the
+			// `id > lastConsidered` range). An early break leaves
+			// unread rows past lastConsidered in this batch, so the
+			// cursor still needs to advance for the client.
+			if !earlyBreak && len(candidates) < batch {
+				exhausted = true
+				break
+			}
 		}
 
-		// next_cursor logic: SQLite returns at most `limit` rows
-		// for the LIMIT clause, so `len(candidates) == limit`
-		// means the candidate stream isn't exhausted and we emit
-		// a cursor at the last considered id. Fewer rows means
-		// the stream is fully drained — omit the cursor
-		// (omitempty drops it from the wire) so clients know to
-		// stop iterating. Tightened from `>=` to `==` per the cold-reviewer's
-		// a prior PR readability note — they're equivalent here, but
-		// `==` reads more precisely.
+		// next_cursor: omit when the DB stream exhausted (clients
+		// know to stop). Emit at lastConsidered otherwise — even
+		// when the page is full of vault-filtered emptiness, the
+		// cursor advances so the next call resumes past the rows
+		// we already considered.
 		var nextCursor string
-		if len(candidates) == limit {
+		if !exhausted {
 			nextCursor = encodeNeedsFillCursor(lastConsidered)
 		}
 

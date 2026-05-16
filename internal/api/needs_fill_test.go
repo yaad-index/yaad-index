@@ -647,6 +647,135 @@ func TestNeedsFill_GapMetadata_Surfaces(t *testing.T) {
 }
 
 // TestNeedsFill_AllGapsFiltered_EntityExcluded: an entity whose
+// TestNeedsFill_NoFillableEntitiesReturnsExhaustedInOneCall pins the
+// #112 contract: a DB full of non-fillable entities (here: vault
+// frontmatter has empty Gaps) resolves to a single round-trip with
+// `entities: []` AND no cursor — the handler scans the candidate
+// stream end-to-end (bounded by needsFillMaxCandidateScan) rather
+// than returning one empty page per `limit` rows with an advancing
+// cursor. Pre-#112 the agent's loop would call this endpoint
+// 325/limit times for a 325-entity DB before realizing nothing was
+// fillable; post-fix it's one call.
+func TestNeedsFill_NoFillableEntitiesReturnsExhaustedInOneCall(t *testing.T) {
+	t.Parallel()
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	r, err := vault.NewReader(root)
+	require.NoError(t, err)
+
+	// Seed 60 entities, all gap_call_done_at=NULL (DB candidates)
+	// but with vault Gaps empty (filtered out by the handler).
+	// 60 > needsFillCandidateBatch (200) is overkill; pick a count
+	// well above the agent's default limit (50) so pre-fix would
+	// have returned multiple empty pages before exhausting.
+	for i := 0; i < 60; i++ {
+		id := fmt.Sprintf("boardgame:nonfillable-%02d", i)
+		require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+			ID: id, Kind: "boardgame",
+			Data: map[string]any{"id": id},
+		}))
+		require.NoError(t, w.Write(&vault.Entity{
+			ID: id, Kind: "boardgame", Plugin: "seed",
+			Data: map[string]any{"id": id},
+			Gaps: nil,
+		}))
+	}
+
+	h := NewHandlerWithRegistry(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		st, testRegistryWithSeed(),
+		WithVaultIO(w, r),
+		WithCanonicalKindRegistry(nfRegistryWithBoardgameSummary()),
+	)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill?limit=20", nil))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	got := decodeNFResponse(t, rec)
+	assert.Empty(t, got.Entities,
+		"60 non-fillable entities → 0 fillable; pre-fix surfaced empty pages with advancing cursor")
+	assert.Empty(t, got.NextCursor,
+		"scan exhausted entire DB → no cursor (client stops paginating)")
+}
+
+// TestNeedsFill_FillablePastNonFillableReturnsInOneCall pins the
+// adjacent #112 shape: interleaved fillable + non-fillable rows
+// past the start. The handler keeps scanning past the non-fillable
+// prefix and surfaces the fillable rows in the same call, not in a
+// later page.
+func TestNeedsFill_FillablePastNonFillableReturnsInOneCall(t *testing.T) {
+	t.Parallel()
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	r, err := vault.NewReader(root)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	fetchedAt := &now
+	// 30 non-fillable rows with ids `boardgame:nf-00..29`, then
+	// 3 fillable rows with ids `boardgame:yes-0..2`. `id ASC`
+	// ordering puts the non-fillable prefix first; the fillable
+	// rows trail well past the agent's `limit=10` if the handler
+	// stopped after the first batch.
+	for i := 0; i < 30; i++ {
+		id := fmt.Sprintf("boardgame:nf-%02d", i)
+		require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+			ID: id, Kind: "boardgame", Data: map[string]any{"id": id},
+		}))
+		require.NoError(t, w.Write(&vault.Entity{
+			ID: id, Kind: "boardgame", Plugin: "seed",
+			Data: map[string]any{"id": id},
+			Gaps: nil,
+		}))
+	}
+	for i := 0; i < 3; i++ {
+		id := fmt.Sprintf("boardgame:yes-%d", i)
+		require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+			ID: id, Kind: "boardgame", Data: map[string]any{"id": id},
+			Provenance: []store.ProvenanceEntry{
+				{Source: "seed", FetchedAt: fetchedAt, OK: true},
+			},
+		}))
+		require.NoError(t, w.Write(&vault.Entity{
+			ID: id, Kind: "boardgame", Plugin: "seed",
+			Data: map[string]any{"id": id},
+			Gaps: []string{"summary"},
+			Provenance: []vault.ProvenanceEntry{
+				{Source: "seed", FetchedAt: fetchedAt, OK: true},
+			},
+			CleanContent: "stub-clean " + id,
+		}))
+	}
+
+	h := NewHandlerWithRegistry(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		st, testRegistryWithSeed(),
+		WithVaultIO(w, r),
+		WithCanonicalKindRegistry(nfRegistryWithBoardgameSummary()),
+	)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill?limit=10", nil))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	got := decodeNFResponse(t, rec)
+	require.Len(t, got.Entities, 3,
+		"all 3 fillable rows must surface in one call despite 30-row non-fillable prefix")
+	for i, e := range got.Entities {
+		assert.Equal(t, fmt.Sprintf("boardgame:yes-%d", i), e.ID,
+			"entities[%d].id", i)
+	}
+	assert.Empty(t, got.NextCursor,
+		"scan exhausted DB after surfacing the trailing 3 fillable rows")
+}
+
 // ALL gaps are deferred or wrong-audience is dropped from the
 // response entirely (not surfaced as an empty-gaps row).
 func TestNeedsFill_AllGapsFiltered_EntityExcluded(t *testing.T) {
