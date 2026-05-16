@@ -370,12 +370,15 @@ func (s *ServeCmd) Run() error {
 		wfResolver := &storeEntityResolver{st: st}
 		wfRunner := actions.New(actions.Options{
 			TaskWriter: actions.NewFileTaskWriter(cfg.Vault.Path),
-			// Phase 4.B stubs — surface clear "vault-backed
-			// impl pending" errors so operators see the gap
-			// at execute time. Phase 4.B.2 follow-up replaces
-			// these with real vault.Writer-backed impls.
-			CommentWriter: actions.StubCommentWriter{},
-			GapWriter:     actions.StubGapWriter{},
+			// Phase 4.B / 4.C stubs — surface clear "real impl
+			// pending" errors so operators see the gap at
+			// execute time. Phase 4.B.2 swaps the writer stubs
+			// for vault.Writer-backed impls; Phase 4.C.2 swaps
+			// the dispatcher stub for the plugins.Registry-
+			// backed impl.
+			CommentWriter:    actions.StubCommentWriter{},
+			GapWriter:        actions.StubGapWriter{},
+			PluginDispatcher: actions.StubPluginDispatcher{},
 			// Receives the rendered-template drift Warn when
 			// the engine ships a non-nil RenderedTemplates map
 			// that lacks an expected (idx, field) entry —
