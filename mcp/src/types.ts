@@ -796,3 +796,106 @@ export interface EdgeListResponse {
  edges: EdgeListEntry[];
  next_cursor: string | null;
 }
+
+/**
+ * WorkflowSummary mirrors yaad-index's engine.WorkflowSummary —
+ * the per-workflow metadata returned by GET /v1/workflows. Used
+ * by the `workflow_list` tool.
+ */
+export interface WorkflowSummary {
+ name: string;
+ version: number;
+ status: string;
+ trigger_type: string;
+ dedup_policy?: string;
+}
+
+export interface WorkflowListResponse {
+ ok: boolean;
+ workflows: WorkflowSummary[];
+}
+
+/**
+ * WorkflowDiscoverResponse mirrors GET /v1/workflows/discover.
+ * `workflows` is the list of workflow names whose condition
+ * predicate matched the given entity. Sorted by name.
+ */
+export interface WorkflowDiscoverResponse {
+ ok: boolean;
+ entity_id: string;
+ workflows: string[];
+}
+
+/**
+ * WorkflowTriggerResponse mirrors POST /v1/workflows/trigger.
+ * Carries the recorded Decision shape: workflow name, the
+ * triggering entity id (empty for target-less manual fires),
+ * the rendered subject, whether the condition fired, any
+ * missing-references encountered during evaluation, an err
+ * string if the run hit a systemic failure, and the RFC3339
+ * decision timestamp.
+ */
+export interface WorkflowTriggerResponse {
+ ok: boolean;
+ workflow: string;
+ entity_id?: string;
+ subject?: string;
+ fired: boolean;
+ missing_refs?: { id: string }[];
+ err?: string;
+ at: string;
+}
+
+/**
+ * TaskSummary mirrors yaad-index's tasks.TaskSummary — the
+ * lightweight per-task shape returned by GET /v1/tasks. `subject`
+ * is empty for err-tasks; `errored: true` discriminates the
+ * err-task surface; `dedup_key` is empty when the workflow has
+ * no dedup.key. `created_at` is RFC3339; zero-value when the
+ * frontmatter omitted it.
+ */
+export interface TaskSummary {
+ id: string;
+ workflow: string;
+ subject?: string;
+ errored?: boolean;
+ dedup_key?: string;
+ created_at: string;
+}
+
+export interface TaskListResponse {
+ ok: boolean;
+ tasks: TaskSummary[];
+}
+
+/**
+ * Task is the full TaskSummary + Body shape returned by
+ * GET /v1/tasks/{id}. Body is the markdown content after the
+ * frontmatter `---` block, verbatim — includes section headers
+ * + content lines. Empty for bodyless files.
+ */
+export interface Task extends TaskSummary {
+ body: string;
+}
+
+export interface TaskLoadResponse {
+ ok: boolean;
+ task: Task;
+}
+
+/**
+ * TaskResolveResponse mirrors POST /v1/tasks/{id}/resolve.
+ * `auto_archived: true` means the file was moved to
+ * `tasks/_archive/<id>.md`; false means it stays in the
+ * active dir (the originating workflow opted out via
+ * `auto_archive_on_done: false`). `errored: true` echoes the
+ * task's err-task flag; err-tasks always auto-archive
+ * regardless of the workflow opt-out per ADR-0024.
+ */
+export interface TaskResolveResponse {
+ ok: boolean;
+ id: string;
+ errored: boolean;
+ auto_archived: boolean;
+ resolved_at: string;
+}

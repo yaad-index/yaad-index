@@ -23,12 +23,18 @@ import type {
  SearchUpstreamRequest,
  SearchUpstreamResponse,
  StructureResponse,
+ TaskListResponse,
+ TaskLoadResponse,
+ TaskResolveResponse,
  UpstreamErrorEnvelope,
  UserContentCreateRequest,
  UserContentDeleteResponse,
  UserContentEntityResponse,
  UserContentSectionResponse,
  UserContentSectionsListResponse,
+ WorkflowDiscoverResponse,
+ WorkflowListResponse,
+ WorkflowTriggerResponse,
 } from "../types.js";
 
 // FetchLike is the structural shape the client + tests need from a
@@ -775,6 +781,82 @@ export class YaadIndexClient {
  "/v1/search/upstream",
  req,
  );
+ }
+
+ /**
+ * Workflow surface per ADR-0024 §"Agent surface" — list every
+ * registered workflow with metadata (name/version/status/
+ * trigger_type/dedup_policy). Sorted by name; the daemon's
+ * snapshot — yaad-mcp adds no client-side caching.
+ */
+ async listWorkflows(): Promise<WorkflowListResponse> {
+ return this.request<WorkflowListResponse>("GET", "/v1/workflows");
+ }
+
+ /**
+ * List workflows whose condition predicate matches the given
+ * entity per ADR-0024 §"workflow.discover". Walks every
+ * registered workflow + evaluates each condition against the
+ * resolved entity; returns the matching workflow names
+ * (sorted). Server returns 404 not_found when the entity has
+ * no store row — surfaced as YaadIndexError(404).
+ */
+ async discoverWorkflows(entityID: string): Promise<WorkflowDiscoverResponse> {
+ const path = `/v1/workflows/discover?entity=${encodeURIComponent(entityID)}`;
+ return this.request<WorkflowDiscoverResponse>("GET", path);
+ }
+
+ /**
+ * Manual workflow trigger per ADR-0024 §"workflow.trigger(input)
+ * input semantics". `input` accepts: empty (target-less for
+ * trigger.type=manual workflows), canonical entity id
+ * (`<kind>:<slug>`), or URL (routes through the ingest-or-
+ * lookup pipeline). Returns the recorded Decision envelope
+ * verbatim.
+ */
+ async triggerWorkflow(name: string, input?: string): Promise<WorkflowTriggerResponse> {
+ return this.request<WorkflowTriggerResponse>("POST", "/v1/workflows/trigger", {
+ name,
+ input: input ?? "",
+ });
+ }
+
+ /**
+ * List workflow-produced tasks per ADR-0024 §"task.list".
+ * Optional `errored` filter routes to ?errored=true|false on
+ * the wire — true returns only err-tasks (per ADR-0024
+ * §"Runtime errors" err-task surface); false returns only
+ * normal tasks; omitted returns both.
+ */
+ async listTasks(args: { errored?: boolean } = {}): Promise<TaskListResponse> {
+ let path = "/v1/tasks";
+ if (args.errored !== undefined) {
+ path += `?errored=${args.errored ? "true" : "false"}`;
+ }
+ return this.request<TaskListResponse>("GET", path);
+ }
+
+ /**
+ * Load one workflow-produced task by id per ADR-0024
+ * §"task.load". Returns the summary + the raw markdown body
+ * (post-frontmatter). 404 when the id doesn't resolve.
+ */
+ async loadTask(id: string): Promise<TaskLoadResponse> {
+ const path = `/v1/tasks/${encodeURIComponent(id)}`;
+ return this.request<TaskLoadResponse>("GET", path);
+ }
+
+ /**
+ * Mark a workflow-produced task done per ADR-0024 §"task.resolve".
+ * Stamps `resolved_at` on the task's frontmatter; auto-archives
+ * (moves the file to tasks/_archive/<id>.md) when the
+ * originating workflow has `auto_archive_on_done: true` (the
+ * default). Err-tasks always auto-archive regardless of the
+ * workflow opt-out.
+ */
+ async resolveTask(id: string): Promise<TaskResolveResponse> {
+ const path = `/v1/tasks/${encodeURIComponent(id)}/resolve`;
+ return this.request<TaskResolveResponse>("POST", path);
  }
 
  private async request<T>(
