@@ -2538,6 +2538,22 @@ describe("task_list tool", () => {
  expect(got.tasks[0]?.id).toBe("wf-err");
  });
 
+ test("errored=false routes to ?errored=false on the wire", async () => {
+ let seenUrl = "";
+ const client = clientWith((u) => {
+ seenUrl = u;
+ return new Response(
+ JSON.stringify({ ok: true, tasks: [{ id: "wf-s", workflow: "wf", subject: "s", created_at: "2026-05-16T10:00:00Z" }] }),
+ { headers: { "Content-Type": "application/json" } },
+ );
+ });
+ const got = (await runTaskList(client, { errored: false })) as {
+ tasks: Array<{ id: string }>;
+ };
+ expect(seenUrl).toContain("errored=false");
+ expect(got.tasks[0]?.id).toBe("wf-s");
+ });
+
  test("upstream 5xx surfaces as YaadIndexError", async () => {
  const client = clientWith(() => new Response("nope", { status: 503 }));
  await expect(runTaskList(client, {})).rejects.toBeInstanceOf(YaadIndexError);

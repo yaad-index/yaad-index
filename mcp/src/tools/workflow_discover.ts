@@ -9,13 +9,15 @@ export const workflowDiscoverTool = {
  "Find every workflow whose condition predicate evaluates true " +
  "for the given entity. Returns `{ok, entity_id, workflows: " +
  "[<name>, ...]}` verbatim from GET /v1/workflows/discover. " +
- "Walks every registered workflow + evaluates each condition " +
- "against the resolved entity (cost O(W × T); W is single-" +
- "digit in v1). Best-effort surface: condition eval errors " +
- "are treated as non-matching, not as a fire commitment. " +
- "Unknown entity surfaces as a daemon 404. Use this to " +
- "discover which workflows would fire on an entity before " +
- "explicitly invoking `workflow_trigger`.",
+ "Resolves the entity once, then for each registered workflow " +
+ "evaluates context bindings + condition predicate against it. " +
+ "Walk is linear in the number of registered workflows; v1 " +
+ "operators run single-digit workflow counts so this stays " +
+ "cheap. Best-effort surface: context-binding failures + " +
+ "condition eval errors are treated as non-matching, not as a " +
+ "fire commitment. Unknown entity surfaces as a daemon 404. " +
+ "Use this to discover which workflows would fire on an " +
+ "entity before explicitly invoking `workflow_trigger`.",
  inputSchema: {
  type: "object",
  properties: {
