@@ -385,10 +385,22 @@ func canonicalKindNamesForTest(reg map[string]CanonicalKindConfig) []string {
 	return out
 }
 
-// Validation: kind name must match [a-z][a-z0-9_]*.
+// Validation: kind name must match the canonicalKindName regex
+// [a-z][a-z0-9_]*(-[a-z0-9_]+)*. Hyphens between alphanumeric
+// groups are accepted (so operator config can extend gaps on
+// plugin-emitted hyphenated kinds like `tv-show`); trailing
+// hyphens, consecutive hyphens, leading-non-letters, and
+// uppercase still reject.
 func TestLoad_CanonicalKinds_RejectsInvalidKindName(t *testing.T) {
 	t.Parallel()
-	for _, badName := range []string{"Person", "1city", "person-foo", "person foo"} {
+	for _, badName := range []string{
+		"Person",     // uppercase
+		"1city",      // leading digit
+		"person foo", // whitespace
+		"-foo",       // leading hyphen
+		"foo-",       // trailing hyphen
+		"foo--bar",   // consecutive hyphens
+	} {
 		badName := badName
 		t.Run(badName, func(t *testing.T) {
 			t.Parallel()
@@ -403,6 +415,34 @@ canonical_kinds:
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "canonical_kinds."+badName)
 			assert.Contains(t, err.Error(), "invalid kind name")
+		})
+	}
+}
+
+// TestLoad_CanonicalKinds_AcceptsHyphenatedKindName: kinds with
+// hyphens between alphanumeric groups (the URL-slug shape
+// plugins emit — `tv-show`, `email-address`, `film-series`)
+// load cleanly. Per yaad-index #99.
+func TestLoad_CanonicalKinds_AcceptsHyphenatedKindName(t *testing.T) {
+	t.Parallel()
+	for _, goodName := range []string{
+		"tv-show",
+		"email-address",
+		"film-series",
+		"video-game-2",
+	} {
+		goodName := goodName
+		t.Run(goodName, func(t *testing.T) {
+			t.Parallel()
+			cfgPath := writeConfig(t, fmt.Sprintf(`
+plugins: []
+canonical_kinds:
+  %q:
+    gaps:
+      name: "x"
+`, goodName))
+			_, err := Load(cfgPath)
+			require.NoError(t, err, "hyphenated kind name should load")
 		})
 	}
 }
