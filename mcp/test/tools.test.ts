@@ -23,6 +23,12 @@ import { runListUserContentSections } from "../src/tools/list_user_content_secti
 import { runReindex } from "../src/tools/reindex.js";
 import { runSearchLocal } from "../src/tools/search_local.js";
 import { runSearchUpstream } from "../src/tools/search_upstream.js";
+import { runTaskList } from "../src/tools/task_list.js";
+import { runTaskLoad } from "../src/tools/task_load.js";
+import { runTaskResolve } from "../src/tools/task_resolve.js";
+import { runWorkflowDiscover } from "../src/tools/workflow_discover.js";
+import { runWorkflowList } from "../src/tools/workflow_list.js";
+import { runWorkflowTrigger } from "../src/tools/workflow_trigger.js";
 
 function clientWith(
  responder: (url: string, init: RequestInit) => Response | Promise<Response>,
@@ -2374,5 +2380,243 @@ describe("edges tool", () => {
  });
  await runEdges(client, { entity_id: "person:foo" });
  expect(seenUrl).not.toContain("direction=");
+ });
+});
+
+describe("workflow_list tool", () => {
+ test("happy path passes through the upstream workflow list", async () => {
+ let seenUrl = "";
+ let seenMethod = "";
+ const client = clientWith((u, init) => {
+ seenUrl = u;
+ seenMethod = init.method ?? "GET";
+ return new Response(
+ JSON.stringify({
+ ok: true,
+ workflows: [
+ { name: "alpha", version: 1, status: "active", trigger_type: "manual", dedup_policy: "update" },
+ { name: "beta", version: 2, status: "active", trigger_type: "edge_created" },
+ ],
+ }),
+ { headers: { "Content-Type": "application/json" } },
+ );
+ });
+ const got = (await runWorkflowList(client, {})) as {
+ ok: boolean;
+ workflows: Array<{ name: string }>;
+ };
+ expect(seenMethod).toBe("GET");
+ expect(seenUrl).toContain("/v1/workflows");
+ expect(got.ok).toBe(true);
+ expect(got.workflows).toHaveLength(2);
+ expect(got.workflows[0]?.name).toBe("alpha");
+ });
+
+ test("upstream 5xx surfaces as YaadIndexError", async () => {
+ const client = clientWith(() =>
+ new Response("server down", { status: 503 }),
+ );
+ await expect(runWorkflowList(client, {})).rejects.toBeInstanceOf(YaadIndexError);
+ });
+});
+
+describe("workflow_discover tool", () => {
+ test("happy path passes through the upstream matches", async () => {
+ let seenUrl = "";
+ const client = clientWith((u) => {
+ seenUrl = u;
+ return new Response(
+ JSON.stringify({
+ ok: true,
+ entity_id: "boardgame:brass-birmingham",
+ workflows: ["classify", "newsletter-of-interest"],
+ }),
+ { headers: { "Content-Type": "application/json" } },
+ );
+ });
+ const got = (await runWorkflowDiscover(client, {
+ entity_id: "boardgame:brass-birmingham",
+ })) as { ok: boolean; workflows: string[] };
+ expect(seenUrl).toContain("/v1/workflows/discover");
+ expect(seenUrl).toContain("entity=boardgame%3Abrass-birmingham");
+ expect(got.workflows).toEqual(["classify", "newsletter-of-interest"]);
+ });
+
+ test("missing entity_id returns invalid_argument without calling the API", async () => {
+ let called = false;
+ const client = clientWith(() => {
+ called = true;
+ return new Response("{}", { headers: { "Content-Type": "application/json" } });
+ });
+ const got = (await runWorkflowDiscover(client, {})) as { ok: boolean; error: string };
+ expect(got.ok).toBe(false);
+ expect(got.error).toBe("invalid_argument");
+ expect(called).toBe(false);
+ });
+});
+
+describe("workflow_trigger tool", () => {
+ test("happy path sends the trigger body + passes through the Decision envelope", async () => {
+ let seenBody = "";
+ const client = clientWith((u, init) => {
+ seenBody = String(init.body ?? "");
+ expect(u).toContain("/v1/workflows/trigger");
+ expect(init.method).toBe("POST");
+ return new Response(
+ JSON.stringify({
+ ok: true,
+ workflow: "morning-brief",
+ entity_id: "boardgame:b",
+ subject: "boardgame:b",
+ fired: true,
+ at: "2026-05-16T20:00:00Z",
+ }),
+ { headers: { "Content-Type": "application/json" } },
+ );
+ });
+ const got = (await runWorkflowTrigger(client, {
+ name: "morning-brief",
+ input: "boardgame:b",
+ })) as { fired: boolean };
+ expect(JSON.parse(seenBody)).toEqual({ name: "morning-brief", input: "boardgame:b" });
+ expect(got.fired).toBe(true);
+ });
+
+ test("missing name returns invalid_argument without calling the API", async () => {
+ let called = false;
+ const client = clientWith(() => {
+ called = true;
+ return new Response("{}", { headers: { "Content-Type": "application/json" } });
+ });
+ const got = (await runWorkflowTrigger(client, {})) as { ok: boolean; error: string };
+ expect(got.error).toBe("invalid_argument");
+ expect(called).toBe(false);
+ });
+
+ test("empty input defaults to empty string in the request body", async () => {
+ let seenBody = "";
+ const client = clientWith((_u, init) => {
+ seenBody = String(init.body ?? "");
+ return new Response(
+ JSON.stringify({ ok: true, workflow: "daily", fired: true, at: "2026-05-16T20:00:00Z" }),
+ { headers: { "Content-Type": "application/json" } },
+ );
+ });
+ await runWorkflowTrigger(client, { name: "daily" });
+ expect(JSON.parse(seenBody)).toEqual({ name: "daily", input: "" });
+ });
+});
+
+describe("task_list tool", () => {
+ test("happy path with no filter omits ?errored= from the URL", async () => {
+ let seenUrl = "";
+ const client = clientWith((u) => {
+ seenUrl = u;
+ return new Response(
+ JSON.stringify({ ok: true, tasks: [] }),
+ { headers: { "Content-Type": "application/json" } },
+ );
+ });
+ await runTaskList(client, {});
+ expect(seenUrl).toContain("/v1/tasks");
+ expect(seenUrl).not.toContain("errored=");
+ });
+
+ test("errored=true routes to ?errored=true on the wire", async () => {
+ let seenUrl = "";
+ const client = clientWith((u) => {
+ seenUrl = u;
+ return new Response(
+ JSON.stringify({ ok: true, tasks: [{ id: "wf-err", workflow: "wf", errored: true, created_at: "2026-05-16T10:00:00Z" }] }),
+ { headers: { "Content-Type": "application/json" } },
+ );
+ });
+ const got = (await runTaskList(client, { errored: true })) as {
+ tasks: Array<{ id: string; errored: boolean }>;
+ };
+ expect(seenUrl).toContain("errored=true");
+ expect(got.tasks[0]?.id).toBe("wf-err");
+ });
+
+ test("upstream 5xx surfaces as YaadIndexError", async () => {
+ const client = clientWith(() => new Response("nope", { status: 503 }));
+ await expect(runTaskList(client, {})).rejects.toBeInstanceOf(YaadIndexError);
+ });
+});
+
+describe("task_load tool", () => {
+ test("happy path passes through the upstream task with body", async () => {
+ let seenUrl = "";
+ const client = clientWith((u) => {
+ seenUrl = u;
+ return new Response(
+ JSON.stringify({
+ ok: true,
+ task: {
+ id: "wf-s",
+ workflow: "wf",
+ subject: "s",
+ created_at: "2026-05-16T10:00:00Z",
+ body: "## candidates\n\nfirst\n",
+ },
+ }),
+ { headers: { "Content-Type": "application/json" } },
+ );
+ });
+ const got = (await runTaskLoad(client, { id: "wf-s" })) as {
+ task: { id: string; body: string };
+ };
+ expect(seenUrl).toContain("/v1/tasks/wf-s");
+ expect(got.task.body).toContain("## candidates");
+ });
+
+ test("missing id returns invalid_argument without calling the API", async () => {
+ let called = false;
+ const client = clientWith(() => {
+ called = true;
+ return new Response("{}", { headers: { "Content-Type": "application/json" } });
+ });
+ const got = (await runTaskLoad(client, {})) as { ok: boolean; error: string };
+ expect(got.error).toBe("invalid_argument");
+ expect(called).toBe(false);
+ });
+});
+
+describe("task_resolve tool", () => {
+ test("happy path POSTs to /resolve + passes through the response", async () => {
+ let seenUrl = "";
+ let seenMethod = "";
+ const client = clientWith((u, init) => {
+ seenUrl = u;
+ seenMethod = init.method ?? "";
+ return new Response(
+ JSON.stringify({
+ ok: true,
+ id: "wf-s",
+ errored: false,
+ auto_archived: true,
+ resolved_at: "2026-05-16T20:30:00Z",
+ }),
+ { headers: { "Content-Type": "application/json" } },
+ );
+ });
+ const got = (await runTaskResolve(client, { id: "wf-s" })) as {
+ ok: boolean;
+ auto_archived: boolean;
+ };
+ expect(seenMethod).toBe("POST");
+ expect(seenUrl).toContain("/v1/tasks/wf-s/resolve");
+ expect(got.auto_archived).toBe(true);
+ });
+
+ test("missing id returns invalid_argument without calling the API", async () => {
+ let called = false;
+ const client = clientWith(() => {
+ called = true;
+ return new Response("{}", { headers: { "Content-Type": "application/json" } });
+ });
+ const got = (await runTaskResolve(client, {})) as { ok: boolean; error: string };
+ expect(got.error).toBe("invalid_argument");
+ expect(called).toBe(false);
  });
 });

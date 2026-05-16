@@ -45,6 +45,12 @@ import {
 } from "./tools/get_user_content_section.js";
 import { ingestTool, runIngest } from "./tools/ingest.js";
 import { kindsTool, runKinds } from "./tools/kinds.js";
+import { taskListTool, runTaskList } from "./tools/task_list.js";
+import { taskLoadTool, runTaskLoad } from "./tools/task_load.js";
+import { taskResolveTool, runTaskResolve } from "./tools/task_resolve.js";
+import { workflowDiscoverTool, runWorkflowDiscover } from "./tools/workflow_discover.js";
+import { workflowListTool, runWorkflowList } from "./tools/workflow_list.js";
+import { workflowTriggerTool, runWorkflowTrigger } from "./tools/workflow_trigger.js";
 import { listEntitiesTool, runListEntities } from "./tools/list_entities.js";
 import {
  listUserContentSectionsTool,
@@ -87,6 +93,12 @@ const TOOLS = [
  deleteEntityTool,
  setOperatorFillTool,
  deferGapTool,
+ workflowListTool,
+ workflowDiscoverTool,
+ workflowTriggerTool,
+ taskListTool,
+ taskLoadTool,
+ taskResolveTool,
 ] as const;
 
 async function main() {
@@ -184,6 +196,18 @@ async function dispatch(
  return runSetOperatorFill(client, args);
  case "defer_gap":
  return runDeferGap(client, args);
+ case "workflow_list":
+ return runWorkflowList(client, args);
+ case "workflow_discover":
+ return runWorkflowDiscover(client, args);
+ case "workflow_trigger":
+ return runWorkflowTrigger(client, args);
+ case "task_list":
+ return runTaskList(client, args);
+ case "task_load":
+ return runTaskLoad(client, args);
+ case "task_resolve":
+ return runTaskResolve(client, args);
  default:
  return { ok: false, error: "unknown_tool", message: `no such tool: ${name}` };
  }

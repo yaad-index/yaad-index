@@ -22,6 +22,12 @@ In-side (real, against the operator-configured yaad-index):
 | `add_comment(entity_id, text, author?)` | POST `/v1/entities/{id}/comments` (via the comments API). Server stamps `date` UTC, `author` from JWT subject (when omitted), and `operator` from the pair-claim. Explicit `author` MUST equal the JWT subject or upstream returns `{ok:false, error:"author_mismatch"}` verbatim. Distinct from other tools: 4xx error envelopes pass through structured (no exception) so the agent can branch on `error === "author_mismatch"` / `"missing_authorization"`. |
 | `list_entities(kind)` | GET `/v1/search?kind=...&limit=100`. `kind` is required — yaad-index has no list-all route. Returns `{results, total, limit, offset}` where each result is `{id, kind, snippet, score}`. |
 | `search_upstream(query, plugins?, limit?, per_plugin_timeout_seconds?)` | POST `/v1/search/upstream` (per yaad-index #2). Plugin-federated search across opted-in plugins (Capabilities.SupportsSearch=true). Goroutine-per-plugin fan-out with per-plugin timeout + partial-results semantic. Returns `{results, per_plugin_status, query, limit, per_plugin_timeout_seconds}` where `results` carries plugin attribution (`[{plugin, id, label, summary}]`) and `per_plugin_status` surfaces per-plugin outcome (ok / candidates / duration_ms / error_message). Explicit-name allowlist: unregistered name → 400, registered-but-not-opted-in → 422. |
+| `workflow_list()` | GET `/v1/workflows`. Returns `{ok, workflows: [{name, version, status, trigger_type, dedup_policy}]}` for every workflow pattern registered with the running daemon (per ADR-0024 §"Agent surface"). |
+| `workflow_discover(entity_id)` | GET `/v1/workflows/discover?entity=<id>`. Returns `{ok, entity_id, workflows: [<name>, ...]}` — the list of workflows whose condition predicate evaluates true against the entity. Best-effort surface (eval errors → non-matching). |
+| `workflow_trigger(name, input?)` | POST `/v1/workflows/trigger` with `{name, input}`. Returns the recorded Decision envelope `{ok, workflow, entity_id, subject, fired, missing_refs?, err?, at}`. `input` shapes: empty (target-less manual), entity id, URL (routes via ingest-or-lookup). |
+| `task_list(errored?)` | GET `/v1/tasks[?errored=true\|false]`. Lists active workflow-produced tasks under `vault/tasks/` (resolved + auto-archived tasks excluded). Optional `errored: true` returns only err-tasks; `false` returns only normal tasks. |
+| `task_load(id)` | GET `/v1/tasks/{id}`. Returns `{ok, task: {id, workflow, subject?, errored?, dedup_key?, created_at, body}}`. `body` is the markdown content after frontmatter, verbatim. |
+| `task_resolve(id)` | POST `/v1/tasks/{id}/resolve`. Stamps `resolved_at` + auto-archives (when the originating workflow has `auto_archive_on_done: true`, the default). Err-tasks always auto-archive. |
 
 ## Setup
 
@@ -44,7 +50,7 @@ Smoke-run:
 YAAD_INDEX_URL=http://localhost:7433 bun run start
 ```
 
-Server boots on stdio. To verify, send the `tools/list` JSON-RPC request via your MCP host of choice — should return all 27 tools.
+Server boots on stdio. To verify, send the `tools/list` JSON-RPC request via your MCP host of choice — should return all 33 tools.
 
 ## Add to Claude Code
 
