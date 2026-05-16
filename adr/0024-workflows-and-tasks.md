@@ -2,6 +2,7 @@
 
 **Status:** PROPOSED
 **Date:** 2026-05-12
+**Revised:** 2026-05-16 (v1 design slice reconciled — see Revisions log at end)
 
 ## Context
 
@@ -29,7 +30,11 @@ A **workflow** is a declared pattern with:
 - A **decision** — deterministic evaluation against entity data (filled-or-otherwise), agent-free by default.
 - An **output** — what the workflow produces if the decision evaluates true.
 
-Workflows are markdown files at `workflows/<name>.md` (vault-side, daemon-managed; plural to match `tasks/`). Frontmatter holds the rules; body is operator-readable documentation. **Workflow definitions are operator-authored, not yaad-index-shipped.** yaad-index ships the engine — parser, trigger detector, fill-gap integration, output dispatch. Operators (with agent help) write the actual workflow files.
+Workflows are markdown files at `workflows/<name>.md` (vault-side default; daemon-managed; plural to match `tasks/`). **Body holds the rules as a YAML code-fence; frontmatter is metadata only** (name, version, status, etc.). The structured workflow definition lives inside a fenced ```yaml``` block in the body, with operator-readable prose around it. Rationale: frontmatter is limited (flat key-value); a YAML code-fence in the body lets the structured rules be richer + editor-friendly while the surrounding prose stays operator-readable as documentation.
+
+**Workflow definitions are operator-authored, not yaad-index-shipped.** yaad-index ships the engine — parser, trigger detector, fill-gap integration, output dispatch. Operators (with agent help) write the actual workflow files in the vault.
+
+**Daemon-side location is reserved** for any future system-shipped workflows (e.g., a workflow that yaad-index needs to bootstrap its own behavior). v1 has none; vault-only is effective today. The schema supports the daemon-side path so it can grow into it without a migration.
 
 ### Task
 
@@ -53,9 +58,9 @@ Tasks outlive the workflow that spawned them — if a workflow pattern is delete
 
 ### Trigger types (v1)
 
-1. **Event-driven** — workflow subscribes to internal events emitted by the daemon's event bus.
-2. **Manual** — agent invokes `workflow.trigger(name, input)`. Input required (e.g., a URL or entity ID).
-3. **Time-based** — workflow declares a schedule (cron-style or named cadence like "daily-morning"). Folded into v1 because existing operator-side patterns (morning brief, weekly summary) are already workflows in disguise; formalizing now costs less than retrofitting later.
+1. **Event-driven** — workflow subscribes to internal events emitted by the daemon's event bus. First-class in v1, starting with `edge_created` and growing to the full CRUD set by v1-final.
+2. **Manual** — invoker calls `workflow.trigger(name, input)` (via MCP / HTTP API) or via the equivalent CLI shape `yaad-index workflow trigger <name> [input]`. Input shapes are entity ID, URL, or empty (workflow runs without an entity target). External host cron uses the CLI form for time-based patterns — e.g., a host cron entry firing `yaad-index workflow trigger morning-brief` daily covers the morning-brief / weekly-summary cases without the daemon owning a scheduler.
+3. **Time-based (internal scheduling)** — **deferred post-v1.** Originally folded into v1; reverted in this revision. External host cron + the manual-trigger CLI cover the immediate need without requiring the daemon to grow scheduling primitives. A future v1.x can fold internal scheduling back in if external cron proves clunky.
 
 ### Internal event bus (v1 core)
 
@@ -89,15 +94,17 @@ Two worked-example shapes:
 
 Workflow-injected gap fills are **permanent** on the entity per ADR-0008 (vault-as-truth). Future re-fetches reuse the stored fill rather than re-classifying. Side benefit: gradual personal-database enrichment as workflows fire over time.
 
-### Output surface
+### Output surface — action vocabulary
 
-A workflow's output is one of:
+A workflow's output is one of three v1 action primitives:
 
-- **Create task entity** — the default; spawns a `tasks/<name>-<task-id>.md`.
-- **Mutate existing entity** — e.g., update priority, add a tag, set a property.
-- **Add edge** — attach a new edge between existing entities.
-- **Silent log** — process inline, no task created (Amazon-receipt-shape: the workflow knows what it is, files it, done).
-- **Emit notification** — out-of-v1 unless concrete need surfaces.
+- **`task_append`** — append content to a section of `tasks/<workflow>-<subject>.md`. Find-or-create semantics: the canonical task path is deterministic (workflow name + operator-defined subject template), so the same workflow firing repeatedly on the same subject lands in the same task file. The action appends to a named section in the task body; sections accumulate over time as the workflow re-fires. This is the default for workflows that surface recurring situations (PR-review, newsletter-of-interest, classified-receipt).
+- **`add_comment`** — attach a comment to an existing entity (the entity that triggered the workflow, or one reached via graph). Reuses the existing entity-comment primitive (the `add_comment` MCP tool). Used when the workflow wants to enrich an entity with workflow-observed context rather than spawning a task.
+- **`plugin_dispatch`** — fire a plugin command (e.g., `bgg.fetch`) from inside the workflow. Used for the "look-something-up-then-decide" shape: a workflow can trigger an ingest of a related entity that isn't yet in the index, wait for it (async), and proceed with the result attached to context.
+
+Out of v1 (deferred — listed below): edge-creation as a workflow action, silent-log shape, emit-notification.
+
+**Why the smaller set:** the earlier draft listed four output types (create task / mutate entity / add edge / silent log). The v1-reconciled set drops `add edge` and `silent log` as separate primitives — `add edge` becomes a follow-up via `plugin_dispatch` (the plugin emits the edge during ingest) or a manual operator add; `silent log` collapses into `add_comment` (record what the workflow saw, no task surface). `plugin_dispatch` is genuinely new — the earlier draft had no explicit way for a workflow to ask the index to go fetch something.
 
 **Concurrent writes.** Two workflows — or any two writers (workflow output, UGC mutation, comment addition, edge addition, plugin emit, operator manual write) — may touch the same on-disk artifact at the same time. v1 protects via a daemon-internal **per-artifact write-lock manager** (`internal/writelocks` per yaad-index #23) with a **block-on-conflict** policy: an Acquire on an artifact already held by another writer returns a typed conflict error immediately, surfacing as a 409 envelope naming the active holder. No queuing, no merging, no last-writer-wins; the rejected caller retries.
 
@@ -112,7 +119,24 @@ Workflow-to-workflow chaining is **out of v1** (decision deferred from the May 9
 
 ### Decision logic is agent-free in v1
 
-The workflow's decision evaluates deterministically without an LLM call at trigger time. Use a known simple DSL (specific pick deferred; not inventing custom). If a decision genuinely needs context-shape understanding beyond a DSL can express, default to **always create the task** and let the operator (or agent at task-load time) decide. Don't push subtle decisions into workflow YAML — that's pseudo-intelligence and the maintenance debt is high.
+The workflow's decision evaluates deterministically without an LLM call at trigger time. **The expression language is CEL** (Common Expression Language, Google's purpose-built predicate language with a mature Go implementation in `cel-go`). Chosen because:
+
+- Purpose-built for predicate expressions (compared to a general scripting language).
+- Safe-by-default: no I/O, no side effects, deterministic evaluation, fast.
+- Mature Go impl already used by Kubernetes, Envoy, Cloud Audit — well-trodden.
+- Smaller surface than embedding a full scripting language (Starlark, Lua, etc.); harder for operators to abuse with code-where-rules-belong.
+
+Settles the "specific pick deferred; not inventing custom" open question from the original draft.
+
+**Predicate shape — cluster-aware.** Workflow decisions operate over a **cluster** of related entities, not only the single triggering entity. The operator declares the cluster (via a graph query — e.g., "all editions of this series", "all PRs against this repo touched today") and the predicate evaluates across the set. CEL's collection operators (`.exists(...)`, `.all(...)`, `.filter(...)`) carry this natively. Worked example: a boardgame-news workflow firing on the 2nd-edition of a game can pull the 1st-edition via graph, evaluate `editions.exists(e, e.rating > 7)`, and surface even when the immediate target has no rating.
+
+The expression context provides:
+
+- `entity` — the triggering entity (resolved, fetched-if-missing).
+- `edge` — the triggering edge (its from/to/type/timestamp).
+- `graph` — a lookup function (`graph.get(id)`, `graph.find({predicate})`) for pulling related entities.
+
+If a decision genuinely needs context-shape understanding beyond what CEL + the cluster query can express, default to **always create the task** and let the operator (or agent at task-load time) decide. Don't push subtle decisions into workflow YAML — that's pseudo-intelligence and the maintenance debt is high.
 
 LLM-involved decision evaluation is a **later v1 step**, not v2 — but not in the first slice.
 
@@ -161,14 +185,24 @@ Policy when a duplicate key fires:
 
 Workflows declare both the key and the policy. Implementation may extend the key vocabulary as patterns surface.
 
+**Secondary action-level dedup inside `task_append`.** Per-pattern dedup at the workflow level prevents N tasks for the same situation. A second layer inside `task_append` prevents N duplicate lines inside the same task: by default `task_append` skips a write when the content line already exists in the target section. The operator can override per-step (`if_already_present: append-anyway` / `replace` / `skip`). The two layers cover different concerns and stack:
+
+- **Workflow-level dedup (per-pattern key + policy)** decides whether a workflow fire reaches the action stage at all.
+- **Action-level dedup (`task_append` skip-if-line-exists)** decides whether a specific line lands inside the task body.
+
+In practice the workflow-level layer handles "should this become a fresh task or update an existing one"; the action-level layer handles "the workflow fired with `update` policy, the existing task is being updated — does this specific content line need to be appended or is it already there?" Belt and suspenders, not redundant.
+
 ## Out of v1 (explicit)
 
 - **Webhook ingress** — no HTTP-in server today; large add.
 - **Workflow-to-workflow chaining** — ergonomic but adds engine complexity.
 - **LLM-involved decisions** — last v1 step at earliest, not first.
 - **External direct plugins** (github / jira / calendar direct) — gmail-via-notifications covers the first-tier workflows. Direct integration is v2.
-- **Emit-notification output type** — listed in the output surface above; deferred unless concrete need surfaces in v1.
+- **Emit-notification output type** — deferred unless concrete need surfaces in v1.
 - **Push notifications on fill-gaps needing answer** — operator polls `/v1/needs-fill` in v1.
+- **Internal time-based / cron trigger** — deferred to post-v1. External host cron + the manual-trigger CLI cover the immediate need; daemon doesn't grow a scheduler.
+- **`add_edge` as a workflow action** — workflows don't directly create edges in v1. Edge creation surfaces via `plugin_dispatch` (the plugin emits edges during ingest) or via operator manual `POST /v1/edges`.
+- **`silent_log` as a distinct output shape** — collapses into `add_comment` (record what the workflow observed against the entity without spawning a task surface). If a true silent-no-side-effect log is needed (audit only), a workflow that does nothing on its happy path achieves that via the err-task pattern on failures only.
 
 ## Agent surface
 
@@ -231,3 +265,18 @@ The pain point this ADR addresses (context-bundle assembly) is resolved by combi
 - ADR-0019: Operator-fill + gap types.
 - ADR-0020: Search with gap predicates (this ADR's query backend).
 - ADR-0023: Unified plugin response protocol (envelope shape that workflows subscribe to).
+
+## Revisions
+
+### 2026-05-16 — v1 design slice reconciled
+
+The original PROPOSED draft (2026-05-12) was richer than necessary for a first v1 cut and had several open-question placeholders. This revision tightens the v1 slice and settles those questions. Changes:
+
+- **Expression language: CEL.** Settles the "specific pick deferred; not inventing custom" open question. `cel-go` is the impl. Predicates operate over a **cluster** of related entities queried via `graph.get` / `graph.find`, with collection operators (`exists`, `all`, `filter`) carrying the multi-entity decision shape.
+- **Action vocabulary: `task_append`, `add_comment`, `plugin_dispatch`** — three primitives, not four. `add_edge` and `silent_log` move to Out-of-v1. `plugin_dispatch` is new — it's how a workflow asks the index to go fetch related context mid-evaluation.
+- **File format: `.md` extension with YAML in a body code-fence.** Frontmatter holds metadata only (name, version, status). Earlier draft put rules in frontmatter; YAML code-fence is richer and lets operator-readable prose live alongside structured rules.
+- **Trigger types: event-driven + manual-via-CLI in v1.** Internal time-based / cron trigger deferred post-v1. External host cron + the `yaad-index workflow trigger <name>` CLI cover the morning-brief / weekly-summary cases without the daemon growing a scheduler.
+- **Dedup: two layers explicit.** Per-pattern at workflow level (key + policy `update`/`skip`/`replace`) prevents N tasks for the same situation; action-level inside `task_append` (skip-if-line-exists) prevents N duplicate lines inside the same task. Stack, don't conflict.
+- **Workflow location: vault-default + daemon-reserved.** Operator-authored vault workflows are the only thing today; daemon-side is reserved as a forward-compatible path for future system-shipped workflows.
+
+Status remains PROPOSED pending operator hard-gate review of this revision.
