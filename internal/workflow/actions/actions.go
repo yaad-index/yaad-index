@@ -162,6 +162,10 @@ type Options struct {
 	// vault-backed shape as CommentWriter.
 	GapWriter GapWriter
 
+	// PluginDispatcher backs plugin_dispatch. Production wires
+	// a stub (Phase 4.C) → registry-backed impl (Phase 4.C.2).
+	PluginDispatcher PluginDispatcher
+
 	// Logger receives drift-warning lines when an action
 	// runner falls back to a raw template field because the
 	// engine's pre-rendered Activation.RenderedTemplates map
@@ -178,18 +182,19 @@ type Options struct {
 //   - add_comment → addCommentRunner backed by
 //     opts.CommentWriter.
 //   - add_gap → addGapRunner backed by opts.GapWriter.
-//   - plugin_dispatch → stub returning
-//     ErrActionNotImplemented (Phase 4.C replaces).
+//   - plugin_dispatch → pluginDispatchRunner backed by
+//     opts.PluginDispatcher.
 func New(opts Options) Runner {
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &dispatcher{
-		taskWriter:    opts.TaskWriter,
-		commentWriter: opts.CommentWriter,
-		gapWriter:     opts.GapWriter,
-		logger:        logger,
+		taskWriter:       opts.TaskWriter,
+		commentWriter:    opts.CommentWriter,
+		gapWriter:        opts.GapWriter,
+		pluginDispatcher: opts.PluginDispatcher,
+		logger:           logger,
 	}
 }
 
@@ -197,10 +202,11 @@ func New(opts Options) Runner {
 // per-primitive writer dependencies; per-action runners are
 // methods that close over the dispatcher's fields.
 type dispatcher struct {
-	taskWriter    TaskWriter
-	commentWriter CommentWriter
-	gapWriter     GapWriter
-	logger        *slog.Logger
+	taskWriter       TaskWriter
+	commentWriter    CommentWriter
+	gapWriter        GapWriter
+	pluginDispatcher PluginDispatcher
+	logger           *slog.Logger
 }
 
 // rendered returns the engine's pre-rendered value for
@@ -254,10 +260,7 @@ func (d *dispatcher) runOne(ctx context.Context, idx int, wf *parser.Workflow, a
 	case a.AddGap != nil:
 		return d.runAddGap(ctx, idx, wf, a.AddGap, dec, act)
 	case a.PluginDispatch != nil:
-		return ActionResult{
-			ActionIdx: idx, Type: "plugin_dispatch",
-			Err: fmt.Errorf("%w: plugin_dispatch (lands in Phase 4.C)", ErrActionNotImplemented),
-		}
+		return d.runPluginDispatch(ctx, idx, wf, a.PluginDispatch, dec, act)
 	default:
 		return ActionResult{
 			ActionIdx: idx, Type: "unknown",
