@@ -70,7 +70,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	}
 
 	mux := http.NewServeMux()
-	tracker := newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks)
+	tracker := newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks, cfg.eventBus)
 
 	// Per yaad-index a prior PR: the protect wrapper enforces Bearer-JWT
 	// auth on every protected route. When auth.required=false the

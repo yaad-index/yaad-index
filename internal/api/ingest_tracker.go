@@ -14,6 +14,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
@@ -200,6 +201,62 @@ type ingestTracker struct {
 	// already collapses concurrent ingests of the same URL; this
 	// lock catches cross-surface conflicts the dedup can't see.
 	writeLocks *writelocks.Manager
+	// bus is the daemon-internal pub-sub substrate per ADR-0024
+	// Phase 2. The tracker publishes entity.created on fresh-
+	// ingest (gated on cache-hit detection — a pre-upsert
+	// GetEntity probe distinguishes the new-entity path from the
+	// re-fetch path per the ADR's "Cache-hit re-fetch semantics"
+	// note) and entity.edge_added on each canonical-edge create
+	// + thin-row materialization. nil bus skips all emissions —
+	// tests + dev deployments without a bus stay unaffected.
+	bus eventbus.Bus
+}
+
+// entityIsNew reports whether the given id has no row in the
+// store yet, so the caller can decide whether to emit
+// entity.created post-upsert. Per ADR-0024's cache-hit re-fetch
+// semantics, entity.created fires only on the first-time-seen
+// path — re-fetch of a known entity does NOT re-publish.
+//
+// Probe failures (anything other than ErrNotFound) return false:
+// without proof of new-ness, the emit-as-create path is suppressed
+// and the caller relies on the existing TopicEntityEdgeAdded
+// emissions for change detection. The probe is best-effort.
+func (t *ingestTracker) entityIsNew(ctx context.Context, id string) bool {
+	_, err := t.store.GetEntity(ctx, id)
+	return errors.Is(err, store.ErrNotFound)
+}
+
+// publishEntityCreated emits entity.created with SourceAgent
+// (ingest path) when bus is configured. Centralizes the
+// time-now + payload construction so the four call sites are
+// one-liners.
+func (t *ingestTracker) publishEntityCreated(ctx context.Context, id, kind string) {
+	if t.bus == nil {
+		return
+	}
+	t.bus.Publish(ctx, eventbus.EntityCreatedEvent{
+		ID:        id,
+		Kind:      kind,
+		SourceTag: eventbus.SourceAgent,
+		At:        time.Now().UTC(),
+	})
+}
+
+// publishEntityEdgeAdded emits entity.edge_added with SourceAgent
+// (ingest path) when bus is configured. Mirrors
+// publishEntityCreated's shape for the per-edge call sites.
+func (t *ingestTracker) publishEntityEdgeAdded(ctx context.Context, e *store.Edge) {
+	if t.bus == nil || e == nil {
+		return
+	}
+	t.bus.Publish(ctx, eventbus.EntityEdgeAddedEvent{
+		FromID:    e.From,
+		ToID:      e.To,
+		EdgeType:  e.Type,
+		SourceTag: eventbus.SourceAgent,
+		At:        time.Now().UTC(),
+	})
 }
 
 // newIngestTracker constructs the in-flight tracker. writer + reader
@@ -215,7 +272,7 @@ type ingestTracker struct {
 // constructs a guard from the keys of cfg.CanonicalKinds (the
 // registry map per ADR-0013 §1) plus cfg.CanonicalEdgeTypes; tests
 // typically pass nil unless they exercise the canonical path.
-func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer, reader *vault.Reader, guard *config.CanonicalGuard, globalCacheTTLSeconds int, dispatcher *attachments.Dispatcher, writeLocks *writelocks.Manager) *ingestTracker {
+func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer, reader *vault.Reader, guard *config.CanonicalGuard, globalCacheTTLSeconds int, dispatcher *attachments.Dispatcher, writeLocks *writelocks.Manager, bus eventbus.Bus) *ingestTracker {
 	if (writer == nil) != (reader == nil) {
 		panic("newIngestTracker: vault writer and reader must both be set or both be nil")
 	}
@@ -223,16 +280,17 @@ func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer,
 		writeLocks = writelocks.New()
 	}
 	return &ingestTracker{
-		records: make(map[string]*ingestRecord),
-		byInvocationKey: make(map[string]*ingestRecord),
+		records:               make(map[string]*ingestRecord),
+		byInvocationKey:       make(map[string]*ingestRecord),
 		globalCacheTTLSeconds: globalCacheTTLSeconds,
-		store: st,
-		vaultWriter: writer,
-		vaultReader: reader,
-		guard: guard,
-		logger: logger,
+		store:                 st,
+		vaultWriter:           writer,
+		vaultReader:           reader,
+		guard:                 guard,
+		logger:                logger,
 		attachmentsDispatcher: dispatcher,
-		writeLocks: writeLocks,
+		writeLocks:            writeLocks,
+		bus:                   bus,
 	}
 }
 
@@ -366,11 +424,19 @@ func (t *ingestTracker) runSimulation(rec *ingestRecord, att ingestAttempt) {
 			t.markFailed(rec, "internal_error", "failed to write vault file")
 			return
 		}
+		// Cache-hit-aware emit: probe before upsert so we know
+		// whether this fixture run is producing a fresh entity.
+		// ADR-0024 Phase 2 — entity.created fires only on the
+		// first-time-seen path.
+		fixtureWasNew := t.bus != nil && t.entityIsNew(ctx, att.entity.ID)
 		if err := t.store.UpsertEntity(ctx, att.entity); err != nil {
 			t.logger.Error("ingest simulator: UpsertEntity failed",
 				"err", err, "id", att.entity.ID)
 			t.markFailed(rec, "internal_error", "failed to persist entity")
 			return
+		}
+		if fixtureWasNew {
+			t.publishEntityCreated(ctx, att.entity.ID, att.entity.Kind)
 		}
 		if err := t.store.AppendProvenance(ctx, att.entity.ID,
 			[]store.ProvenanceEntry{att.provenance},
@@ -713,10 +779,18 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 		return fmt.Errorf("failed to write vault file: %w", err)
 	}
 
+	// Cache-hit-aware emit: probe before upsert so a re-fetch
+	// of a known entity doesn't re-publish entity.created. ADR-0024
+	// Phase 2 — re-fetch surfaces as entity.edge_added on any new
+	// edge, never as entity.created.
+	pluginWasNew := t.bus != nil && t.entityIsNew(ctx, result.Entity.ID)
 	if err := t.store.UpsertEntity(ctx, result.Entity); err != nil {
 		t.logger.Error("ingest simulator: UpsertEntity (plugin path) failed",
 			"err", err, "id", result.Entity.ID)
 		return fmt.Errorf("failed to persist entity: %w", err)
+	}
+	if pluginWasNew {
+		t.publishEntityCreated(ctx, result.Entity.ID, result.Entity.Kind)
 	}
 	if err := t.store.AppendProvenance(ctx, result.Entity.ID, provenance); err != nil {
 		t.logger.Error("ingest simulator: AppendProvenance (plugin path) failed",
@@ -1057,6 +1131,12 @@ func (t *ingestTracker) materializeThinLabelRowsFromEdges(ctx context.Context, e
 				"err", err, "id", e.To, "kind", kind, "plugin", plugin)
 			continue
 		}
+		// ADR-0024 Phase 2 — thin canonical-label row materialized
+		// for the first time on this ingest. The skip-if-exists
+		// probe above guarantees we only reach here on the create
+		// path, so the emit is unconditional (no extra was-new
+		// gate needed).
+		t.publishEntityCreated(ctx, e.To, kind)
 		// Provenance: stamp who referenced this label and when.
 		// Mirrors persistCanonicalEntities' provenance shape so
 		// /v1/entities surfaces look uniform across legacy stubs
@@ -1112,7 +1192,12 @@ func (t *ingestTracker) persistCanonicalEdges(ctx context.Context, candidates []
 			}
 			t.logger.Error("ingest: CreateEdge for canonical edge failed",
 				"err", err, "type", e.Type, "from", e.From, "to", e.To, "plugin", plugin)
+			continue
 		}
+		// ADR-0024 Phase 2 — one entity.edge_added per landed
+		// canonical edge. Drops (missing endpoint, guard-filtered)
+		// don't emit; the edge never reached the graph.
+		t.publishEntityEdgeAdded(ctx, e)
 	}
 }
 
