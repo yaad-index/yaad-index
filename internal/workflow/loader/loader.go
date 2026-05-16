@@ -103,6 +103,17 @@ type Loader struct {
 	workflows map[string]*parser.Workflow // by Workflow.Name
 	perFile   map[string]string           // file path → workflow Name
 	mtimes    map[string]time.Time        // file path → last-parsed mtime
+	// collisionLogged tracks paths currently rejected for
+	// name-collision so the loader doesn't spam WARN on every
+	// poll while the collision persists. Collision-rejected
+	// paths intentionally skip the mtimes cache so subsequent
+	// polls re-attempt registration — a rejected file whose
+	// colliding sibling later disappears has unchanged mtime
+	// and would never re-register without the retry path.
+	// Cleared when the rejection no longer applies (success /
+	// parser-fail / missing-plugins) so re-collision after
+	// recovery re-logs once.
+	collisionLogged map[string]struct{}
 }
 
 // New constructs a Loader with the given options. Logger nil →
@@ -117,13 +128,14 @@ func New(opts Options) *Loader {
 		interval = DefaultPollInterval
 	}
 	return &Loader{
-		paths:          append([]string(nil), opts.Paths...),
-		pluginRegistry: opts.PluginRegistry,
-		pollInterval:   interval,
-		logger:         logger,
-		workflows:      make(map[string]*parser.Workflow),
-		perFile:        make(map[string]string),
-		mtimes:         make(map[string]time.Time),
+		paths:           append([]string(nil), opts.Paths...),
+		pluginRegistry:  opts.PluginRegistry,
+		pollInterval:    interval,
+		logger:          logger,
+		workflows:       make(map[string]*parser.Workflow),
+		perFile:         make(map[string]string),
+		mtimes:          make(map[string]time.Time),
+		collisionLogged: make(map[string]struct{}),
 	}
 }
 
@@ -134,21 +146,39 @@ func New(opts Options) *Loader {
 // registry without failing the overall Load — operators see
 // the structured rejection lines and can fix the offending
 // files without daemon restart.
+//
+// Three-phase shape:
+//
+//  1. Enumerate `*.md` files across all configured paths
+//     (no per-file parsing yet).
+//  2. Drop perFile entries whose paths disappeared since the
+//     last scan — must happen BEFORE per-file processing so
+//     the collision-detection in maybeReloadFile sees a clean
+//     state. (Without this, a collision-rejected file whose
+//     prior-registrant file was removed between scans would
+//     still see the stale prior entry and re-reject.)
+//  3. Per-file parse + register.
 func (l *Loader) Load(ctx context.Context) error {
 	seen := make(map[string]struct{})
+	var filesToScan []string
 	for _, dir := range l.paths {
 		if strings.TrimSpace(dir) == "" {
 			continue
 		}
-		if err := l.scanPath(ctx, dir, seen); err != nil {
+		paths, err := l.enumerateMarkdownFiles(ctx, dir)
+		if err != nil {
 			return err
 		}
+		for _, p := range paths {
+			seen[p] = struct{}{}
+			filesToScan = append(filesToScan, p)
+		}
 	}
-	// Files that disappeared since the last scan: drop them
-	// from the registry. perFile maps path → workflow name; if
-	// the path didn't appear in `seen`, the file is gone.
+
+	// Phase 2 — drop removed files BEFORE phase 3 per the
+	// docstring rationale (avoid stale state on the collision
+	// re-resolution path).
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	for path, name := range l.perFile {
 		if _, kept := seen[path]; kept {
 			continue
@@ -156,18 +186,34 @@ func (l *Loader) Load(ctx context.Context) error {
 		delete(l.workflows, name)
 		delete(l.perFile, path)
 		delete(l.mtimes, path)
+		delete(l.collisionLogged, path)
 		l.logger.InfoContext(ctx, "workflow file removed from registry",
 			"path", path, "workflow_name", name)
+	}
+	// Clear collision-logged entries for paths that
+	// disappeared between scans (they never registered, so
+	// they're not in perFile; the loop above misses them).
+	// Future reappearance re-logs once.
+	for path := range l.collisionLogged {
+		if _, kept := seen[path]; !kept {
+			delete(l.collisionLogged, path)
+		}
+	}
+	l.mu.Unlock()
+
+	// Phase 3 — parse + register each enumerated file.
+	for _, p := range filesToScan {
+		l.maybeReloadFile(ctx, p)
 	}
 	return nil
 }
 
-// scanPath walks one directory non-recursively, parsing each
-// `*.md` file. seen accumulates the paths visited across all
-// configured paths so the post-walk delete-detection pass can
-// distinguish "removed since last scan" from "in a different
-// directory than this one."
-func (l *Loader) scanPath(ctx context.Context, dir string, seen map[string]struct{}) error {
+// enumerateMarkdownFiles walks one directory non-recursively
+// and returns the absolute paths of every `*.md` file (skip
+// dotfiles + subdirectories). Used by Load's phase-1 sweep
+// before per-file parsing runs; the file-removal sweep in
+// phase 2 reads the returned paths against perFile.
+func (l *Loader) enumerateMarkdownFiles(ctx context.Context, dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -177,10 +223,11 @@ func (l *Loader) scanPath(ctx context.Context, dir string, seen map[string]struc
 			// noisy.
 			l.logger.InfoContext(ctx, "workflow directory missing; no workflows loaded from this path",
 				"path", dir)
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("workflow loader: read dir %q: %w", dir, err)
+		return nil, fmt.Errorf("workflow loader: read dir %q: %w", dir, err)
 	}
+	var out []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -191,11 +238,9 @@ func (l *Loader) scanPath(ctx context.Context, dir string, seen map[string]struc
 		if strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		path := filepath.Join(dir, e.Name())
-		seen[path] = struct{}{}
-		l.maybeReloadFile(ctx, path)
+		out = append(out, filepath.Join(dir, e.Name()))
 	}
-	return nil
+	return out, nil
 }
 
 // maybeReloadFile checks the file's mtime against the
@@ -235,6 +280,10 @@ func (l *Loader) maybeReloadFile(ctx context.Context, path string) {
 		// Track the mtime even on failure so we don't spam
 		// the log re-parsing the same broken file every tick.
 		l.mtimes[path] = mtime
+		// Clear collision-logged flag: a parser-rejected file
+		// is no longer collision-state, so a recovery + re-
+		// collision should re-log once.
+		delete(l.collisionLogged, path)
 		l.mu.Unlock()
 		l.logger.WarnContext(ctx, "workflow file rejected",
 			"path", path, "err", err)
@@ -258,6 +307,7 @@ func (l *Loader) maybeReloadFile(ctx context.Context, path string) {
 				delete(l.perFile, path)
 			}
 			l.mtimes[path] = mtime
+			delete(l.collisionLogged, path)
 			l.mu.Unlock()
 			l.logger.WarnContext(ctx, "workflow file rejected: allowed_plugins not loaded",
 				"path", path,
@@ -274,12 +324,22 @@ func (l *Loader) maybeReloadFile(ctx context.Context, path string) {
 	// Reject the LATER one (alphabetical by path, since
 	// scanPath visits in directory order); the first one
 	// keeps the registry slot.
+	//
+	// Collision-rejected paths intentionally SKIP the mtimes
+	// cache so subsequent polls re-attempt registration —
+	// without this, a colliding file keeps its rejection
+	// forever even after the prior registrant file is removed
+	// (its mtime hasn't changed). The collisionLogged set
+	// suppresses re-logging the rejection on every poll while
+	// the collision persists.
 	if priorPath, exists := nameRegisteredElsewhere(l.perFile, wf.Name, path); exists {
-		l.logger.WarnContext(ctx, "workflow file rejected: name collision",
-			"path", path,
-			"workflow_name", wf.Name,
-			"prior_path", priorPath)
-		l.mtimes[path] = mtime
+		if _, alreadyLogged := l.collisionLogged[path]; !alreadyLogged {
+			l.logger.WarnContext(ctx, "workflow file rejected: name collision",
+				"path", path,
+				"workflow_name", wf.Name,
+				"prior_path", priorPath)
+			l.collisionLogged[path] = struct{}{}
+		}
 		return
 	}
 	// If this path previously mapped to a different name (operator
@@ -290,6 +350,10 @@ func (l *Loader) maybeReloadFile(ctx context.Context, path string) {
 	l.workflows[wf.Name] = wf
 	l.perFile[path] = wf.Name
 	l.mtimes[path] = mtime
+	// Clear any prior collision-logged flag so a future
+	// collision (e.g., operator re-adds a colliding file)
+	// re-logs once.
+	delete(l.collisionLogged, path)
 	l.logger.InfoContext(ctx, "workflow file registered",
 		"path", path,
 		"workflow_name", wf.Name,
