@@ -761,13 +761,18 @@ func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec De
 			"err", err.Error())
 		return
 	}
+	missingRefIDs := make([]string, 0, len(dec.MissingRefs))
+	for _, mr := range dec.MissingRefs {
+		missingRefIDs = append(missingRefIDs, mr.ID)
+	}
 	results := e.runner.Run(ctx, reg.workflow,
 		actions.Decision{
-			Workflow: dec.Workflow,
-			EntityID: dec.EntityID,
-			Subject:  dec.Subject,
-			At:       dec.At,
-			DedupKey: dec.DedupKey,
+			Workflow:    dec.Workflow,
+			EntityID:    dec.EntityID,
+			Subject:     dec.Subject,
+			At:          dec.At,
+			DedupKey:    dec.DedupKey,
+			MissingRefs: missingRefIDs,
 		},
 		actions.Activation{
 			Entity:            entity,

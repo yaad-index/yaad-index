@@ -64,6 +64,15 @@ type Decision struct {
 	// fire's identity. Empty when the workflow has no
 	// dedup.key or the render failed.
 	DedupKey string
+
+	// MissingRefs is the deduplicated + id-sorted list of
+	// canonical entity ids referenced during evaluation
+	// (context-binding graph.get, condition graph.get,
+	// subject graph.get) that didn't resolve. task_append
+	// runner writes these into the task's `## Missing
+	// references` section per ADR-0024 §"Missing-reference
+	// handling". Empty when the fire resolved all refs.
+	MissingRefs []string
 }
 
 // Activation carries the per-fire CEL-evaluation context
@@ -146,6 +155,21 @@ type Runner interface {
 // non-empty, is stamped into the task's frontmatter on
 // first create so cross-fire identity stays inspectable
 // per ADR-0024 §"Per-pattern de-duplication".
+//
+// EnsureMissingRefsSection keeps the task's `## Missing
+// references` section in sync with the current missing-ref
+// id list per ADR-0024 §"Missing-reference handling". Each
+// fire of the task_append runner re-syncs the section to
+// the latest refs (idempotent rewrite):
+//   - refs empty + section absent → no-op.
+//   - refs empty + section present → section removed (the
+//     workflow re-evaluated against now-complete context).
+//   - refs non-empty + section present → section body
+//     replaced with the new refs list.
+//   - refs non-empty + section absent → section appended
+//     after the operator-declared sections.
+//   - task file absent (no task_append wrote yet) → no-op
+//     (there's no task to annotate).
 type TaskWriter interface {
 	AppendTaskSection(
 		ctx context.Context,
@@ -155,6 +179,13 @@ type TaskWriter interface {
 		section string,
 		content string,
 		ifAlreadyPresent string,
+	) error
+
+	EnsureMissingRefsSection(
+		ctx context.Context,
+		workflow string,
+		subject string,
+		refs []string,
 	) error
 }
 

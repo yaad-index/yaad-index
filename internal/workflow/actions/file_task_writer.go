@@ -69,6 +69,13 @@ func NewFileTaskWriter(vaultRoot string) *FileTaskWriter {
 	return &FileTaskWriter{vaultRoot: vaultRoot}
 }
 
+// MissingRefsSectionName is the body section the task_append
+// runner re-syncs each fire to reflect the current
+// missing-reference id list per ADR-0024 §"Missing-reference
+// handling". Held as a const so the writer + future
+// readers (Phase 6 task.* surface) speak the same vocab.
+const MissingRefsSectionName = "Missing references"
+
 // AppendTaskSection finds-or-creates the task file at the
 // canonical path + appends content to the named section
 // per the if_already_present policy. See package doc for
@@ -108,6 +115,115 @@ func (w *FileTaskWriter) AppendTaskSection(_ context.Context, workflow, subject,
 		return err
 	}
 	return w.writeFile(path, []byte(body))
+}
+
+// EnsureMissingRefsSection idempotently rewrites the task
+// file's `## Missing references` section to reflect refs.
+// See TaskWriter docstring for the four-case semantics
+// (refs empty / non-empty × section present / absent +
+// file-absent no-op).
+func (w *FileTaskWriter) EnsureMissingRefsSection(_ context.Context, workflow, subject string, refs []string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	path := w.taskPath(workflow, subject)
+	existing, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		// No task file to annotate yet — task_append hasn't
+		// run for this (workflow, subject). Silent no-op
+		// per the docstring; the missing-refs section is
+		// strictly a task-body annotation, not a task
+		// creator.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read existing task %q: %w", path, err)
+	}
+
+	body, err := rewriteMissingRefsSection(string(existing), refs)
+	if err != nil {
+		return err
+	}
+	if body == string(existing) {
+		return nil
+	}
+	return w.writeFile(path, []byte(body))
+}
+
+// rewriteMissingRefsSection produces a new task-file body
+// with the `## Missing references` section in sync with
+// refs. Pure helper — no I/O. Handles the four shapes:
+//   - refs empty + section absent → return existing.
+//   - refs empty + section present → drop the section.
+//   - refs non-empty + section absent → append the section
+//     at end of body.
+//   - refs non-empty + section present → replace the
+//     section's body with the new refs list.
+//
+// Section body shape: one ref per line, formatted as
+// "- <id>". Trailing newline preserved.
+func rewriteMissingRefsSection(existing string, refs []string) (string, error) {
+	lines := splitLines(existing)
+	header := "## " + MissingRefsSectionName
+	startIdx := -1
+	endIdx := -1
+	for i, line := range lines {
+		if strings.TrimRight(line, " \t") == header {
+			startIdx = i
+			// Section runs until the next `## ` header or EOF.
+			endIdx = len(lines)
+			for j := i + 1; j < len(lines); j++ {
+				if strings.HasPrefix(lines[j], "## ") {
+					endIdx = j
+					break
+				}
+			}
+			break
+		}
+	}
+
+	if len(refs) == 0 {
+		if startIdx == -1 {
+			return existing, nil
+		}
+		// Drop the section + the blank line typically before
+		// it (so two adjacent sections don't collapse to no
+		// gap).
+		drop := startIdx
+		if drop > 0 && lines[drop-1] == "" {
+			drop--
+		}
+		out := append([]string(nil), lines[:drop]...)
+		out = append(out, lines[endIdx:]...)
+		return strings.Join(out, "\n"), nil
+	}
+
+	refLines := make([]string, 0, len(refs)+3)
+	refLines = append(refLines, header, "")
+	for _, r := range refs {
+		refLines = append(refLines, "- "+r)
+	}
+	refLines = append(refLines, "")
+
+	if startIdx == -1 {
+		// Append at end. Strip trailing blanks before
+		// inserting + re-add one blank as separator.
+		body := strings.TrimRight(existing, "\n")
+		if body != "" {
+			body += "\n\n"
+		}
+		body += strings.Join(refLines, "\n")
+		if !strings.HasSuffix(body, "\n") {
+			body += "\n"
+		}
+		return body, nil
+	}
+
+	// Replace [startIdx, endIdx).
+	out := append([]string(nil), lines[:startIdx]...)
+	out = append(out, refLines...)
+	out = append(out, lines[endIdx:]...)
+	return strings.Join(out, "\n"), nil
 }
 
 // taskPath computes the canonical task file path. workflow
