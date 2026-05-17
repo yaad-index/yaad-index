@@ -41,6 +41,7 @@
 package writelocks
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -148,6 +149,56 @@ func (m *Manager) Acquire(artifact, holder string) (release func(), err error) {
 		}
 		released = true
 	}, nil
+}
+
+// acquireWaitPollInterval is the back-off between Acquire
+// retries inside AcquireWithTimeout. Sized for the typical
+// ingest-write hold (10s of ms per envelope); short enough that
+// a workflow firing during ingest doesn't wait perceptibly past
+// the upstream release.
+const acquireWaitPollInterval = 25 * time.Millisecond
+
+// AcquireWithTimeout is the wait-on-conflict variant of Acquire
+// per #152. Used by callers that have no operator / agent to
+// retry on a 409 (workflow action runners firing during ingest,
+// where the ingest path holds the source-entity lock for a
+// short window). On success returns the release closure
+// identical to Acquire's. On conflict polls every
+// acquireWaitPollInterval until the lock frees, the timeout
+// expires (returns the latest *ConflictError), or ctx is
+// cancelled (returns ctx.Err()).
+//
+// The HTTP-side writers stay on the fail-fast Acquire path —
+// operators / agents see a 409 + retry from their side. This
+// shape exists specifically for the async-action surface where
+// no caller exists to retry.
+func (m *Manager) AcquireWithTimeout(ctx context.Context, artifact, holder string, timeout time.Duration) (release func(), err error) {
+	if timeout <= 0 {
+		return m.Acquire(artifact, holder)
+	}
+	deadline := clock.Now().Add(timeout)
+	for {
+		rel, err := m.Acquire(artifact, holder)
+		if err == nil {
+			return rel, nil
+		}
+		if !IsConflict(err) {
+			return nil, err
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, err
+		}
+		wait := acquireWaitPollInterval
+		if wait > remaining {
+			wait = remaining
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
 }
 
 // Holds reports whether artifact is currently locked. Diagnostic
