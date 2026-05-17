@@ -1,9 +1,9 @@
 import type { YaadIndexClient } from "../client/yaad_index.js";
 
-export const addCommentTool = {
- name: "add_comment",
+export const addNoteTool = {
+ name: "add_note",
  description:
- "Append a comment to an existing entity. " +
+ "Append a note to an existing entity. " +
  "Server stamps date (UTC), the JWT subject as author, and the " +
  "operator from the pair-claim. Empty author is server-filled; an " +
  "explicit author MUST equal the JWT subject or the call returns " +
@@ -17,7 +17,7 @@ export const addCommentTool = {
  },
  text: {
  type: "string",
- description: "Comment body. Server-trims surrounding whitespace.",
+ description: "Note body. Server-trims surrounding whitespace.",
  },
  author: {
  type: "string",
@@ -29,7 +29,7 @@ export const addCommentTool = {
  },
 } as const;
 
-export async function runAddComment(
+export async function runAddNote(
  client: YaadIndexClient,
  args: Record<string, unknown>,
 ): Promise<unknown> {
@@ -51,5 +51,5 @@ export async function runAddComment(
  }
  const author =
  typeof args.author === "string" && args.author !== "" ? args.author : undefined;
- return client.addComment(entityID, text, author);
+ return client.addNote(entityID, text, author);
 }

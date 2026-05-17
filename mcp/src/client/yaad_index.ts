@@ -4,7 +4,7 @@
 // patching globals.
 
 import type {
- CommentsResponse,
+ NotesResponse,
  CVStatusResponse,
  EdgeListResponse,
  EntitiesBatchResponse,
@@ -88,25 +88,25 @@ export class YaadIndexClient {
  }
 
  /**
- * Append a comment to an existing entity (per yaad-index a prior PR
- * / — POST /v1/entities/{id}/comments). Server stamps `date`
+ * Append a note to an existing entity (per yaad-index a prior PR
+ * / — POST /v1/entities/{id}/notes). Server stamps `date`
  * UTC + `Operator` from the JWT pair-claim's operator. `author`:
  *
  * - omitted (or empty) → server fills from JWT `sub`.
  * - non-empty matching JWT `sub` → accepted, stored verbatim.
  * - non-empty disagreeing → upstream 403 `author_mismatch`.
  *
- * Unlike most client methods, addComment surfaces the upstream
+ * Unlike most client methods, addNote surfaces the upstream
  * error envelope verbatim instead of throwing — the agent observes
  * structured `{ok:false, error, message}` directly so they can
  * branch on `error === "author_mismatch"` without parsing an
  * exception message. The discriminant is `ok`.
  */
- async addComment(
+ async addNote(
  id: string,
  text: string,
  author?: string,
- ): Promise<CommentsResponse | UpstreamErrorEnvelope> {
+ ): Promise<NotesResponse | UpstreamErrorEnvelope> {
  const body: Record<string, string> = { text };
  if (author) {
  body.author = author;
@@ -118,7 +118,7 @@ export class YaadIndexClient {
  if (this.authToken) {
  headers["Authorization"] = `Bearer ${this.authToken}`;
  }
- const path = `/v1/entities/${encodeURIComponent(id)}/comments`;
+ const path = `/v1/entities/${encodeURIComponent(id)}/notes`;
  const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
  method: "POST",
  headers,
@@ -131,11 +131,11 @@ export class YaadIndexClient {
  // yaad-index (every error path emits a JSON envelope) but
  // defensive against silent upstream changes.
  return res.ok
- ? ({ ok: true } as unknown as CommentsResponse)
+ ? ({ ok: true } as unknown as NotesResponse)
  : { ok: false, error: "empty_response", message: `${res.status}` };
  }
  try {
- return JSON.parse(text2) as CommentsResponse | UpstreamErrorEnvelope;
+ return JSON.parse(text2) as NotesResponse | UpstreamErrorEnvelope;
  } catch {
  // Non-JSON 5xx body (e.g. an upstream proxy error page) —
  // surface as a generic envelope so the agent can route on
@@ -521,7 +521,7 @@ export class YaadIndexClient {
  * - cross-author → 403 author_mismatch
  *
  * Unlike most client methods, this returns the upstream envelope
- * verbatim on 4xx (mirrors `addComment`'s passthrough pattern) so
+ * verbatim on 4xx (mirrors `addNote`'s passthrough pattern) so
  * the agent branches on `ok === false && error === "..."` without
  * parsing exception messages. 5xx still throws.
  */

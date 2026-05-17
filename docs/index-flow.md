@@ -82,7 +82,7 @@ provenance:
 edges:
  - type: authored
  to: book:jonathan-strange-and-mr-norrell
-comments_text: | # derived projection of comment threads
+comments_text: | # derived projection of note threads
  ...
 created_at: 2025-12-15T10:00:00Z
 updated_at: 2026-01-10T14:30:00Z
@@ -115,7 +115,7 @@ Some `data:` keys are owned by yaad-index, not plugins (per AGENTS.md "Reserved 
 
 - `summary` — derived from `vault.Entity.Summary` (a prior PR)
 - `tags` — derived from `vault.Entity.Tags` (a prior PR)
-- `comments_text` — `\n`-joined projection of comment threads, FTS-only (a prior PR)
+- `comments_text` — `\n`-joined projection of note threads, FTS-only (a prior PR)
 
 Plugin attempts to emit these as plugin-extracted fields get clobbered by the vault → DB projection (`internal/api/fill.go::vaultEntityDataForDB`) on every re-ingest + fill cycle. Treat them as reserved.
 
@@ -211,7 +211,7 @@ Returned by `Reindexer.Run`; HTTP encodes directly, CLI prints line-by-line. Per
 
 **ADRs that govern this surface:** [ADR-0008](../adr/0008-vault-as-source-of-truth.md) (vault-canonical, reindex re-derives from frontmatter), [ADR-0009](../adr/0009-provenance-reconciliation.md) (provenance reconciliation — pattern reused for notations), [ADR-0010](../adr/0010-row-level-idempotency-for-derived-tables.md) (UNIQUE constraints + ON CONFLICT DO NOTHING).
 **Cross-link:** [`docs/plugin-flow.md`](plugin-flow.md) §2a (notation cache architecture), §2b (TTL semantics).
-**PRs that evolved it:** (vault → DB derivation) (reindex helpers) (`derivedTables` slice + comment) (FK comment tightening) (`log_level` config flowing through reindex CLI's logger) (`store.ReplaceProvenance`) (reindex calls `ReplaceProvenance`) (provenance UNIQUE indexes), + (entity_notations schema + reindex re-derive).
+**PRs that evolved it:** (vault → DB derivation) (reindex helpers) (`derivedTables` slice + note) (FK note tightening) (`log_level` config flowing through reindex CLI's logger) (`store.ReplaceProvenance`) (reindex calls `ReplaceProvenance`) (provenance UNIQUE indexes), + (entity_notations schema + reindex re-derive).
 
 ## 3. WipeDerivedState
 
@@ -242,7 +242,7 @@ Preserved across the wipe — NOT vault-derived:
 
 The current `derivedTables` slice is alphabetical (`edges, entities, provenance, reindex_files`) and FK-safe **by coincidence** — `edges` (the only FK child in the set) sorts before `entities` (the parent), which is what the FK requires. Future tables that introduce new parent/child relationships MUST verify deletion order explicitly; alphabetical might break child-first.
 
-The slice's inline comment names this constraint (per PRs +) so future editors don't repeat the wrong-claim shape the cold-reviewer flagged on a prior PR.
+The slice's inline note names this constraint (per PRs +) so future editors don't repeat the wrong-claim shape the cold-reviewer flagged on a prior PR.
 
 ### Adding a new table
 
@@ -250,13 +250,13 @@ When a future PR adds a new derived table:
 
 1. Append to `derivedTables` slice (alphabetical position).
 2. Add the table + rationale to the **Wiped tables** list above.
-3. Verify FK chain: if the new table has FKs to or from `entities` / `edges` / `provenance` / `reindex_files`, confirm the alphabetical order keeps child-before-parent. If not, reorder explicitly + update the slice's inline comment.
+3. Verify FK chain: if the new table has FKs to or from `entities` / `edges` / `provenance` / `reindex_files`, confirm the alphabetical order keeps child-before-parent. If not, reorder explicitly + update the slice's inline note.
 4. Add migration that creates the table + any FKs.
 
 Non-derived tables (e.g. a future auth/session table): add to **Excluded tables** instead. Silence in this doc means a future editor has to read the slice to know the wipe set, which is the gap a prior PR closed.
 
 **ADRs that govern this surface:** [ADR-0008](../adr/0008-vault-as-source-of-truth.md) (DB is derived, vault is canonical).
-**PRs that evolved it:** (`derivedTables` slice + initial comment) (FK comment tightening — corrected the "no FK" claim).
+**PRs that evolved it:** (`derivedTables` slice + initial note) (FK note tightening — corrected the "no FK" claim).
 
 ## 4. DB upsert invariants
 
@@ -296,7 +296,7 @@ For reindex specifically: each file's `upsertEntity` + `CreateEdge` loop runs as
 
 - **Plugin-touching surfaces** (startup/cache, ingest, fill, plugin contract) — see [`docs/plugin-flow.md`](plugin-flow.md).
 - **Operator config schema** (`yaad-index.yaml`, `canonical_kinds:`, plugin allowlist) — see `AGENTS.md` and ADR-0006.
-- **Comments / search / batch endpoints** — `POST /v1/entities/{id}/comments`, `GET /v1/search`, `POST /v1/entities/batch` are agent-facing surfaces, not index-internal flows. Their persistence paths use the upsert invariants above; their wire shapes are in ADR-0002.
+- **Notes / search / batch endpoints** — `POST /v1/entities/{id}/notes`, `GET /v1/search`, `POST /v1/entities/batch` are agent-facing surfaces, not index-internal flows. Their persistence paths use the upsert invariants above; their wire shapes are in ADR-0002.
 - **Agent authentication** — currently stub-shaped (`agent:stub` source on provenance per `internal/api/edges.go` + `internal/api/fill.go`). Real authn is a future ADR.
 
 ## Maintenance discipline

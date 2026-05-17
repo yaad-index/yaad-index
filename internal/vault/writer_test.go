@@ -116,11 +116,11 @@ func TestWriter_WriteRoundTripsViaReader(t *testing.T) {
 	assert.Equal(t, want.Summary, got.Summary)
 	assert.Equal(t, want.Tags, got.Tags)
 	assert.Equal(t, want.Edges, got.Edges)
-	require.Len(t, got.Comments, len(want.Comments))
-	for i := range want.Comments {
-		assert.True(t, want.Comments[i].Date.Equal(got.Comments[i].Date),
-			"comments[%d].date", i)
-		assert.Equal(t, want.Comments[i].Text, got.Comments[i].Text, "comments[%d].text", i)
+	require.Len(t, got.Notes, len(want.Notes))
+	for i := range want.Notes {
+		assert.True(t, want.Notes[i].Date.Equal(got.Notes[i].Date),
+			"notes[%d].date", i)
+		assert.Equal(t, want.Notes[i].Text, got.Notes[i].Text, "notes[%d].text", i)
 	}
 }
 

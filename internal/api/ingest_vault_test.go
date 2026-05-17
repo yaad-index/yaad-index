@@ -251,7 +251,7 @@ func TestIngest_NoVaultConfigured_StillWorksDBOnly(t *testing.T) {
 
 // TestIngest_ReingestPreservesAgentFilledState locks ADR-0008's
 // "agent fills survive re-ingest" property: a fill of `summary` /
-// `tags` / `comments` written into the vault frontmatter (simulating
+// `tags` / `notes` written into the vault frontmatter (simulating
 // what a prior PR will do) survives a subsequent re-ingest of the same
 // URL. The re-ingest reads the existing file, accumulates new
 // provenance, and writes back — agent-filled fields are preserved
@@ -299,7 +299,7 @@ func TestIngest_ReingestPreservesAgentFilledState(t *testing.T) {
 // TestIngest_ForceRefetchPreservesUserContent pins the operator's
 // requirement: re-ingest with force_refetch=true MUST refresh
 // plugin-provided fields (data, provenance, notations, etc.) but
-// MUST NOT clobber user-added content (comments Per the prior design, edges
+// MUST NOT clobber user-added content (notes Per the prior design, edges
 // added by the agent). The contract was inherited from +
 // — this test locks the regression boundary.
 func TestIngest_ForceRefetchPreservesUserContent(t *testing.T) {
@@ -314,17 +314,17 @@ func TestIngest_ForceRefetchPreservesUserContent(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	// Simulate an agent comment landing on the entity (post-).
+	// Simulate an agent note landing on the entity (post-).
 	w, err := vault.NewWriter(root)
 	require.NoError(t, err)
 	v := readVaultFile(t, root, "boardgame", "brass-birmingham")
-	// Comments serialize to body-table date precision Per the prior design,'s
+	// Notes serialize to body-table date precision Per the prior design,'s
 	// rendering shape; the writer normalizes to date-only on round-
 	// trip. Use midnight UTC so the assertion below hits cleanly.
-	commentDate := time.Date(2026, 5, 6, 0, 0, 0, 0, time.UTC)
-	v.Comments = []vault.Comment{
+	noteDate := time.Date(2026, 5, 6, 0, 0, 0, 0, time.UTC)
+	v.Notes = []vault.Note{
 		{
-			Date: commentDate,
+			Date: noteDate,
 			Text: "Played this last weekend, the canal phase is brilliant.",
 			Author: "the implementer",
 			Operator: "alice",
@@ -334,7 +334,7 @@ func TestIngest_ForceRefetchPreservesUserContent(t *testing.T) {
 
 	// force_refetch=true bypasses the cache → plugin runs → vault is
 	// re-written with fresh plugin-provided data. The merger
-	// (buildVaultEntity) MUST preserve the comments from the existing
+	// (buildVaultEntity) MUST preserve the notes from the existing
 	// vault file.
 	rec = postIngest(t, h, map[string]any{
 		"url": "https://boardgamegeek.com/boardgame/224517/brass-birmingham",
@@ -344,12 +344,12 @@ func TestIngest_ForceRefetchPreservesUserContent(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "force_refetch body=%s", rec.Body.String())
 
 	got := readVaultFile(t, root, "boardgame", "brass-birmingham")
-	require.Len(t, got.Comments, 1, "user-added comment must survive force_refetch")
-	assert.Equal(t, "Played this last weekend, the canal phase is brilliant.", got.Comments[0].Text)
-	assert.Equal(t, "the implementer", got.Comments[0].Author)
-	assert.Equal(t, "alice", got.Comments[0].Operator)
-	assert.True(t, commentDate.Equal(got.Comments[0].Date),
-		"comment date round-trips: want %s, got %s", commentDate, got.Comments[0].Date)
+	require.Len(t, got.Notes, 1, "user-added note must survive force_refetch")
+	assert.Equal(t, "Played this last weekend, the canal phase is brilliant.", got.Notes[0].Text)
+	assert.Equal(t, "the implementer", got.Notes[0].Author)
+	assert.Equal(t, "alice", got.Notes[0].Operator)
+	assert.True(t, noteDate.Equal(got.Notes[0].Date),
+		"note date round-trips: want %s, got %s", noteDate, got.Notes[0].Date)
 
 	// Plugin-provided fields refresh — the new ingest stamped a fresh
 	// provenance entry on top of the prior one.

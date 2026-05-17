@@ -309,7 +309,7 @@ func TestUserContent_Section_404OnDuplicateSlug(t *testing.T) {
 }
 
 // vault_required when the handler runs without WithVaultIO. Mirrors
-// the comments handler's degradation.
+// the notes handler's degradation.
 func TestUserContent_503OnNoVault(t *testing.T) {
 	t.Parallel()
 

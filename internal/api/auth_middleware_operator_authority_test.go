@@ -1,6 +1,6 @@
 // Tests for the ClaimHasOperatorAuthority helper added in
 // yaad-index — the operator-authority gate replaces the
-// brittle Subject==Operator check at operator-fill + add_comment
+// brittle Subject==Operator check at operator-fill + add_note
 // call sites. The gate accepts agent-on-behalf-of-operator
 // pair-claims (Subject is an agent, Operator names the human),
 // which the prior check rejected even though the operator

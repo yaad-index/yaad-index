@@ -165,7 +165,7 @@ type dedupShape struct {
 // `- task_append: {...}` for each list entry.
 type actionShape struct {
 	TaskAppend     *taskAppendShape     `yaml:"task_append"`
-	AddComment     *addCommentShape     `yaml:"add_comment"`
+	AddNote     *addNoteShape     `yaml:"add_note"`
 	PluginDispatch *pluginDispatchShape `yaml:"plugin_dispatch"`
 	AddGap         *addGapShape         `yaml:"add_gap"`
 }
@@ -176,7 +176,7 @@ type taskAppendShape struct {
 	IfAlreadyPresent string `yaml:"if_already_present"`
 }
 
-type addCommentShape struct {
+type addNoteShape struct {
 	Target  string `yaml:"target"`
 	Content string `yaml:"content"`
 }
@@ -320,7 +320,7 @@ func actionsFromShape(entries []actionShape) []Action {
 	for i, e := range entries {
 		out[i] = Action{
 			TaskAppend:     taskAppendFromShape(e.TaskAppend),
-			AddComment:     addCommentFromShape(e.AddComment),
+			AddNote:     addNoteFromShape(e.AddNote),
 			PluginDispatch: pluginDispatchFromShape(e.PluginDispatch),
 			AddGap:         addGapFromShape(e.AddGap),
 		}
@@ -339,11 +339,11 @@ func taskAppendFromShape(s *taskAppendShape) *TaskAppendAction {
 	}
 }
 
-func addCommentFromShape(s *addCommentShape) *AddCommentAction {
+func addNoteFromShape(s *addNoteShape) *AddNoteAction {
 	if s == nil {
 		return nil
 	}
-	return &AddCommentAction{
+	return &AddNoteAction{
 		Target:  strings.TrimSpace(s.Target),
 		Content: s.Content,
 	}

@@ -111,7 +111,7 @@ var protectedRoutes = []struct {
 	{http.MethodPost, "/v1/ingest", `{"url":"http://x"}`},
 	{http.MethodGet, "/v1/needs-fill", ""},
 	{http.MethodPost, "/v1/entities/some-id/fill", `{}`},
-	{http.MethodPost, "/v1/entities/some-id/comments", `{"author":"bob","body":"hi"}`},
+	{http.MethodPost, "/v1/entities/some-id/notes", `{"author":"bob","body":"hi"}`},
 }
 
 func TestAuthWiring_PublicRoutes_AccessibleWithoutToken(t *testing.T) {

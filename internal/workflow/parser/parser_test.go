@@ -98,7 +98,7 @@ func TestParse_HappyPath_ADRExample(t *testing.T) {
 	// Action — task_append populated, others nil
 	require.Len(t, wf.Actions, 1)
 	require.NotNil(t, wf.Actions[0].TaskAppend)
-	assert.Nil(t, wf.Actions[0].AddComment)
+	assert.Nil(t, wf.Actions[0].AddNote)
 	assert.Nil(t, wf.Actions[0].PluginDispatch)
 	assert.Nil(t, wf.Actions[0].AddGap)
 	assert.Equal(t, "candidates", wf.Actions[0].TaskAppend.Section)
@@ -116,7 +116,7 @@ func TestParse_HappyPath_ADRExample(t *testing.T) {
 // other defaults; PR-77 fold-in).
 func TestParse_DefaultsApplied(t *testing.T) {
 	t.Parallel()
-	md := "---\nname: minimal\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: manual\nactions:\n  - add_comment:\n      content: 'hi'\n```\n"
+	md := "---\nname: minimal\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: manual\nactions:\n  - add_note:\n      content: 'hi'\n```\n"
 	wf, err := Parse([]byte(md))
 	require.NoError(t, err)
 	assert.Equal(t, "minimal", wf.Name)
@@ -158,7 +158,7 @@ func TestParse_TaskAppendIfAlreadyPresentExplicit(t *testing.T) {
 // the entity.id default.
 func TestParse_SubjectExplicit(t *testing.T) {
 	t.Parallel()
-	md := "---\nname: subj\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: manual\nsubject: '{{ entity.slug }}'\nactions:\n  - add_comment: {content: hi}\n```\n"
+	md := "---\nname: subj\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: manual\nsubject: '{{ entity.slug }}'\nactions:\n  - add_note: {content: hi}\n```\n"
 	wf, err := Parse([]byte(md))
 	require.NoError(t, err)
 	assert.Equal(t, "{{ entity.slug }}", wf.Subject, "explicit subject preserved over default")
@@ -201,7 +201,7 @@ func TestParse_DuplicateYAMLBody(t *testing.T) {
 // KnownFields(true).)
 func TestParse_UnknownFrontmatterField(t *testing.T) {
 	t.Parallel()
-	md := "---\nname: x\nverison: 1\n---\n\n```yaml\nallowed_plugins: [a]\ntrigger: {type: manual}\nactions:\n  - add_comment: {content: hi}\n```\n"
+	md := "---\nname: x\nverison: 1\n---\n\n```yaml\nallowed_plugins: [a]\ntrigger: {type: manual}\nactions:\n  - add_note: {content: hi}\n```\n"
 	_, err := Parse([]byte(md))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "verison",
@@ -212,7 +212,7 @@ func TestParse_UnknownFrontmatterField(t *testing.T) {
 // YAML body half.
 func TestParse_UnknownBodyField(t *testing.T) {
 	t.Parallel()
-	md := "---\nname: x\n---\n\n```yaml\nallowed_plugins: [a]\ntrigger: {type: manual}\nactions:\n  - add_comment: {content: hi}\nbogus_field: yes\n```\n"
+	md := "---\nname: x\n---\n\n```yaml\nallowed_plugins: [a]\ntrigger: {type: manual}\nactions:\n  - add_note: {content: hi}\nbogus_field: yes\n```\n"
 	_, err := Parse([]byte(md))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bogus_field")
@@ -226,7 +226,7 @@ func TestValidate_NameRequired(t *testing.T) {
 	wf := &Workflow{
 		AllowedPlugins: []string{"yaad-gmail"},
 		Trigger:        Trigger{Type: TriggerTypeManual},
-		Actions:        []Action{{AddComment: &AddCommentAction{Content: "x"}}},
+		Actions:        []Action{{AddNote: &AddNoteAction{Content: "x"}}},
 	}
 	err := Validate(wf)
 	require.Error(t, err)
@@ -241,7 +241,7 @@ func TestValidate_AllowedPluginsRequired(t *testing.T) {
 	wf := &Workflow{
 		Name:    "x",
 		Trigger: Trigger{Type: TriggerTypeManual},
-		Actions: []Action{{AddComment: &AddCommentAction{Content: "x"}}},
+		Actions: []Action{{AddNote: &AddNoteAction{Content: "x"}}},
 	}
 	err := Validate(wf)
 	require.Error(t, err)
@@ -256,7 +256,7 @@ func TestValidate_AllowedPluginsDuplicated(t *testing.T) {
 		Name:           "x",
 		AllowedPlugins: []string{"yaad-gmail", "yaad-gmail"},
 		Trigger:        Trigger{Type: TriggerTypeManual},
-		Actions:        []Action{{AddComment: &AddCommentAction{Content: "x"}}},
+		Actions:        []Action{{AddNote: &AddNoteAction{Content: "x"}}},
 	}
 	err := Validate(wf)
 	require.Error(t, err)
@@ -378,7 +378,7 @@ func TestValidate_ActionMultiplePrimitives(t *testing.T) {
 	wf := minimalWorkflow()
 	wf.Actions = []Action{{
 		TaskAppend: &TaskAppendAction{Section: "x", Content: "y"},
-		AddComment: &AddCommentAction{Content: "z"},
+		AddNote: &AddNoteAction{Content: "z"},
 	}}
 	err := Validate(wf)
 	require.Error(t, err)
@@ -528,7 +528,7 @@ func minimalWorkflow() *Workflow {
 		Status:         StatusActive,
 		AllowedPlugins: []string{"yaad-gmail"},
 		Trigger:        Trigger{Type: TriggerTypeManual},
-		Actions:        []Action{{AddComment: &AddCommentAction{Content: "x"}}},
+		Actions:        []Action{{AddNote: &AddNoteAction{Content: "x"}}},
 	}
 }
 

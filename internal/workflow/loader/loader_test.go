@@ -47,7 +47,7 @@ func minimalWorkflowMarkdown(name string, allowedPlugins ...string) string {
 	for _, p := range allowedPlugins {
 		plugins += "  - " + p + "\n"
 	}
-	return fmt.Sprintf("---\nname: %s\n---\n\n```yaml\nallowed_plugins:\n%strigger:\n  type: manual\nactions:\n  - add_comment:\n      content: 'hi'\n```\n", name, plugins)
+	return fmt.Sprintf("---\nname: %s\n---\n\n```yaml\nallowed_plugins:\n%strigger:\n  type: manual\nactions:\n  - add_note:\n      content: 'hi'\n```\n", name, plugins)
 }
 
 // writeWorkflow writes content to dir/name.md with the given

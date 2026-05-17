@@ -12,11 +12,11 @@ import (
 	"github.com/yaad-index/yaad-index/internal/workflow/parser"
 )
 
-// fakeCommentWriter records every AppendComment call so
+// fakeNoteWriter records every AppendNote call so
 // tests can assert the runner translated the action +
 // decision into the right entity + body. Returns an
 // injected error if writeErr is non-nil.
-type fakeCommentWriter struct {
+type fakeNoteWriter struct {
 	mu       sync.Mutex
 	calls    []commentCall
 	writeErr error
@@ -28,14 +28,14 @@ type commentCall struct {
 	body     string
 }
 
-func (f *fakeCommentWriter) AppendComment(_ context.Context, workflow, entityID, body string) error {
+func (f *fakeNoteWriter) AppendNote(_ context.Context, workflow, entityID, body string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, commentCall{workflow: workflow, entityID: entityID, body: body})
 	return f.writeErr
 }
 
-func (f *fakeCommentWriter) snapshot() []commentCall {
+func (f *fakeNoteWriter) snapshot() []commentCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]commentCall, len(f.calls))
@@ -43,14 +43,14 @@ func (f *fakeCommentWriter) snapshot() []commentCall {
 	return out
 }
 
-// TestAddComment_HappyPath: an add_comment action with a
+// TestAddNote_HappyPath: an add_note action with a
 // target defaults to dec.EntityID, body flows through.
-func TestAddComment_HappyPath(t *testing.T) {
+func TestAddNote_HappyPath(t *testing.T) {
 	t.Parallel()
-	w := &fakeCommentWriter{}
-	r := New(Options{CommentWriter: w})
+	w := &fakeNoteWriter{}
+	r := New(Options{NoteWriter: w})
 	wf := wfWithActions("pr-review",
-		parser.Action{AddComment: &parser.AddCommentAction{Content: "review needed"}},
+		parser.Action{AddNote: &parser.AddNoteAction{Content: "review needed"}},
 	)
 	results := r.Run(context.Background(), wf, Decision{Workflow: "pr-review", EntityID: "pr:123"}, Activation{})
 	require.Len(t, results, 1)
@@ -60,14 +60,14 @@ func TestAddComment_HappyPath(t *testing.T) {
 	assert.Equal(t, "review needed", w.snapshot()[0].body)
 }
 
-// TestAddComment_ExplicitTarget: when action.target is set,
+// TestAddNote_ExplicitTarget: when action.target is set,
 // it wins over decision.entity_id.
-func TestAddComment_ExplicitTarget(t *testing.T) {
+func TestAddNote_ExplicitTarget(t *testing.T) {
 	t.Parallel()
-	w := &fakeCommentWriter{}
-	r := New(Options{CommentWriter: w})
+	w := &fakeNoteWriter{}
+	r := New(Options{NoteWriter: w})
 	wf := wfWithActions("wf",
-		parser.Action{AddComment: &parser.AddCommentAction{
+		parser.Action{AddNote: &parser.AddNoteAction{
 			Target:  "pr:456",
 			Content: "explicit",
 		}},
@@ -78,15 +78,15 @@ func TestAddComment_ExplicitTarget(t *testing.T) {
 	assert.Equal(t, "pr:456", w.snapshot()[0].entityID)
 }
 
-// TestAddComment_NoTarget_AuthorBug: action without target
+// TestAddNote_NoTarget_AuthorBug: action without target
 // + decision without entity_id (e.g. manual target-less)
 // returns ErrActionAuthorBug.
-func TestAddComment_NoTarget_AuthorBug(t *testing.T) {
+func TestAddNote_NoTarget_AuthorBug(t *testing.T) {
 	t.Parallel()
-	w := &fakeCommentWriter{}
-	r := New(Options{CommentWriter: w})
+	w := &fakeNoteWriter{}
+	r := New(Options{NoteWriter: w})
 	wf := wfWithActions("wf",
-		parser.Action{AddComment: &parser.AddCommentAction{Content: "x"}},
+		parser.Action{AddNote: &parser.AddNoteAction{Content: "x"}},
 	)
 	results := r.Run(context.Background(), wf, Decision{Workflow: "wf"}, Activation{})
 	require.Len(t, results, 1)
@@ -95,13 +95,13 @@ func TestAddComment_NoTarget_AuthorBug(t *testing.T) {
 	assert.Empty(t, w.snapshot())
 }
 
-// TestAddComment_EmptyContent_AuthorBug: content required.
-func TestAddComment_EmptyContent_AuthorBug(t *testing.T) {
+// TestAddNote_EmptyContent_AuthorBug: content required.
+func TestAddNote_EmptyContent_AuthorBug(t *testing.T) {
 	t.Parallel()
-	w := &fakeCommentWriter{}
-	r := New(Options{CommentWriter: w})
+	w := &fakeNoteWriter{}
+	r := New(Options{NoteWriter: w})
 	wf := wfWithActions("wf",
-		parser.Action{AddComment: &parser.AddCommentAction{Target: "pr:1"}},
+		parser.Action{AddNote: &parser.AddNoteAction{Target: "pr:1"}},
 	)
 	results := r.Run(context.Background(), wf, Decision{Workflow: "wf"}, Activation{})
 	require.Len(t, results, 1)
@@ -109,14 +109,14 @@ func TestAddComment_EmptyContent_AuthorBug(t *testing.T) {
 	assert.ErrorIs(t, results[0].Err, ErrActionAuthorBug)
 }
 
-// TestAddComment_WriterError: CommentWriter errors are
+// TestAddNote_WriterError: NoteWriter errors are
 // surfaced with the underlying cause wrapped.
-func TestAddComment_WriterError(t *testing.T) {
+func TestAddNote_WriterError(t *testing.T) {
 	t.Parallel()
-	w := &fakeCommentWriter{writeErr: errors.New("vault unavailable")}
-	r := New(Options{CommentWriter: w})
+	w := &fakeNoteWriter{writeErr: errors.New("vault unavailable")}
+	r := New(Options{NoteWriter: w})
 	wf := wfWithActions("wf",
-		parser.Action{AddComment: &parser.AddCommentAction{Content: "x"}},
+		parser.Action{AddNote: &parser.AddNoteAction{Content: "x"}},
 	)
 	results := r.Run(context.Background(), wf, Decision{Workflow: "wf", EntityID: "e1"}, Activation{})
 	require.Len(t, results, 1)
@@ -124,30 +124,30 @@ func TestAddComment_WriterError(t *testing.T) {
 	assert.Contains(t, results[0].Err.Error(), "vault unavailable")
 }
 
-// TestStubCommentWriter_ReturnsNotImplemented: the stub
-// CommentWriter (test/dev default) returns
+// TestStubNoteWriter_ReturnsNotImplemented: the stub
+// NoteWriter (test/dev default) returns
 // ErrActionNotImplemented with the workflow + entity + body
 // length surfaced for operator debugging.
-func TestStubCommentWriter_ReturnsNotImplemented(t *testing.T) {
+func TestStubNoteWriter_ReturnsNotImplemented(t *testing.T) {
 	t.Parallel()
-	err := StubCommentWriter{}.AppendComment(context.Background(), "wf", "pr:1", "review")
+	err := StubNoteWriter{}.AppendNote(context.Background(), "wf", "pr:1", "review")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrActionNotImplemented)
 	assert.Contains(t, err.Error(), "wf")
 	assert.Contains(t, err.Error(), "pr:1")
 }
 
-// TestAddComment_WorkflowAttribution: the workflow name from
-// the recorded Decision flows through to the CommentWriter
+// TestAddNote_WorkflowAttribution: the workflow name from
+// the recorded Decision flows through to the NoteWriter
 // as the first arg, so the production vault impl can stamp
-// the Comment.Author as `workflow:<name>` per ADR-0024's
+// the Note.Author as `workflow:<name>` per ADR-0024's
 // Source vocabulary.
-func TestAddComment_WorkflowAttribution(t *testing.T) {
+func TestAddNote_WorkflowAttribution(t *testing.T) {
 	t.Parallel()
-	w := &fakeCommentWriter{}
-	r := New(Options{CommentWriter: w})
+	w := &fakeNoteWriter{}
+	r := New(Options{NoteWriter: w})
 	wf := wfWithActions("bgg-news",
-		parser.Action{AddComment: &parser.AddCommentAction{Content: "found a match"}},
+		parser.Action{AddNote: &parser.AddNoteAction{Content: "found a match"}},
 	)
 	results := r.Run(context.Background(), wf, Decision{Workflow: "bgg-news", EntityID: "pr:1"}, Activation{})
 	require.Len(t, results, 1)

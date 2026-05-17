@@ -77,19 +77,19 @@ export interface DisambiguationOption {
 }
 
 /**
- * CommentEntry mirrors yaad-index's wire shape for one comment on
- * `POST /v1/entities/{id}/comments` (per yaad-index a prior PR /).
+ * NoteEntry mirrors yaad-index's wire shape for one note on
+ * `POST /v1/entities/{id}/notes` (per yaad-index a prior PR /).
  *
  * - `date` — RFC3339 UTC, server-stamped (clients never send it).
- * - `text` — the comment body (server-trims whitespace).
+ * - `text` — the note body (server-trims whitespace).
  * - `author` — the agent identity. Server stamps from JWT `sub` when
  * the request omits the field; an explicit non-matching value is
  * rejected upstream with 403 author_mismatch.
  * - `operator` — the human resource owner from the pair-claim,
- * stamped server-side from JWT `operator`. Empty on legacy comments
+ * stamped server-side from JWT `operator`. Empty on legacy notes
  * (legacy vault entries).
  */
-export interface CommentEntry {
+export interface NoteEntry {
  date: string;
  text: string;
  author?: string;
@@ -97,21 +97,21 @@ export interface CommentEntry {
 }
 
 /**
- * CommentsResponse mirrors `POST /v1/entities/{id}/comments` 201 envelope:
- * the just-appended comment plus the freshly merged entity, so the
+ * NotesResponse mirrors `POST /v1/entities/{id}/notes` 201 envelope:
+ * the just-appended note plus the freshly merged entity, so the
  * caller can refresh local state without a follow-up GET. Per yaad-index
  *.
  */
-export interface CommentsResponse {
+export interface NotesResponse {
  ok: boolean;
- comment: CommentEntry;
+ note: NoteEntry;
  entity: Entity;
 }
 
 /**
  * UpstreamErrorEnvelope is the canonical 4xx/5xx shape emitted by
  * yaad-index per ADR-0002 (`{ok: false, error: "...", message: "..."}`).
- * Surfaced verbatim by `add_comment` and `edit_user_content_section`
+ * Surfaced verbatim by `add_note` and `edit_user_content_section`
  * so agents observe the structured error code (`missing_authorization`,
  * `author_mismatch`, `precondition_failed`, `precondition_required`, …)
  * directly — without parsing it out of an exception message.

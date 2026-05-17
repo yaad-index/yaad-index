@@ -155,7 +155,7 @@ func TestStubGapWriter_ReturnsNotImplemented(t *testing.T) {
 
 // TestAddGap_WorkflowAttribution: the workflow name from the
 // recorded Decision flows through to the GapWriter as the
-// first arg, mirroring the add_comment attribution pattern.
+// first arg, mirroring the add_note attribution pattern.
 func TestAddGap_WorkflowAttribution(t *testing.T) {
 	t.Parallel()
 	w := &fakeGapWriter{}

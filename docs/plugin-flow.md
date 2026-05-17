@@ -262,7 +262,7 @@ For nil / absent frontmatter `cache_ttl_seconds`: cache hits forever (preserves 
 `GET /v1/entities/{id}` returns the full entity body in one hop (per the operator's "GetEntity should be a single hop" rule, 2026-05-03). The `entity` wire shape carries:
 
 - DB-derived: `id`, `kind`, `data`, `provenance`, `edges`.
-- Vault-derived (via `mergeVaultEntity` overlay when `WithVaultIO` is wired): `clean_content`, `summary`, `tags`, `gaps`, `aliases`, `plugin`, `notations`, `comments`. All `omitempty` — DB-only deployments don't surface dummy-empty fields.
+- Vault-derived (via `mergeVaultEntity` overlay when `WithVaultIO` is wired): `clean_content`, `summary`, `tags`, `gaps`, `aliases`, `plugin`, `notations`, `notes`. All `omitempty` — DB-only deployments don't surface dummy-empty fields.
 
 `handleEntity` vault-reads on every GET when wired and applies the overlay. A vault read failure downgrades to the DB-only shape (entity still resolves) with a WARN log.
 
@@ -287,7 +287,7 @@ The agent's mental model: ingest produces the body fields once; every subsequent
  - Atomically rewrites the vault file (temp-file + rename via `vault.Writer`)
  - Mirrors the change to the DB via `store.UpsertEntity` + `store.AppendProvenance`
 
- Fill does NOT write a comments row. Comments are an independent surface (`POST /v1/entities/{id}/comments`); a fill call doesn't auto-generate one. If an agent wants a fill audit-trail beyond provenance, it posts a comment explicitly.
+ Fill does NOT write a notes row. Notes are an independent surface (`POST /v1/entities/{id}/notes`); a fill call doesn't auto-generate one. If an agent wants a fill audit-trail beyond provenance, it posts a note explicitly.
 
 5. **Wire response: `fillResponse`** with `entity` (refreshed from vault), `gaps: [...]` (remaining unfilled gap field names; empty when this call closed every open gap). The agent can chain another partial fill by re-invoking with the remaining gap names.
 
@@ -297,7 +297,7 @@ The agent's mental model: ingest produces the body fields once; every subsequent
 
 **Stale DB → 404.** If the DB row is missing (e.g., reindex pending after vault changes), fill returns `404 not_found`. Operator runs `yaad-index reindex` to repair drift (see `docs/index-flow.md`).
 
-**ADRs that govern this surface:** [ADR-0002](../adr/0002-api-surface.md) (universal-state amendment includes `needs_fill`), [ADR-0008](../adr/0008-vault-as-source-of-truth.md) (vault-canonical gap state, callback-id-is-entity-id, per-call atomic, comments first-class).
+**ADRs that govern this surface:** [ADR-0002](../adr/0002-api-surface.md) (universal-state amendment includes `needs_fill`), [ADR-0008](../adr/0008-vault-as-source-of-truth.md) (vault-canonical gap state, callback-id-is-entity-id, per-call atomic, notes first-class).
 **PRs that evolved it:** (vault-first rewrite, fill_token removal) (fill-vault-first) (fill response gaps field).
 
 ## 4. Plugin contract
@@ -411,7 +411,7 @@ result.Notations = []string{
 The entity's `data:` block has reserved keys per AGENTS.md (a prior PR). A plugin MUST NOT emit these as plugin-extracted fields — they're owned by yaad-index:
 
 - `summary` — vault-side narrative summary (filled by agent, not plugin)
-- `comments_text` — derived projection of comment threads
+- `comments_text` — derived projection of note threads
 - (See `AGENTS.md` for the canonical reserved-key list)
 
 Collisions are silently dropped at ingest/fill time, even when both endpoints exist as canonical entities.
@@ -485,7 +485,7 @@ These are **user-initiated actions** by design. Per the load-bearing invariant i
 ## What this doc deliberately does NOT cover
 
 - **Reindex** (full or incremental walks of the vault → DB derivation). That's index-internal flow; see `docs/index-flow.md`. Note: reindex re-derives `entity_notations` from vault frontmatter as a downstream consequence (per §2a); see also ADR-0009 for the provenance pattern this mirrors.
-- **Edge / comment / search endpoints** that don't dispatch through plugins (`POST /v1/edges`, `POST /v1/entities/{id}/comments`, `GET /v1/search`). Those are plugin-independent surfaces.
+- **Edge / note / search endpoints** that don't dispatch through plugins (`POST /v1/edges`, `POST /v1/entities/{id}/notes`, `GET /v1/search`). Those are plugin-independent surfaces.
 - **Operator config** (`yaad-index.yaml` schema, `canonical_kinds:`, `canonical_edge_types:`, plugin allowlist mechanics). See `AGENTS.md` and ADR-0006.
 
 ## Maintenance discipline

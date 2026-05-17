@@ -182,7 +182,7 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 		// tokens representing agent-on-behalf-of-operator authority
 		// reject with 403. URL-shape inputs continue to accept any
 		// authenticated claim — that path's existing gate is
-		// unchanged (operator-fill / comments still gate on
+		// unchanged (operator-fill / notes still gate on
 		// ClaimHasOperatorAuthority for their own write paths).
 		//
 		// Anonymous dev-mode claims pass this gate; ClaimIsOperatorOnly
@@ -342,7 +342,7 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 // vaultEntity (when non-nil) carries the single-hop body fields
 // the cache-hit response surfaces via mergeVaultEntity (per issue
 // a prior PR addendum) — clean_content, summary, tags, gaps,
-// aliases, plugin, notations, comments. nil when WithVaultIO isn't
+// aliases, plugin, notations, notes. nil when WithVaultIO isn't
 // wired or the vault read errored; the response then falls back to
 // the DB-only shape.
 type notationCacheHit struct {
@@ -420,7 +420,7 @@ func tryNotationCacheHit(
 	// (ADR-0008). Read the vault first — both the TTL gate
 	// and the response enrichment (the source issue a prior PR addendum:
 	// clean_content, summary, tags, aliases, plugin, notations,
-	// comments) need it. DB-only mode (no vault wiring) skips the
+	// notes) need it. DB-only mode (no vault wiring) skips the
 	// TTL gate entirely; cache hits forever, matching the legacy
 	// fallback contract.
 	var (
@@ -501,7 +501,7 @@ func resolveInstruction(kind, global string, reg map[string]config.CanonicalKind
 //
 // The wire entity carries the same single-hop body fields
 // (clean_content / summary / tags / gaps / aliases / plugin /
-// notations / comments) that GetEntity surfaces, via the
+// notations / notes) that GetEntity surfaces, via the
 // mergeVaultEntity overlay (per yaad-index the source issue a prior PR
 // addendum). Closes the gap a prior PR left where cache hits returned
 // only the DB-mirrored slice.

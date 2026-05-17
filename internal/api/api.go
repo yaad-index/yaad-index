@@ -132,7 +132,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("GET /v1/needs-fill", protect(http.HandlerFunc(handleNeedsFill(logger, st, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg))))
 	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
 	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
-	mux.Handle("POST /v1/entities/{id}/comments", protect(http.HandlerFunc(handleComments(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg))))
+	mux.Handle("POST /v1/entities/{id}/notes", protect(http.HandlerFunc(handleNotes(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg))))
 
 	// User-content (UGC) read + write surface per yaad-index
 	// (PR-B added the GETs; PR-C added the writes).
@@ -216,7 +216,7 @@ type handlerConfig struct {
 	// (yaad-index #23 + ADR-0024). Acquired before any vault
 	// mutation surface (ingest, fill, archive/restore, delete, UGC
 	// section, UGC frontmatter); skipped for additive surfaces
-	// (comments, edges). NewHandlerWithRegistry constructs a fresh
+	// (notes, edges). NewHandlerWithRegistry constructs a fresh
 	// Manager when this is nil so tests + dev deployments don't
 	// have to wire one explicitly.
 	writeLocks *writelocks.Manager

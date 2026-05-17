@@ -366,7 +366,7 @@ type VaultEntry struct {
 	// AutoCommitDebounceSeconds collapses bursty writes into batched
 	// commits. 0 (default) → per-operation commit. >0 → collect writes
 	// for N seconds, commit a single rollup with a summarized message
-	// (`bulk: ingest 12 entities, fill 3, comment 2`). Trade-off:
+	// (`bulk: ingest 12 entities, fill 3, note 2`). Trade-off:
 	// per-operation gives a 1:1 audit; debounce trades 1:1 for fewer
 	// process spawns under bulk-import / reindex workloads.
 	AutoCommitDebounceSeconds int `yaml:"auto_commit_debounce_seconds,omitempty"`

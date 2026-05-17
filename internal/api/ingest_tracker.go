@@ -985,10 +985,10 @@ func buildVaultEntity(e *store.Entity, plugin string, gaps []string, cleanConten
 		// frontmatter is the canonical source for these fields; the
 		// new ingest attempt only replaces them when it has its own
 		// values to write (which today it never does — plugin output
-		// doesn't include summary/tags/comments).
+		// doesn't include summary/tags/notes).
 		merged.Summary = existing.Summary
 		merged.Tags = existing.Tags
-		merged.Comments = existing.Comments
+		merged.Notes = existing.Notes
 		// Edges: prior vault edges survive when this ingest emits
 		// none. When the plugin DID emit canonical edges, the block
 		// below replaces them wholesale (plugin is canonical for

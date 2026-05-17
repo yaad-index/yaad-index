@@ -406,7 +406,7 @@ func (s *ServeCmd) Run() error {
 		}
 		wfRunner := actions.New(actions.Options{
 			TaskWriter:       actions.NewFileTaskWriter(cfg.Vault.Path),
-			CommentWriter:    actions.NewVaultCommentWriter(wfWriterBackend),
+			NoteWriter:    actions.NewVaultNoteWriter(wfWriterBackend),
 			GapWriter:        actions.NewVaultGapWriter(wfWriterBackend),
 			PluginDispatcher: wfPluginDispatcher,
 			// Phase 5.B err-task pattern — systemic failures

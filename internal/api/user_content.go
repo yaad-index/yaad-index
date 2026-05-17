@@ -6,7 +6,7 @@
 //
 // The body of a user-content entity rides on Entity.CleanContent —
 // same field plugin-fetched bodies use, since the file-on-disk shape
-// (frontmatter + clean_content + standard `## Edges` / `## Comments`
+// (frontmatter + clean_content + standard `## Edges` / `## Notes`
 // sections) is uniform across entity sources. The UGC story diverges
 // at write time (PR-C: the agent supplies the body directly rather
 // than a plugin fetching it); on the read side both paths converge.

@@ -228,22 +228,22 @@ func TestRunner_TaskAppend_EmptySection(t *testing.T) {
 	assert.Empty(t, w.snapshot(), "no writer call on author-bug rejection")
 }
 
-// TestRunner_NoCommentWriter_ConfigError: a dispatcher
-// constructed without a CommentWriter surfaces a clear
-// config-error message on add_comment actions — not
+// TestRunner_NoNoteWriter_ConfigError: a dispatcher
+// constructed without a NoteWriter surfaces a clear
+// config-error message on add_note actions — not
 // ErrActionNotImplemented (those come from the
-// production StubCommentWriter that ships in Phase 4.B).
-func TestRunner_NoCommentWriter_ConfigError(t *testing.T) {
+// production StubNoteWriter that ships in Phase 4.B).
+func TestRunner_NoNoteWriter_ConfigError(t *testing.T) {
 	t.Parallel()
 	r := New(Options{})
 	wf := wfWithActions("wf",
-		parser.Action{AddComment: &parser.AddCommentAction{Content: "hi"}},
+		parser.Action{AddNote: &parser.AddNoteAction{Content: "hi"}},
 	)
 	results := r.Run(context.Background(), wf, Decision{Workflow: "wf", EntityID: "e1"}, Activation{})
 	require.Len(t, results, 1)
-	assert.Equal(t, "add_comment", results[0].Type)
+	assert.Equal(t, "add_note", results[0].Type)
 	require.Error(t, results[0].Err)
-	assert.Contains(t, results[0].Err.Error(), "no CommentWriter wired")
+	assert.Contains(t, results[0].Err.Error(), "no NoteWriter wired")
 }
 
 // TestRunner_NoGapWriter_ConfigError: same shape for
@@ -304,14 +304,14 @@ func TestRunner_EmptyActions_NilResult(t *testing.T) {
 // TestRunner_RenderedTemplates_UsedWhenPresent: when the
 // engine ships a populated RenderedTemplates entry for an
 // action, the runner uses the rendered value rather than the
-// raw action.<Field>. Exercises add_comment's target +
+// raw action.<Field>. Exercises add_note's target +
 // content fields together.
 func TestRunner_RenderedTemplates_UsedWhenPresent(t *testing.T) {
 	t.Parallel()
-	cw := &fakeCommentWriter{}
-	r := New(Options{CommentWriter: cw})
+	cw := &fakeNoteWriter{}
+	r := New(Options{NoteWriter: cw})
 	wf := wfWithActions("wf",
-		parser.Action{AddComment: &parser.AddCommentAction{
+		parser.Action{AddNote: &parser.AddNoteAction{
 			Target:  "entity.id",
 			Content: "rating={{ entity.rating }}",
 		}},
@@ -339,12 +339,12 @@ func TestRunner_RenderedTemplates_UsedWhenPresent(t *testing.T) {
 // (legacy / no-renderer path is expected for tests).
 func TestRunner_RenderedTemplates_FallbackOnNilMap(t *testing.T) {
 	t.Parallel()
-	cw := &fakeCommentWriter{}
+	cw := &fakeNoteWriter{}
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	r := New(Options{CommentWriter: cw, Logger: logger})
+	r := New(Options{NoteWriter: cw, Logger: logger})
 	wf := wfWithActions("wf",
-		parser.Action{AddComment: &parser.AddCommentAction{
+		parser.Action{AddNote: &parser.AddNoteAction{
 			Target:  "pr:55",
 			Content: "raw content",
 		}},
@@ -365,12 +365,12 @@ func TestRunner_RenderedTemplates_FallbackOnNilMap(t *testing.T) {
 // "engine forgot to populate" surfaces at execute time.
 func TestRunner_RenderedTemplates_DriftWarnsOnMissingKey(t *testing.T) {
 	t.Parallel()
-	cw := &fakeCommentWriter{}
+	cw := &fakeNoteWriter{}
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	r := New(Options{CommentWriter: cw, Logger: logger})
+	r := New(Options{NoteWriter: cw, Logger: logger})
 	wf := wfWithActions("wf",
-		parser.Action{AddComment: &parser.AddCommentAction{
+		parser.Action{AddNote: &parser.AddNoteAction{
 			Target:  "fallback:target",
 			Content: "fallback content",
 		}},

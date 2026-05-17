@@ -68,7 +68,7 @@ func decodeEntityResponse(t *testing.T, rec *httptest.ResponseRecorder) entity {
 
 // TestGetEntity_VaultSurfaceMerged pins the source issue a prior PR addendum:
 // GET /v1/entities/{id} returns the single-hop body — clean_content,
-// summary, tags, gaps, aliases, plugin, notations, comments — when
+// summary, tags, gaps, aliases, plugin, notations, notes — when
 // the vault is wired and the entity's vault file carries them.
 func TestGetEntity_VaultSurfaceMerged(t *testing.T) {
 	t.Parallel()
@@ -90,7 +90,7 @@ func TestGetEntity_VaultSurfaceMerged(t *testing.T) {
 			"https://en.wikipedia.org/wiki/Susanna_Clarke",
 			"wikipedia: Susanna Clarke",
 		},
-		Comments: []vault.Comment{
+		Notes: []vault.Note{
 			{Date: commentDate, Text: "Met at a reading", Author: "alice"},
 		},
 	})
@@ -113,9 +113,9 @@ func TestGetEntity_VaultSurfaceMerged(t *testing.T) {
 		"https://en.wikipedia.org/wiki/Susanna_Clarke",
 		"wikipedia: Susanna Clarke",
 	}, got.Notations)
-	require.Len(t, got.Comments, 1)
-	assert.Equal(t, "Met at a reading", got.Comments[0].Text)
-	assert.Equal(t, "alice", got.Comments[0].Author)
+	require.Len(t, got.Notes, 1)
+	assert.Equal(t, "Met at a reading", got.Notes[0].Text)
+	assert.Equal(t, "alice", got.Notes[0].Author)
 }
 
 // TestGetEntity_OmitsEmptyVaultFields pins the no-noise contract:
@@ -147,7 +147,7 @@ func TestGetEntity_OmitsEmptyVaultFields(t *testing.T) {
 		`"gaps"`,
 		`"aliases"`,
 		`"notations"`,
-		`"comments"`,
+		`"notes"`,
 	} {
 		assert.NotContains(t, body, key,
 			"empty vault fields must omit %s from the wire", key)
@@ -194,7 +194,7 @@ func TestGetEntity_DBOnlyDeploymentSurfacesNothing(t *testing.T) {
 		`"aliases"`,
 		`"notations"`,
 		`"plugin"`,
-		`"comments"`,
+		`"notes"`,
 	} {
 		assert.NotContains(t, body, key,
 			"DB-only deployment must NOT surface vault-only field %s", key)

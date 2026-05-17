@@ -3,7 +3,7 @@
 // When the vault root is a git working tree, vault.Writer can hand
 // every successful atomic write to a Committer that records it as a
 // git commit summarizing the operation. The vault becomes its own
-// audit log: ingest, fill, and comment writes show up as one commit
+// audit log: ingest, fill, and note writes show up as one commit
 // each (or one batched commit per debounce window).
 //
 // Detection + opt-out semantics live in the operator config layer
@@ -411,7 +411,7 @@ func isLockContended(err error) bool {
 
 // summarizeBatch produces a single commit message that names the
 // per-operation counts in the batch ("bulk: ingest 12, fill 3,
-// comment 2"). Falls back to the single message when the batch is
+// note 2"). Falls back to the single message when the batch is
 // homogeneous of size 1.
 func summarizeBatch(pending []pendingWrite) string {
 	if len(pending) == 1 {

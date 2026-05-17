@@ -43,8 +43,8 @@ func fixtureEntity(t *testing.T) *Entity {
 			{Type: "designed", To: "boardgame:brass-birmingham"},
 			{Type: "is_about", To: "person:martin-wallace", Metadata: map[string]any{"confidence": "high"}},
 		},
-		Comments: []Comment{
-			// Per the prior design, the on-disk comment table renders date-only
+		Notes: []Note{
+			// Per the prior design, the on-disk note table renders date-only
 			// (`YYYY-MM-DD`); time-of-day is dropped on round-trip.
 			// Fixtures use midnight-UTC so the round-trip equality
 			// assertions hold.
@@ -86,12 +86,12 @@ func TestMarshal_RoundTrip(t *testing.T) {
 		assertProvenanceEqual(t, want.Provenance[i], got.Provenance[i])
 	}
 
-	require.Len(t, got.Comments, len(want.Comments))
-	for i := range want.Comments {
-		assert.True(t, want.Comments[i].Date.Equal(got.Comments[i].Date),
-			"comments[%d].date: want %s, got %s", i, want.Comments[i].Date, got.Comments[i].Date)
-		assert.Equal(t, want.Comments[i].Text, got.Comments[i].Text, "comments[%d].text", i)
-		assert.Equal(t, want.Comments[i].Author, got.Comments[i].Author, "comments[%d].author", i)
+	require.Len(t, got.Notes, len(want.Notes))
+	for i := range want.Notes {
+		assert.True(t, want.Notes[i].Date.Equal(got.Notes[i].Date),
+			"notes[%d].date: want %s, got %s", i, want.Notes[i].Date, got.Notes[i].Date)
+		assert.Equal(t, want.Notes[i].Text, got.Notes[i].Text, "notes[%d].text", i)
+		assert.Equal(t, want.Notes[i].Author, got.Notes[i].Author, "notes[%d].author", i)
 	}
 
 	// CleanContent normalizes to a trailing newline on round-trip.
@@ -422,7 +422,7 @@ func TestUnmarshal_BodyOnlyUntypedWikilinkAssignsDefaultType(t *testing.T) {
 }
 
 // TestUnmarshal_CommentsFromBodyTable pins the post- contract:
-// comments live in the body `## Comments` table only — frontmatter
+// notes live in the body `## Notes` table only — frontmatter
 // no longer carries them. The table parser reads alternating
 // heading/body rows.
 func TestUnmarshal_CommentsFromBodyTable(t *testing.T) {
@@ -433,35 +433,37 @@ func TestUnmarshal_CommentsFromBodyTable(t *testing.T) {
 		"id: wikipedia:foo",
 		"kind: wikipedia-article",
 		"plugin: wikipedia",
-		"comment_count: 2",
+		"note_count: 2",
 		"---",
 		"",
-		"## Comments",
+		NotesStartMarker,
+		"## Notes",
 		"",
-		"| Comments |",
+		"| Notes |",
 		"|----------|",
 		"| 2026-04-15 — alice |",
-		"| First comment from the body table. |",
+		"| First note from the body table. |",
 		"| 2026-04-16 — operator |",
-		"| Second comment, also a body row. |",
+		"| Second note, also a body row. |",
+		NotesEndMarker,
 		"",
 	}, "\n")
 
 	got, err := Unmarshal([]byte(raw))
 	require.NoError(t, err)
 
-	require.Len(t, got.Comments, 2)
-	assert.Equal(t, "alice", got.Comments[0].Author)
-	assert.Equal(t, "First comment from the body table.", got.Comments[0].Text)
-	assert.Equal(t, "2026-04-15", got.Comments[0].Date.UTC().Format("2006-01-02"))
-	assert.Equal(t, "operator", got.Comments[1].Author)
-	assert.Equal(t, "Second comment, also a body row.", got.Comments[1].Text)
-	assert.Equal(t, "2026-04-16", got.Comments[1].Date.UTC().Format("2006-01-02"))
+	require.Len(t, got.Notes, 2)
+	assert.Equal(t, "alice", got.Notes[0].Author)
+	assert.Equal(t, "First note from the body table.", got.Notes[0].Text)
+	assert.Equal(t, "2026-04-15", got.Notes[0].Date.UTC().Format("2006-01-02"))
+	assert.Equal(t, "operator", got.Notes[1].Author)
+	assert.Equal(t, "Second note, also a body row.", got.Notes[1].Text)
+	assert.Equal(t, "2026-04-16", got.Notes[1].Date.UTC().Format("2006-01-02"))
 }
 
 // TestUnmarshal_CommentsWithOperator pins the yaad-index a prior PR
 // extension: heading rows of the form `<date> — <author> @ <operator>`
-// parse the operator into Comment.Operator. Backward compat: the
+// parse the operator into Note.Operator. Backward compat: the
 // legacy form (`<date> — <author>`) leaves Operator empty, so legacy
 // vault files round-trip unchanged.
 func TestUnmarshal_CommentsWithOperator(t *testing.T) {
@@ -472,43 +474,45 @@ func TestUnmarshal_CommentsWithOperator(t *testing.T) {
 		"id: wikipedia:foo",
 		"kind: wikipedia-article",
 		"plugin: wikipedia",
-		"comment_count: 3",
+		"note_count: 3",
 		"---",
 		"",
-		"## Comments",
+		NotesStartMarker,
+		"## Notes",
 		"",
-		"| Comments |",
+		"| Notes |",
 		"|----------|",
 		"| 2026-04-15 — bob @ alice |",
-		"| Comment with full pair-claim attribution. |",
+		"| Note with full pair-claim attribution. |",
 		"| 2026-04-16 — alice2 |",
-		"| Legacy comment — author only, no operator. |",
+		"| Legacy note — author only, no operator. |",
 		"| 2026-04-17 |",
-		"| Anonymous comment — date only. |",
+		"| Anonymous note — date only. |",
+		NotesEndMarker,
 		"",
 	}, "\n")
 
 	got, err := Unmarshal([]byte(raw))
 	require.NoError(t, err)
-	require.Len(t, got.Comments, 3)
+	require.Len(t, got.Notes, 3)
 
 	// Pair-claim shape: agent + operator both populated.
-	assert.Equal(t, "bob", got.Comments[0].Author)
-	assert.Equal(t, "alice", got.Comments[0].Operator)
-	assert.Equal(t, "Comment with full pair-claim attribution.", got.Comments[0].Text)
+	assert.Equal(t, "bob", got.Notes[0].Author)
+	assert.Equal(t, "alice", got.Notes[0].Operator)
+	assert.Equal(t, "Note with full pair-claim attribution.", got.Notes[0].Text)
 
 	// Legacy: author-only. Operator stays empty (no invention).
-	assert.Equal(t, "alice2", got.Comments[1].Author)
-	assert.Empty(t, got.Comments[1].Operator,
-		"legacy comment must round-trip with empty Operator")
+	assert.Equal(t, "alice2", got.Notes[1].Author)
+	assert.Empty(t, got.Notes[1].Operator,
+		"legacy note must round-trip with empty Operator")
 
 	// Date-only: both author + operator stay empty.
-	assert.Empty(t, got.Comments[2].Author)
-	assert.Empty(t, got.Comments[2].Operator)
+	assert.Empty(t, got.Notes[2].Author)
+	assert.Empty(t, got.Notes[2].Operator)
 }
 
 // TestMarshal_CommentRenderingShape pins the wire shape of the
-// rendered comments table for a prior PR:
+// rendered notes table for a prior PR:
 //
 // - Operator non-empty → heading reads `<date> — <author> @ <operator>`.
 // - Operator empty (legacy) → heading reads `<date> — <author>` (unchanged).
@@ -518,10 +522,10 @@ func TestMarshal_CommentRenderingShape(t *testing.T) {
 	t.Parallel()
 
 	e := &Entity{
-		ID: "wikipedia:render-comments",
+		ID: "wikipedia:render-notes",
 		Kind: "wikipedia-article",
 		Plugin: "wikipedia",
-		Comments: []Comment{
+		Notes: []Note{
 			{
 				Date: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC),
 				Text: "first — pair claim",
@@ -561,7 +565,7 @@ func TestRoundTrip_CommentsWithOperator(t *testing.T) {
 		ID: "wikipedia:roundtrip",
 		Kind: "wikipedia-article",
 		Plugin: "wikipedia",
-		Comments: []Comment{
+		Notes: []Note{
 			{
 				Date: time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC),
 				Text: "with operator",
@@ -580,17 +584,17 @@ func TestRoundTrip_CommentsWithOperator(t *testing.T) {
 	out, err := Unmarshal(b)
 	require.NoError(t, err)
 
-	require.Len(t, out.Comments, 2)
-	assert.Equal(t, "bob", out.Comments[0].Author)
-	assert.Equal(t, "alice", out.Comments[0].Operator)
-	assert.Equal(t, "with operator", out.Comments[0].Text)
-	assert.Equal(t, "alice2", out.Comments[1].Author)
-	assert.Empty(t, out.Comments[1].Operator)
-	assert.Equal(t, "without operator", out.Comments[1].Text)
+	require.Len(t, out.Notes, 2)
+	assert.Equal(t, "bob", out.Notes[0].Author)
+	assert.Equal(t, "alice", out.Notes[0].Operator)
+	assert.Equal(t, "with operator", out.Notes[0].Text)
+	assert.Equal(t, "alice2", out.Notes[1].Author)
+	assert.Empty(t, out.Notes[1].Operator)
+	assert.Equal(t, "without operator", out.Notes[1].Text)
 }
 
 // TestMarshal_BodySectionsRegeneratedFromFrontmatter is the inverse
-// contract: hand-edits to `## Edges` / `## Comments` that haven't been
+// contract: hand-edits to `## Edges` / `## Notes` that haven't been
 // merged back into the entity's frontmatter via a prior Unmarshal are
 // LOST on the next Marshal. Locks the documented "frontmatter is
 // canonical on write" rule from the package comment, so a future
@@ -602,7 +606,7 @@ func TestMarshal_BodySectionsRegeneratedFromFrontmatter(t *testing.T) {
 		ID: "wikipedia:x",
 		Kind: "wikipedia-article",
 		Plugin: "wikipedia",
-		// No Edges, no Comments in frontmatter — even though a real
+		// No Edges, no Notes in frontmatter — even though a real
 		// vault file might have body-section content, Marshal never
 		// sees it.
 	}
@@ -612,8 +616,8 @@ func TestMarshal_BodySectionsRegeneratedFromFrontmatter(t *testing.T) {
 	out := string(b)
 	assert.NotContains(t, out, "## Edges",
 		"empty Edges should not produce a `## Edges` section")
-	assert.NotContains(t, out, "## Comments",
-		"empty Comments should not produce a `## Comments` section")
+	assert.NotContains(t, out, "## Notes",
+		"empty Notes should not produce a `## Notes` section")
 }
 
 // TestMarshal_HandEditWithoutReindexLoses pins yaad's recommended

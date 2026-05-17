@@ -31,7 +31,7 @@ import (
 //     primitive.
 //   - TaskAppend: Section + Content required; IfAlreadyPresent
 //     in the closed set when set.
-//   - AddComment: Content required.
+//   - AddNote: Content required.
 //   - PluginDispatch: Plugin + Command required; Plugin must
 //     appear in AllowedPlugins; TimeoutSeconds non-negative.
 //   - AddGap: Gap required + must be a member of
@@ -221,7 +221,7 @@ func validateActions(wf *Workflow) error {
 		if a.TaskAppend != nil {
 			set++
 		}
-		if a.AddComment != nil {
+		if a.AddNote != nil {
 			set++
 		}
 		if a.PluginDispatch != nil {
@@ -231,7 +231,7 @@ func validateActions(wf *Workflow) error {
 			set++
 		}
 		if set == 0 {
-			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_comment / plugin_dispatch / add_gap)", i)
+			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_note / plugin_dispatch / add_gap)", i)
 		}
 		if set > 1 {
 			return fmt.Errorf("workflow: actions[%d] sets %d primitives (expected exactly one)", i, set)
@@ -241,9 +241,9 @@ func validateActions(wf *Workflow) error {
 			if err := validateTaskAppend(a.TaskAppend); err != nil {
 				return fmt.Errorf("workflow: actions[%d].task_append: %w", i, err)
 			}
-		case a.AddComment != nil:
-			if err := validateAddComment(a.AddComment); err != nil {
-				return fmt.Errorf("workflow: actions[%d].add_comment: %w", i, err)
+		case a.AddNote != nil:
+			if err := validateAddNote(a.AddNote); err != nil {
+				return fmt.Errorf("workflow: actions[%d].add_note: %w", i, err)
 			}
 		case a.PluginDispatch != nil:
 			if err := validatePluginDispatch(a.PluginDispatch, pluginSet); err != nil {
@@ -272,7 +272,7 @@ func validateTaskAppend(a *TaskAppendAction) error {
 	return fmt.Errorf("if_already_present %q is not one of {skip, replace, append-anyway}", a.IfAlreadyPresent)
 }
 
-func validateAddComment(a *AddCommentAction) error {
+func validateAddNote(a *AddNoteAction) error {
 	if strings.TrimSpace(a.Content) == "" {
 		return fmt.Errorf("content is required")
 	}

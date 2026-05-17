@@ -7,15 +7,15 @@
 // CLI — those land in a prior PR and a prior PR respectively.
 //
 // The frontmatter schema is locked by ADR-0008's "Frontmatter schema (v1)"
-// table; the body shape (clean_content + `## Edges` + `## Comments`) is
+// table; the body shape (clean_content + `## Edges` + `## Notes`) is
 // generated from frontmatter on write.
 //
 // Read/write asymmetry. The frontmatter is the canonical source on write —
 // the writer regenerates the body sections from frontmatter every time, so
-// hand-edits made to a `## Edges` or `## Comments` block in the body
+// hand-edits made to a `## Edges` or `## Notes` block in the body
 // disappear on the next write that doesn't first read-merge them in. The
 // reader compensates by merging body-section parses on top of frontmatter
-// (additional wikilinks, additional dated comment blocks) when it returns
+// (additional wikilinks, additional dated note blocks) when it returns
 // the entity. The intended workflow is therefore: hand-edits land in the
 // body → reindex (or any vault-aware writer that read-modifies-writes)
 // picks them up via the reader's body→frontmatter merge → next write
@@ -29,7 +29,7 @@ import "time"
 
 // Entity is the in-memory shape of a vault file. Mirrors store.Entity
 // today but extends it with the v1 frontmatter fields (Plugin, Summary,
-// Tags, Comments, Gaps) — separate type until a prior PR converges the two
+// Tags, Notes, Gaps) — separate type until a prior PR converges the two
 // shapes at the ingest boundary.
 //
 // Required for serialization: ID, Kind, Plugin. Everything else is allowed
@@ -44,7 +44,7 @@ type Entity struct {
 	Summary string // agent-filled gap; empty until fill
 	Tags []string // plugin-emitted + agent-filled
 	Edges []Edge
-	Comments []Comment
+	Notes []Note
 	Gaps []string // currently-unfilled gap field names
 
 	// Aliases is the navigation overlay surfaced in frontmatter —
@@ -92,7 +92,7 @@ type Entity struct {
 
 	// CleanContent is the verbatim plugin-emitted body — the agent's
 	// raw material for the fill pass. Written verbatim into the file
-	// body before the `## Edges` / `## Comments` mirror sections; not
+	// body before the `## Edges` / `## Notes` mirror sections; not
 	// stored in frontmatter.
 	//
 	// Mirrors the plugin's `RawContent` body (per
@@ -209,17 +209,17 @@ type Edge struct {
 	Metadata map[string]any `yaml:"metadata,omitempty"`
 }
 
-// Comment is one user-authored entry on an entity. Stored in frontmatter
+// Note is one user-authored entry on an entity. Stored in frontmatter
 // as `{date, text, author?, operator?}` and mirrored to the body
-// `## Comments` section as a dated block. Append-only in v1 (edit/delete
+// `## Notes` section as a dated block. Append-only in v1 (edit/delete
 // is a follow-up per ADR-0008's open questions).
 //
 // Per yaad-index a prior PR (auth pair-claim model): Author is the agent
-// that posted the comment (mapped to JWT `sub`); Operator is the human
+// that posted the note (mapped to JWT `sub`); Operator is the human
 // resource owner (JWT `operator`). Both fields are optional on parse —
 // legacy vault files omit Operator, and the parser leaves it empty
-// rather than inventing a value. New comments stamp both.
-type Comment struct {
+// rather than inventing a value. New notes stamp both.
+type Note struct {
 	Date time.Time `yaml:"date"`
 	Text string `yaml:"text"`
 	Author string `yaml:"author,omitempty"`

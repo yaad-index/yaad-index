@@ -213,7 +213,7 @@ type Dedup struct {
 // this.
 type Action struct {
 	TaskAppend     *TaskAppendAction
-	AddComment     *AddCommentAction
+	AddNote     *AddNoteAction
 	PluginDispatch *PluginDispatchAction
 	AddGap         *AddGapAction
 }
@@ -242,17 +242,17 @@ type TaskAppendAction struct {
 	IfAlreadyPresent string
 }
 
-// AddCommentAction is the `add_comment` primitive — attaches a
-// comment to an existing entity via the standard comments
+// AddNoteAction is the `add_note` primitive — attaches a
+// note to an existing entity via the standard notes
 // pathway.
-type AddCommentAction struct {
+type AddNoteAction struct {
 	// Target is the CEL expression that resolves to the
 	// target entity's id. Defaults to `entity.id` (the
 	// triggering entity) when omitted.
 	Target string
 
 	// Content is the CEL template the engine evaluates to
-	// produce the comment body. Required non-empty.
+	// produce the note body. Required non-empty.
 	Content string
 }
 

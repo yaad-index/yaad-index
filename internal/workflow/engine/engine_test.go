@@ -78,7 +78,7 @@ func manualWorkflow(name string) *parser.Workflow {
 		AllowedPlugins: []string{"yaad-gmail"},
 		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
 		Subject:        "entity.id",
-		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions:        []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 }
 
@@ -145,7 +145,7 @@ func TestEngine_EdgeCreated_FiresPredicate(t *testing.T) {
 		},
 		Condition: "entity.rating > 7",
 		Subject:   "entity.id",
-		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions:   []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -183,7 +183,7 @@ func TestEngine_EdgeCreated_PredicateFalse_RecordsDecision(t *testing.T) {
 			Match: parser.TriggerMatch{EdgeType: "is_about"},
 		},
 		Condition: "entity.rating > 7",
-		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions:   []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -216,7 +216,7 @@ func TestEngine_EdgeCreated_EdgeTypeFilter(t *testing.T) {
 			Type:  parser.TriggerTypeEdgeCreated,
 			Match: parser.TriggerMatch{EdgeType: "is_about"},
 		},
-		Actions: []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -251,7 +251,7 @@ func TestEngine_EdgeCreated_TargetKindFilter(t *testing.T) {
 				TargetKind: "boardgame",
 			},
 		},
-		Actions: []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -283,7 +283,7 @@ func TestEngine_EntityCreated_KindFilter(t *testing.T) {
 			Type:  parser.TriggerTypeEntityCreated,
 			Match: parser.TriggerMatch{Kind: "boardgame"},
 		},
-		Actions: []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -321,7 +321,7 @@ func TestEngine_FillCompleted_GapAndSourceFilter(t *testing.T) {
 				Source: "operator",
 			},
 		},
-		Actions: []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -365,7 +365,7 @@ func TestEngine_ContextBindings_FedIntoCondition(t *testing.T) {
 			{Name: "prior", Via: "graph.get(entity.previous_edition_id)"},
 		},
 		Condition: "entity.rating > 7 || (prior != null && prior.rating > 7)",
-		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions:   []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -400,7 +400,7 @@ func TestEngine_MissingRefs_SurfaceOnDecision(t *testing.T) {
 			{Name: "other", Via: "graph.get(entity.ref)"},
 		},
 		Condition: "entity.rating > 7 || (other != null && other.rating > 7)",
-		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions:   []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -429,7 +429,7 @@ func TestEngine_ResolveFailure_OnTriggerEntity(t *testing.T) {
 		Trigger: parser.Trigger{
 			Type: parser.TriggerTypeEntityCreated,
 		},
-		Actions: []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -462,7 +462,7 @@ func TestEngine_ConditionRuntimeError_RecordsErr(t *testing.T) {
 		},
 		// Returns string, not bool — EvalBool surfaces an error.
 		Condition: "entity.name",
-		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions:   []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -500,7 +500,7 @@ func TestEngine_Decisions_RingBufferBound(t *testing.T) {
 			Type:  parser.TriggerTypeEdgeCreated,
 			Match: parser.TriggerMatch{EdgeType: "is_about"},
 		},
-		Actions: []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -541,7 +541,7 @@ func TestEngine_Reconcile_HotReloadRebuildsRegistration(t *testing.T) {
 			Match: parser.TriggerMatch{EdgeType: "is_about"},
 		},
 		Condition: "entity.rating > 7",
-		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions:   []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{v1}))
 
@@ -582,7 +582,7 @@ func TestEngine_UnregisteredWorkflow_DoesNotFire(t *testing.T) {
 			Type:  parser.TriggerTypeEdgeCreated,
 			Match: parser.TriggerMatch{EdgeType: "is_about"},
 		},
-		Actions: []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{})) // drop it
@@ -609,7 +609,7 @@ func TestEngine_NilResolver_TriggerEntityMissing(t *testing.T) {
 		Name:           "noResolver",
 		AllowedPlugins: []string{"yaad-gmail"},
 		Trigger:        parser.Trigger{Type: parser.TriggerTypeEntityCreated},
-		Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions:        []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -638,7 +638,7 @@ func TestEngine_SubjectTemplate_Rendered(t *testing.T) {
 			Match: parser.TriggerMatch{EdgeType: "is_about"},
 		},
 		Subject: "entity.slug",
-		Actions: []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -672,7 +672,7 @@ func TestEngine_DedupMissingRefs(t *testing.T) {
 			{Name: "b", Via: "graph.get(entity.ref)"}, // same missing id
 		},
 		Condition: "a != null && b != null",
-		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions:   []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -709,7 +709,7 @@ func TestEngine_ErrEntityNotFound_SentinelTranslation(t *testing.T) {
 			{Name: "missing", Via: `graph.get("does-not-exist")`},
 		},
 		Condition: "missing == null",
-		Actions:   []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+		Actions:   []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
@@ -735,7 +735,7 @@ func TestEngine_ErrEntityNotFound_SentinelTranslation(t *testing.T) {
 // engine pre-renders each action's template fields against
 // the activation + ships the rendered values to the runner
 // via Activation.RenderedTemplates. Exercises mustache + a
-// mix of fields (add_comment.target / content +
+// mix of fields (add_note.target / content +
 // add_gap.entity).
 func TestEngine_ActionTemplates_RenderedAndPassedToRunner(t *testing.T) {
 	t.Parallel()
@@ -762,7 +762,7 @@ func TestEngine_ActionTemplates_RenderedAndPassedToRunner(t *testing.T) {
 		Subject:     "{{ entity.id }}",
 		AddableGaps: []string{"is_interesting_to_me"},
 		Actions: []parser.Action{
-			{AddComment: &parser.AddCommentAction{
+			{AddNote: &parser.AddNoteAction{
 				Target:  "entity.id",
 				Content: "{{ entity.name }} ({{ entity.year }})",
 			}},
@@ -789,8 +789,8 @@ func TestEngine_ActionTemplates_RenderedAndPassedToRunner(t *testing.T) {
 	require.Len(t, calls[0].actions, 2)
 	require.NotNil(t, calls[0].rendered)
 
-	// Action 0 — add_comment with rendered target + content.
-	require.NotNil(t, calls[0].actions[0].AddComment)
+	// Action 0 — add_note with rendered target + content.
+	require.NotNil(t, calls[0].actions[0].AddNote)
 	assert.Equal(t, "boardgame:b", calls[0].rendered[0]["target"])
 	assert.Equal(t, "Brass (2018)", calls[0].rendered[0]["content"])
 
@@ -808,10 +808,10 @@ func TestEngine_ActionTemplates_CompileFailureSkipsRegistration(t *testing.T) {
 	eng, _ := newEngineWithBus(t, nil)
 	good := manualWorkflow("good")
 	bad := manualWorkflow("bad")
-	// add_comment.content with an unmatched mustache open is
+	// add_note.content with an unmatched mustache open is
 	// a template parse error at register time.
 	bad.Actions = []parser.Action{
-		{AddComment: &parser.AddCommentAction{
+		{AddNote: &parser.AddNoteAction{
 			Content: "broken {{ entity.name",
 		}},
 	}

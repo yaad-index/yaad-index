@@ -15,7 +15,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/vault"
 )
 
-// commentsRequest is the POST /v1/entities/{id}/comments body. The
+// commentsRequest is the POST /v1/entities/{id}/notes body. The
 // server stamps `date` (UTC) — clients never send it.
 //
 // Per yaad-index a prior PR, `author` must match the JWT subject
@@ -29,69 +29,69 @@ type commentsRequest struct {
 	Author string `json:"author,omitempty"`
 }
 
-// commentEntry is the wire shape for a single comment on the response.
-// Matches the vault.Comment frontmatter shape; Date is RFC3339 UTC so
+// noteEntry is the wire shape for a single note on the response.
+// Matches the vault.Note frontmatter shape; Date is RFC3339 UTC so
 // clients can do their own timezone rendering.
 //
 // Operator (added a prior PR) names the human resource owner from the
-// pair-claim. Empty for legacy comments (vault entries written before
-// had no operator stamp). Always populated on new comments.
-type commentEntry struct {
+// pair-claim. Empty for legacy notes (vault entries written before
+// had no operator stamp). Always populated on new notes.
+type noteEntry struct {
 	Date string `json:"date"`
 	Text string `json:"text"`
 	Author string `json:"author,omitempty"`
 	Operator string `json:"operator,omitempty"`
 }
 
-// commentsResponse is the 201 envelope: the just-appended comment plus
+// commentsResponse is the 201 envelope: the just-appended note plus
 // the merged entity (so the caller can refresh local state without a
 // follow-up GET). Mirrors the fillResponse shape.
 type commentsResponse struct {
 	OK bool `json:"ok"`
-	Comment commentEntry `json:"comment"`
+	Note noteEntry `json:"note"`
 	Entity entity `json:"entity"`
 }
 
-// handleComments implements POST /v1/entities/{id}/comments.
+// handleNotes implements POST /v1/entities/{id}/notes.
 //
-// Vault-first append (per ADR-0008): the new comment is added to the
-// entity's body `## Comments` table (Per the prior design, — comments live in the
-// body, frontmatter just carries `comment_count: N`); the DB row is
+// Vault-first append (per ADR-0008): the new note is added to the
+// entity's body `## Notes` table (Per the prior design, — notes live in the
+// body, frontmatter just carries `note_count: N`); the DB row is
 // updated to mirror the new state. The vault file is the source of
 // truth; the DB is a derived index.
 //
 // **No AppendProvenance call** (deliberate, do not "fix"). The
 // provenance log is for fetch/fill events — "where did this entity's
-// data come from" — and a comment-append isn't a fetch or a structural
-// data change. The body comments table IS the audit trail (date +
+// data come from" — and a note-append isn't a fetch or a structural
+// data change. The body notes table IS the audit trail (date +
 // author + text per entry); duplicating that into the provenance log
 // would pollute it. The provenance shape (`{source, fetched_at, ok}`)
-// also doesn't fit a comment-append cleanly. Keep these surfaces
+// also doesn't fit a note-append cleanly. Keep these surfaces
 // separate.
 //
-// Append-only in v1 — edit/delete-by-comment-id is a follow-up per
+// Append-only in v1 — edit/delete-by-note-id is a follow-up per
 // ADR-0008's Open Questions section. Server stamps `date` (UTC); the
 // client never supplies it.
 //
 // Input normalization: `text` is `strings.TrimSpace`-d before storage
 // to address the cold-reviewer's a prior PR review note about the vault parser
-// trimming leading whitespace from body comment blocks. After this
+// trimming leading whitespace from body note blocks. After this
 // trim, the API → vault → reindex round-trip is lossless for non-
 // whitespace text content; pure-whitespace inputs surface as 400
 // invalid_argument.
 //
 // Asymmetry with a prior PR ingest: like the fill endpoint (a prior PR),
-// comments require vault wiring — there's no "DB-only fallback"
-// for comments because the canonical comment list lives in vault
+// notes require vault wiring — there's no "DB-only fallback"
+// for notes because the canonical note list lives in vault
 // frontmatter. Returns 503 vault_required when WithVaultIO is
 // omitted.
-// canonicalKindReg widens the carve-out per yaad-index: comments
+// canonicalKindReg widens the carve-out per yaad-index: notes
 // targeting a canonical-label thin row (`<kind>:<slug>` where `kind`
 // is in the operator's canonical_kinds registry) auto-materialize
 // the vault file at `{ROOT}/ct/<kind>/<slug>.md` when the caller
 // holds operator authority. Without operator authority, or when the
 // id isn't canonical-label-shaped, the existing 404 paths apply.
-func handleComments(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
+func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req commentsRequest
 		dec := json.NewDecoder(r.Body)
@@ -126,7 +126,7 @@ func handleComments(logger *slog.Logger, st store.Store, vaultReader *vault.Read
 		claim, ok := ClaimFromContext(r.Context())
 		if !ok || claim == nil {
 			logger.ErrorContext(r.Context(),
-				"comments handler reached without an auth claim — middleware misconfigured",
+				"notes handler reached without an auth claim — middleware misconfigured",
 				"id", r.PathValue("id"))
 			writeError(w, http.StatusInternalServerError, "internal_error",
 				"auth claim missing on request — server misconfiguration")
@@ -148,18 +148,18 @@ func handleComments(logger *slog.Logger, st store.Store, vaultReader *vault.Read
 
 		if vaultReader == nil || vaultWriter == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_required",
-				"comments require vault.path configuration; the comment list lives in vault frontmatter")
+				"notes require vault.path configuration; the note list lives in vault frontmatter")
 			return
 		}
 
 		// autoMaterialize covers the "thin DB row exists, vault file
 		// missing" case for canonical-label entities (per yaad-index
-		//). The comment write then creates the vault file via
+		//). The note write then creates the vault file via
 		// WriteCanonicalLabelWithCommit. Per the operator's scope
-		// tightening, comments do NOT create the entity row from
+		// tightening, notes do NOT create the entity row from
 		// nothing — that path stays a 404 to prevent dangling
-		// comments on entities that don't exist. Operator-fill is the
-		// deliberate-create path; comments are casual and need an
+		// notes on entities that don't exist. Operator-fill is the
+		// deliberate-create path; notes are casual and need an
 		// existing entity to attach to.
 		var autoMaterialize bool
 
@@ -170,7 +170,7 @@ func handleComments(logger *slog.Logger, st store.Store, vaultReader *vault.Read
 					fmt.Sprintf("no entity with id %s", id))
 				return
 			}
-			logger.ErrorContext(r.Context(), "store.GetEntity from comments", "err", err, "id", id)
+			logger.ErrorContext(r.Context(), "store.GetEntity from notes", "err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",
 				"failed to look up entity")
 			return
@@ -179,7 +179,7 @@ func handleComments(logger *slog.Logger, st store.Store, vaultReader *vault.Read
 		ve, err := vaultReader.ReadByID(got.Kind, id)
 		if err != nil {
 			if !vault.IsNotExist(err) {
-				logger.ErrorContext(r.Context(), "vault.Reader.ReadByID from comments", "err", err, "id", id)
+				logger.ErrorContext(r.Context(), "vault.Reader.ReadByID from notes", "err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",
 					"failed to read vault file")
 				return
@@ -202,23 +202,23 @@ func handleComments(logger *slog.Logger, st store.Store, vaultReader *vault.Read
 		}
 
 		// Truncate to second precision so the YAML frontmatter encoding
-		// and the body `## Comments` section header (which uses
+		// and the body `## Notes` section header (which uses
 		// RFC3339, second-precision) round-trip to the SAME Date value
 		// post-Unmarshal. Without the truncate, frontmatter retains
-		// nanos but body loses them — the vault.mergeComments dedup
-		// then fails to collapse the two reads of the same comment,
+		// nanos but body loses them — the vault.mergeNotes dedup
+		// then fails to collapse the two reads of the same note,
 		// producing duplicate entries on every read-modify-write
 		// cycle.
 		now := clock.Now().Truncate(time.Second)
-		newComment := vault.Comment{
+		newNote := vault.Note{
 			Date: now,
 			Text: text,
 			Author: author,
 			Operator: operator,
 		}
-		ve.Comments = append(ve.Comments, newComment)
+		ve.Notes = append(ve.Notes, newNote)
 
-		commitMsg := commentCommitMessage(ve.ID, author)
+		commitMsg := noteCommitMessage(ve.ID, author)
 		commitAuthor := agentAuthorRef(author)
 		writeErr := error(nil)
 		if autoMaterialize {
@@ -227,15 +227,15 @@ func handleComments(logger *slog.Logger, st store.Store, vaultReader *vault.Read
 			writeErr = vaultWriter.WriteWithCommit(r.Context(), ve, commitMsg, commitAuthor)
 		}
 		if writeErr != nil {
-			logger.ErrorContext(r.Context(), "vault.Writer.Write from comments",
+			logger.ErrorContext(r.Context(), "vault.Writer.Write from notes",
 				"err", writeErr, "id", id, "auto_materialize", autoMaterialize)
 			writeError(w, http.StatusInternalServerError, "internal_error",
 				"failed to write vault file")
 			return
 		}
 
-		// Mirror the comment-augmented data shape into the DB so
-		// search (LIKE on data) finds the new comment text. No
+		// Mirror the note-augmented data shape into the DB so
+		// search (LIKE on data) finds the new note text. No
 		// AppendProvenance call (see handler doc).
 		if err := st.UpsertEntity(r.Context(), &store.Entity{
 			ID: ve.ID,
@@ -243,10 +243,10 @@ func handleComments(logger *slog.Logger, st store.Store, vaultReader *vault.Read
 			Data: vaultEntityDataForDB(ve),
 			CreatedAt: got.CreatedAt,
 		}); err != nil {
-			logger.ErrorContext(r.Context(), "store.UpsertEntity from comments (vault already written)",
+			logger.ErrorContext(r.Context(), "store.UpsertEntity from notes (vault already written)",
 				"err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",
-				"failed to mirror comment to DB")
+				"failed to mirror note to DB")
 			return
 		}
 
@@ -254,7 +254,7 @@ func handleComments(logger *slog.Logger, st store.Store, vaultReader *vault.Read
 		// shape — same pattern as fill.
 		fresh, err := st.GetEntity(r.Context(), id)
 		if err != nil {
-			logger.ErrorContext(r.Context(), "store.GetEntity post-comment reread", "err", err, "id", id)
+			logger.ErrorContext(r.Context(), "store.GetEntity post-note reread", "err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",
 				"failed to reload entity")
 			return
@@ -264,15 +264,15 @@ func handleComments(logger *slog.Logger, st store.Store, vaultReader *vault.Read
 		w.WriteHeader(http.StatusCreated)
 		if err := json.NewEncoder(w).Encode(commentsResponse{
 			OK: true,
-			Comment: commentEntry{
-				Date: newComment.Date.Format(time.RFC3339),
-				Text: newComment.Text,
-				Author: newComment.Author,
-				Operator: newComment.Operator,
+			Note: noteEntry{
+				Date: newNote.Date.Format(time.RFC3339),
+				Text: newNote.Text,
+				Author: newNote.Author,
+				Operator: newNote.Operator,
 			},
 			Entity: toAPIEntity(fresh),
 		}); err != nil {
-			logger.ErrorContext(r.Context(), "encode /v1/entities/{id}/comments response", "err", err)
+			logger.ErrorContext(r.Context(), "encode /v1/entities/{id}/notes response", "err", err)
 		}
 	}
 }

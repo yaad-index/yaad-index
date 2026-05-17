@@ -19,14 +19,14 @@ import (
 	"github.com/yaad-index/yaad-index/internal/vault"
 )
 
-// Author-validation tests for POST /v1/entities/{id}/comments per
+// Author-validation tests for POST /v1/entities/{id}/notes per
 // yaad-index a prior PR. Production runs through RequireAuth — these
 // tests wire that path explicitly so the strict identity check fires.
 // The dev-mode (AnonymousAuth) path is exercised by the existing
 // comments_test.go corpus, which keeps passing because IsAnonymousClaim
 // short-circuits the enforcement.
 
-const commentsAuthTestEntityID = "boardgame:auth-comment-test"
+const commentsAuthTestEntityID = "boardgame:auth-note-test"
 
 // newAuthedCommentsFixture builds a vault-wired handler protected by
 // RequireAuth, plus the signer the test uses to mint Bearer tokens.
@@ -63,7 +63,7 @@ func newAuthedCommentsFixture(t *testing.T) (http.Handler, store.Store, string, 
 		ID: commentsAuthTestEntityID,
 		Kind: "boardgame",
 		Plugin: "test-fixture",
-		Data: map[string]any{"id": commentsAuthTestEntityID, "title": "Auth Comment Test"},
+		Data: map[string]any{"id": commentsAuthTestEntityID, "title": "Auth Note Test"},
 	}))
 	return h, st, root, signer
 }
@@ -83,7 +83,7 @@ func mintToken(t *testing.T, signer auth.Signer, agent, operator string) string 
 
 func postAuthedComment(t *testing.T, h http.Handler, id, bearer string, body any) *httptest.ResponseRecorder {
 	t.Helper()
-	target := "/v1/entities/" + id + "/comments"
+	target := "/v1/entities/" + id + "/notes"
 	b, err := json.Marshal(body)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(string(b)))
@@ -105,14 +105,14 @@ func TestCommentsAuth_EmptyAuthor_FilledFromClaim(t *testing.T) {
 
 	var got commentsResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
-	assert.Equal(t, "bob", got.Comment.Author, "empty author defaulted to JWT sub")
-	assert.Equal(t, "alice", got.Comment.Operator, "operator stamped from JWT operator claim")
+	assert.Equal(t, "bob", got.Note.Author, "empty author defaulted to JWT sub")
+	assert.Equal(t, "alice", got.Note.Operator, "operator stamped from JWT operator claim")
 
 	// Vault file mirrors the stamps.
 	v := readVaultByID(t, root, "boardgame", commentsAuthTestEntityID)
-	require.Len(t, v.Comments, 1)
-	assert.Equal(t, "bob", v.Comments[0].Author)
-	assert.Equal(t, "alice", v.Comments[0].Operator)
+	require.Len(t, v.Notes, 1)
+	assert.Equal(t, "bob", v.Notes[0].Author)
+	assert.Equal(t, "alice", v.Notes[0].Operator)
 }
 
 func TestCommentsAuth_MatchingAuthor_StoresBoth(t *testing.T) {
@@ -128,13 +128,13 @@ func TestCommentsAuth_MatchingAuthor_StoresBoth(t *testing.T) {
 
 	var got commentsResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
-	assert.Equal(t, "bob", got.Comment.Author)
-	assert.Equal(t, "alice", got.Comment.Operator)
+	assert.Equal(t, "bob", got.Note.Author)
+	assert.Equal(t, "alice", got.Note.Operator)
 
 	v := readVaultByID(t, root, "boardgame", commentsAuthTestEntityID)
-	require.Len(t, v.Comments, 1)
-	assert.Equal(t, "bob", v.Comments[0].Author)
-	assert.Equal(t, "alice", v.Comments[0].Operator)
+	require.Len(t, v.Notes, 1)
+	assert.Equal(t, "bob", v.Notes[0].Author)
+	assert.Equal(t, "alice", v.Notes[0].Operator)
 }
 
 func TestCommentsAuth_MismatchedAuthor_403(t *testing.T) {
@@ -143,8 +143,8 @@ func TestCommentsAuth_MismatchedAuthor_403(t *testing.T) {
 	tok := mintToken(t, signer, "bob", "alice")
 
 	rec := postAuthedComment(t, h, commentsAuthTestEntityID, tok, map[string]any{
-		"text": "yaad trying to post as bob",
-		"author": "yaad", // disagrees with the JWT sub
+		"text": "alice trying to post as bob",
+		"author": "alice", // disagrees with the JWT sub
 	})
 	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
 	var er errorResponse
@@ -153,14 +153,14 @@ func TestCommentsAuth_MismatchedAuthor_403(t *testing.T) {
 
 	// Vault file must NOT have grown.
 	v := readVaultByID(t, root, "boardgame", commentsAuthTestEntityID)
-	assert.Empty(t, v.Comments, "rejected comment must not land in vault")
+	assert.Empty(t, v.Notes, "rejected note must not land in vault")
 }
 
 func TestCommentsAuth_MissingToken_401(t *testing.T) {
 	t.Parallel()
 	h, _, _, _ := newAuthedCommentsFixture(t)
 
-	target := "/v1/entities/" + commentsAuthTestEntityID + "/comments"
+	target := "/v1/entities/" + commentsAuthTestEntityID + "/notes"
 	body := strings.NewReader(`{"text":"no token"}`)
 	req := httptest.NewRequest(http.MethodPost, target, body)
 	rec := httptest.NewRecorder()

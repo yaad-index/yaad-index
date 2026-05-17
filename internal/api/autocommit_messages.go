@@ -102,16 +102,16 @@ func entityDestroyCommitMessage(entityID, kind, author string) string {
 	return fmt.Sprintf("destroy: %s [%s] by %s", entityID, kind, author)
 }
 
-// commentCommitMessage produces the audit line for a comment write.
+// noteCommitMessage produces the audit line for a note write.
 //
 // Templates:
-// - comment with author: comment: <entity-id> by <author>
-// - comment with empty author: comment: <entity-id>
-func commentCommitMessage(entityID, author string) string {
+// - note with author: note: <entity-id> by <author>
+// - note with empty author: note: <entity-id>
+func noteCommitMessage(entityID, author string) string {
 	if author == "" {
-		return "comment: " + entityID
+		return "note: " + entityID
 	}
-	return fmt.Sprintf("comment: %s by %s", entityID, author)
+	return fmt.Sprintf("note: %s by %s", entityID, author)
 }
 
 // agentAuthorRef shapes a commit author from an optional agent
