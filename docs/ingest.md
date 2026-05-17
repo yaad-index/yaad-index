@@ -192,24 +192,47 @@ provenance:
 British board game designer...
 <!-- yaad:plugin end -->
 
+## Edges
+
+- [[source-type:wikipedia-article]] (is_a)
+- [[person:martin-wallace]] (is_about)
+
+<!-- yaad:notes start -->
 ## Notes
 
-(operator hand-edits go here — preserved across re-ingest)
+| Notes |
+|----------|
+| 2026-05-17 — agent:linkedin-classify |
+| Saw this designer mentioned in a hiring alert; flagged for follow-up. |
+<!-- yaad:notes end -->
+
+<!-- yaad:dataview start -->
+co_player:: alice  my_rating:: 9  played_at:: essen-2024
+<!-- yaad:dataview end -->
+
+(free-form operator prose lives outside every marker pair — preserved verbatim across re-ingest)
 ```
+
+The body has three managed marker-pair regions today; each is owned end-to-end by the daemon. Anything OUTSIDE every marker pair (before any pair, between two pairs, after the last pair) is preserved verbatim on re-ingest.
 
 The split:
 
-| Where                                       | What lands                                                                | Owned by    |
-|---------------------------------------------|---------------------------------------------------------------------------|-------------|
-| Frontmatter `data:`                         | Structured metadata (`subject`, `date`, plugin-specific keys)             | Plugin      |
-| Frontmatter `edges:`                        | Resolved canonical-label edges (`{type, to}` flat list)                   | Daemon      |
-| Frontmatter `provenance:`                   | Fetch metadata (`source`, `fetched_at`, `ok`); appended per fetch         | Daemon      |
-| Body between `yaad:plugin` markers          | Plugin-emitted `raw_content` (markdown)                                   | Plugin      |
-| Body outside the marker pair                | Operator hand-edits (`## Notes` and prose)                                | Operator    |
-| Body `## Edges` section                     | Wikilink mirror of frontmatter edges (auto-regenerated each write)        | Daemon      |
-| `<entity-dir>/attachments/<name>`           | Staged binary attachments from `attachments[]`                            | Plugin/Daemon |
+| Where                                                 | What lands                                                                  | Owned by      |
+|-------------------------------------------------------|-----------------------------------------------------------------------------|---------------|
+| Frontmatter `data:`                                   | Structured metadata (`subject`, `date`, plugin-specific keys)               | Plugin        |
+| Frontmatter `edges:`                                  | Resolved canonical-label edges (`{type, to}` flat list)                     | Daemon        |
+| Frontmatter `provenance:`                             | Fetch metadata (`source`, `fetched_at`, `ok`); appended per fetch           | Daemon        |
+| Frontmatter `gap_state:`                              | Per-gap state (source/filled_at/deferred + workflow-injected `data_schema`) | Daemon        |
+| Body between `<!-- yaad:plugin start/end -->`         | Plugin-emitted `raw_content` (markdown)                                     | Plugin        |
+| Body between `<!-- yaad:notes start/end -->`          | Note table (per [ADR-0015](../adr/0015-plugin-body-markers.md) extension via #115) | Daemon (write) / Agent + Operator (content) |
+| Body between `<!-- yaad:dataview start/end -->`       | Sorted-key dataview-inline paragraphs from canonical_type `data` (#119)     | Daemon        |
+| Body `## Edges` section                               | Wikilink mirror of frontmatter edges. **No marker pair**: written directly between the `yaad:plugin` and `yaad:notes` regions and regenerated wholesale on every write | Daemon |
+| Body outside every marker pair                        | Free-form operator hand-edits                                               | Operator      |
+| `<entity-dir>/attachments/<name>`                     | Staged binary attachments from `attachments[]`                              | Plugin/Daemon |
 
-Per [ADR-0015](../adr/0015-plugin-body-markers.md): the daemon detects the marker pair on re-ingest, replaces ONLY the content between markers, and preserves everything outside verbatim. First-write with existing un-marked body keeps the existing content as the `before` region — plugin-emitted content appears AT THE END of the body, so operator-prepended notes stay on top.
+Per [ADR-0015](../adr/0015-plugin-body-markers.md): the daemon detects each marker pair on re-ingest, replaces ONLY the content between the markers, and preserves everything outside every pair verbatim. First-write with existing un-marked body keeps the existing content as the `before` region — plugin-emitted content appears AT THE END of that region, so operator-prepended prose stays on top.
+
+**Heads-up for agents authoring hand-edits**: prose typed outside every marker pair survives re-ingest. Prose typed inside the `yaad:plugin` pair gets overwritten on the next ingest. Notes intended for durable storage should be added via the `add_note` workflow action or the `/v1/entities/{id}/notes` endpoint — the daemon lands them inside the `yaad:notes` pair where they belong.
 
 ## 8. DB derive
 
@@ -239,7 +262,7 @@ The handler maps the materialization result to one of four wire envelopes (per [
 | Body content missing despite plugin returning it     | `raw_content` field on the NDJSON line. If empty, body stays empty by design (preserves prior body).  |
 | Body content in `data.body` instead of .md body      | Plugin bug — emit on top-level `raw_content`, not `data["body"]`. yaad-gmail #125 was this shape.     |
 | Frontmatter has only `data.subject` but no body      | Plugin didn't emit `raw_content`. Confirm against ADR-0008 (`frontmatter = metadata; body = data`).   |
-| Re-ingest wiped operator hand-edits                  | Marker pair missing or mangled. Check for `<!-- yaad:plugin start -->` / `end` in the .md body.       |
+| Re-ingest wiped operator hand-edits                  | Edits sat inside the `yaad:plugin` marker pair. Move them to outside every marker pair, or land notes via `add_note` (which writes into the `yaad:notes` pair). |
 | Edge target points at non-existent canonical entity  | Expected — canonical labels are pure pointers (ADR-0021 §3). The label materializes only on attach.   |
 | Duplicate canonical entities for the same concept    | Slug variance. Check `aliases:` overlap merge (ADR-0011); operator may need to merge manually.        |
 | Cache served stale content                           | `cache_ttl_seconds:` in frontmatter + freshest non-cache provenance. `force_refetch=true` bypasses.   |
