@@ -199,7 +199,7 @@ Maps to `POST /v1/entities/{id}/fill`. The handler:
 
 1. Validates each field against its `gap_metadata.type` + the type-specific shape (range / max_length / values / kinds).
 2. Acquires the per-entity write-lock.
-3. Reads the vault file; merges the new fields into frontmatter `data:`.
+3. Reads the vault file; merges the new fields into frontmatter `data:`. For `canonical_type` fields the merged value is the **canonical-label ID list** (`["person:uwe-rosenberg"]`) — the raw `[{name, kind, data}]` shape is projected to IDs at the persist step (`canonicalLabelEntryIDs` helper). Per-entry `data:` does NOT land on the source's frontmatter; it flows to the target canonical entity's body per §6.
 4. For `canonical_type` fields: slugifies each `{name, kind}` and creates an edge per element (idempotent — re-fills don't duplicate edges).
 5. Removes each filled gap name from `gaps:` and stamps the `gap_state[<gap>]` entry with `source: agent`, `filled_at: <now>`.
 6. Writes the vault file, mirrors to the store.
