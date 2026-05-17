@@ -57,7 +57,7 @@ import (
 // and the caller has no clean rollback.
 //
 // Eventbus emissions (ADR-0024 Phase 2): when bus is non-nil, this
-// helper publishes:
+// helper emits:
 //
 //   - entity.created on each thin label row that's materialized for
 //     the first time (gated on the `created` return from
@@ -69,6 +69,14 @@ import (
 // workflow-injected fills via Phase 4+). When bus is nil the helper
 // is silent on emission — used by the UGC paths until UGC eventbus
 // wiring lands as a follow-up.
+//
+// Per #154, when `pending` is non-nil the helper appends events
+// to the queue rather than calling bus.Publish synchronously; the
+// caller drains the queue AFTER releasing its per-entity write-
+// lock. This avoids the synchronous-handler-takes-same-lock
+// deadlock that the prior in-lock Publish shape produced. When
+// pending is nil the helper falls back to immediate publish
+// (callers outside any locked scope).
 func applyCanonicalTypeEdges(
 	ctx context.Context,
 	st store.Store,
@@ -78,6 +86,7 @@ func applyCanonicalTypeEdges(
 	logger *slog.Logger,
 	bus eventbus.Bus,
 	source eventbus.Source,
+	pending *eventbus.PendingEvents,
 ) error {
 	for _, op := range ops {
 		spec, ok := gaps[op.Field]
@@ -110,12 +119,12 @@ func applyCanonicalTypeEdges(
 			}
 			if created && bus != nil {
 				// Thin canonical-label row materialized for the
-				// first time on this fill — publish per ADR-0024
+				// first time on this fill — emit per ADR-0024
 				// Phase 2. SplitLabelID was already validated
 				// inside EnsureLabelRow, so the kind extraction
 				// here can't fail.
 				kind, _, _ := splitCanonicalLabelID(label)
-				bus.Publish(ctx, eventbus.EntityCreatedEvent{
+				eventbus.QueueOrPublish(ctx, bus, pending, eventbus.EntityCreatedEvent{
 					ID:        label,
 					Kind:      kind,
 					SourceTag: source,
@@ -136,7 +145,7 @@ func applyCanonicalTypeEdges(
 				// created — workflow subscribers commonly trigger
 				// on these to surface "this entity got tagged as
 				// X" downstream effects.
-				bus.Publish(ctx, eventbus.EntityEdgeAddedEvent{
+				eventbus.QueueOrPublish(ctx, bus, pending, eventbus.EntityEdgeAddedEvent{
 					FromID:    sourceID,
 					ToID:      label,
 					EdgeType:  op.Field,
@@ -187,12 +196,18 @@ func canonicalLabelEntryIDs(v any) []string {
 // SourceOperator for operator-fill. The workflow action
 // surfaces a workflow:<name> source tag through its own
 // publish path.
+//
+// Per #154 the helper accepts a `*eventbus.PendingEvents`
+// queue: when non-nil the fill.completed event is appended for
+// publish-after-unlock; when nil it falls through to immediate
+// bus.Publish (pre-#154 callers outside any locked scope).
 func appendDataviewParagraphs(
 	ctx context.Context,
 	deps canonical.DataviewAppendDeps,
 	ops []operatorFillOp,
 	source eventbus.Source,
 	sourceWorkflow string,
+	pending *eventbus.PendingEvents,
 ) error {
 	if deps.VaultReader == nil || deps.VaultWriter == nil || deps.WriteLocks == nil {
 		return nil
@@ -219,7 +234,7 @@ func appendDataviewParagraphs(
 				return fmt.Errorf("append dataview paragraph on %s (gap=%q): %w", e.ID, op.Field, err)
 			}
 			if appended && deps.Bus != nil {
-				deps.Bus.Publish(ctx, eventbus.FillCompletedEvent{
+				eventbus.QueueOrPublish(ctx, deps.Bus, pending, eventbus.FillCompletedEvent{
 					EntityID:  e.ID,
 					Gap:       op.Field,
 					SourceTag: source,

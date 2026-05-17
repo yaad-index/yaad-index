@@ -177,6 +177,11 @@ func handleUserContentCreate(
 		if !lockOK {
 			return
 		}
+		// #154: release first, then publish — Drain defer
+		// (declared first) runs LAST via LIFO, after release
+		// defer (declared second). Bus may be nil in test wiring.
+		var pending eventbus.PendingEvents
+		defer pending.Drain(r.Context(), bus)
 		defer release()
 
 		claim, ok := ClaimFromContext(r.Context())
@@ -305,7 +310,8 @@ func handleUserContentCreate(
 		// pre-upsert probe needed). SourceOperator per
 		// ADR-0012 (UGC is operator-authored).
 		if bus != nil {
-			bus.Publish(r.Context(), eventbus.EntityCreatedEvent{
+			// #154: queue for publish-after-unlock.
+			eventbus.QueueOrPublish(r.Context(), bus, &pending, eventbus.EntityCreatedEvent{
 				ID:        id,
 				Kind:      userContentKind,
 				SourceTag: eventbus.SourceOperator,
@@ -334,7 +340,7 @@ func handleUserContentCreate(
 			// helper publishes entity.created on each thin
 			// canonical-label row materialized for the first
 			// time + entity.edge_added on each derived edge.
-			if err := applyCanonicalTypeEdges(r.Context(), st, id, ucEdgeOps, ucGaps, logger, bus, eventbus.SourceOperator); err != nil {
+			if err := applyCanonicalTypeEdges(r.Context(), st, id, ucEdgeOps, ucGaps, logger, bus, eventbus.SourceOperator, &pending); err != nil {
 				logger.ErrorContext(r.Context(), "user-content create: canonical-edge derivation",
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",
@@ -577,6 +583,9 @@ func handleUserContentFrontmatterEdit(
 		if !ok {
 			return
 		}
+		// #154: release first, then publish — LIFO defer ordering.
+		var pending eventbus.PendingEvents
+		defer pending.Drain(r.Context(), bus)
 		defer release()
 		ve, status, errCode, errMsg := loadUserContentVaultEntity(logger, r, st, vaultReader, id)
 		if status != 0 {
@@ -724,7 +733,7 @@ func handleUserContentFrontmatterEdit(
 			// The helper still emits entity.edge_added on each
 			// new edge (and entity.created on any newly-
 			// materialized thin canonical-label rows).
-			if err := applyCanonicalTypeEdges(r.Context(), st, id, fullOps, ucGaps, logger, bus, eventbus.SourceOperator); err != nil {
+			if err := applyCanonicalTypeEdges(r.Context(), st, id, fullOps, ucGaps, logger, bus, eventbus.SourceOperator, &pending); err != nil {
 				logger.ErrorContext(r.Context(), "user-content frontmatter-edit: canonical-edge re-derivation",
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",

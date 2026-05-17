@@ -395,6 +395,145 @@ func TestWorkflowChain_FromContextReturnsCopy(t *testing.T) {
 	}
 }
 
+// TestPendingEvents_ReleaseThenPublish_AvoidsLockReentry is the
+// #154 regression test. The contract: events queued via
+// PendingEvents.Add do NOT publish until Drain runs; with the
+// LIFO defer pattern (Drain declared first, lock-release
+// declared second), release runs before Drain, so a handler
+// reacting to the published event can take the same lock the
+// publisher held without deadlocking.
+//
+// The check uses a sync.Mutex as a stand-in for the per-artifact
+// write-lock (writelocks pkg is downstream; this test stays in
+// eventbus). A handler subscribed before Publish tries to Lock
+// the mutex. If we'd called bus.Publish inside the locked
+// section, the handler would block forever (mutex is held);
+// the LIFO release-then-Drain pattern releases first, so the
+// handler succeeds.
+func TestPendingEvents_ReleaseThenPublish_AvoidsLockReentry(t *testing.T) {
+	t.Parallel()
+	bus := NewMemoryBus()
+
+	var mu sync.Mutex
+	handlerAcquired := make(chan struct{})
+
+	defer bus.Subscribe(TopicEntityCreated, func(_ context.Context, _ Event) {
+		// If the publisher held the mutex while publishing, this
+		// Lock would never return — the handler runs synchronously
+		// on the publisher's goroutine. With release-then-publish,
+		// the mutex is already free.
+		mu.Lock()
+		defer mu.Unlock()
+		close(handlerAcquired)
+	}).Unsubscribe()
+
+	func() {
+		mu.Lock()
+		// LIFO: Drain defer declared first runs LAST — AFTER the
+		// release (Unlock) defer declared second.
+		var pending PendingEvents
+		defer pending.Drain(context.Background(), bus)
+		defer mu.Unlock()
+
+		// Queue the event while holding the mutex; the prior shape
+		// called bus.Publish directly here, which would block on
+		// the handler's Lock attempt.
+		pending.Add(EntityCreatedEvent{
+			ID:        "test:1",
+			Kind:      "test",
+			SourceTag: SourceAgent,
+			At:        time.Now().UTC(),
+		})
+	}()
+
+	select {
+	case <-handlerAcquired:
+		// Handler took the lock after Drain — the publisher
+		// released it as expected.
+	case <-time.After(time.Second):
+		t.Fatal("handler never acquired the lock — release-then-publish ordering broken")
+	}
+}
+
+// TestPendingEvents_Drain_FIFO pins ordering: events come out
+// of Drain in the order they went in (subscribers commonly
+// rely on entity.created landing before entity.edge_added so
+// FK probes see the row).
+func TestPendingEvents_Drain_FIFO(t *testing.T) {
+	t.Parallel()
+	bus := NewMemoryBus()
+
+	var seen []string
+	var mu sync.Mutex
+	defer bus.Subscribe(TopicEntityCreated, func(_ context.Context, e Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, "created:"+e.(EntityCreatedEvent).ID)
+	}).Unsubscribe()
+	defer bus.Subscribe(TopicEntityEdgeAdded, func(_ context.Context, e Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		ee := e.(EntityEdgeAddedEvent)
+		seen = append(seen, "edge:"+ee.FromID+"->"+ee.ToID)
+	}).Unsubscribe()
+
+	var pending PendingEvents
+	now := time.Now().UTC()
+	pending.Add(EntityCreatedEvent{ID: "a", Kind: "k", SourceTag: SourceAgent, At: now})
+	pending.Add(EntityEdgeAddedEvent{FromID: "a", ToID: "b", EdgeType: "t", SourceTag: SourceAgent, At: now})
+	pending.Add(EntityCreatedEvent{ID: "b", Kind: "k", SourceTag: SourceAgent, At: now})
+	pending.Drain(context.Background(), bus)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 3 ||
+		seen[0] != "created:a" ||
+		seen[1] != "edge:a->b" ||
+		seen[2] != "created:b" {
+		t.Errorf("Drain did not preserve FIFO order: got %v", seen)
+	}
+}
+
+// TestPendingEvents_NilSafety: Add / Drain / Len on a nil
+// receiver are no-ops, and QueueOrPublish with nil pending
+// falls through to immediate bus.Publish.
+func TestPendingEvents_NilSafety(t *testing.T) {
+	t.Parallel()
+	var p *PendingEvents // nil
+	assert.NotPanics(t, func() {
+		p.Add(EntityCreatedEvent{ID: "x", SourceTag: SourceAgent, At: time.Now()})
+	})
+	assert.NotPanics(t, func() {
+		p.Drain(context.Background(), NewMemoryBus())
+	})
+	assert.Equal(t, 0, p.Len())
+
+	bus := NewMemoryBus()
+	var hits atomic.Int32
+	defer bus.Subscribe(TopicEntityCreated, func(_ context.Context, _ Event) {
+		hits.Add(1)
+	}).Unsubscribe()
+
+	QueueOrPublish(context.Background(), bus, nil, EntityCreatedEvent{
+		ID: "y", SourceTag: SourceAgent, At: time.Now(),
+	})
+	assert.Equal(t, int32(1), hits.Load(),
+		"QueueOrPublish with nil pending falls through to immediate bus.Publish")
+
+	// With a non-nil pending, the event queues — bus shouldn't
+	// fire until Drain.
+	var pending PendingEvents
+	QueueOrPublish(context.Background(), bus, &pending, EntityCreatedEvent{
+		ID: "z", SourceTag: SourceAgent, At: time.Now(),
+	})
+	assert.Equal(t, int32(1), hits.Load(),
+		"QueueOrPublish with pending defers the publish")
+	assert.Equal(t, 1, pending.Len())
+	pending.Drain(context.Background(), bus)
+	assert.Equal(t, int32(2), hits.Load(),
+		"Drain publishes the queued event")
+}
+
 func TestEvent_WorkflowChain_Roundtrips(t *testing.T) {
 	t.Parallel()
 	chain := []string{"w1", "w2"}
