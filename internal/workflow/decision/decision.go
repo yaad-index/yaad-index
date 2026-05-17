@@ -32,6 +32,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/ext"
 )
 
 // GraphLookup is the entity-resolution interface the CEL
@@ -213,6 +214,8 @@ func (e *Evaluator) buildEnv(bindings []string) (*cel.Env, error) {
 				cel.UnaryBinding(e.graphGet),
 			),
 		),
+		ext.Strings(),
+		regexCaptureFunction(),
 	}
 	seen := make(map[string]struct{}, len(bindings))
 	for _, name := range bindings {
@@ -301,6 +304,9 @@ func (e *Evaluator) Compile(expr string, returnAs string) (*Program, error) {
 	checked, issues := e.env.Check(ast)
 	if issues != nil && issues.Err() != nil {
 		return nil, fmt.Errorf("decision: check %q: %w", expr, issues.Err())
+	}
+	if err := validateLiteralRegexCaptures(checked, expr); err != nil {
+		return nil, err
 	}
 	prog, err := e.env.Program(checked, cel.EvalOptions(cel.OptOptimize))
 	if err != nil {
