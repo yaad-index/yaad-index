@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // TestDefaultGaps_Stable pins the built-in gap-set every canonical
@@ -653,4 +654,89 @@ func TestMergeCanonicalRegistry_PluginExtraOverridesBuiltinKindGap(t *testing.T)
 		"plugin extra overrides ADR-0019 built-in")
 	assert.Equal(t, []int{1, 5}, bg.Gaps["rating"].Range)
 	assert.Equal(t, "agent", bg.Gaps["rating"].FillStrategy)
+}
+
+// TestGapSpec_KindsWildcardScalar pins #141 fix: a scalar
+// `kinds: "*"` decodes to []string{"*"}. yaml.v3 v3.0.1 cannot
+// decode a scalar directly into a `*yaml.Node` struct field,
+// which is why the gapSpecYAML.Kinds field went from a raw node
+// to a typed kindsYAML with its own UnmarshalYAML.
+func TestGapSpec_KindsWildcardScalar(t *testing.T) {
+	t.Parallel()
+	yamlSrc := `
+type: canonical_type
+description: "any kind"
+kinds: "*"
+`
+	var g GapSpec
+	require.NoError(t, yaml.Unmarshal([]byte(yamlSrc), &g))
+	assert.Equal(t, "canonical_type", g.Type)
+	assert.Equal(t, []string{"*"}, g.Kinds)
+}
+
+// TestGapSpec_KindsBlockSequence pins #141 fix: a block
+// sequence `kinds:\n  - person\n  - boardgame` decodes
+// verbatim. This was the primary failure shape — operators
+// writing the documented long form (`docs/configs.md` §5.2)
+// got `yaml: unmarshal errors: ... cannot unmarshal !!seq into
+// yaml.Node` at server start before the fix.
+func TestGapSpec_KindsBlockSequence(t *testing.T) {
+	t.Parallel()
+	yamlSrc := `
+type: canonical_type
+description: "the designer"
+kinds:
+  - person
+  - boardgame
+`
+	var g GapSpec
+	require.NoError(t, yaml.Unmarshal([]byte(yamlSrc), &g))
+	assert.Equal(t, []string{"person", "boardgame"}, g.Kinds)
+}
+
+// TestGapSpec_KindsFlowSequence pins #141 fix: the inline flow
+// sequence shape (`kinds: [person, boardgame]`) decodes the same
+// way as the block form.
+func TestGapSpec_KindsFlowSequence(t *testing.T) {
+	t.Parallel()
+	yamlSrc := `
+type: canonical_type
+description: "the designer"
+kinds: [person, boardgame]
+`
+	var g GapSpec
+	require.NoError(t, yaml.Unmarshal([]byte(yamlSrc), &g))
+	assert.Equal(t, []string{"person", "boardgame"}, g.Kinds)
+}
+
+// TestGapSpec_KindsAbsent: a long-form GapSpec without `kinds:`
+// decodes with nil Kinds — covers the non-canonical_type gap
+// shapes that should not carry the field.
+func TestGapSpec_KindsAbsent(t *testing.T) {
+	t.Parallel()
+	yamlSrc := `
+type: int
+description: "your rating"
+range: [1, 10]
+`
+	var g GapSpec
+	require.NoError(t, yaml.Unmarshal([]byte(yamlSrc), &g))
+	assert.Nil(t, g.Kinds)
+}
+
+// TestGapSpec_KindsMappingRejected: a mapping shape (operator
+// typo) rejects with a clear error rather than degenerate to a
+// stringified blob.
+func TestGapSpec_KindsMappingRejected(t *testing.T) {
+	t.Parallel()
+	yamlSrc := `
+type: canonical_type
+description: "the designer"
+kinds:
+  person: true
+`
+	var g GapSpec
+	err := yaml.Unmarshal([]byte(yamlSrc), &g)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "kinds must be a scalar")
 }
