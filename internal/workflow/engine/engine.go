@@ -1006,6 +1006,27 @@ func compileActionTemplates(ev *decision.Evaluator, a parser.Action) (map[string
 		// wired. Returning an empty map keeps the runner-side
 		// drift-warn quiet for this action (no templated
 		// fields → no rendered keys expected).
+	case a.SetProperty != nil:
+		if a.SetProperty.Entity != "" {
+			tpl, err := template.Compile(a.SetProperty.Entity, ev)
+			if err != nil {
+				return nil, fmt.Errorf("set_property.entity: %w", err)
+			}
+			tpls["entity"] = tpl
+		}
+		// Each field's value is a CEL template; key the
+		// rendered output under `field:<name>` so the runner
+		// retrieves it the same way it does single-field
+		// primitives. set_property's per-field map can grow
+		// arbitrarily; namespacing under `field:` avoids
+		// collision with the literal "entity" key.
+		for name, expr := range a.SetProperty.Fields {
+			tpl, err := template.Compile(expr, ev)
+			if err != nil {
+				return nil, fmt.Errorf("set_property.fields[%q]: %w", name, err)
+			}
+			tpls["field:"+name] = tpl
+		}
 	}
 	return tpls, nil
 }

@@ -165,9 +165,10 @@ type dedupShape struct {
 // `- task_append: {...}` for each list entry.
 type actionShape struct {
 	TaskAppend     *taskAppendShape     `yaml:"task_append"`
-	AddNote     *addNoteShape     `yaml:"add_note"`
+	AddNote        *addNoteShape        `yaml:"add_note"`
 	PluginDispatch *pluginDispatchShape `yaml:"plugin_dispatch"`
 	AddGap         *addGapShape         `yaml:"add_gap"`
+	SetProperty    *setPropertyShape    `yaml:"set_property"`
 }
 
 type taskAppendShape struct {
@@ -191,6 +192,11 @@ type pluginDispatchShape struct {
 type addGapShape struct {
 	Entity string `yaml:"entity"`
 	Gap    string `yaml:"gap"`
+}
+
+type setPropertyShape struct {
+	Entity string            `yaml:"entity"`
+	Fields map[string]string `yaml:"fields"`
 }
 
 // decode runs the two YAML decode passes (frontmatter + body)
@@ -320,9 +326,10 @@ func actionsFromShape(entries []actionShape) []Action {
 	for i, e := range entries {
 		out[i] = Action{
 			TaskAppend:     taskAppendFromShape(e.TaskAppend),
-			AddNote:     addNoteFromShape(e.AddNote),
+			AddNote:        addNoteFromShape(e.AddNote),
 			PluginDispatch: pluginDispatchFromShape(e.PluginDispatch),
 			AddGap:         addGapFromShape(e.AddGap),
+			SetProperty:    setPropertyFromShape(e.SetProperty),
 		}
 	}
 	return out
@@ -368,5 +375,19 @@ func addGapFromShape(s *addGapShape) *AddGapAction {
 	return &AddGapAction{
 		Entity: strings.TrimSpace(s.Entity),
 		Gap:    strings.TrimSpace(s.Gap),
+	}
+}
+
+func setPropertyFromShape(s *setPropertyShape) *SetPropertyAction {
+	if s == nil {
+		return nil
+	}
+	fields := make(map[string]string, len(s.Fields))
+	for k, v := range s.Fields {
+		fields[strings.TrimSpace(k)] = v
+	}
+	return &SetPropertyAction{
+		Entity: strings.TrimSpace(s.Entity),
+		Fields: fields,
 	}
 }

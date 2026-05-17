@@ -213,9 +213,10 @@ type Dedup struct {
 // this.
 type Action struct {
 	TaskAppend     *TaskAppendAction
-	AddNote     *AddNoteAction
+	AddNote        *AddNoteAction
 	PluginDispatch *PluginDispatchAction
 	AddGap         *AddGapAction
+	SetProperty    *SetPropertyAction
 }
 
 // TaskAppendAction is the `task_append` primitive per ADR-0024
@@ -292,6 +293,31 @@ type AddGapAction struct {
 	// Gap is the gap-field name to inject. Must be a member of
 	// the workflow's AddableGaps list.
 	Gap string
+}
+
+// SetPropertyAction is the `set_property` primitive — writes
+// static or CEL-templated values directly into the target
+// entity's frontmatter `data` map without going through the
+// fill machinery. Suited for derive-from-existing-context
+// classifications where an LLM call is overkill.
+//
+// Merge semantics: per-field overwrite (last-write-wins on key
+// collisions with existing `data` entries; other keys are
+// preserved). The runner publishes one `fill.completed` event
+// per field that lands so downstream workflows can subscribe
+// per-field, mirroring the per-gap event shape from the fill
+// pathway.
+type SetPropertyAction struct {
+	// Entity is the CEL expression that resolves to the target
+	// entity id. Defaults to `entity.id` (the triggering
+	// entity) when omitted.
+	Entity string
+
+	// Fields maps field-name → CEL template the runner
+	// evaluates to produce the value written to that field.
+	// Required non-empty; empty field names rejected at
+	// validate time.
+	Fields map[string]string
 }
 
 // Trigger type constants — the v1 closed set per ADR-0024

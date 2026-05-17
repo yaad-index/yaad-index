@@ -406,9 +406,11 @@ func (s *ServeCmd) Run() error {
 		}
 		wfRunner := actions.New(actions.Options{
 			TaskWriter:       actions.NewFileTaskWriter(cfg.Vault.Path),
-			NoteWriter:    actions.NewVaultNoteWriter(wfWriterBackend),
+			NoteWriter:       actions.NewVaultNoteWriter(wfWriterBackend),
 			GapWriter:        actions.NewVaultGapWriter(wfWriterBackend),
+			PropertyWriter:   actions.NewVaultPropertyWriter(wfWriterBackend),
 			PluginDispatcher: wfPluginDispatcher,
+			Bus:              bus,
 			// Phase 5.B err-task pattern — systemic failures
 			// (condition-eval, subject-render, action-runner
 			// non-MissingRef errors) accumulate into the

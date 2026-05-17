@@ -258,6 +258,78 @@ func (w *VaultGapWriter) AddGap(ctx context.Context, workflow, entityID, gap str
 	return nil
 }
 
+// VaultPropertyWriter is the production-default PropertyWriter
+// for set_property. Acquires the per-entity write-lock, reads
+// the vault file, merges the given fields into vault.Entity.Data
+// (per-key overwrite), writes back with workflow:<name>
+// commit-author + mirrors into the store. Bus emission of
+// fill.completed is the runner's responsibility (set_property.go)
+// — the writer reports success/failure only.
+type VaultPropertyWriter struct {
+	backend *VaultWriterBackend
+}
+
+// NewVaultPropertyWriter mirrors NewVaultNoteWriter.
+func NewVaultPropertyWriter(b *VaultWriterBackend) *VaultPropertyWriter {
+	return &VaultPropertyWriter{backend: b}
+}
+
+// SetProperties implements PropertyWriter. Read-merge-write
+// loop with per-entity lock. The Data map is initialized when
+// the entity has no prior data.
+func (w *VaultPropertyWriter) SetProperties(ctx context.Context, workflow, entityID string, fields map[string]any) error {
+	if w.backend == nil {
+		return fmt.Errorf("VaultPropertyWriter: backend not wired")
+	}
+	holder := workflowHolder(workflow, "set_property")
+	release, err := w.backend.WriteLocks.Acquire(entityID, holder)
+	if err != nil {
+		return fmt.Errorf("acquire write-lock on %s: %w", entityID, err)
+	}
+	defer release()
+
+	got, err := w.backend.Store.GetEntity(ctx, entityID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("%w: %s", ErrEntityNotFound, entityID)
+		}
+		return fmt.Errorf("store.GetEntity %s: %w", entityID, err)
+	}
+
+	ve, err := w.backend.VaultReader.ReadByID(got.Kind, entityID)
+	if err != nil {
+		if vault.IsNotExist(err) {
+			return fmt.Errorf("%w: %s (vault file missing)", ErrEntityNotFound, entityID)
+		}
+		return fmt.Errorf("vault.Reader.ReadByID %s: %w", entityID, err)
+	}
+
+	if ve.Data == nil {
+		ve.Data = make(map[string]any, len(fields))
+	}
+	for k, v := range fields {
+		ve.Data[k] = v
+	}
+
+	commitMsg := fmt.Sprintf("workflow set_property on %s by %s", ve.ID, workflowAuthor(workflow))
+	if err := w.backend.VaultWriter.WriteWithCommit(ctx, ve, commitMsg, workflowAuthor(workflow)); err != nil {
+		return fmt.Errorf("vault.Writer.WriteWithCommit %s: %w", entityID, err)
+	}
+
+	if err := w.backend.Store.UpsertEntity(ctx, &store.Entity{
+		ID:        ve.ID,
+		Kind:      ve.Kind,
+		Data:      vaultEntityDataForDB(ve),
+		CreatedAt: got.CreatedAt,
+		GapState:  vaultGapStateForDB(ve.GapState),
+	}); err != nil {
+		w.backend.logger().Warn(
+			"workflow set_property: store.UpsertEntity failed (vault already written)",
+			"entity_id", entityID, "err", err)
+	}
+	return nil
+}
+
 // workflowAuthor returns the canonical `workflow:<name>`
 // attribution string used for Note.Author + commit-author
 // stamps per ADR-0024 Source vocabulary.
