@@ -324,10 +324,10 @@ Required (non-empty) when the workflow has `add_gap` actions; otherwise optional
 ## 10. `auto_archive_on_done`
 
 ```yaml
-auto_archive_on_done: true
+auto_archive_on_done: false
 ```
 
-When true and the workflow produces `task_append` actions, the engine marks the task as eligible for auto-archive once all its sections are resolved (per the task surface in [`docs/tasks.md`](./tasks.md), forthcoming). Default false; explicit opt-in.
+Controls whether `task_resolve` on a task spawned by this workflow auto-archives the task file to `tasks/_archive/<id>.md` (per the task surface in [`docs/tasks.md`](./tasks.md)). **Default `true`** per ADR-0024 §"Task" — auto-archive on done is the standard path. Workflows that want the operator's completed-tasks audit trail to stick around explicitly opt OUT via `auto_archive_on_done: false`. Err-tasks always auto-archive regardless of the opt-out (per ADR-0024 §"Runtime errors").
 
 ## 11. Worked example: GitHub notification classifier
 
