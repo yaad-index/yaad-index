@@ -97,9 +97,11 @@ type GapSpec struct {
 // fields → unambiguous decode → merge logic in UnmarshalYAML
 // picks whichever was set.
 //
-// Kinds is decoded as a raw yaml.Node so the polymorphic shape
-// (scalar `"*"` vs list `["person", "boardgame"]`) is resolved in
-// UnmarshalYAML rather than at field-decode time.
+// Kinds uses the typed kindsYAML shape so the polymorphic field
+// (scalar `"*"` vs sequence `["person", "boardgame"]`) decodes
+// uniformly via kindsYAML.UnmarshalYAML — yaml.v3 v3.0.1 cannot
+// decode either shape into a bare `*yaml.Node` field (#141), so
+// we route through a custom unmarshaler instead.
 type gapSpecYAML struct {
 	Type string `yaml:"type"`
 	Description string `yaml:"description"`
@@ -108,7 +110,47 @@ type gapSpecYAML struct {
 	Range []int `yaml:"range"`
 	MaxLength int `yaml:"max_length"`
 	Values []string `yaml:"values"`
-	Kinds *yaml.Node `yaml:"kinds"`
+	Kinds kindsYAML `yaml:"kinds"`
+}
+
+// kindsYAML decodes the polymorphic `kinds:` field. Two accepted
+// shapes per ADR-0021 + yaad-index:
+//
+//   - Scalar `"*"` → `[]string{"*"}` (wildcard sentinel).
+//   - Sequence `[person, boardgame]` (block or flow) → verbatim.
+//
+// Absent / nil decodes to nil. Any other shape (mapping, nested
+// sequence, non-scalar list entries) rejects at config-load time.
+//
+// The custom UnmarshalYAML bypasses the yaml.v3 v3.0.1
+// `*yaml.Node` decode bug (#141): the library can't unmarshal
+// !!seq or !!str into a yaml.Node struct field, but it routes
+// through this method's `*yaml.Node` parameter cleanly.
+type kindsYAML []string
+
+func (k *kindsYAML) UnmarshalYAML(value *yaml.Node) error {
+	if value == nil || value.Kind == 0 {
+		return nil
+	}
+	switch value.Kind {
+	case yaml.ScalarNode:
+		// Bare scalar → single-entry slice. Validation downstream
+		// enforces that "*" is the only legal scalar.
+		*k = []string{value.Value}
+		return nil
+	case yaml.SequenceNode:
+		out := make([]string, 0, len(value.Content))
+		for _, c := range value.Content {
+			if c.Kind != yaml.ScalarNode {
+				return fmt.Errorf("kinds list entries must be scalars, got kind %d", c.Kind)
+			}
+			out = append(out, c.Value)
+		}
+		*k = out
+		return nil
+	default:
+		return fmt.Errorf("kinds must be a scalar `\"*\"` or a list of strings, got kind %d", value.Kind)
+	}
 }
 
 // CanonicalTypeName is the GapSpec.Type sentinel for the
@@ -148,10 +190,6 @@ func (g *GapSpec) UnmarshalYAML(value *yaml.Node) error {
 	if desc == "" {
 		desc = p.Prompt
 	}
-	kinds, err := decodeKindsYAML(p.Kinds)
-	if err != nil {
-		return fmt.Errorf("decode GapSpec.kinds: %w", err)
-	}
 	*g = GapSpec{
 		Type: p.Type,
 		Description: desc,
@@ -159,37 +197,9 @@ func (g *GapSpec) UnmarshalYAML(value *yaml.Node) error {
 		Range: p.Range,
 		MaxLength: p.MaxLength,
 		Values: p.Values,
-		Kinds: kinds,
+		Kinds: []string(p.Kinds),
 	}
 	return nil
-}
-
-// decodeKindsYAML resolves the polymorphic `kinds:` field per
-// yaad-index: scalar `"*"` decodes to []string{"*"}; list
-// `["person", "boardgame"]` decodes verbatim. Absent / nil
-// returns nil; any other shape rejects loudly so config typos
-// surface at server start.
-func decodeKindsYAML(node *yaml.Node) ([]string, error) {
-	if node == nil || node.Kind == 0 {
-		return nil, nil
-	}
-	switch node.Kind {
-	case yaml.ScalarNode:
-		// Bare scalar → single-entry slice. Validation downstream
-		// enforces that "*" is the only legal scalar.
-		return []string{node.Value}, nil
-	case yaml.SequenceNode:
-		out := make([]string, 0, len(node.Content))
-		for _, c := range node.Content {
-			if c.Kind != yaml.ScalarNode {
-				return nil, fmt.Errorf("kinds list entries must be scalars, got kind %d", c.Kind)
-			}
-			out = append(out, c.Value)
-		}
-		return out, nil
-	default:
-		return nil, fmt.Errorf("kinds must be a scalar `\"*\"` or a list of strings, got kind %d", node.Kind)
-	}
 }
 
 // Valid GapSpec.FillStrategy values per ADR-0019 §Per-gap
