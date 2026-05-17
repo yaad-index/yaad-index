@@ -128,17 +128,26 @@ type Decision struct {
 	// when no dedup applied (Fired=false or err-path).
 	DedupPolicyApplied string
 
-	// SuppressedByBackstop is true when the runaway-fire
-	// backstop tripped on this fire's (workflow, entity)
-	// pair per ADR-0024 §"Self-loop detection". The
+	// SuppressedByCycle is true when the structural
+	// cycle-detection backstop tripped on this fire per
+	// #147 / ADR-0024 §"Self-loop detection": the
+	// triggering event's workflow chain already names this
+	// workflow, so firing it again would close a loop. The
 	// evaluation pipeline short-circuits before condition
 	// eval — Fired stays false, MissingRefs / Subject /
 	// DedupKey stay empty, action runner doesn't run. The
-	// first suppressed fire of an active trip also writes
-	// an err-task entry; subsequent suppressed fires log
-	// at DEBUG (no err-task spam) until the sliding
-	// window rolls + the pair drops back below threshold.
-	SuppressedByBackstop bool
+	// first cycle-tripped fire of a workflow chain also
+	// writes an err-task entry naming the offending chain;
+	// subsequent cycle suppressions on the same chain skip
+	// the err-task to avoid spam.
+	SuppressedByCycle bool
+
+	// CycleChain is the workflow-name list the engine saw on
+	// the triggering event when SuppressedByCycle is true.
+	// Logged + persisted on the err-task so operators can
+	// trace W1→W2→W3→W1 loops by name. Empty when not
+	// suppressed.
+	CycleChain []string
 }
 
 // Options configures an Engine.
@@ -184,19 +193,6 @@ type Options struct {
 	// Zero → DefaultDecisionRingSize.
 	DecisionRingSize int
 
-	// BackstopThreshold caps per-(workflow, entity)
-	// re-evaluations within BackstopWindow before the engine
-	// suppresses further fires for that pair. Zero →
-	// DefaultBackstopThreshold. Per ADR-0024 §"Self-loop
-	// detection" the backstop catches runaway re-fires that
-	// slip past per-workflow author discipline + per-pattern
-	// dedup.
-	BackstopThreshold int
-
-	// BackstopWindow is the sliding-window duration the
-	// backstop counts fires within. Zero →
-	// DefaultBackstopWindow.
-	BackstopWindow time.Duration
 }
 
 // DefaultIngestTimeout caps Engine.Dispatch's wait on the
@@ -205,15 +201,6 @@ type Options struct {
 // modest tracker overhead. Production main.go can override
 // per its operator-config.
 const DefaultIngestTimeout = 60 * time.Second
-
-// DefaultBackstopThreshold + DefaultBackstopWindow encode
-// ADR-0024 §"Self-loop detection" engine-backstop defaults:
-// >10 fires on the same (workflow, entity) pair within 60s
-// → suppress + err-task. Production main.go can override.
-const (
-	DefaultBackstopThreshold = 10
-	DefaultBackstopWindow    = 60 * time.Second
-)
 
 // DefaultDecisionRingSize bounds the engine's in-memory
 // decision history when DecisionRingSize is unset. Sized to
@@ -227,16 +214,14 @@ const DefaultDecisionRingSize = 1024
 // Reconcile(workflows); use Decisions() to inspect the
 // recorded history.
 type Engine struct {
-	bus               eventbus.Bus
-	resolver          EntityResolver
-	runner            actions.Runner
-	errTaskWriter     actions.ErrTaskWriter
-	ingestRouter      IngestRouter
-	ingestTimeout     time.Duration
-	backstopThreshold int
-	backstopWindow    time.Duration
-	logger            *slog.Logger
-	ringSize          int
+	bus           eventbus.Bus
+	resolver      EntityResolver
+	runner        actions.Runner
+	errTaskWriter actions.ErrTaskWriter
+	ingestRouter  IngestRouter
+	ingestTimeout time.Duration
+	logger        *slog.Logger
+	ringSize      int
 
 	mu        sync.Mutex
 	workflows map[string]*registeredWorkflow
@@ -244,20 +229,14 @@ type Engine struct {
 	decMu     sync.Mutex
 	decisions []Decision
 
-	// backstopMu guards the per-(workflow, entity) fire
-	// history used by the runaway-detection backstop per
-	// ADR-0024 §"Self-loop detection". The map stores a
-	// sliding window of recent fire timestamps for each
-	// pair; on each fire the engine prunes entries older
-	// than backstopWindow + checks whether the remaining
-	// count exceeds backstopThreshold. backstopLogged
-	// tracks pairs currently tripped so the err-task only
-	// records the trip once per active suppression window
-	// (cleared when the window clears + the pair drops
-	// back below threshold).
-	backstopMu     sync.Mutex
-	backstopFires  map[backstopKey][]time.Time
-	backstopLogged map[backstopKey]struct{}
+	// cycleMu guards cycleLogged — the set of workflow
+	// chains the engine has already err-tasked for cycle
+	// detection per #147. A chain "fingerprint" (joined
+	// workflow names + the closing workflow) trips once and
+	// stays in the set until a process restart so the same
+	// loop doesn't spam the err-task on every re-fire.
+	cycleMu     sync.Mutex
+	cycleLogged map[string]struct{}
 
 	// dedupMu guards dedupSeen — the set of namespaced
 	// dedup keys this engine has already produced a fire
@@ -288,15 +267,6 @@ type dedupID struct {
 }
 
 // backstopKey names the engine-internal runaway-fire
-// counter's per-pair key — the (workflow, entity-id)
-// scope per ADR-0024 §"Self-loop detection". Empty
-// entity-id pairs (target-less manual fires) still get a
-// counter, scoped to (workflow, "").
-type backstopKey struct {
-	workflow string
-	entityID string
-}
-
 // registeredWorkflow holds the per-workflow runtime state:
 // the parsed Workflow, its compiled programs, and its bus
 // subscriptions. Released atomically on Unregister.
@@ -348,29 +318,18 @@ func New(opts Options) (*Engine, error) {
 	if ingestTimeout <= 0 {
 		ingestTimeout = DefaultIngestTimeout
 	}
-	backstopThreshold := opts.BackstopThreshold
-	if backstopThreshold <= 0 {
-		backstopThreshold = DefaultBackstopThreshold
-	}
-	backstopWindow := opts.BackstopWindow
-	if backstopWindow <= 0 {
-		backstopWindow = DefaultBackstopWindow
-	}
 	return &Engine{
-		bus:               opts.Bus,
-		resolver:          opts.Resolver,
-		runner:            runner,
-		errTaskWriter:     actions.ErrTaskWriterFor(runner),
-		ingestRouter:      opts.IngestRouter,
-		ingestTimeout:     ingestTimeout,
-		backstopThreshold: backstopThreshold,
-		backstopWindow:    backstopWindow,
-		logger:            logger,
-		ringSize:          ring,
-		workflows:         make(map[string]*registeredWorkflow),
-		dedupSeen:         make(map[dedupID]struct{}),
-		backstopFires:     make(map[backstopKey][]time.Time),
-		backstopLogged:    make(map[backstopKey]struct{}),
+		bus:           opts.Bus,
+		resolver:      opts.Resolver,
+		runner:        runner,
+		errTaskWriter: actions.ErrTaskWriterFor(runner),
+		ingestRouter:  opts.IngestRouter,
+		ingestTimeout: ingestTimeout,
+		logger:        logger,
+		ringSize:      ring,
+		workflows:     make(map[string]*registeredWorkflow),
+		dedupSeen:     make(map[dedupID]struct{}),
+		cycleLogged:   make(map[string]struct{}),
 	}, nil
 }
 
@@ -588,7 +547,7 @@ func (e *Engine) makeEdgeHandler(reg *registeredWorkflow) eventbus.Handler {
 		if title := titleOf(toEntity); title != "" {
 			edgeMap["to_title"] = title
 		}
-		e.evaluateAndRecord(ctx, reg, entityID, edgeMap)
+		e.evaluateAndRecord(ctx, reg, entityID, edgeMap, edge.Chain)
 	}
 }
 
@@ -625,7 +584,7 @@ func (e *Engine) makeEntityHandler(reg *registeredWorkflow) eventbus.Handler {
 		if m.Kind != "" && created.Kind != m.Kind {
 			return
 		}
-		e.evaluateAndRecord(ctx, reg, created.ID, nil)
+		e.evaluateAndRecord(ctx, reg, created.ID, nil, created.Chain)
 	}
 }
 
@@ -648,7 +607,7 @@ func (e *Engine) makeFillHandler(reg *registeredWorkflow) eventbus.Handler {
 		if m.Source != "" && string(fill.SourceTag) != m.Source {
 			return
 		}
-		e.evaluateAndRecord(ctx, reg, fill.EntityID, nil)
+		e.evaluateAndRecord(ctx, reg, fill.EntityID, nil, fill.Chain)
 	}
 }
 
@@ -658,20 +617,31 @@ func (e *Engine) makeFillHandler(reg *registeredWorkflow) eventbus.Handler {
 // Each step's failure mode is folded into the recorded
 // Decision (Err or MissingRefs) so the engine never blocks
 // on a single workflow's misbehavior.
-func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow, entityID string, edge map[string]any) {
+func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow, entityID string, edge map[string]any, chain []string) {
 	dec := Decision{
 		Workflow: reg.workflow.Name,
 		EntityID: entityID,
 		At:       time.Now().UTC(),
 	}
 
-	// Phase 5.D backstop — runaway-fire detection per
-	// ADR-0024 §"Self-loop detection". Suppress further
-	// fires + write a single err-task entry on the first
-	// trip.
-	if e.applyBackstop(ctx, &dec) {
+	// #147 structural cycle detection per ADR-0024 §"Self-loop
+	// detection": when the triggering event's workflow chain
+	// already names this workflow, firing it again would close
+	// a loop. Suppress + record an err-task on the first
+	// suppression of this chain shape.
+	if e.applyCycleCheck(ctx, &dec, chain) {
 		return
 	}
+
+	// Append this workflow to the chain for downstream events
+	// the action runner publishes (writers read the chain from
+	// ctx via eventbus.WorkflowChainFromContext + attach it to
+	// the events they emit). This is what propagates the chain
+	// across the W1 → W2 → W3 → W1 detection axis.
+	childChain := make([]string, 0, len(chain)+1)
+	childChain = append(childChain, chain...)
+	childChain = append(childChain, reg.workflow.Name)
+	ctx = eventbus.WithWorkflowChain(ctx, childChain)
 
 	entity, err := e.resolveEntity(ctx, entityID)
 	if err != nil {
@@ -753,69 +723,53 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 	}
 }
 
-// applyBackstop wires backstopCheck into the evaluation
-// pipeline. On a tripped pair: records a Decision with
-// SuppressedByBackstop=true (so the ring buffer reflects
-// the suppression) + writes a single err-task entry on the
-// first trip of an active window. Subsequent suppressed
-// fires within the same active trip skip the err-task to
-// avoid spam — Decisions() still shows every suppressed
-// fire so operator-side visibility isn't lost.
+// applyCycleCheck implements the #147 structural cycle
+// detection that replaces the prior per-(workflow, entity)
+// rate-limit backstop. The triggering event's workflow chain
+// names every workflow whose firing produced the event; when
+// the current workflow is already in that chain, firing it
+// again would close a loop. Suppress + record a Decision
+// with SuppressedByCycle=true + write a single err-task entry
+// the first time the engine sees this particular chain-shape
+// loop (the chain fingerprint is unique per loop closure, so
+// the same loop won't err-task-spam on re-fire).
 //
 // Returns true when the fire is suppressed (caller must
 // abort the evaluation pipeline).
-func (e *Engine) applyBackstop(ctx context.Context, dec *Decision) bool {
-	suppressed, firstTrip := e.backstopCheck(dec.Workflow, dec.EntityID, dec.At)
-	if !suppressed {
-		return false
-	}
-	dec.SuppressedByBackstop = true
-	e.recordDecision(*dec)
-	if firstTrip && e.errTaskWriter != nil {
-		msg := fmt.Sprintf("backstop: workflow re-evaluated >%d times within %s on entity %q; further fires suppressed until the sliding window clears",
-			e.backstopThreshold, e.backstopWindow, dec.EntityID)
-		if err := e.errTaskWriter.AppendErrTask(ctx, dec.Workflow, dec.At, dec.EntityID, msg); err != nil {
-			e.logger.Warn("workflow err-task append failed (backstop)",
-				"workflow", dec.Workflow, "err", err.Error())
+func (e *Engine) applyCycleCheck(ctx context.Context, dec *Decision, chain []string) bool {
+	for _, w := range chain {
+		if w == dec.Workflow {
+			dec.SuppressedByCycle = true
+			dec.CycleChain = append([]string(nil), chain...)
+			e.recordDecision(*dec)
+			e.maybeWriteCycleErrTask(ctx, dec, chain)
+			return true
 		}
 	}
-	return true
+	return false
 }
 
-// backstopCheck records the per-(workflow, entity) fire +
-// reports whether the pair has tripped the runaway-fire
-// backstop per ADR-0024 §"Self-loop detection". Returns
-// (suppressed=true) when the pair's fire count within
-// backstopWindow exceeds backstopThreshold. firstTrip is
-// true only on the first suppressed fire of an active trip
-// — used by the caller to decide whether to write a single
-// err-task entry. Subsequent suppressed fires within the
-// same trip window report firstTrip=false; the trip
-// "re-arms" once the window naturally rolls + the pair
-// drops back below threshold.
-func (e *Engine) backstopCheck(workflow, entityID string, now time.Time) (suppressed, firstTrip bool) {
-	key := backstopKey{workflow: workflow, entityID: entityID}
-	cutoff := now.Add(-e.backstopWindow)
-	e.backstopMu.Lock()
-	defer e.backstopMu.Unlock()
-	fires := e.backstopFires[key]
-	pruned := fires[:0]
-	for _, t := range fires {
-		if t.After(cutoff) {
-			pruned = append(pruned, t)
-		}
+// maybeWriteCycleErrTask writes a single err-task entry per
+// (closing-workflow, chain-fingerprint) so a re-firing loop
+// doesn't append per-fire to the workflow's err-task.
+func (e *Engine) maybeWriteCycleErrTask(ctx context.Context, dec *Decision, chain []string) {
+	if e.errTaskWriter == nil {
+		return
 	}
-	pruned = append(pruned, now)
-	e.backstopFires[key] = pruned
-	if len(pruned) > e.backstopThreshold {
-		if _, alreadyLogged := e.backstopLogged[key]; alreadyLogged {
-			return true, false
-		}
-		e.backstopLogged[key] = struct{}{}
-		return true, true
+	fingerprint := dec.Workflow + "|" + strings.Join(chain, ">")
+	e.cycleMu.Lock()
+	if _, already := e.cycleLogged[fingerprint]; already {
+		e.cycleMu.Unlock()
+		return
 	}
-	delete(e.backstopLogged, key)
-	return false, false
+	e.cycleLogged[fingerprint] = struct{}{}
+	e.cycleMu.Unlock()
+	msg := fmt.Sprintf("cycle suppressed: workflow %q already in event chain %v on entity %q; further fires on the same chain stay suppressed",
+		dec.Workflow, chain, dec.EntityID)
+	if err := e.errTaskWriter.AppendErrTask(ctx, dec.Workflow, dec.At, dec.EntityID, msg); err != nil {
+		e.logger.Warn("workflow err-task append failed (cycle)",
+			"workflow", dec.Workflow, "err", err.Error())
+	}
 }
 
 // applyDedupPolicy renders the workflow's dedup key against
@@ -1255,7 +1209,9 @@ func (e *Engine) Dispatch(ctx context.Context, name, input string) (Decision, er
 		target = id
 	}
 
-	e.evaluateAndRecord(ctx, reg, target, nil)
+	// Manual dispatch starts a fresh chain — no upstream
+	// workflow firing produced this invocation.
+	e.evaluateAndRecord(ctx, reg, target, nil, nil)
 	return e.findRecentDecision(name, target), nil
 }
 
@@ -1289,10 +1245,12 @@ func (e *Engine) runEvaluation(ctx context.Context, reg *registeredWorkflow, ent
 		At:       time.Now().UTC(),
 	}
 
-	// Phase 5.D backstop check — same shape as
-	// evaluateAndRecord; short-circuits before any
-	// evaluation runs.
-	if e.applyBackstop(ctx, &dec) {
+	// #147 cycle check — same shape as evaluateAndRecord;
+	// short-circuits before any evaluation runs. runEvaluation
+	// is the no-upstream-chain shape (Dispatch path) so the
+	// chain is always empty here; the check is defensive in
+	// case a future caller threads a chain in.
+	if e.applyCycleCheck(ctx, &dec, nil) {
 		return
 	}
 

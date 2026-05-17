@@ -104,12 +104,14 @@ func (d *dispatcher) runSetProperty(ctx context.Context, idx int, _ *parser.Work
 	// workflow X on a property X itself injected.
 	if d.bus != nil && dec.Workflow != "" {
 		source := eventbus.WorkflowSource(dec.Workflow)
+		chain := eventbus.WorkflowChainFromContext(ctx)
 		for _, name := range fieldNames {
 			d.bus.Publish(ctx, eventbus.FillCompletedEvent{
 				EntityID:  target,
 				Gap:       name,
 				SourceTag: source,
 				At:        dec.At,
+				Chain:     chain,
 			})
 		}
 	}

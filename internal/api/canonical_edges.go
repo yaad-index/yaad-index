@@ -120,6 +120,7 @@ func applyCanonicalTypeEdges(
 					Kind:      kind,
 					SourceTag: source,
 					At:        time.Now().UTC(),
+					Chain:     eventbus.WorkflowChainFromContext(ctx),
 				})
 			}
 			if err := st.CreateEdge(ctx, &store.Edge{
@@ -141,6 +142,7 @@ func applyCanonicalTypeEdges(
 					EdgeType:  op.Field,
 					SourceTag: source,
 					At:        time.Now().UTC(),
+					Chain:     eventbus.WorkflowChainFromContext(ctx),
 				})
 			}
 		}
@@ -222,6 +224,7 @@ func appendDataviewParagraphs(
 					Gap:       op.Field,
 					SourceTag: source,
 					At:        now,
+					Chain:     eventbus.WorkflowChainFromContext(ctx),
 				})
 			}
 		}

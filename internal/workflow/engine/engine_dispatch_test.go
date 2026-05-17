@@ -7,6 +7,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -596,10 +597,15 @@ func (r *recordingRunner) snapshot() []recordedRun {
 // suppresses further fires + writes a single err-task entry.
 // Test uses a tight threshold (3) + a long window so the
 // sliding-window prune doesn't interfere.
-func TestEngine_Backstop_TripsAfterThreshold(t *testing.T) {
+// TestEngine_Cycle_SuppressedWhenWorkflowInChain pins the
+// #147 structural cycle detection that replaced the prior
+// per-(workflow, entity) rate-limit backstop. When a workflow
+// fires on an event whose Chain already names that workflow,
+// firing it again would close a loop; the engine suppresses
+// the fire + writes a single err-task naming the chain.
+func TestEngine_Cycle_SuppressedWhenWorkflowInChain(t *testing.T) {
 	t.Parallel()
 	errWriter := &fakeErrTaskWriter{}
-	rec := &recordingRunner{}
 	bus := eventbus.NewMemoryBus()
 	resolver := newFakeResolver(map[string]map[string]any{
 		"e:1": {"id": "e:1"},
@@ -610,19 +616,13 @@ func TestEngine_Backstop_TripsAfterThreshold(t *testing.T) {
 	})
 	eng, err := New(Options{
 		Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger(),
-		BackstopThreshold: 3,
-		BackstopWindow:    time.Minute,
 	})
 	require.NoError(t, err)
-	// Use the recordingRunner via a second wf that's NOT
-	// the one we're spamming so we can keep track. Actually
-	// we just use the engine's Decisions() ring to verify.
-	_ = rec
 
 	wf := &parser.Workflow{
 		Name:           "loop",
 		AllowedPlugins: []string{"yaad-gmail"},
-		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeEntityCreated},
 		Subject:        "entity.id",
 		Actions: []parser.Action{{TaskAppend: &parser.TaskAppendAction{
 			Section: "s", Content: "'x'",
@@ -630,45 +630,39 @@ func TestEngine_Backstop_TripsAfterThreshold(t *testing.T) {
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
-	// Fire 5 times — threshold is 3, so fires 4 + 5 trip the
-	// backstop.
-	for i := 0; i < 5; i++ {
-		_, err = eng.Dispatch(context.Background(), "loop", "e:1")
-		require.NoError(t, err)
-	}
+	// Publish an event whose Chain already names the workflow
+	// — this is what the engine produces when an action runner
+	// emits a child event mid-fire. The handler should detect
+	// the cycle and suppress.
+	bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
+		ID:        "e:1",
+		Kind:      "any",
+		SourceTag: eventbus.WorkflowSource("loop"),
+		At:        time.Now().UTC(),
+		Chain:     []string{"loop"}, // <-- workflow already in chain
+	})
 
 	decs := eng.Decisions()
-	require.Len(t, decs, 5)
-	// First three fires: normal evaluation.
-	for i := 0; i < 3; i++ {
-		assert.False(t, decs[i].SuppressedByBackstop,
-			"fire %d should be below threshold", i+1)
-	}
-	// Fires 4 + 5: suppressed.
-	assert.True(t, decs[3].SuppressedByBackstop, "fire 4 suppressed (just over threshold)")
-	assert.True(t, decs[4].SuppressedByBackstop, "fire 5 still suppressed")
+	require.Len(t, decs, 1)
+	assert.True(t, decs[0].SuppressedByCycle, "cycle should be detected")
+	assert.Equal(t, []string{"loop"}, decs[0].CycleChain)
 
-	// Err-task fired ONCE on the first trip — subsequent
-	// suppressed fires don't re-spam.
 	errCalls := errWriter.snapshot()
 	require.Len(t, errCalls, 1)
 	assert.Equal(t, "loop", errCalls[0].workflow)
-	assert.Equal(t, "e:1", errCalls[0].entityID)
-	assert.Contains(t, errCalls[0].errMsg, "backstop")
-	assert.Contains(t, errCalls[0].errMsg, "suppressed")
+	assert.Contains(t, errCalls[0].errMsg, "cycle suppressed")
 }
 
-// TestEngine_Backstop_DistinctEntitiesIndependent: the
-// counter is per-(workflow, entity), so two different
-// entities firing on the same workflow each have their own
-// budget.
-func TestEngine_Backstop_DistinctEntitiesIndependent(t *testing.T) {
+// TestEngine_Cycle_RepeatedTripsDoNotSpamErrTask pins the
+// fingerprint dedup: a chain that fires N times for the same
+// (workflow, chain-shape) only writes ONE err-task entry —
+// subsequent suppressions skip the writer to avoid spam.
+func TestEngine_Cycle_RepeatedTripsDoNotSpamErrTask(t *testing.T) {
 	t.Parallel()
 	errWriter := &fakeErrTaskWriter{}
 	bus := eventbus.NewMemoryBus()
 	resolver := newFakeResolver(map[string]map[string]any{
-		"e:a": {"id": "e:a"},
-		"e:b": {"id": "e:b"},
+		"e:1": {"id": "e:1"},
 	})
 	runner := actions.New(actions.Options{
 		TaskWriter:    &noopTaskWriter{},
@@ -676,31 +670,136 @@ func TestEngine_Backstop_DistinctEntitiesIndependent(t *testing.T) {
 	})
 	eng, err := New(Options{
 		Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger(),
-		BackstopThreshold: 2,
-		BackstopWindow:    time.Minute,
 	})
 	require.NoError(t, err)
 
 	wf := &parser.Workflow{
 		Name:           "loop",
 		AllowedPlugins: []string{"yaad-gmail"},
-		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeEntityCreated},
 		Subject:        "entity.id",
-		Actions: []parser.Action{{TaskAppend: &parser.TaskAppendAction{
-			Section: "s", Content: "'x'",
-		}}},
+		Actions:        []parser.Action{{TaskAppend: &parser.TaskAppendAction{Section: "s", Content: "'x'"}}},
 	}
 	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
 
-	// 2 fires on each entity = at threshold, none tripped.
-	for i := 0; i < 2; i++ {
-		_, err = eng.Dispatch(context.Background(), "loop", "e:a")
-		require.NoError(t, err)
-		_, err = eng.Dispatch(context.Background(), "loop", "e:b")
-		require.NoError(t, err)
+	for i := 0; i < 5; i++ {
+		bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
+			ID: "e:1", Kind: "any",
+			SourceTag: eventbus.WorkflowSource("loop"),
+			At:        time.Now().UTC(),
+			Chain:     []string{"loop"},
+		})
+	}
+
+	decs := eng.Decisions()
+	require.Len(t, decs, 5)
+	for i, d := range decs {
+		assert.True(t, d.SuppressedByCycle, "fire %d should be suppressed", i+1)
+	}
+	// Err-task fired only ONCE for the (workflow, chain) pair.
+	assert.Len(t, errWriter.snapshot(), 1,
+		"repeated suppressions on the same (workflow, chain) fingerprint must not re-spam the err-task")
+}
+
+// TestEngine_Cycle_DistinctChainsLogIndependently: two
+// different chain shapes that both close on the same workflow
+// each get their own err-task entry — the dedup is per-chain,
+// not per-workflow.
+func TestEngine_Cycle_DistinctChainsLogIndependently(t *testing.T) {
+	t.Parallel()
+	errWriter := &fakeErrTaskWriter{}
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"e:1": {"id": "e:1"},
+	})
+	runner := actions.New(actions.Options{
+		TaskWriter:    &noopTaskWriter{},
+		ErrTaskWriter: errWriter,
+	})
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+
+	wf := &parser.Workflow{
+		Name:           "router",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeEntityCreated},
+		Subject:        "entity.id",
+		Actions:        []parser.Action{{TaskAppend: &parser.TaskAppendAction{Section: "s", Content: "'x'"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
+		ID: "e:1", Kind: "any",
+		SourceTag: eventbus.WorkflowSource("router"),
+		At:        time.Now().UTC(),
+		Chain:     []string{"router", "tagger"},
+	})
+	bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
+		ID: "e:1", Kind: "any",
+		SourceTag: eventbus.WorkflowSource("router"),
+		At:        time.Now().UTC(),
+		Chain:     []string{"router", "enricher"},
+	})
+
+	calls := errWriter.snapshot()
+	require.Len(t, calls, 2, "distinct chain shapes log independently")
+}
+
+// TestEngine_Cycle_HighVolumeDistinctEntitiesNotSuppressed
+// pins the #147 anti-false-positive: 100 distinct events
+// from independent fresh-ingest sources (no upstream
+// workflow chain) all fire the workflow successfully.
+// The prior per-entity rate-limit would have suppressed
+// fires 11..100 once they hit the same target entity; cycle
+// detection looks at the chain, not the per-entity count,
+// so all 100 pass.
+func TestEngine_Cycle_HighVolumeDistinctEntitiesNotSuppressed(t *testing.T) {
+	t.Parallel()
+	errWriter := &fakeErrTaskWriter{}
+	bus := eventbus.NewMemoryBus()
+	entities := make(map[string]map[string]any, 100)
+	for i := 0; i < 100; i++ {
+		id := fmt.Sprintf("email:%d", i)
+		entities[id] = map[string]any{"id": id}
+	}
+	resolver := newFakeResolver(entities)
+	runner := actions.New(actions.Options{
+		TaskWriter:    &noopTaskWriter{},
+		ErrTaskWriter: errWriter,
+	})
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+
+	wf := &parser.Workflow{
+		Name:           "github-classify",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeEntityCreated},
+		Subject:        "entity.id",
+		Actions:        []parser.Action{{TaskAppend: &parser.TaskAppendAction{Section: "s", Content: "'x'"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	for i := 0; i < 100; i++ {
+		bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
+			ID:        fmt.Sprintf("email:%d", i),
+			Kind:      "any",
+			SourceTag: eventbus.SourceAgent,
+			At:        time.Now().UTC(),
+			// No chain — fresh ingest from agent.
+		})
+	}
+
+	decs := eng.Decisions()
+	require.Len(t, decs, 100)
+	for _, d := range decs {
+		assert.False(t, d.SuppressedByCycle, "no chain → no cycle suppression")
 	}
 	assert.Empty(t, errWriter.snapshot(),
-		"each entity at threshold but not over → no trip")
+		"high-volume fresh-ingest with no chain produces no cycle err-task")
 }
 
 // noopTaskWriter is a no-error TaskWriter for backstop +

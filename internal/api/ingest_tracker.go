@@ -240,6 +240,7 @@ func (t *ingestTracker) publishEntityCreated(ctx context.Context, id, kind strin
 		Kind:      kind,
 		SourceTag: eventbus.SourceAgent,
 		At:        time.Now().UTC(),
+		Chain:     eventbus.WorkflowChainFromContext(ctx),
 	})
 }
 
@@ -256,6 +257,7 @@ func (t *ingestTracker) publishEntityEdgeAdded(ctx context.Context, e *store.Edg
 		EdgeType:  e.Type,
 		SourceTag: eventbus.SourceAgent,
 		At:        time.Now().UTC(),
+		Chain:     eventbus.WorkflowChainFromContext(ctx),
 	})
 }
 

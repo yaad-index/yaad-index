@@ -370,3 +370,44 @@ func TestAllTopics_Closed_Set(t *testing.T) {
 		[]Topic{TopicEntityCreated, TopicEntityEdgeAdded, TopicFillCompleted},
 		AllTopics)
 }
+
+func TestWorkflowChain_RoundtripsThroughContext(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	if chain := WorkflowChainFromContext(ctx); chain != nil {
+		t.Errorf("empty ctx should return nil chain, got %v", chain)
+	}
+	ctx2 := WithWorkflowChain(ctx, []string{"a", "b", "c"})
+	got := WorkflowChainFromContext(ctx2)
+	if len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "c" {
+		t.Errorf("chain roundtrip failed: got %v", got)
+	}
+}
+
+func TestWorkflowChain_FromContextReturnsCopy(t *testing.T) {
+	t.Parallel()
+	ctx := WithWorkflowChain(context.Background(), []string{"a", "b"})
+	got1 := WorkflowChainFromContext(ctx)
+	got1[0] = "MUTATED"
+	got2 := WorkflowChainFromContext(ctx)
+	if got2[0] != "a" {
+		t.Errorf("WorkflowChainFromContext returned aliased slice — mutation leaked: %v", got2)
+	}
+}
+
+func TestEvent_WorkflowChain_Roundtrips(t *testing.T) {
+	t.Parallel()
+	chain := []string{"w1", "w2"}
+	now := time.Now().UTC()
+	cases := []Event{
+		EntityCreatedEvent{ID: "a:b", Kind: "k", SourceTag: SourceAgent, At: now, Chain: chain},
+		EntityEdgeAddedEvent{FromID: "a:b", ToID: "a:c", EdgeType: "t", SourceTag: SourceAgent, At: now, Chain: chain},
+		FillCompletedEvent{EntityID: "a:b", Gap: "g", SourceTag: SourceAgent, At: now, Chain: chain},
+	}
+	for _, e := range cases {
+		got := e.WorkflowChain()
+		if len(got) != 2 || got[0] != "w1" || got[1] != "w2" {
+			t.Errorf("WorkflowChain roundtrip on %T failed: got %v", e, got)
+		}
+	}
+}

@@ -174,6 +174,16 @@ type Event interface {
 	// debounce, dedup-by-recency) read this; clock skew across
 	// publishers isn't a concern in the in-process model.
 	OccurredAt() time.Time
+
+	// WorkflowChain returns the ordered list of workflow names
+	// whose firings produced THIS event (per #147 structural
+	// cycle detection). An event that wasn't produced by any
+	// workflow chain (fresh ingest, agent fill, operator
+	// action) has an empty chain. The engine reads the chain
+	// before firing a workflow on the event; the workflow's
+	// own name appearing in the chain means firing it would
+	// close a cycle, so the engine suppresses + records.
+	WorkflowChain() []string
 }
 
 // EntityCreatedEvent is published when a fresh ingest produces
@@ -198,11 +208,18 @@ type EntityCreatedEvent struct {
 
 	// At is the wall-clock time the entity row was written.
 	At time.Time
+
+	// Chain is the workflow-name list per #147 cycle detection.
+	// Producers reading WorkflowChainFromContext on publish set
+	// this; the engine reads it before firing a workflow and
+	// skips when the workflow's own name appears.
+	Chain []string
 }
 
-func (e EntityCreatedEvent) Topic() Topic          { return TopicEntityCreated }
-func (e EntityCreatedEvent) Source() Source        { return e.SourceTag }
-func (e EntityCreatedEvent) OccurredAt() time.Time { return e.At }
+func (e EntityCreatedEvent) Topic() Topic           { return TopicEntityCreated }
+func (e EntityCreatedEvent) Source() Source         { return e.SourceTag }
+func (e EntityCreatedEvent) OccurredAt() time.Time  { return e.At }
+func (e EntityCreatedEvent) WorkflowChain() []string { return e.Chain }
 
 // EntityEdgeAddedEvent is published when a new edge is attached
 // to an entity. Production sites (per ADR-0024):
@@ -230,11 +247,15 @@ type EntityEdgeAddedEvent struct {
 
 	// At is the wall-clock time the edge row was written.
 	At time.Time
+
+	// Chain is the workflow-name list per #147 cycle detection.
+	Chain []string
 }
 
-func (e EntityEdgeAddedEvent) Topic() Topic          { return TopicEntityEdgeAdded }
-func (e EntityEdgeAddedEvent) Source() Source        { return e.SourceTag }
-func (e EntityEdgeAddedEvent) OccurredAt() time.Time { return e.At }
+func (e EntityEdgeAddedEvent) Topic() Topic           { return TopicEntityEdgeAdded }
+func (e EntityEdgeAddedEvent) Source() Source         { return e.SourceTag }
+func (e EntityEdgeAddedEvent) OccurredAt() time.Time  { return e.At }
+func (e EntityEdgeAddedEvent) WorkflowChain() []string { return e.Chain }
 
 // FillCompletedEvent is published when a gap-fill lands on an
 // entity. The Source tag is the load-bearing field here: the
@@ -256,11 +277,15 @@ type FillCompletedEvent struct {
 
 	// At is the wall-clock time the fill was committed.
 	At time.Time
+
+	// Chain is the workflow-name list per #147 cycle detection.
+	Chain []string
 }
 
-func (e FillCompletedEvent) Topic() Topic          { return TopicFillCompleted }
-func (e FillCompletedEvent) Source() Source        { return e.SourceTag }
-func (e FillCompletedEvent) OccurredAt() time.Time { return e.At }
+func (e FillCompletedEvent) Topic() Topic           { return TopicFillCompleted }
+func (e FillCompletedEvent) Source() Source         { return e.SourceTag }
+func (e FillCompletedEvent) OccurredAt() time.Time  { return e.At }
+func (e FillCompletedEvent) WorkflowChain() []string { return e.Chain }
 
 // Handler is the per-subscription callback the bus invokes on
 // every matching published event. Handlers MUST return quickly
@@ -304,4 +329,39 @@ type Bus interface {
 	// callback dispatch — see Handler's contract for the
 	// runtime expectations.
 	Publish(ctx context.Context, e Event)
+}
+
+// workflowChainKey is the context key for the workflow chain
+// trace per #147. Unexported to keep callers on the With /
+// From helpers below.
+type workflowChainKey struct{}
+
+// WithWorkflowChain returns a derived ctx carrying the given
+// chain. Producers reading WorkflowChainFromContext on their
+// publish path use this to inherit the chain from the
+// workflow-evaluation context: the engine sets the chain
+// before invoking action runners, the writers read it on
+// publish, downstream events carry it forward, and the engine
+// detects cycles when the workflow's own name appears.
+//
+// A nil chain is fine — the producer reads "" and the
+// published event carries an empty Chain field. The "first
+// fire by an outside source" path (ingest, agent fill,
+// operator action) goes through a ctx with no chain.
+func WithWorkflowChain(ctx context.Context, chain []string) context.Context {
+	return context.WithValue(ctx, workflowChainKey{}, chain)
+}
+
+// WorkflowChainFromContext returns the chain attached to ctx,
+// or nil when none is set. Producers use this to populate the
+// Chain field on events they emit. Returns a copy so the
+// caller can append without mutating ctx-stored state.
+func WorkflowChainFromContext(ctx context.Context) []string {
+	v, _ := ctx.Value(workflowChainKey{}).([]string)
+	if len(v) == 0 {
+		return nil
+	}
+	out := make([]string, len(v))
+	copy(out, v)
+	return out
 }

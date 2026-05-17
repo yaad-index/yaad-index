@@ -315,12 +315,14 @@ func handleEntityOperatorFill(
 			}
 		}
 		sort.Strings(setOps)
+		opFillChain := eventbus.WorkflowChainFromContext(r.Context())
 		for _, gap := range setOps {
 			bus.Publish(r.Context(), eventbus.FillCompletedEvent{
 				EntityID:  ve.ID,
 				Gap:       gap,
 				SourceTag: eventbus.SourceOperator,
 				At:        now,
+				Chain:     opFillChain,
 			})
 		}
 
