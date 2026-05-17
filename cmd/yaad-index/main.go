@@ -101,10 +101,20 @@ func (r canonicalLoaderRegistry) RegisteredGapTypes(gap string) []string {
 }
 
 // storeEntityResolver satisfies engine.EntityResolver against
-// the production store.Store. Returns the entity's Data map
-// plus id + kind fields injected so CEL predicates can
-// reference entity.id and entity.kind without operators
-// having to materialize them inside Data.
+// the production store.Store. Returns a nested map:
+//   - top-level `id` + `kind` so CEL predicates can reference
+//     entity.id and entity.kind directly.
+//   - top-level `data` carrying the entity's frontmatter Data
+//     sub-map so predicates can read entity.data.<field>
+//     (e.g. entity.data.subject for a gmail entity).
+//
+// The nested shape matches docs/workflows.md §11's worked
+// example and the canonical CEL access pattern operators
+// declare in their workflow files. The previous shape flattened
+// Data into the top level — entity.data.subject failed CEL
+// evaluation with `no such key: data` even though the entity's
+// vault frontmatter clearly had `data: {subject, date}`
+// populated. Bug fix per #145.
 type storeEntityResolver struct {
 	st store.Store
 }
@@ -117,12 +127,24 @@ func (r *storeEntityResolver) Resolve(ctx context.Context, id string) (map[strin
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]any, len(e.Data)+2)
-	for k, v := range e.Data {
-		out[k] = v
-	}
+	out := make(map[string]any, 3)
 	out["id"] = e.ID
 	out["kind"] = e.Kind
+	// data may be nil for canonical-label thin rows (no
+	// plugin-emitted Data); CEL `has(entity.data)` returns
+	// false against an absent key cleanly, but operators
+	// commonly write `entity.data.X` — a nil sub-map produces
+	// `no such key: X` on the inner access, which is the
+	// expected failure shape (the data field genuinely isn't
+	// there). Workflows that want to guard the missing-data
+	// case use `has(entity.data) && entity.data.X != ""`.
+	if len(e.Data) > 0 {
+		dataMap := make(map[string]any, len(e.Data))
+		for k, v := range e.Data {
+			dataMap[k] = v
+		}
+		out["data"] = dataMap
+	}
 	return out, nil
 }
 
