@@ -82,6 +82,15 @@ type GapStateEntry struct {
 	FilledAt *time.Time `json:"filled_at,omitempty"`
 	Deferred bool `json:"deferred,omitempty"`
 	DeferredAt *time.Time `json:"deferred_at,omitempty"`
+	// DataSchema is the per-key extraction guidance the agent's
+	// fill prompt sees for canonical_type gaps carrying the
+	// optional per-entry `data` map. Workflow `add_gap` injects
+	// this when the workflow knows the shape of data its events
+	// produce; canonical_kinds config provides only the gap's
+	// global type/strategy/range. Map key = data-field name; map
+	// value = natural-language extraction instruction for the
+	// LLM. Empty / nil omits from the wire.
+	DataSchema map[string]string `json:"data_schema,omitempty"`
 }
 
 // ArchivedFilter selects which archive-state subset of entities a

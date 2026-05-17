@@ -72,6 +72,14 @@ type needsFillGapMeta struct {
 	// against the operator's full canonical_kinds registry per
 	// ADR-0008.
 	Kinds []string `json:"kinds,omitempty"`
+	// DataSchema is the optional per-key extraction guidance a
+	// workflow `add_gap` action injected for canonical_type
+	// gaps carrying per-entry `data` (#117). Key = data-field
+	// name; value = natural-language extraction instruction.
+	// Surfaced so the agent's fill-prompt builder can include
+	// the per-key guidance inline. Empty / nil drops via
+	// `omitempty` for gaps without workflow-injected schema.
+	DataSchema map[string]string `json:"data_schema,omitempty"`
 }
 
 // needsFillEntry is one entry on the `entities` array of the
@@ -321,7 +329,7 @@ func buildNeedsFillEntry(
 			continue
 		}
 		gaps[g] = spec.Description
-		meta[g] = needsFillGapMeta{
+		gm := needsFillGapMeta{
 			Type: spec.Type,
 			FillStrategy: spec.FillStrategy,
 			Range: spec.Range,
@@ -329,6 +337,10 @@ func buildNeedsFillEntry(
 			Values: spec.Values,
 			Kinds: spec.Kinds,
 		}
+		if entry, ok := ve.GapState[g]; ok && len(entry.DataSchema) > 0 {
+			gm.DataSchema = entry.DataSchema
+		}
+		meta[g] = gm
 	}
 	if len(gaps) == 0 {
 		return needsFillEntry{}, false

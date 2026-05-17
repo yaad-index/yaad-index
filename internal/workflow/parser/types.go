@@ -293,6 +293,15 @@ type AddGapAction struct {
 	// Gap is the gap-field name to inject. Must be a member of
 	// the workflow's AddableGaps list.
 	Gap string
+
+	// DataSchema is the optional per-key extraction guidance the
+	// agent's fill prompt sees for canonical_type gaps carrying
+	// the optional per-entry `data` map. Map key = data-field
+	// name; map value = natural-language extraction instruction.
+	// Persisted on the gap's GapStateEntry; surfaced on
+	// `/v1/needs-fill` so the prompt builder includes the
+	// instruction set. Empty / nil omits.
+	DataSchema map[string]string
 }
 
 // SetPropertyAction is the `set_property` primitive — writes

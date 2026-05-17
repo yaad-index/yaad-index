@@ -309,6 +309,14 @@ func validateAddGap(a *AddGapAction, addable map[string]struct{}) error {
 	if _, ok := addable[a.Gap]; !ok {
 		return fmt.Errorf("gap %q is not in the workflow's addable_gaps vocabulary", a.Gap)
 	}
+	for k, v := range a.DataSchema {
+		if k == "" {
+			return fmt.Errorf("data_schema key is empty (after trim) — schema field names must be non-empty")
+		}
+		if strings.TrimSpace(v) == "" {
+			return fmt.Errorf("data_schema[%q] value is empty — extraction instruction must be non-empty", k)
+		}
+	}
 	return nil
 }
 

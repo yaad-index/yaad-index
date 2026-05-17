@@ -267,6 +267,44 @@ func TestSaveEntity_GapStateRoundTrip(t *testing.T) {
 	assert.True(t, deferredAt.Equal(*got.GapState["played"].DeferredAt))
 }
 
+// TestSaveEntity_GapStateDataSchemaRoundTrip pins the #117
+// addition: GapStateEntry.DataSchema (workflow-injected per-key
+// extraction guidance) round-trips through SaveEntity →
+// GetEntity verbatim. Empty / nil schemas drop via omitempty so
+// the existing wire shape stays untouched for gaps without
+// workflow-injected schema.
+func TestSaveEntity_GapStateDataSchemaRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := newMemoryStore(t)
+	ctx := context.Background()
+
+	want := fixtureEntity()
+	want.GapState = map[string]GapStateEntry{
+		"hiring_alert_for": {
+			DataSchema: map[string]string{
+				"role":      "the role title in the hiring alert",
+				"salary":    "salary range if mentioned, else omit",
+				"work_mode": "remote / hybrid / onsite if mentioned, else omit",
+			},
+		},
+		"is_interesting_to_me": {}, // no schema — existing shape, unchanged
+	}
+	require.NoError(t, s.SaveEntity(ctx, want), "SaveEntity")
+
+	got, err := s.GetEntity(ctx, want.ID)
+	require.NoError(t, err, "GetEntity")
+	require.Len(t, got.GapState, 2, "gap_state entries round-trip")
+
+	hiring := got.GapState["hiring_alert_for"].DataSchema
+	require.NotNil(t, hiring, "data_schema round-trips")
+	assert.Equal(t, "the role title in the hiring alert", hiring["role"])
+	assert.Equal(t, "salary range if mentioned, else omit", hiring["salary"])
+	assert.Equal(t, "remote / hybrid / onsite if mentioned, else omit", hiring["work_mode"])
+	assert.Nil(t, got.GapState["is_interesting_to_me"].DataSchema,
+		"unschema'd gap stays unschema'd")
+}
+
 // Empty / nil GapState must round-trip as nil — the column stays
 // NULL so existing-row reads see "no metadata" cleanly.
 func TestSaveEntity_GapStateNilStaysNil(t *testing.T) {
