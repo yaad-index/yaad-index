@@ -9,7 +9,7 @@
 
 Plugins emit FetchResult JSON; the daemon writes that into a vault entity file (`<kind>/<local-id>.md`). The file has two surfaces:
 
-1. **Frontmatter** — structured YAML the daemon manages. Plugin-emitted, but ADR-0012 establishes preservation rules: Summary / Tags / Comments / Edges are merged-in-place across re-ingest (operator additions survive).
+1. **Frontmatter** — structured YAML the daemon manages. Plugin-emitted, but ADR-0012 establishes preservation rules: Summary / Tags / Notes / Edges are merged-in-place across re-ingest (operator additions survive).
 2. **Body** — the markdown content under the frontmatter. Today the daemon REPLACES the body wholesale from plugin output on every re-ingest.
 
 This becomes a problem the moment a plugin starts emitting non-trivial body content (e.g.,: render boardgame entity body with title heading + image embed + description text). An operator who appends `## Notes` with their own observations gets that wiped on the next re-ingest. ADR-0012's user-content surface (`/v1/user-content/`) is a separate entity track; it doesn't cover hand-written prose inside a plugin-emitted entity's `.md`.

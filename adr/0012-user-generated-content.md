@@ -12,7 +12,7 @@ There's a second pattern this doesn't cover: **content the user originates with 
 - Project / design write-ups that should connect to other entities (people, ideas, tags) via the same edge mechanism plugin entities use.
 - Long-form narrative content the user composes interactively with the agent.
 
-Today these live in vault folders outside the entity-graph layer. Agents can't link them via edges; canonical-axis tools (search, kind-discovery) don't see them; comments-on-entity doesn't apply.
+Today these live in vault folders outside the entity-graph layer. Agents can't link them via edges; canonical-axis tools (search, kind-discovery) don't see them; notes-on-entity doesn't apply.
 
 Routing this through a plugin (operator-configured subprocess that the agent invokes via Fetch) would work mechanically, but the lifecycle is wrong: plugins fetch from upstream, expire on TTL, refresh on cache miss. User-generated content has no upstream and no expiry; the agent doesn't refetch a memory.
 
@@ -20,7 +20,7 @@ A first-class in-process entity source pattern fits cleaner — no subprocess, n
 
 ## Decision
 
-**Add a built-in entity source `user-content` that lets the agent originate entities directly, with the same edge / canonical-axis / comments machinery the plugin path uses.**
+**Add a built-in entity source `user-content` that lets the agent originate entities directly, with the same edge / canonical-axis / notes machinery the plugin path uses.**
 
 ### Entity shape
 
@@ -61,7 +61,7 @@ DELETE /v1/user-content/{id} — delete entity
 
 `{sec}` addressing: heading-text-slug for unique-heading sections OR positional index (`0`, `1`, …). Server canonicalizes either form. Positional is the disambiguating fallback when two headings slugify identically (rare for UGC, but possible).
 
-**Auth (per yaad-index–, mirrors comment author validation from a prior PR).** All endpoints require Bearer JWT. Create stamps the JWT subject as `author` and the operator from the pair-claim. Edit / delete is restricted to (a) the original author OR (b) the operator on behalf of any agent. Cross-author edit returns 403 `author_mismatch`.
+**Auth (per yaad-index–, mirrors note author validation from a prior PR).** All endpoints require Bearer JWT. Create stamps the JWT subject as `author` and the operator from the pair-claim. Edit / delete is restricted to (a) the original author OR (b) the operator on behalf of any agent. Cross-author edit returns 403 `author_mismatch`.
 
 **Concurrency.** PUT requires `If-Match: <etag>` to prevent lost-update on simultaneous section edits; the etag scheme (per-section body hash vs. whole-entity content-hash) is settled by the write-endpoint implementation PR. 412 on mismatch.
 
@@ -79,7 +79,7 @@ Multi-write provenance under `source: user` accumulates as:
 - The original create write (one row).
 - Each section-level edit (one row per PUT).
 - Each hand-edit-and-reindex (one row, captured by reindex).
-- Each comment append (a separate `comments:` write, not a fresh provenance row).
+- Each note append (a separate `notes:` write, not a fresh provenance row).
 
 ### Edges
 
@@ -115,20 +115,20 @@ Operator config gating applies regardless of which shape — DB rows only for in
 
 The user-facing edge types — `idea`, `design`, `memory`, etc. — are simply edge types the operator registers in `canonical_edge_types`. There's nothing UGC-specific about them; any plugin can emit edges of those types too. `user-content` entities just happen to be the most common emitter of `idea` / `design` / `memory` edges.
 
-### Comments
+### Notes
 
-UGC entities support comments per ADR-0010 / — same body-section single-column-table format, append-only.
+UGC entities support notes per ADR-0010 / — same body-section single-column-table format, append-only.
 
 ### Storage
 
 - Vault path: `<vault>/user-content/<slug>.md`. Top-level folder mirroring the kind prefix (matches the existing `<vault>/<kind>/<slug>.md` convention from ADR-0008).
-- File body holds `body` + the standard `## Edges` / `## Comments` rendered sections.
+- File body holds `body` + the standard `## Edges` / `## Notes` rendered sections.
 
 ## Consequences
 
 **Enables:**
 - The agent and user can originate entities cleanly without faking a plugin or routing through external-fetch lifecycle.
-- UGC participates in the existing graph: search, edges (via `canonical_edge_types` config), comments, single-hop GET body.
+- UGC participates in the existing graph: search, edges (via `canonical_edge_types` config), notes, single-hop GET body.
 - A future "render UGC linked from a plugin entity" view comes for free — the edge layer is uniform.
 
 **Costs:**
@@ -152,5 +152,5 @@ UGC entities support comments per ADR-0010 / — same body-section single-column
 ## Open follow-ups
 
 - Slug derivation rules for UGC titles (ASCII-fold, dedupe-suffix on collision). Punt to the implementation PR.
-- Reindex behavior on hand-edit of UGC body / frontmatter — preserve user edits or re-render. Same question as comments Per the prior design,'s open list.
+- Reindex behavior on hand-edit of UGC body / frontmatter — preserve user edits or re-render. Same question as notes Per the prior design,'s open list.
 - Search inclusion of UGC `body` — defer to's evolution. UGC will participate in `search_local` once that surface gets text-body indexing.

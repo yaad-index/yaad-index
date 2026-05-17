@@ -19,7 +19,7 @@ In-side (real, against the operator-configured yaad-index):
 | `needs_fill(limit?, cursor?)` | GET `/v1/needs-fill`. Browse the open-gap queue: entities with unfilled gaps that haven't been gap-called for the current fetch-cycle. Paginated via opaque `next_cursor`; agent passes it back as-is on the next call until absent (queue exhausted). Verbatim pass-through; no auto-pagination. |
 | `cv_status()` | GET `/v1/cv-status`. Canonical-vocabulary drift snapshot: per-(plugin, kind/edge_type) counters of canonical stubs the operator's config dropped at ingest time, plus `config_hash` for change detection and `last_reindex_at` for the operator-prompted reindex hint. Verbatim pass-through. Agents that cache key on `config_hash`. |
 | `fill(id, fields)` | POST `/v1/entities/{id}/fill`. Each key in `fields` must be a current gap on the entity; returns the updated entity + remaining gap names. |
-| `add_comment(entity_id, text, author?)` | POST `/v1/entities/{id}/comments` (via the comments API). Server stamps `date` UTC, `author` from JWT subject (when omitted), and `operator` from the pair-claim. Explicit `author` MUST equal the JWT subject or upstream returns `{ok:false, error:"author_mismatch"}` verbatim. Distinct from other tools: 4xx error envelopes pass through structured (no exception) so the agent can branch on `error === "author_mismatch"` / `"missing_authorization"`. |
+| `add_note(entity_id, text, author?)` | POST `/v1/entities/{id}/notes` (via the notes API). Server stamps `date` UTC, `author` from JWT subject (when omitted), and `operator` from the pair-claim. Explicit `author` MUST equal the JWT subject or upstream returns `{ok:false, error:"author_mismatch"}` verbatim. Distinct from other tools: 4xx error envelopes pass through structured (no exception) so the agent can branch on `error === "author_mismatch"` / `"missing_authorization"`. |
 | `list_entities(kind)` | GET `/v1/search?kind=...&limit=100`. `kind` is required — yaad-index has no list-all route. Returns `{results, total, limit, offset}` where each result is `{id, kind, snippet, score}`. |
 | `search_upstream(query, plugins?, limit?, per_plugin_timeout_seconds?)` | POST `/v1/search/upstream` (per yaad-index #2). Plugin-federated search across opted-in plugins (Capabilities.SupportsSearch=true). Goroutine-per-plugin fan-out with per-plugin timeout + partial-results semantic. Returns `{results, per_plugin_status, query, limit, per_plugin_timeout_seconds}` where `results` carries plugin attribution (`[{plugin, id, label, summary}]`) and `per_plugin_status` surfaces per-plugin outcome (ok / candidates / duration_ms / error_message). Explicit-name allowlist: unregistered name → 400, registered-but-not-opted-in → 422. |
 | `workflow_list()` | GET `/v1/workflows`. Returns `{ok, workflows: [{name, version, status, trigger_type, dedup_policy}]}` for every workflow pattern registered with the running daemon (per ADR-0024 §"Agent surface"). |
@@ -70,7 +70,7 @@ In `~/.claude.json` under `mcpServers`:
 }
 ```
 
-Restart Claude Code. The tools become available; the agent can ingest URLs, fill gaps, append comments, and explore entities directly.
+Restart Claude Code. The tools become available; the agent can ingest URLs, fill gaps, append notes, and explore entities directly.
 
 ## Tests
 

@@ -27,7 +27,7 @@ DB invariants belong at the storage layer, not deferred to a periodic batch proc
 
 Concrete principle:
 
-- Any table whose row-set is fully derivable from vault state — `entities`, `edges`, `provenance`, future `comments`, future canonical-stub mirrors — gets a UNIQUE constraint on the natural key composing its rows.
+- Any table whose row-set is fully derivable from vault state — `entities`, `edges`, `provenance`, future `notes`, future canonical-stub mirrors — gets a UNIQUE constraint on the natural key composing its rows.
 - `Append*` store methods that write into those tables use `ON CONFLICT (...) DO NOTHING`: a duplicate insert is a silent no-op, not a constraint error.
 - `Replace*` store methods (which delete-then-insert in one tx) are unaffected — they can never collide with themselves; only with concurrent `Append*` calls. The UNIQUE-on-Append makes that collision benign.
 

@@ -95,7 +95,7 @@ A **task** is a workflow's instance — a first-class entity created when a work
 
 - Each task is its own entity with its own ID, frontmatter, and edges.
 - Edges to: the spawning workflow, the source entities the workflow loaded (PR, jira, project, email, etc.).
-- Properties: priority (operator-modifiable), snooze (see below), comments (operator notes, agent-readable on load).
+- Properties: priority (operator-modifiable), snooze (see below), notes (operator notes, agent-readable on load).
 - Close: either operator-marks-done (default) or condition-based per workflow pattern (e.g., PR-merged → auto-close).
 - Auto-archive on done (per ADR-0018 archive lifecycle). Workflow can opt out per-pattern via `auto_archive_on_done: false` for cases where the operator wants the audit trail of completed tasks to stick around.
 
@@ -152,7 +152,7 @@ Workflow-injected gap fills are **permanent** on the entity per ADR-0008 (vault-
 A workflow's output is one of three v1 action primitives:
 
 - **`task_append`** — append content to a section of `tasks/<workflow>-<subject>.md`. Find-or-create semantics: the canonical task path is deterministic (workflow name + operator-defined subject template), so the same workflow firing repeatedly on the same subject lands in the same task file. The action appends to a named section in the task body; sections accumulate over time as the workflow re-fires. This is the default for workflows that surface recurring situations (PR-review, newsletter-of-interest, classified-receipt).
-- **`add_comment`** — attach a comment to an existing entity (the entity that triggered the workflow, or one reached via graph). Reuses the existing entity-comment primitive (the `add_comment` MCP tool). Used when the workflow wants to enrich an entity with workflow-observed context rather than spawning a task.
+- **`add_note`** — attach a note to an existing entity (the entity that triggered the workflow, or one reached via graph). Reuses the existing entity-note primitive (the `add_note` MCP tool). Used when the workflow wants to enrich an entity with workflow-observed context rather than spawning a task.
 - **`plugin_dispatch`** — fire a plugin command (e.g., `bgg.fetch`) from inside the workflow. Used for the "look-something-up-then-decide" shape: a workflow asks the index to go ingest a related entity that isn't yet known, gets the result back, and proceeds with that entity in context.
 - **`add_gap`** — inject a gap onto an entity from the workflow's action stage. Used for the "ask the operator/agent a question via the gap-fill pipeline" shape: a workflow that doesn't have a deterministic predicate (because the operator's interest isn't stored anywhere) injects a gap (e.g., `is_interesting_to_me?`) onto the relevant entity; the gap surfaces in `needs-fill` for the operator to answer; a subscribing workflow (could be the same, could be a sibling) fires on the `fill.completed` event and decides on the answer. Bridges decision-needing-human-input cases into the workflow framework without requiring an LLM-decision step in v1.
 
@@ -161,24 +161,24 @@ A workflow's output is one of three v1 action primitives:
   - **Constrained to the workflow's declared gap vocabulary.** Each workflow declares ONE unified `addable_gaps` set in the YAML body (e.g. `addable_gaps: [is_interesting_to_me, owned_status]`) that covers BOTH paths — trigger-time injection AND action-stage `add_gap`. Calls outside that declared set are rejected at expression-evaluation time as a workflow-author error. Single source of truth keeps the workflow's gap-side-effect surface visible at file-read time rather than scattered across CEL expressions or split between two declarations.
   - **Re-fire semantics distinct from self-loop.** The existing internal-event-bus `source` tag breaks **direct self-loops** — workflow X's own fill (where X is also a filler) doesn't re-fire X. `add_gap` is different: workflow X adds the gap, but the **operator or agent** fills it later. The resulting `fill.completed` event carries `source: operator` or `source: agent`, NOT `workflow:X`. A workflow X that adds a gap AND subscribes to `fill.completed` for that gap WILL re-fire when the operator/agent answers — that's the intended round-trip ("workflow asks question; human answers; workflow decides on the answer"). The source-tag self-loop detection doesn't apply here. The engine-backstop re-evaluation counter (per-`(workflow, entity)` counter, fixed bound within a short window) still applies as a runaway-detection backstop.
 
-**Decision rule between `task_append`, `add_comment`, and `add_gap`:**
+**Decision rule between `task_append`, `add_note`, and `add_gap`:**
 - If the information needs operator queuing (i.e., something to act on later) or accumulates across multiple workflow fires into a recurring surface → `task_append`.
-- If it's entity-local annotation (context observed against an entity, no required operator action) → `add_comment`.
+- If it's entity-local annotation (context observed against an entity, no required operator action) → `add_note`.
 - If the workflow needs a human-shaped answer to proceed (the predicate can't decide alone) → `add_gap`, with a sibling workflow subscribing to `fill.completed` for the decision step.
 
-A single workflow can use multiple — e.g., a PR-review workflow can `add_comment` on the PR entity with the review-state delta AND `task_append` the operator's "review needed" line to the running task.
+A single workflow can use multiple — e.g., a PR-review workflow can `add_note` on the PR entity with the review-state delta AND `task_append` the operator's "review needed" line to the running task.
 
 **`plugin_dispatch` execution semantics.** The call is **synchronous from the workflow's point of view**: the workflow blocks on the plugin result up to a configurable timeout (v1 default: 30s). The plugin can do its work async internally (long-poll, queue, etc.), but the workflow does not see "async result later" — it sees the result inline or a timeout. The "async" framing in earlier drafts was misleading; replacing it. On timeout: the workflow's err-task pattern fires (one err task per workflow, error appended); the workflow continues firing on future events but the current evaluation aborts. On plugin error (typed failure surfaced through the unified plugin response envelope per ADR-0023): same path — err task, abort current evaluation.
 
 Out of v1 (deferred — listed below): edge-creation as a workflow action, silent-log shape, emit-notification, `graph.find` lookups, internal time-based trigger.
 
-**Why the smaller set:** the earlier draft listed four output types (create task / mutate entity / add edge / silent log). The v1-reconciled set drops `add edge` and `silent log` as separate primitives — `add edge` becomes a follow-up via `plugin_dispatch` (the plugin emits the edge during ingest) or a manual operator add; `silent log` collapses into `add_comment` (record what the workflow saw, no task surface). `plugin_dispatch` is genuinely new — the earlier draft had no explicit way for a workflow to ask the index to go fetch something.
+**Why the smaller set:** the earlier draft listed four output types (create task / mutate entity / add edge / silent log). The v1-reconciled set drops `add edge` and `silent log` as separate primitives — `add edge` becomes a follow-up via `plugin_dispatch` (the plugin emits the edge during ingest) or a manual operator add; `silent log` collapses into `add_note` (record what the workflow saw, no task surface). `plugin_dispatch` is genuinely new — the earlier draft had no explicit way for a workflow to ask the index to go fetch something.
 
-**Concurrent writes.** Two workflows — or any two writers (workflow output, UGC mutation, comment addition, edge addition, plugin emit, operator manual write) — may touch the same on-disk artifact at the same time. v1 protects via a daemon-internal **per-artifact write-lock manager** (`internal/writelocks` per yaad-index #23) with a **block-on-conflict** policy: an Acquire on an artifact already held by another writer returns a typed conflict error immediately, surfacing as a 409 envelope naming the active holder. No queuing, no merging, no last-writer-wins; the rejected caller retries.
+**Concurrent writes.** Two workflows — or any two writers (workflow output, UGC mutation, note addition, edge addition, plugin emit, operator manual write) — may touch the same on-disk artifact at the same time. v1 protects via a daemon-internal **per-artifact write-lock manager** (`internal/writelocks` per yaad-index #23) with a **block-on-conflict** policy: an Acquire on an artifact already held by another writer returns a typed conflict error immediately, surfacing as a 409 envelope naming the active holder. No queuing, no merging, no last-writer-wins; the rejected caller retries.
 
 Two write classes deliberately skip the lock as additive-append shapes that don't conflict at the storage layer:
 
-- **Comments** (`POST /v1/entities/{id}/comments`) — append-only entries in vault frontmatter's comments table.
+- **Notes** (`POST /v1/entities/{id}/notes`) — append-only entries in vault frontmatter's notes table.
 - **Edges** (`POST /v1/edges`) — append-only rows in the store + frontmatter.
 
 Every other mutation surface (ingest, fill, operator-fill, archive/restore, delete, UGC section / frontmatter / create / delete) acquires the per-entity lock — section-scoped where applicable (UGC section writers key on `<id>#<idx>` so different sections of the same UGC file proceed concurrently). Cross-host distributed locking is out of scope; the manager is in-process only.
@@ -293,7 +293,7 @@ In practice the workflow-level layer handles "should this become a fresh task or
 
 **`if_already_present` scope:** `replace` rewrites the **matching line only**, not the entire section. The section's other lines stay in place. `append-anyway` writes a new copy regardless. `skip` is the default no-op.
 
-**Workflow-level `update` policy semantics:** when `update` is the policy and a duplicate-key event fires, the workflow runs against the existing task — re-evaluating its action steps with the new event context, with the action-level dedup determining what actually lands. Concretely: the workflow's `task_append` steps re-run; lines that already exist in the target section get the configured `if_already_present` treatment (skip by default); new lines append. The task's frontmatter is updated with the latest event context (e.g., last-seen-at timestamp, latest priority signal). `update` does not modify task properties not touched by the workflow (operator-set priority, snooze state, comments).
+**Workflow-level `update` policy semantics:** when `update` is the policy and a duplicate-key event fires, the workflow runs against the existing task — re-evaluating its action steps with the new event context, with the action-level dedup determining what actually lands. Concretely: the workflow's `task_append` steps re-run; lines that already exist in the target section get the configured `if_already_present` treatment (skip by default); new lines append. The task's frontmatter is updated with the latest event context (e.g., last-seen-at timestamp, latest priority signal). `update` does not modify task properties not touched by the workflow (operator-set priority, snooze state, notes).
 
 ## Out of v1 (explicit)
 
@@ -305,7 +305,7 @@ In practice the workflow-level layer handles "should this become a fresh task or
 - **Push notifications on fill-gaps needing answer** — operator polls `/v1/needs-fill` in v1.
 - **Internal time-based / cron trigger** — deferred to post-v1. External host cron + the manual-trigger CLI cover the immediate need; daemon doesn't grow a scheduler.
 - **`add_edge` as a workflow action** — workflows don't directly create edges in v1. Edge creation surfaces via `plugin_dispatch` (the plugin emits edges during ingest) or via operator manual `POST /v1/edges`.
-- **`silent_log` as a distinct output shape** — collapses into `add_comment` (record what the workflow observed against the entity without spawning a task surface). If a true silent-no-side-effect log is needed (audit only), a workflow that does nothing on its happy path achieves that via the err-task pattern on failures only.
+- **`silent_log` as a distinct output shape** — collapses into `add_note` (record what the workflow observed against the entity without spawning a task surface). If a true silent-no-side-effect log is needed (audit only), a workflow that does nothing on its happy path achieves that via the err-task pattern on failures only.
 
 ## Agent surface
 
@@ -376,7 +376,7 @@ The pain point this ADR addresses (context-bundle assembly) is resolved by combi
 The original PROPOSED draft (2026-05-12) was richer than necessary for a first v1 cut and had several open-question placeholders. This revision tightens the v1 slice and settles those questions. Changes:
 
 - **Expression language: CEL.** Settles the "specific pick deferred; not inventing custom" open question. `cel-go` is the impl. Predicates operate over a **cluster** of related entities queried via `graph.get` / `graph.find`, with collection operators (`exists`, `all`, `filter`) carrying the multi-entity decision shape.
-- **Action vocabulary: `task_append`, `add_comment`, `plugin_dispatch`** — three primitives, not four. `add_edge` and `silent_log` move to Out-of-v1. `plugin_dispatch` is new — it's how a workflow asks the index to go fetch related context mid-evaluation.
+- **Action vocabulary: `task_append`, `add_note`, `plugin_dispatch`** — three primitives, not four. `add_edge` and `silent_log` move to Out-of-v1. `plugin_dispatch` is new — it's how a workflow asks the index to go fetch related context mid-evaluation.
 - **File format: `.md` extension with YAML in a body code-fence.** Frontmatter holds metadata only (name, version, status). Earlier draft put rules in frontmatter; YAML code-fence is richer and lets operator-readable prose live alongside structured rules.
 - **Trigger types: event-driven + manual-via-CLI in v1.** Internal time-based / cron trigger deferred post-v1. External host cron + the `yaad-index workflow trigger <name>` CLI cover the morning-brief / weekly-summary cases without the daemon growing a scheduler.
 - **Dedup: two layers explicit.** Per-pattern at workflow level (key + policy `update`/`skip`/`replace`) prevents N tasks for the same situation; action-level inside `task_append` (skip-if-line-exists) prevents N duplicate lines inside the same task. Stack, don't conflict.
@@ -399,12 +399,12 @@ Pre-reviewer flagged 9 specification gaps before the hard-gate read. All accepte
 - `edge.target` → `edge.to` in graph.get prose + worked CEL example (consistency with the edge shape spec).
 - Pre-existing workflow-chaining out-of-v1 line cleaned of meeting-reference framing (operator hard-gate requirement before PROPOSED → ACCEPTED).
 - **`add_gap` action primitive added** (operator-requested). Bridges decision-needing-human-input cases into the workflow framework without an LLM step. Constraints: permanent per ADR-0008, scoped to a single unified `addable_gaps` declaration covering BOTH trigger-time injection and action-stage adds. The intended add_gap-loop (workflow asks → human fills → workflow decides on the answer) is design, not a self-loop; the source-tag self-loop detection doesn't cover it (fills are sourced from operator/agent, not the workflow), and the engine-backstop re-evaluation counter is the right protection layer.
-- Decision rule between `task_append`/`add_comment`/`add_gap` extended to cover all three primitives.
+- Decision rule between `task_append`/`add_note`/`add_gap` extended to cover all three primitives.
 - `plugin_dispatch` async/sync semantics were contradictory — clarified as **synchronous bounded-await** (default timeout 30s; err-task on timeout/error).
 - `task_append` skip-if-line-exists match semantics — specified as **exact-byte match, no normalization**; dynamic content needs explicit `if_already_present: append-anyway`.
 - `if_already_present: replace` scope — clarified as **matching line only**, not the entire section.
 - `edge` context for manual triggers — specified as **nil/absent for manual**, CEL must guard with `has(edge)`.
 - `update` dedup policy semantics — concretely specified: workflow re-runs against existing task; action-level dedup handles per-line behavior; task frontmatter updates with latest event context; operator-set properties stay untouched.
-- `add_comment` vs `task_append` decision rule — added one-sentence heuristic.
+- `add_note` vs `task_append` decision rule — added one-sentence heuristic.
 - Manual trigger input disambiguation — cross-referenced to the existing `workflow.trigger(input) input semantics` section already in the ADR.
 - YAML code-fence schema — added minimal worked example (boardgame-news workflow) to the workflow location section.
