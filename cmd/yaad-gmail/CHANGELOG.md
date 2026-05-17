@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/yaad-index/yaad-index/compare/yaad-gmail-v0.2.0...yaad-gmail-v0.2.1) (2026-05-17)
+
+
+### Bug Fixes
+
+* **gmail:** move email body from data.body to top-level raw_content ([#125](https://github.com/yaad-index/yaad-index/issues/125)) ([#128](https://github.com/yaad-index/yaad-index/issues/128)) ([b2b90f1](https://github.com/yaad-index/yaad-index/commit/b2b90f1531434fe23d2a7e796599250e6d0c5184))
+
 ## [0.2.0](https://github.com/yaad-index/yaad-index/compare/yaad-gmail-v0.1.0...yaad-gmail-v0.2.0) (2026-05-15)
 
 
