@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -949,4 +950,189 @@ func TestNeedsFill_GapMetadata_WorkflowOverridesConfigPerField(t *testing.T) {
 	assert.Equal(t, []string{"person", "company"}, meta.Kinds, "kinds falls through")
 	assert.Equal(t, "workflow override",
 		got.Entities[0].Gaps["hiring_alert_for"], "workflow overrides description")
+}
+
+// TestNeedsFill_KindNotInRegistry_WorkflowInjectedGap_Surfaces
+// is the #156 regression test for symptom 2: a source-shape
+// entity (kind not in the canonical-LABEL registry per ADR-0016
+// — sources aren't carried there, only canonical-label kinds
+// are) with a workflow-injected GapStateEntry must surface on
+// /v1/needs-fill. The prior strict-mode early-return in
+// buildNeedsFillEntry dropped these entities entirely, leaving
+// e.g. linkedin-hiring-classify workflow fills unreachable.
+//
+// Kind=gmail is plugin-emitted source-shape (yaad-gmail's
+// canonical_kinds_emitted is email + email-address + label,
+// not gmail itself). The workflow's add_gap injects the full
+// spec inline per #142; needs_fill must accept that as the
+// authoritative shape regardless of whether the kind has an
+// operator/plugin canonical_kinds entry.
+func TestNeedsFill_KindNotInRegistry_WorkflowInjectedGap_Surfaces(t *testing.T) {
+	t.Parallel()
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	r, err := vault.NewReader(root)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	id := "gmail:msg-abc"
+	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+		ID: id, Kind: "gmail",
+		Data:       map[string]any{"id": id},
+		Provenance: []store.ProvenanceEntry{{Source: "seed", FetchedAt: &now, OK: true}},
+	}))
+	require.NoError(t, w.Write(&vault.Entity{
+		ID: id, Kind: "gmail", Plugin: "gmail",
+		Data: map[string]any{"id": id, "subject": "linkedin notification"},
+		Gaps: []string{"hiring_alert_for"},
+		GapState: map[string]vault.GapStateEntry{
+			"hiring_alert_for": {
+				Type:         "canonical_type",
+				FillStrategy: "agent",
+				Kinds:        []string{"company"},
+				Description:  "the company that's hiring",
+			},
+		},
+		Provenance:   []vault.ProvenanceEntry{{Source: "seed", FetchedAt: &now, OK: true}},
+		CleanContent: "linkedin email body",
+	}))
+
+	// Registry has NO entry for gmail — sources aren't canonical
+	// labels per ADR-0016. The workflow-injected GapStateEntry is
+	// the only shape source.
+	reg := map[string]config.CanonicalKindConfig{}
+
+	h := NewHandlerWithRegistry(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		st, testRegistryWithSeed(),
+		WithVaultIO(w, r), WithCanonicalKindRegistry(reg),
+	)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	got := decodeNFResponse(t, rec)
+	require.Len(t, got.Entities, 1,
+		"source-shape entity with workflow-injected gap should surface (per #156)")
+	require.Equal(t, id, got.Entities[0].ID)
+	require.Equal(t, "gmail", got.Entities[0].Kind)
+	require.Contains(t, got.Entities[0].GapMetadata, "hiring_alert_for")
+	meta := got.Entities[0].GapMetadata["hiring_alert_for"]
+	assert.Equal(t, "canonical_type", meta.Type)
+	assert.Equal(t, "agent", meta.FillStrategy)
+	assert.Equal(t, []string{"company"}, meta.Kinds)
+	assert.Equal(t, "the company that's hiring",
+		got.Entities[0].Gaps["hiring_alert_for"])
+}
+
+// TestNeedsFill_KindNotInRegistry_NoWorkflowShape_StillDropped
+// pins the per-gap strict-mode preserved by #156: an entity
+// whose kind is not in the registry AND has no workflow-injected
+// shape on any gap still drops — there's no prompt source for
+// any of its gaps, so it shouldn't surface as a zero-prompt row.
+// This is the prior `TestNeedsFill_KindNotInRegistry_EntitySkipped`
+// invariant from #4 strict-mode, re-asserted post-#156 to
+// confirm the per-gap loop's `!hasCfgSpec && !workflowGapEntryHasShape`
+// guard still handles the no-shape-anywhere case.
+func TestNeedsFill_KindNotInRegistry_NoWorkflowShape_StillDropped(t *testing.T) {
+	t.Parallel()
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	r, err := vault.NewReader(root)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	id := "gmail:msg-no-shape"
+	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+		ID: id, Kind: "gmail",
+		Data:       map[string]any{"id": id},
+		Provenance: []store.ProvenanceEntry{{Source: "seed", FetchedAt: &now, OK: true}},
+	}))
+	require.NoError(t, w.Write(&vault.Entity{
+		ID: id, Kind: "gmail", Plugin: "gmail",
+		Data:         map[string]any{"id": id},
+		Gaps:         []string{"summary"}, // gap exists but no shape anywhere
+		Provenance:   []vault.ProvenanceEntry{{Source: "seed", FetchedAt: &now, OK: true}},
+		CleanContent: "body",
+	}))
+
+	h := NewHandlerWithRegistry(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		st, testRegistryWithSeed(),
+		WithVaultIO(w, r),
+		WithCanonicalKindRegistry(map[string]config.CanonicalKindConfig{}),
+	)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	got := decodeNFResponse(t, rec)
+	assert.Empty(t, got.Entities,
+		"kind not in registry + no workflow-injected shape → entity drops (per-gap strict mode preserved)")
+}
+
+// TestNeedsFill_VaultNotExist_QuietDebugSkip is the #156
+// symptom-1 regression: a candidate row whose vault file genuinely
+// doesn't exist (e.g. pure-pointer canonical-label thin row per
+// ADR-0021 — DB row created during ingest/fill, vault file never
+// materialized) should be skipped without a WARN. The prior shape
+// logged WARN on every scan, flooding the daemon log for every
+// thin pointer in the DB. Correctness was already fine; this
+// pins the silence contract.
+//
+// Test shape: seed a DB row but skip the vault.Write. Confirm the
+// scan returns no entities (the missing-file row is skipped) AND
+// that no WARN was emitted. The logger captures into a buffer so
+// the test inspects emitted log records.
+func TestNeedsFill_VaultNotExist_QuietDebugSkip(t *testing.T) {
+	t.Parallel()
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	r, err := vault.NewReader(root)
+	require.NoError(t, err)
+	_ = w // unused — intentional: no vault.Write so ReadByID returns IsNotExist
+
+	now := time.Now().UTC()
+	// DB row exists (thin-pointer canonical-label shape) — no vault file.
+	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+		ID: "email-address:notify-at-example",
+		Kind: "email-address",
+		Data: map[string]any{"id": "email-address:notify-at-example"},
+		Provenance: []store.ProvenanceEntry{{Source: "seed", FetchedAt: &now, OK: true}},
+	}))
+
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	h := NewHandlerWithRegistry(
+		logger, st, testRegistryWithSeed(),
+		WithVaultIO(w, r),
+		WithCanonicalKindRegistry(map[string]config.CanonicalKindConfig{
+			"email-address": {Gaps: map[string]config.GapSpec{}},
+		}),
+	)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	got := decodeNFResponse(t, rec)
+	assert.Empty(t, got.Entities, "thin-pointer row with no vault file is skipped")
+
+	logOutput := logBuf.String()
+	assert.NotContains(t, logOutput, `"level":"WARN"`,
+		"missing-vault-file is the expected pure-pointer shape; should NOT emit WARN.\nlog dump: %s", logOutput)
+	assert.Contains(t, logOutput, "no vault file (pure-pointer row)",
+		"should still emit a debug record so operators can trace the skip if needed")
 }

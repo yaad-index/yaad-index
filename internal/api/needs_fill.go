@@ -207,6 +207,19 @@ func handleNeedsFill(
 
 				ve, err := vaultReader.ReadByID(cand.Kind, cand.ID)
 				if err != nil {
+					// Pure-pointer canonical-label rows (per ADR-0021)
+					// live in the DB with `gap_call_done_at = NULL`
+					// but have no vault file — ReadByID returns
+					// IsNotExist after probing all three layouts
+					// (active, ct/, _archive). This is the expected
+					// shape, not a fault; log at debug to keep the
+					// scan quiet. Per #156.
+					if vault.IsNotExist(err) {
+						logger.DebugContext(r.Context(),
+							"needs-fill candidate has no vault file (pure-pointer row); skipping",
+							"id", cand.ID, "kind", cand.Kind)
+						continue
+					}
 					logger.WarnContext(r.Context(),
 						"vault read for needs-fill candidate errored; skipping",
 						"id", cand.ID, "err", err)
@@ -297,13 +310,21 @@ func buildNeedsFillEntry(
 	reg map[string]config.CanonicalKindConfig,
 	isOperator bool,
 ) (needsFillEntry, bool) {
-	kindCfg, kindInRegistry := reg[kind]
-	if !kindInRegistry {
-		// Strict mode (#4): without a registry entry there are no
-		// prompts to surface. Skip the entry entirely so the list
-		// endpoint doesn't return zero-prompt rows.
-		return needsFillEntry{}, false
-	}
+	// kind-not-in-registry was a strict-mode early-return until
+	// #142 added workflow-injected GapStateEntry — a workflow can
+	// now inject the full gap spec inline on a source-shape entity
+	// whose kind is plugin-emitted but not in the canonical-kind
+	// registry (the registry is canonical-LABEL-side per ADR-0016,
+	// source kinds aren't carried there). The per-gap loop below
+	// already enforces strict-mode per-gap via the
+	// `!hasCfgSpec && !workflowGapEntryHasShape(entry)` check, so
+	// an entity whose gaps have NO declared shape anywhere still
+	// drops via len(gaps)==0; a source-shape entity with at least
+	// one workflow-injected gap shape surfaces (per #156). kindCfg
+	// is the zero-value `config.CanonicalKindConfig` when the kind
+	// isn't in `reg`; Gaps is nil and lookups return zero/false
+	// safely.
+	kindCfg := reg[kind]
 	gaps := make(map[string]string, len(ve.Gaps))
 	meta := make(map[string]needsFillGapMeta, len(ve.Gaps))
 	for _, g := range ve.Gaps {
