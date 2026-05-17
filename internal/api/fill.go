@@ -186,6 +186,15 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 		// summary / tags / etc. on source-shape entities).
 		kindCfg := canonicalKindReg[got.Kind]
 
+		// Per #158: route via the effective gap-spec map that
+		// merges operator-config canonical_kinds with workflow-
+		// injected GapStateEntry (per #142). A source-shape
+		// entity whose canonical_type gap was injected by a
+		// workflow has no kindCfg.Gaps entry — the merge picks
+		// it up from ve.GapState so the canonical_type code path
+		// fires.
+		effectiveGaps := resolveEffectiveGaps(kindCfg.Gaps, ve.GapState)
+
 		// Operator's full canonical_kinds registry — wildcard
 		// expansion source for canonical_type gaps with
 		// `kinds: "*"` per ADR-0008.
@@ -203,7 +212,7 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 		canonicalTypeOps := make([]operatorFillOp, 0)
 		legacyFields := make(map[string]any, len(rawReq.Fields))
 		for field, raw := range rawReq.Fields {
-			spec, hasSpec := kindCfg.Gaps[field]
+			spec, hasSpec := effectiveGaps[field]
 			if hasSpec && spec.Type == config.CanonicalTypeName {
 				labels, perr := parseCanonicalLabelList(field, raw, spec, operatorAllKinds, false)
 				if perr != nil {
@@ -309,7 +318,7 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 		// source, ensures thin label rows for new endpoints, then
 		// CreateEdge for each.
 		if len(canonicalTypeOps) > 0 {
-			if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, canonicalTypeOps, kindCfg.Gaps, logger, bus, eventbus.SourceAgent, &pending); err != nil {
+			if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, canonicalTypeOps, effectiveGaps, logger, bus, eventbus.SourceAgent, &pending); err != nil {
 				logger.ErrorContext(r.Context(), "fill canonical_type edge create/replace",
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",
