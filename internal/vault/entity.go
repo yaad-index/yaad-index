@@ -176,6 +176,15 @@ type GapStateEntry struct {
 	FilledAt *time.Time `yaml:"filled_at,omitempty"`
 	Deferred bool `yaml:"deferred,omitempty"`
 	DeferredAt *time.Time `yaml:"deferred_at,omitempty"`
+	// DataSchema is the per-key extraction guidance the agent's
+	// fill prompt sees for canonical_type gaps carrying the
+	// optional per-entry `data` map. Workflow `add_gap` injects
+	// this when the workflow knows the shape of data its events
+	// produce; canonical_kinds config provides only the gap's
+	// global type/strategy. Map key = data-field name; map value
+	// = natural-language extraction instruction for the LLM.
+	// Empty / nil omits from frontmatter.
+	DataSchema map[string]string `yaml:"data_schema,omitempty"`
 }
 
 // Attachment is one entry in the entity's manifest per ADR-0018

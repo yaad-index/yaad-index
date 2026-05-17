@@ -646,6 +646,73 @@ func TestNeedsFill_GapMetadata_Surfaces(t *testing.T) {
 	assert.Equal(t, []int{1, 10}, meta.Range)
 }
 
+// TestNeedsFill_GapMetadata_DataSchemaSurfaces pins the #117
+// contract: when a gap's GapStateEntry carries DataSchema
+// (workflow-injected via add_gap.data_schema), needs-fill
+// surfaces it on GapMetadata so the agent's fill-prompt builder
+// can include the per-key extraction guidance.
+func TestNeedsFill_GapMetadata_DataSchemaSurfaces(t *testing.T) {
+	t.Parallel()
+	reg := map[string]config.CanonicalKindConfig{
+		"boardgame": {
+			Gaps: map[string]config.GapSpec{
+				"hiring_alert_for": {
+					Type:         "canonical_type",
+					Description:  "company that's hiring per this alert",
+					Kinds:        []string{"company"},
+					FillStrategy: "agent",
+				},
+			},
+		},
+	}
+	schema := map[string]string{
+		"role":      "the role title in the hiring alert",
+		"salary":    "salary range if mentioned, else omit",
+		"work_mode": "remote / hybrid / onsite if mentioned, else omit",
+	}
+	gapState := map[string]vault.GapStateEntry{
+		"hiring_alert_for": {DataSchema: schema},
+	}
+	h, _, _ := nfFixtureWithGaps(t,
+		"boardgame:schema-test",
+		[]string{"hiring_alert_for"},
+		gapState, reg, false)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	got := decodeNFResponse(t, rec)
+	require.Len(t, got.Entities, 1)
+	require.Contains(t, got.Entities[0].GapMetadata, "hiring_alert_for")
+	meta := got.Entities[0].GapMetadata["hiring_alert_for"]
+	assert.Equal(t, "canonical_type", meta.Type)
+	assert.Equal(t, "agent", meta.FillStrategy)
+	assert.Equal(t, []string{"company"}, meta.Kinds)
+	assert.Equal(t, schema, meta.DataSchema)
+}
+
+// TestNeedsFill_GapMetadata_NoDataSchemaWhenAbsent pins the
+// omitempty wire shape: a gap without DataSchema produces no
+// `data_schema` key in the JSON response.
+func TestNeedsFill_GapMetadata_NoDataSchemaWhenAbsent(t *testing.T) {
+	t.Parallel()
+	reg := map[string]config.CanonicalKindConfig{
+		"boardgame": {
+			Gaps: map[string]config.GapSpec{
+				"rating": {Type: "int", Description: "rating", Range: []int{1, 10}, FillStrategy: "both"},
+			},
+		},
+	}
+	h, _, _ := nfFixtureWithGaps(t,
+		"boardgame:no-schema",
+		[]string{"rating"},
+		nil, reg, false)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.NotContains(t, rec.Body.String(), `"data_schema"`,
+		"gaps without workflow-injected schema must not surface the field")
+}
+
 // TestNeedsFill_AllGapsFiltered_EntityExcluded: an entity whose
 // TestNeedsFill_NoFillableEntitiesReturnsExhaustedInOneCall pins the
 // #112 contract: a DB full of non-fillable entities (here: vault

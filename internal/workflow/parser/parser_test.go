@@ -464,6 +464,108 @@ func TestValidate_AddGapMustBeInAddableGaps(t *testing.T) {
 	require.NoError(t, Validate(wf))
 }
 
+// TestParser_AddGapWithDataSchema: the workflow YAML `add_gap`
+// action carries optional `data_schema` (#117) which round-trips
+// onto AddGapAction.DataSchema with keys trimmed.
+func TestParser_AddGapWithDataSchema(t *testing.T) {
+	t.Parallel()
+	src := "---\n" +
+		"name: data-schema-flow\n" +
+		"status: active\n" +
+		"---\n" +
+		"\n" +
+		"```yaml\n" +
+		"allowed_plugins:\n" +
+		"  - yaad-gmail\n" +
+		"addable_gaps:\n" +
+		"  - hiring_alert_for\n" +
+		"\n" +
+		"trigger:\n" +
+		"  type: manual\n" +
+		"\n" +
+		"actions:\n" +
+		"  - add_gap:\n" +
+		"      entity: 'entity.id'\n" +
+		"      gap: hiring_alert_for\n" +
+		"      data_schema:\n" +
+		"        role: \"the role title in the hiring alert\"\n" +
+		"        salary: \"salary range if mentioned, else omit\"\n" +
+		"        work_mode: \"remote / hybrid / onsite if mentioned, else omit\"\n" +
+		"```\n"
+	wf, err := Parse([]byte(src))
+	require.NoError(t, err)
+	require.Len(t, wf.Actions, 1)
+	require.NotNil(t, wf.Actions[0].AddGap)
+	got := wf.Actions[0].AddGap
+	assert.Equal(t, "entity.id", got.Entity)
+	assert.Equal(t, "hiring_alert_for", got.Gap)
+	require.Len(t, got.DataSchema, 3)
+	assert.Equal(t, "the role title in the hiring alert", got.DataSchema["role"])
+	assert.Equal(t, "salary range if mentioned, else omit", got.DataSchema["salary"])
+	assert.Equal(t, "remote / hybrid / onsite if mentioned, else omit", got.DataSchema["work_mode"])
+}
+
+// TestParser_AddGapWithoutDataSchema: the absence of
+// `data_schema` is fine — AddGapAction.DataSchema is nil and
+// the action validates and runs unchanged from pre-#117.
+func TestParser_AddGapWithoutDataSchema(t *testing.T) {
+	t.Parallel()
+	src := "---\n" +
+		"name: no-schema-flow\n" +
+		"status: active\n" +
+		"---\n" +
+		"\n" +
+		"```yaml\n" +
+		"allowed_plugins:\n" +
+		"  - yaad-gmail\n" +
+		"addable_gaps:\n" +
+		"  - is_interesting_to_me\n" +
+		"\n" +
+		"trigger:\n" +
+		"  type: manual\n" +
+		"\n" +
+		"actions:\n" +
+		"  - add_gap:\n" +
+		"      gap: is_interesting_to_me\n" +
+		"```\n"
+	wf, err := Parse([]byte(src))
+	require.NoError(t, err)
+	require.NotNil(t, wf.Actions[0].AddGap)
+	assert.Nil(t, wf.Actions[0].AddGap.DataSchema)
+}
+
+// TestValidate_AddGapDataSchemaEmptyValueRejected: a workflow
+// that declares data_schema but supplies an empty extraction
+// instruction is an author bug — the agent gets useless guidance.
+func TestValidate_AddGapDataSchemaEmptyValueRejected(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.AddableGaps = []string{"g"}
+	wf.Actions = []Action{{AddGap: &AddGapAction{
+		Gap:        "g",
+		DataSchema: map[string]string{"role": ""},
+	}}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data_schema")
+	assert.Contains(t, err.Error(), "role")
+}
+
+// TestValidate_AddGapDataSchemaEmptyKeyRejected: empty key in
+// the schema map (trimmed) is also rejected.
+func TestValidate_AddGapDataSchemaEmptyKeyRejected(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.AddableGaps = []string{"g"}
+	wf.Actions = []Action{{AddGap: &AddGapAction{
+		Gap:        "g",
+		DataSchema: map[string]string{"": "some instruction"},
+	}}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data_schema")
+}
+
 // TestValidate_AddableGapsDuplicate
 func TestValidate_AddableGapsDuplicate(t *testing.T) {
 	t.Parallel()

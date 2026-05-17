@@ -194,8 +194,12 @@ func NewVaultGapWriter(b *VaultWriterBackend) *VaultGapWriter {
 // vault.Entity.Gaps (idempotent — adding a gap that's already
 // present is a no-op success), initializes a zero-value
 // GapState entry (pending — not filled, not deferred), writes
-// back, mirrors to the store.
-func (w *VaultGapWriter) AddGap(ctx context.Context, workflow, entityID, gap string) error {
+// back, mirrors to the store. When dataSchema is non-empty
+// the entry's DataSchema is set so `/v1/needs-fill` can
+// surface the per-key extraction guidance to the agent's fill
+// prompt; calls with nil/empty schema preserve any existing
+// schema on the entry (additive, not destructive).
+func (w *VaultGapWriter) AddGap(ctx context.Context, workflow, entityID, gap string, dataSchema map[string]string) error {
 	if w.backend == nil {
 		return fmt.Errorf("VaultGapWriter: backend not wired")
 	}
@@ -222,22 +226,28 @@ func (w *VaultGapWriter) AddGap(ctx context.Context, workflow, entityID, gap str
 		return fmt.Errorf("vault.Reader.ReadByID %s: %w", entityID, err)
 	}
 
-	// Idempotent: gap already present → no-op success.
+	gapPresent := false
 	for _, g := range ve.Gaps {
 		if g == gap {
-			return nil
+			gapPresent = true
+			break
 		}
 	}
-	ve.Gaps = append(ve.Gaps, gap)
+	// Idempotent: gap already present + no new schema → no-op.
+	if gapPresent && len(dataSchema) == 0 {
+		return nil
+	}
 	if ve.GapState == nil {
 		ve.GapState = make(map[string]vault.GapStateEntry)
 	}
-	if _, ok := ve.GapState[gap]; !ok {
-		// Zero-value entry: not filled, not deferred. The
-		// gap shows up in needs_fill until an operator /
-		// agent fills it.
-		ve.GapState[gap] = vault.GapStateEntry{}
+	if !gapPresent {
+		ve.Gaps = append(ve.Gaps, gap)
 	}
+	entry := ve.GapState[gap]
+	if len(dataSchema) > 0 {
+		entry.DataSchema = cloneStringMap(dataSchema)
+	}
+	ve.GapState[gap] = entry
 
 	commitMsg := fmt.Sprintf("workflow add_gap %s on %s by %s", gap, ve.ID, workflowAuthor(workflow))
 	if err := w.backend.VaultWriter.WriteWithCommit(ctx, ve, commitMsg, workflowAuthor(workflow)); err != nil {
@@ -392,7 +402,23 @@ func vaultGapStateForDB(in map[string]vault.GapStateEntry) map[string]store.GapS
 			FilledAt:   v.FilledAt,
 			Deferred:   v.Deferred,
 			DeferredAt: v.DeferredAt,
+			DataSchema: cloneStringMap(v.DataSchema),
 		}
+	}
+	return out
+}
+
+// cloneStringMap copies a string→string map so the caller can
+// mutate the source without aliasing into the persisted entry
+// (and vice versa). Returns nil for nil/empty input so the
+// `omitempty` shape stays clean on the wire.
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
 	}
 	return out
 }

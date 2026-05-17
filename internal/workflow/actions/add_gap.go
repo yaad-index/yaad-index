@@ -39,7 +39,15 @@ type GapWriter interface {
 	// originating workflow so the production vault impl can
 	// stamp the commit author as `workflow:<name>` per the
 	// ADR-0024 Source vocabulary.
-	AddGap(ctx context.Context, workflow, entityID, gap string) error
+	//
+	// dataSchema is the optional per-key extraction guidance
+	// for canonical_type gaps carrying per-entry `data`. When
+	// non-empty it lands on the gap's GapStateEntry so
+	// `/v1/needs-fill` can surface it to the agent's fill
+	// prompt builder. nil / empty preserves any pre-existing
+	// schema on the entry (lets a subsequent workflow inject
+	// schema onto a gap added earlier without one).
+	AddGap(ctx context.Context, workflow, entityID, gap string, dataSchema map[string]string) error
 }
 
 // runAddGap executes one add_gap action: enforces the
@@ -98,7 +106,7 @@ func (d *dispatcher) runAddGap(ctx context.Context, idx int, wf *parser.Workflow
 		}
 	}
 
-	if err := d.gapWriter.AddGap(ctx, dec.Workflow, target, gap); err != nil {
+	if err := d.gapWriter.AddGap(ctx, dec.Workflow, target, gap, a.DataSchema); err != nil {
 		return ActionResult{
 			ActionIdx: idx,
 			Type:      "add_gap",

@@ -190,8 +190,9 @@ type pluginDispatchShape struct {
 }
 
 type addGapShape struct {
-	Entity string `yaml:"entity"`
-	Gap    string `yaml:"gap"`
+	Entity     string            `yaml:"entity"`
+	Gap        string            `yaml:"gap"`
+	DataSchema map[string]string `yaml:"data_schema"`
 }
 
 type setPropertyShape struct {
@@ -372,9 +373,17 @@ func addGapFromShape(s *addGapShape) *AddGapAction {
 	if s == nil {
 		return nil
 	}
+	var schema map[string]string
+	if len(s.DataSchema) > 0 {
+		schema = make(map[string]string, len(s.DataSchema))
+		for k, v := range s.DataSchema {
+			schema[strings.TrimSpace(k)] = v
+		}
+	}
 	return &AddGapAction{
-		Entity: strings.TrimSpace(s.Entity),
-		Gap:    strings.TrimSpace(s.Gap),
+		Entity:     strings.TrimSpace(s.Entity),
+		Gap:        strings.TrimSpace(s.Gap),
+		DataSchema: schema,
 	}
 }
 

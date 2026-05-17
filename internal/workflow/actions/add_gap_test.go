@@ -20,15 +20,21 @@ type fakeGapWriter struct {
 }
 
 type gapCall struct {
-	workflow string
-	entityID string
-	gap      string
+	workflow   string
+	entityID   string
+	gap        string
+	dataSchema map[string]string
 }
 
-func (f *fakeGapWriter) AddGap(_ context.Context, workflow, entityID, gap string) error {
+func (f *fakeGapWriter) AddGap(_ context.Context, workflow, entityID, gap string, dataSchema map[string]string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, gapCall{workflow: workflow, entityID: entityID, gap: gap})
+	f.calls = append(f.calls, gapCall{
+		workflow:   workflow,
+		entityID:   entityID,
+		gap:        gap,
+		dataSchema: dataSchema,
+	})
 	return f.writeErr
 }
 
@@ -145,12 +151,59 @@ func TestAddGap_WriterError(t *testing.T) {
 // ErrActionNotImplemented with the workflow + entity + gap.
 func TestStubGapWriter_ReturnsNotImplemented(t *testing.T) {
 	t.Parallel()
-	err := StubGapWriter{}.AddGap(context.Background(), "wf", "email:m1", "is_interesting_to_me")
+	err := StubGapWriter{}.AddGap(context.Background(), "wf", "email:m1", "is_interesting_to_me", nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrActionNotImplemented)
 	assert.Contains(t, err.Error(), "wf")
 	assert.Contains(t, err.Error(), "email:m1")
 	assert.Contains(t, err.Error(), "is_interesting_to_me")
+}
+
+// TestAddGap_DataSchemaPassedThrough: an AddGapAction carrying
+// data_schema (#117) flows the map through to the GapWriter so
+// the vault impl persists it on the GapStateEntry.
+func TestAddGap_DataSchemaPassedThrough(t *testing.T) {
+	t.Parallel()
+	w := &fakeGapWriter{}
+	r := New(Options{GapWriter: w})
+	schema := map[string]string{
+		"role":   "the role title in the hiring alert",
+		"salary": "salary range if mentioned, else omit",
+	}
+	wf := wfWithActions("linkedin-classify",
+		parser.Action{AddGap: &parser.AddGapAction{
+			Gap:        "hiring_alert_for",
+			DataSchema: schema,
+		}},
+	)
+	wf.AddableGaps = []string{"hiring_alert_for"}
+	results := r.Run(context.Background(), wf,
+		Decision{Workflow: "linkedin-classify", EntityID: "email:m1"}, Activation{})
+	require.Len(t, results, 1)
+	assert.NoError(t, results[0].Err)
+	calls := w.snapshot()
+	require.Len(t, calls, 1)
+	assert.Equal(t, schema, calls[0].dataSchema,
+		"data_schema flows to GapWriter verbatim")
+}
+
+// TestAddGap_DataSchemaNilFlowsAsNil: an AddGapAction without
+// data_schema (the legacy shape) passes nil to the GapWriter so
+// vault impls can branch cleanly on "schema absent".
+func TestAddGap_DataSchemaNilFlowsAsNil(t *testing.T) {
+	t.Parallel()
+	w := &fakeGapWriter{}
+	r := New(Options{GapWriter: w})
+	wf := wfWithActions("wf",
+		parser.Action{AddGap: &parser.AddGapAction{Gap: "g"}},
+	)
+	wf.AddableGaps = []string{"g"}
+	results := r.Run(context.Background(), wf, Decision{Workflow: "wf", EntityID: "e1"}, Activation{})
+	require.Len(t, results, 1)
+	assert.NoError(t, results[0].Err)
+	calls := w.snapshot()
+	require.Len(t, calls, 1)
+	assert.Nil(t, calls[0].dataSchema)
 }
 
 // TestAddGap_WorkflowAttribution: the workflow name from the

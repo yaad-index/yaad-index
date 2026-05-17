@@ -39,7 +39,7 @@ func (StubNoteWriter) AppendNote(_ context.Context, workflow, entityID, body str
 // Same stub-reject shape as StubNoteWriter.
 type StubGapWriter struct{}
 
-func (StubGapWriter) AddGap(_ context.Context, workflow, entityID, gap string) error {
+func (StubGapWriter) AddGap(_ context.Context, workflow, entityID, gap string, _ map[string]string) error {
 	return fmt.Errorf("%w: vault-backed add_gap not wired; attempted workflow=%s entity=%s gap=%s",
 		ErrActionNotImplemented, workflow, entityID, gap)
 }
