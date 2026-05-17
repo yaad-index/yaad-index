@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.3.0...yaad-index-v0.4.0) (2026-05-17)
+
+
+### Features
+
+* **fill,vault:** canonical_type entries carry data → dataview append on target ([#119](https://github.com/yaad-index/yaad-index/issues/119)) ([#124](https://github.com/yaad-index/yaad-index/issues/124)) ([c08a11d](https://github.com/yaad-index/yaad-index/commit/c08a11d8f8b6e84ebf1872fcbe8204effe3a1212))
+* **workflow,api:** add_gap carries per-key data_schema for canonical_type data extension ([#117](https://github.com/yaad-index/yaad-index/issues/117)) ([#130](https://github.com/yaad-index/yaad-index/issues/130)) ([b476f02](https://github.com/yaad-index/yaad-index/commit/b476f02699ecaa108b7e92187081e78b4421378d))
+* **workflow,decision:** cel-go strings ext + regex_capture function ([#123](https://github.com/yaad-index/yaad-index/issues/123)) ([#127](https://github.com/yaad-index/yaad-index/issues/127)) ([9ce17ef](https://github.com/yaad-index/yaad-index/commit/9ce17ef62fc2c6d5ec0dc34cfa0bba325d517def))
+* **workflow:** set_property action — direct frontmatter write ([#121](https://github.com/yaad-index/yaad-index/issues/121)) ([58d3e8c](https://github.com/yaad-index/yaad-index/commit/58d3e8c9b6cd5ec47bbe9bcf411c6a8c738dbc34))
+
 ## [0.3.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.2.0...yaad-index-v0.3.0) (2026-05-17)
 
 
