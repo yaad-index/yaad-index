@@ -150,13 +150,14 @@ deserves notes / notes / metadata."
 edge creation time.** Edges to a canonical label do NOT trigger
 file creation; the label stays a pure pointer.
 
-**Auto-materialize on first operator action** (carve-out, added
-2026-05-09; widened 2026-05-10 per yaad-index). When an
-operator (or an agent acting on the operator's behalf via a
-pair-claim JWT) takes the first attaching action on a canonical
-label, the daemon auto-creates the markdown file at
-`{ROOT}/ct/<kind>/<slug>.md` and proceeds with the action
-against the freshly-materialized file. Two trigger sets today:
+**Auto-materialize when there is honest content to attach.**
+The materialization principle is content-driven: when an action
+produces substantive content that needs a home on the canonical
+label's vault file, the daemon auto-creates the file at
+`{ROOT}/ct/<kind>/<slug>.md` and proceeds with the action against
+the freshly-materialized file. "Honest content" is the test —
+not the token claim shape, not the action class as such.
+Trigger sets today:
 
 - **Operator-fill on an operator-strategy gap** (e.g. `rating`,
  `owned`, `want`, `played`, `knows_how_to_play` per yaad-bgg's
@@ -166,6 +167,15 @@ against the freshly-materialized file. Two trigger sets today:
  vault file exists, operator-fill auto-creates both. This is the
  intentional path for "operator manually invents canonical
  metadata."
+- **Dataview-paragraph-append from canonical_type fill** — when
+ a canonical_type fill carries the optional `data: {...}` map
+ per entry, the daemon appends one dataview paragraph per entry
+ to the target canonical label's body. The structured per-event
+ content (role / salary / source / etc.) is substantive — it
+ carries its own structured fields and its own dedup key — so
+ the vault file auto-materializes on first paragraph append
+ regardless of token claim shape. This is not a "casual"
+ action; it's structured data with provenance.
 - **Note authored on the canonical label** — the note
  lands in the body's `## Notes` section (per ADR-0008's
  note layout). Notes **do NOT create entities from
@@ -173,18 +183,19 @@ against the freshly-materialized file. Two trigger sets today:
  404. The vault file gets materialized only when the thin DB
  row already exists (typically from an ingest-time
  materialization Per the prior design, phase B). The asymmetry vs
- operator-fill exists because notes are a casual action; an
- uninhibited create-from-nothing path on notes would
- accumulate dangling entries on canonical labels that nobody
- meaningfully promoted.
+ operator-fill exists because **for notes specifically**, an
+ uninhibited create-from-nothing path would accumulate dangling
+ entries on canonical labels that nobody meaningfully promoted.
 
-Notes authored by the operator (whether typed directly or
-relayed through an agent acting on the operator's behalf) count
-as operator action and trigger the carve-out; the agent's JWT
-must carry an operator claim in the pair-claim model (per
-yaad-index). Agent-only tokens (no operator claim) do NOT
-trigger materialization — operator-attributed content is the
-condition.
+**Note-specific token gate.** For notes only (not for the other
+triggers above): notes authored by the operator (whether typed
+directly or relayed through an agent acting on the operator's
+behalf via a pair-claim JWT) count as operator action and
+trigger the carve-out; agent-only tokens (no operator claim) do
+NOT trigger materialization through the note path. The gate
+exists because a casually-typed note is a low-substance action
+that can accumulate noise; the dataview-paragraph trigger above
+is higher-substance and does not need the same gate.
 
 Future operator-attached metadata writes (e.g. operator-set tags,
 operator-set aliases — separate issues if/when they're built)
