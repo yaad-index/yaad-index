@@ -261,7 +261,9 @@ func TestSourceSlug_HashTailOnOverflow(t *testing.T) {
 	}
 	tail := got[len(got)-sourceHashTailLen:]
 	for _, r := range tail {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+		isDigit := r >= '0' && r <= '9'
+		isHexLower := r >= 'a' && r <= 'f'
+		if !isDigit && !isHexLower {
 			t.Errorf("hash tail not lowercase-hex: got=%q tail=%q", got, tail)
 		}
 	}
