@@ -3,7 +3,7 @@
 **Status:** Accepted (2026-05-01)
 **Date:** 2026-05-01
 **Depends on:** [ADR-0001](./0001-fresh-rewrite-ai-first-remote-api.md), [ADR-0002](./0002-api-surface.md), [ADR-0005](./0005-plugin-lifecycle.md), [ADR-0006](./0006-plugin-discovery-config-allowlist.md)
-**Supersedes:** the storage-axis implication of ADR-0001 (DB-as-primary was never explicit but was the working assumption). Amends ADR-0002 in three places: snippet semantics, fill-token mechanism, new comment endpoint.
+**Supersedes:** the storage-axis implication of ADR-0001 (DB-as-primary was never explicit but was the working assumption). Amends ADR-0002 in three places: snippet semantics, fill-token mechanism, new note endpoint.
 
 ## Context
 
@@ -25,7 +25,7 @@ The agent-fill loop is revised so that the entity exists from the moment yaad-in
 
 1. Agent calls `POST /v1/ingest` with a URL or shorthand input.
 2. yaad-index dispatches to the matching plugin (subprocess, per ADR-0005). Plugin returns structured data, `clean_content`, named gaps, and any deterministically-derivable edges.
-3. **yaad-index writes the partial entity to the vault as a markdown file** with frontmatter for entity ID, kind, plugin-derived data, provenance, plugin-emitted edges, and a body containing `clean_content` (verbatim) and an empty `## Comments` section. **Vault writes are atomic** — the writer serializes to a temp file in the same directory and renames into place; a crash mid-serialization leaves the previous version (or no file) intact, never a half-written frontmatter that would poison reindex.
+3. **yaad-index writes the partial entity to the vault as a markdown file** with frontmatter for entity ID, kind, plugin-derived data, provenance, plugin-emitted edges, and a body containing `clean_content` (verbatim) and an empty `## Notes` section. **Vault writes are atomic** — the writer serializes to a temp file in the same directory and renames into place; a crash mid-serialization leaves the previous version (or no file) intact, never a half-written frontmatter that would poison reindex.
 4. yaad-index updates the DB with the partial entity (initial state, `summary` empty, agent-fillable gaps recorded).
 5. yaad-index responds to the agent with the appropriate `state` (`complete` if no gaps, `needs_fill` otherwise), the entity, the `clean_content`, the gap set, and the entity ID as the callback handle.
 6. The agent runs its own LLM on the `clean_content` to fill the gaps.
@@ -46,16 +46,16 @@ Every entity carries at minimum these three gap fields. Plugins fill what they c
 
 Plugins MAY declare additional kind-specific gaps (e.g. `complexity_assessment` for boardgames per the BGG plugin's `--init` capabilities). The three above are the floor every entity carries.
 
-### Comments as first-class
+### Notes as first-class
 
-Users author comments on entities. Decision: **comments are a first-class field on the entity model, not a separate plugin.**
+Users author notes on entities. Decision: **notes are a first-class field on the entity model, not a separate plugin.**
 
-- Plugins are fetchers of external content; comments are user-authored, no fetch. A comment plugin would conflate two unrelated jobs. Every entity should carry comments regardless of which plugin produced it.
-- Shape: `comments: [{date, text, author?}]`. Append-only; full edit/delete is out of scope for v1.
-- Storage: comments live at the end of the markdown body in a `## Comments` section, one entry per dated block. Frontmatter mirrors the array for fast access; the body is the authoring surface.
-- DB-indexed (FTS) — comments often carry the most personal-knowledge signal.
-- Authoring path 1: `POST /v1/entities/{id}/comments` (new endpoint, takes `{text, author?}`, server stamps `date`).
-- Authoring path 2: hand-edit the markdown directly. The vault is truth — a hand-edit of the `## Comments` section is just as valid as an API call. Reindex picks up either path.
+- Plugins are fetchers of external content; notes are user-authored, no fetch. A note plugin would conflate two unrelated jobs. Every entity should carry notes regardless of which plugin produced it.
+- Shape: `notes: [{date, text, author?}]`. Append-only; full edit/delete is out of scope for v1.
+- Storage: notes live at the end of the markdown body in a `## Notes` section, one entry per dated block. Frontmatter mirrors the array for fast access; the body is the authoring surface.
+- DB-indexed (FTS) — notes often carry the most personal-knowledge signal.
+- Authoring path 1: `POST /v1/entities/{id}/notes` (new endpoint, takes `{text, author?}`, server stamps `date`).
+- Authoring path 2: hand-edit the markdown directly. The vault is truth — a hand-edit of the `## Notes` section is just as valid as an API call. Reindex picks up either path.
 
 ### Cross-source identity
 
@@ -173,14 +173,14 @@ Pure derived index. Holds:
 
 - Entity rows (id, kind, frontmatter fields, summary).
 - Edge rows (from, to, type, metadata).
-- FTS index over data fields, summary, tags, comments, body.
+- FTS index over data fields, summary, tags, notes, body.
 - Reindex bookkeeping (per-file mtime, content hash, last_indexed_at).
 
 Schema can change freely; reindex regenerates. No migration scripts; no schema versioning beyond what reindex needs to detect "rebuild required."
 
 ### New endpoint and CLI surface
 
-- `POST /v1/entities/{id}/comments` — append a comment.
+- `POST /v1/entities/{id}/notes` — append a note.
 - `POST /v1/reindex` — trigger a full reindex from the vault. v1 has no auth layer (per ADR-0001's network-topology trust model: localhost-only or trusted-network-only deployment); the endpoint is reachable to anyone who can reach the server. A future auth ADR may gate this and other state-mutating endpoints; until then, the trust model is the network boundary.
 - CLI: `yaad-index reindex` — full or incremental rebuild from the vault.
 - Config: new top-level key `vault.path` (required). Missing or unreadable → fail-fast at server start.
@@ -199,10 +199,10 @@ The markdown frontmatter for an entity carries:
 | `summary` | string | agent-filled gap; empty until fill |
 | `tags` | list of strings | plugin-emitted + agent-filled |
 | `edges` | list of `{type, to, metadata?}` | plugin-emitted + agent-filled (also expressible as body wikilinks) |
-| `comments` | list of `{date, text, author?, operator?}` | append-only; mirrored to body `## Comments` section. Per yaad-index a prior PR the body heading row reads `<date> — <author> @ <operator>` when both are set; legacy `<date> — <author>` rows still parse and round-trip with empty `operator` |
+| `notes` | list of `{date, text, author?, operator?}` | append-only; mirrored to body `## Notes` section. Per yaad-index a prior PR the body heading row reads `<date> — <author> @ <operator>` when both are set; legacy `<date> — <author>` rows still parse and round-trip with empty `operator` |
 | `gaps` | list of strings | currently-unfilled gap field names; consumed by the fill endpoint's validation |
 
-The body of the markdown file holds the `clean_content` (verbatim from the plugin) followed by `## Edges` and `## Comments` sections that mirror the frontmatter for human authoring. Reindex parses both representations; on write, the canonical source is the frontmatter, and the body sections are regenerated.
+The body of the markdown file holds the `clean_content` (verbatim from the plugin) followed by `## Edges` and `## Notes` sections that mirror the frontmatter for human authoring. Reindex parses both representations; on write, the canonical source is the frontmatter, and the body sections are regenerated.
 
 Implementation PRs MAY add fields (e.g. `last_indexed_at` for reindex bookkeeping, kind-specific data subfields) but MUST NOT remove or rename the fields above without a follow-up ADR.
 
@@ -220,7 +220,7 @@ Watcher complexity is bounded but real. Pushed to a follow-up ADR if/when the st
 - **DB primary, vault as periodic export.** Keep the existing DB-first model; write markdown to the vault on a cadence as a one-way export. Rejected because the operator authors in Obsidian — bidirectional sync from a primary DB is fragile, and a one-way export defeats the personal-knowledge-first framing. The vault has to be the place edits happen.
 - **Plugin writes to vault directly.** Plugins emit markdown files instead of structured JSON. Rejected because it couples every plugin to the filesystem (breaking the subprocess-and-stdio shape from ADR-0005), turns plugin authors into vault-schema authors (drift across plugins), and conflates fetching with persistence. yaad-index keeps the orchestration role; plugins stay thin.
 - **Token registry kept.** Keep ADR-0002's `fill_token` as a separate handle. Rejected — durable callback via entity ID is structurally simpler, removes in-memory state, removes expiry edge cases, and lets agents pick fills back up after restarts or long delays.
-- **Comment plugin.** Treat comments as a plugin like any other source. Rejected because plugins fetch external content; comments are user-authored. Conflating breaks the plugin contract; user-data should not flow through the same protocol as fetch-data.
+- **Note plugin.** Treat notes as a plugin like any other source. Rejected because plugins fetch external content; notes are user-authored. Conflating breaks the plugin contract; user-data should not flow through the same protocol as fetch-data.
 - **Entity merging across sources.** Single canonical entity rows with multi-source provenance, instead of separate source entities + canonical. Rejected because it collapses kind-shape — a Wikipedia article and a BGG designer record have different fields, different lifecycle, different cleaning logic; merging them into one row makes round-trip back to source representation lossy. Edges-between-source-and-canonical preserves both axes.
 
 ## Consequences
@@ -230,7 +230,7 @@ Watcher complexity is bounded but real. Pushed to a follow-up ADR if/when the st
 - The vault is the human-facing artifact. Obsidian works directly on yaad-index entities; no sync layer.
 - DB loss is non-fatal — reindex restores from the vault.
 - DB schema can evolve freely; reindex regenerates rows under the new shape.
-- Hand-edits in the vault are first-class. A user editing the `## Comments` section of `vault/people/alice.md` produces the same result as an API call.
+- Hand-edits in the vault are first-class. A user editing the `## Notes` section of `vault/people/alice.md` produces the same result as an API call.
 - Agent fills can land arbitrarily late. The session-coupling of `fill_token` goes away.
 - Cross-source identity via edges keeps source-shape intact. Future plugins (IMDb, Goodreads, etc.) plug in alongside without renegotiating the canonical kinds.
 
@@ -238,7 +238,7 @@ Watcher complexity is bounded but real. Pushed to a follow-up ADR if/when the st
 
 - Vault writes are now load-bearing in the ingest hot path. Slower than DB-only — markdown serialization plus a file write per ingest. Acceptable for personal-scale; revisit if a bulk ingest path needs batching.
 - Hand-edits during a server run cause DB drift until next reindex. Mitigated by an optional file watcher; without one, operators run periodic reindex.
-- Implementation is substantial. Vault writer + parser + reindex + ingest-writes-vault + fill-endpoint-vault-first + snippet→summary + canonical-kinds config schema + comments endpoint + AGENTS.md update = eight PRs of work (see Action items). Sequenced, not concurrent (per the one-task-per-worker rule).
+- Implementation is substantial. Vault writer + parser + reindex + ingest-writes-vault + fill-endpoint-vault-first + snippet→summary + canonical-kinds config schema + notes endpoint + AGENTS.md update = eight PRs of work (see Action items). Sequenced, not concurrent (per the one-task-per-worker rule).
 - Existing v1 behavior changes. Pre-alpha state allows the break — no production deployments to migrate. Test data already ingested in the existing DB is discardable.
 
 ### Migration
@@ -252,7 +252,7 @@ There is no production yaad-index. The existing DB schema can be tossed; the exi
 - **Wikilinks vs frontmatter edges precedence** — when both express the same edge, dedupe on write. Resolved in the markdown-parser PR.
 - **File watcher** — deferred. v1 is reindex-only; watcher is a follow-up ADR.
 - **Multi-vault** — not in v1. ADR-0001's "one vault per server instance" stays.
-- **Comments edit/delete** — append-only in v1. Edit-by-comment-id is a follow-up if/when it becomes a real need.
+- **Notes edit/delete** — append-only in v1. Edit-by-note-id is a follow-up if/when it becomes a real need.
 - **Vault edits during a server run** — acceptable staleness in v1. Operator runs reindex on a cadence; future watcher closes the gap.
 - **Conflict resolution on concurrent fills** — locked in the Decision (Callback ID = entity ID subsection): v1 returns 409 Conflict with the rejected field names. Merge semantics for specific field types (e.g. `tags` as a union) are a deliberate follow-up.
 
@@ -266,7 +266,7 @@ Sequenced PRs from the implementer after ADR merges. Each is a separate dispatch
 4. **Fill endpoint vault-first + entity ID callback.** `POST /v1/entities/{id}/fill` updates vault first, then DB. Remove `fill_token` and `fill_token_expires_at` from response shapes.
 5. **Snippet → summary.** Replace the substring-strip snippet implementation with reading `summary` from the entity. Search results carry the agent-filled summary directly.
 6. **Canonical-kinds config schema + validation.** Extend the config loader (per ADR-0006) with `canonical_kinds:` and `canonical_edge_types:` keys. Wire the ingest pipeline + fill endpoint to validate plugin-emitted and agent-emitted canonical entities/edges against the operator's enabled set, dropping entities/edges for kinds not in config.
-7. **Comments endpoint and parsing.** `POST /v1/entities/{id}/comments`, body-section parsing, frontmatter mirror, FTS indexing.
+7. **Notes endpoint and parsing.** `POST /v1/entities/{id}/notes`, body-section parsing, frontmatter mirror, FTS indexing.
 8. **AGENTS.md update.** Architecture overview reflects vault-as-truth; configuration section documents `vault.path`.
 
 ADR-0008 itself is one PR (this document only); the eight implementation PRs follow.

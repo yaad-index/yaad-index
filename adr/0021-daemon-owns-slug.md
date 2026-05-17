@@ -135,7 +135,7 @@ metadata to a canonical label by creating a markdown file at:
 ```
 
 Example: `{ROOT}/ct/person/martin-wallace.md`. Markdown is the
-fixed extension — the body supports the existing comment system
+fixed extension — the body supports the existing note system
 (per ADR-0008), and YAML frontmatter holds operator-attached
 metadata (notes, hand-curated description, operator-fill values
 that aren't tied to any source).
@@ -144,7 +144,7 @@ that aren't tied to any source).
 operator wants to attach metadata. Most canonical labels in the
 edge graph have NO corresponding file — they're pure pointers.
 The file appears when the operator decides "this canonical label
-deserves notes / comments / metadata."
+deserves notes / notes / metadata."
 
 **System never auto-materializes canonical metadata files at
 edge creation time.** Edges to a canonical label do NOT trigger
@@ -166,19 +166,19 @@ against the freshly-materialized file. Two trigger sets today:
  vault file exists, operator-fill auto-creates both. This is the
  intentional path for "operator manually invents canonical
  metadata."
-- **Comment authored on the canonical label** — the comment
- lands in the body's `## Comments` section (per ADR-0008's
- comment layout). Comments **do NOT create entities from
- nothing**: when the DB row is absent, comment requests return
+- **Note authored on the canonical label** — the note
+ lands in the body's `## Notes` section (per ADR-0008's
+ note layout). Notes **do NOT create entities from
+ nothing**: when the DB row is absent, note requests return
  404. The vault file gets materialized only when the thin DB
  row already exists (typically from an ingest-time
  materialization Per the prior design, phase B). The asymmetry vs
- operator-fill exists because comments are a casual action; an
- uninhibited create-from-nothing path on comments would
+ operator-fill exists because notes are a casual action; an
+ uninhibited create-from-nothing path on notes would
  accumulate dangling entries on canonical labels that nobody
  meaningfully promoted.
 
-Comments authored by the operator (whether typed directly or
+Notes authored by the operator (whether typed directly or
 relayed through an agent acting on the operator's behalf) count
 as operator action and trigger the carve-out; the agent's JWT
 must carry an operator claim in the pair-claim model (per
@@ -192,7 +192,7 @@ follow the same pattern: the trigger set widens, the
 materialization condition (honest content to attach) stays.
 
 The file appears because there's now actual content (a fill
-value, a comment, an operator-attached note) to put in it; this
+value, a note, an operator-attached note) to put in it; this
 is honest materialization triggered by the first piece of
 attached data, not speculative materialization on edge presence.
 

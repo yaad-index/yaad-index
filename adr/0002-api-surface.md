@@ -1,6 +1,6 @@
 # ADR-0002 — API surface
 
-**Status:** Accepted (2026-04-27). Amended by ADR-0008 in three places (snippet semantics, fill-token mechanism, new comment endpoint). See ADR-0008's "Supersedes" line for details. The obsolete `fill_token` + equal-set fill semantics in this ADR's body have been struck through in-place with cross-links to ADR-0008 (Per the prior design, Option A: visible deprecation, audit trail preserved via git history + strike-through markers).
+**Status:** Accepted (2026-04-27). Amended by ADR-0008 in three places (snippet semantics, fill-token mechanism, new note endpoint). See ADR-0008's "Supersedes" line for details. The obsolete `fill_token` + equal-set fill semantics in this ADR's body have been struck through in-place with cross-links to ADR-0008 (Per the prior design, Option A: visible deprecation, audit trail preserved via git history + strike-through markers).
 **Date:** 2026-04-27
 **Depends on:** [ADR-0001](./0001-fresh-rewrite-ai-first-remote-api.md)
 
@@ -644,7 +644,7 @@ Initial code set:
 - `unsupported_url` (422) — `POST /v1/ingest` URL well-formed but no registered plugin's `url_patterns` claim it (per [ADR-0006](./0006-plugin-discovery-config-allowlist.md)). Server cannot dispatch with the currently-loaded plugin set; operator registers a plugin (or re-checks `--config`) to enable the URL family.
 - `not_acceptable` (406)
 - `unsupported_media_type` (415)
-- `vault_required` (503) — state-mutating endpoints (`/fill`, `/comments`) reject when `vault.path` is not configured (per [ADR-0008](./0008-vault-as-source-of-truth.md) §"Vault layout"). Ingest stays DB-only as a backwards-compatible fallback.
+- `vault_required` (503) — state-mutating endpoints (`/fill`, `/notes`) reject when `vault.path` is not configured (per [ADR-0008](./0008-vault-as-source-of-truth.md) §"Vault layout"). Ingest stays DB-only as a backwards-compatible fallback.
 - `internal_error` (500)
 - `collector_unavailable` (502)
 - `collector_timeout` (504)
@@ -677,7 +677,7 @@ Initial code set:
 - `POST /v1/ingest`
 - `GET /v1/needs-fill`
 - `POST /v1/entities/{id}/fill`
-- `POST /v1/entities/{id}/comments`
+- `POST /v1/entities/{id}/notes`
 - `POST /v1/edges`
 - `POST /v1/reindex`
 
@@ -694,7 +694,7 @@ The split is enforced at routing time in `internal/api/api.go`. The default-prot
 
 **Path precedence chain (locked):** CLI flag > env var > config file > built-in default — the same chain used for `keys_dir` and `default_ttl` . For `auth.required` the built-in default is `true`; for `keys_dir` it is `/etc/yaad-index/keys/`; for `default_ttl` it is `2160h` (90 days).
 
-Comment-author validation (the JWT's `sub` must match `POST /v1/entities/{id}/comments` body's `author`) lands in a prior PR. The full auth series (a prior a prior PR keypair + sign/verify + CLIs, a prior a prior PR middleware, a prior a prior PR comment validation, a prior a prior PR /v1/jwks) closes out the auth surface area for v1.
+Note-author validation (the JWT's `sub` must match `POST /v1/entities/{id}/notes` body's `author`) lands in a prior PR. The full auth series (a prior a prior PR keypair + sign/verify + CLIs, a prior a prior PR middleware, a prior a prior PR note validation, a prior a prior PR /v1/jwks) closes out the auth surface area for v1.
 
 ### Rate limiting
 

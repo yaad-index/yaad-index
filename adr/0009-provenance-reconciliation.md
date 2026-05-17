@@ -6,13 +6,13 @@ Accepted (2026-05-02).
 
 ## Context
 
-[ADR-0008](0008-vault-as-source-of-truth.md) established the vault-as-source-of-truth, DB-as-derived-index model. That redesign covered entities, edges, comments, and the fill/ingest endpoints. **Provenance was the one surface left half-migrated.**
+[ADR-0008](0008-vault-as-source-of-truth.md) established the vault-as-source-of-truth, DB-as-derived-index model. That redesign covered entities, edges, notes, and the fill/ingest endpoints. **Provenance was the one surface left half-migrated.**
 
 What we have today:
 
 - **Vault frontmatter** — every entity's `*.md` file accumulates the full provenance list under the `provenance:` key (a prior PR). Plugin fetches, agent fills, manual edits all append entries. The vault list is the canonical record.
 - **DB `provenance` table** — entity-keyed audit rows. a prior PR left a dual-write contract: ingest writes the vault first, then `AppendProvenance` mirrors to the DB. Concurrency-safe via `AppendProvenance`'s tx wrapper.
-- **Reindex** — a prior PR added the vault walker, but `Reindexer.upsertEntity` deliberately does NOT touch DB provenance during re-derivation. Its only DB write is `store.UpsertEntity`. Comment in `internal/reindex/reindex.go` explicitly defers this work to a future PR.
+- **Reindex** — a prior PR added the vault walker, but `Reindexer.upsertEntity` deliberately does NOT touch DB provenance during re-derivation. Its only DB write is `store.UpsertEntity`. Note in `internal/reindex/reindex.go` explicitly defers this work to a future PR.
 
 The result: the DB's `provenance` rows are a **half-derived** state. They mirror what the API has written, but they're not regenerable from the vault. A `WipeDerivedState` followed by reindex leaves the table empty until the next ingest / fill writes new rows. The vault still holds the full record — data isn't lost — but the DB-side mirror diverges until ingest / fill fires.
 
@@ -132,5 +132,5 @@ Existing dual-write paths in ingest / fill stay unchanged.
 - [ADR-0008](0008-vault-as-source-of-truth.md) — vault-as-source-of-truth (foundation)
 - [docs/index-flow.md](../docs/index-flow.md) §2 (re-derive scope) + §3 (wipe set rationale)
 - Issue — backlog spec this ADR formalizes
-- a prior PR — reindex landed; comment block deferred provenance handling
+- a prior PR — reindex landed; note block deferred provenance handling
 - a prior PR — vault-first ingest writes; vault list is the live record
