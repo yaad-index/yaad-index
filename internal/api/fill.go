@@ -205,6 +205,10 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 					Kind: opSet,
 					Value: labels,
 				})
+				// Frontmatter stores label IDs only; the per-
+				// entry `data` payload flows through Value to
+				// applyCanonicalTypeEdges as the dataview-append
+				// source per yaad-index #119.
 				continue
 			}
 			// Legacy untyped path — decode the raw JSON into the
@@ -230,7 +234,11 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 			if ve.Data == nil {
 				ve.Data = make(map[string]any, 1)
 			}
-			ve.Data[op.Field] = op.Value
+			// Frontmatter persists label IDs only; the per-entry
+			// `data` payload is recorded as a dataview paragraph
+			// on the target canonical entity after the source-
+			// side vault write (applyCanonicalTypeEdges).
+			ve.Data[op.Field] = canonicalLabelEntryIDs(op.Value)
 		}
 		applyFieldsToVaultEntity(ve, legacyFields)
 

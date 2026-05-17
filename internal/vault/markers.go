@@ -45,6 +45,27 @@ const (
 	NotesEndMarker = "<!-- yaad:notes end -->"
 )
 
+// DataviewStartMarker / DataviewEndMarker delimit the agent-
+// appended dataview paragraphs per yaad-index #119. Each
+// paragraph is a single line of Obsidian dataview-inline
+// metadata (`key:: value  key:: value`) representing one
+// canonical-type fill event on the target canonical entity.
+// Distinct from the notes-pair so a plugin re-ingest or an
+// operator-authored notes section can't smear data into the
+// dataview region by accident.
+//
+// On read: parser detects the marker pair and splits the
+// inner block into structured paragraphs. On write:
+// writeDataviewSection wraps the rendered paragraphs in the
+// marker pair so the next read finds them deterministically.
+// Bare `key:: value` lines outside the marker pair stay in
+// CleanContent verbatim — the marker is the activation
+// signal, prose stays prose.
+const (
+	DataviewStartMarker = "<!-- yaad:dataview start -->"
+	DataviewEndMarker = "<!-- yaad:dataview end -->"
+)
+
 // ErrPluginEmittedMarker is returned by MergePluginBody when the
 // plugin's emitted body contains the literal start or end marker
 // substring. Per ADR-0015 §4 last bullet: fail-fast surfaces the

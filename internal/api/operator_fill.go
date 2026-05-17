@@ -575,7 +575,18 @@ func applyOperatorFillOps(ve *vault.Entity, ops []operatorFillOp, now time.Time,
 	for _, op := range ops {
 		switch op.Kind {
 		case opSet:
-			ve.Data[op.Field] = op.Value
+			// canonical_type ops carry a []canonicalLabelEntry —
+			// frontmatter records the ID list only; per-entry
+			// `data` flows through op.Value to
+			// applyCanonicalTypeEdges for dataview-paragraph
+			// recording on the target canonical entity per
+			// yaad-index #119. Scalar ops keep their natural
+			// Go shape.
+			if ids := canonicalLabelEntryIDs(op.Value); ids != nil {
+				ve.Data[op.Field] = ids
+			} else {
+				ve.Data[op.Field] = op.Value
+			}
 			ve.GapState[op.Field] = vault.GapStateEntry{
 				Source: "operator",
 				FilledAt: &now,

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -110,6 +111,7 @@ func Marshal(e *Entity, canonicalKinds []string) ([]byte, error) {
 
 	writeEdgesSection(&buf, e.Edges)
 	writeNotesSection(&buf, e.Notes)
+	writeDataviewSection(&buf, e.Dataview)
 
 	return buf.Bytes(), nil
 }
@@ -153,13 +155,17 @@ func Unmarshal(b []byte) (*Entity, error) {
 		return nil, err
 	}
 
-	cleanContent, bodyEdges, bodyNotes := splitBody(body)
+	cleanContent, bodyEdges, bodyNotes, bodyDataview := splitBody(body)
 	e.CleanContent = cleanContent
 	e.Edges = mergeEdges(e.Edges, bodyEdges)
 	// Notes live in the body `## Notes` section only — the
 	// frontmatter `note_count` is informational + queryable, the
 	// body is the source of truth .
 	e.Notes = bodyNotes
+	// Dataview paragraphs live in the body's yaad:dataview marker
+	// region only — no frontmatter mirror (frontmatter `data` stays
+	// global per yaad-index #119).
+	e.Dataview = bodyDataview
 
 	return e, nil
 }
@@ -352,12 +358,13 @@ var noteHeadingRow = regexp.MustCompile(`^(\S+)(?:\s+(?:—|-)\s+([^@]+?)(?:\s+@
 // heading — the fallback path lets first-read recover notes
 // from pre-marker vault files; the next write produces marker-
 // wrapped output.
-func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note) {
+func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, dataview []DataviewParagraph) {
 	var (
 		section = "clean"
 		clean bytes.Buffer
 		edgesB []Edge
 		notesB []Note
+		dvB []DataviewParagraph
 
 		// note-table accumulator
 		noteTableHeaderSeen bool // ate the `| Notes |` row
@@ -436,6 +443,15 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note) {
 				flushOrphanedHeading()
 			}
 			inNotesMarker = false
+			section = "clean"
+			continue
+		case trimmed == DataviewStartMarker:
+			if section == "notes" {
+				flushOrphanedHeading()
+			}
+			section = "dataview"
+			continue
+		case trimmed == DataviewEndMarker:
 			section = "clean"
 			continue
 		case trimmed == "## Edges":
@@ -543,6 +559,10 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note) {
 			curAuthor = ""
 			curOperator = ""
 			noteExpectHeading = true
+		case "dataview":
+			if fields := parseDataviewLine(line); len(fields) > 0 {
+				dvB = append(dvB, DataviewParagraph{Fields: fields})
+			}
 		}
 	}
 
@@ -558,9 +578,9 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note) {
 	// regardless of how the caller spaced their input.
 	trimmed := strings.Trim(clean.String(), "\n")
 	if trimmed == "" {
-		return "", edgesB, notesB
+		return "", edgesB, notesB, dvB
 	}
-	return trimmed + "\n", edgesB, notesB
+	return trimmed + "\n", edgesB, notesB, dvB
 }
 
 // parseCommentDate accepts both RFC3339 timestamps (legacy from the
@@ -667,6 +687,98 @@ func writeNotesSection(w *bytes.Buffer, notes []Note) {
 	}
 	w.WriteString(NotesEndMarker)
 	w.WriteByte('\n')
+}
+
+// writeDataviewSection renders the entity's dataview paragraphs
+// per yaad-index #119. Each paragraph becomes one line in the
+// marker-wrapped region:
+//
+//	<!-- yaad:dataview start -->
+//	role:: Staff Platform Engineer  salary:: 150k+  work_mode:: hybrid
+//	role:: Senior Engineer  salary:: 130k+  work_mode:: remote
+//	<!-- yaad:dataview end -->
+//
+// Keys are sorted within each paragraph for deterministic
+// rendering (the dedup contract assumes sorted-key equality).
+// Empty Dataview slice skips the section entirely so entities
+// that never receive a canonical-type fill with `data` stay
+// noise-free.
+func writeDataviewSection(w *bytes.Buffer, paragraphs []DataviewParagraph) {
+	if len(paragraphs) == 0 {
+		return
+	}
+	w.WriteString(DataviewStartMarker)
+	w.WriteByte('\n')
+	for _, p := range paragraphs {
+		if len(p.Fields) == 0 {
+			continue
+		}
+		w.WriteString(renderDataviewParagraph(p))
+		w.WriteByte('\n')
+	}
+	w.WriteString(DataviewEndMarker)
+	w.WriteByte('\n')
+}
+
+// renderDataviewParagraph turns a DataviewParagraph into its
+// `key:: value  key:: value` wire form with sorted-key order.
+// Exposed at the package level so the handler dedup path can
+// content-hash a candidate paragraph the same way the writer
+// will render it.
+func renderDataviewParagraph(p DataviewParagraph) string {
+	if len(p.Fields) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(p.Fields))
+	for k := range p.Fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteString("  ")
+		}
+		b.WriteString(k)
+		b.WriteString(":: ")
+		b.WriteString(p.Fields[k])
+	}
+	return b.String()
+}
+
+// parseDataviewLine inverts renderDataviewParagraph for one
+// line in a yaad:dataview block. Two-space separator between
+// key-value pairs is the cell delimiter; `::` separates a key
+// from its value. Lines without `::` (blank lines, decorative
+// content) return nil so the parser skips them silently.
+// Permissive enough to round-trip operator hand-edits that
+// shuffle field order (sorted-key render canonicalizes on
+// next write).
+func parseDataviewLine(line string) map[string]string {
+	if !strings.Contains(line, "::") {
+		return nil
+	}
+	out := make(map[string]string)
+	for _, pair := range strings.Split(line, "  ") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		idx := strings.Index(pair, "::")
+		if idx <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(pair[:idx])
+		val := strings.TrimSpace(pair[idx+2:])
+		if key == "" {
+			continue
+		}
+		out[key] = val
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // DefaultBodyEdgeType is assigned to a body wikilink that does not

@@ -312,6 +312,95 @@ func TestAgentFill_CanonicalType_NotArray(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "type_mismatch")
 }
 
+// TestAgentFill_CanonicalType_AcceptsDataPerEntry pins
+// yaad-index #119 Cut 1: a canonical_type entry MAY carry an
+// optional `data: {...}` map. The parser accepts it without
+// rejecting; frontmatter `data[<field>]` persists label IDs
+// only — the per-entry data does NOT bleed into the source
+// entity's frontmatter. Cut 2 will use the carried data to
+// append dataview paragraphs on the target canonical entity.
+func TestAgentFill_CanonicalType_AcceptsDataPerEntry(t *testing.T) {
+	t.Parallel()
+	h, st, root, signer := newAgentFillCanonicalTypeFixture(t, []string{"person", "boardgame"})
+	tok := mintToken(t, signer, "agent", "alice")
+	const id = "source:agent-data-per-entry"
+	seedSourceForAgentCanonicalTypeFill(t, st, root, id)
+
+	rec := agentFillReq(t, h, id, tok, map[string]any{
+		"subjects": []any{
+			map[string]any{
+				"name": "Brass: Birmingham",
+				"kind": "boardgame",
+				"data": map[string]any{
+					"my_rating":   "9",
+					"played_at":   "essen-2024",
+					"co_player":   "alice",
+				},
+			},
+			map[string]any{
+				"name": "Martin Wallace",
+				"kind": "person",
+				// No data — older entries stay valid.
+			},
+		},
+	})
+	require.Equal(t, http.StatusOK, rec.Code,
+		"data field must be accepted; body=%s", rec.Body.String())
+
+	// Edges still land — the existing canonical_type semantics
+	// are preserved.
+	edges, err := st.GetEdgesFor(context.Background(), id, []string{"subjects"})
+	require.NoError(t, err)
+	require.Len(t, edges, 2)
+
+	// Frontmatter `data.subjects` persists label IDs only —
+	// the per-entry `data` payload doesn't bleed into the
+	// source entity's frontmatter. Cut 2 records it as a
+	// dataview paragraph on the target instead.
+	ve := readVaultByID(t, root, "source", id)
+	storedRaw, ok := ve.Data["subjects"]
+	require.True(t, ok, "subjects must persist on frontmatter")
+	stored, ok := storedRaw.([]any)
+	require.True(t, ok, "subjects must persist as a list; got %T", storedRaw)
+	gotIDs := make([]string, len(stored))
+	for i, v := range stored {
+		gotIDs[i], _ = v.(string)
+	}
+	assert.ElementsMatch(t,
+		[]string{"boardgame:brass-birmingham", "person:martin-wallace"},
+		gotIDs,
+		"frontmatter must store label-IDs only, NOT the per-entry data payload")
+}
+
+// TestAgentFill_CanonicalType_DataExtraFieldsAccepted: the
+// per-entry `data` map is free-form — daemon does not type
+// the keys. Any string-keyed map value the agent emits
+// passes through unchanged.
+func TestAgentFill_CanonicalType_DataExtraFieldsAccepted(t *testing.T) {
+	t.Parallel()
+	h, st, root, signer := newAgentFillCanonicalTypeFixture(t, []string{"person", "boardgame"})
+	tok := mintToken(t, signer, "agent", "alice")
+	const id = "source:agent-data-extras"
+	seedSourceForAgentCanonicalTypeFill(t, st, root, id)
+
+	rec := agentFillReq(t, h, id, tok, map[string]any{
+		"subjects": []any{
+			map[string]any{
+				"name": "Caverna",
+				"kind": "boardgame",
+				"data": map[string]any{
+					"any_key":     "any-value",
+					"nested_map":  map[string]any{"deep": "ok"},
+					"numeric":     42,
+					"empty_value": "",
+				},
+			},
+		},
+	})
+	require.Equal(t, http.StatusOK, rec.Code,
+		"free-form data keys must pass; body=%s", rec.Body.String())
+}
+
 // TestAgentFill_LegacyFieldsStillWork covers the back-compat
 // guarantee: fields without a typed gap-spec entry (e.g. summary
 // + tags on a source-shape entity that doesn't declare them in

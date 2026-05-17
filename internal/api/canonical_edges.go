@@ -98,11 +98,12 @@ func applyCanonicalTypeEdges(
 		if op.Kind == opClear {
 			continue
 		}
-		labels, ok := op.Value.([]string)
+		entries, ok := op.Value.([]canonicalLabelEntry)
 		if !ok {
-			return fmt.Errorf("canonical_type op %q: expected []string value, got %T", op.Field, op.Value)
+			return fmt.Errorf("canonical_type op %q: expected []canonicalLabelEntry value, got %T", op.Field, op.Value)
 		}
-		for _, label := range labels {
+		for _, e := range entries {
+			label := e.ID
 			created, err := ensureCanonicalLabelRow(ctx, st, label, logger)
 			if err != nil {
 				return fmt.Errorf("ensure label row %q: %w", label, err)
@@ -145,6 +146,23 @@ func applyCanonicalTypeEdges(
 		}
 	}
 	return nil
+}
+
+// canonicalLabelEntryIDs extracts just the IDs from a slice of
+// canonicalLabelEntry. Frontmatter `data[<field>]` stores label
+// IDs only — the per-entry `Data` payload lands as a dataview
+// paragraph on the target canonical entity, not in the source
+// entity's frontmatter, per yaad-index #119.
+func canonicalLabelEntryIDs(v any) []string {
+	entries, ok := v.([]canonicalLabelEntry)
+	if !ok {
+		return nil
+	}
+	ids := make([]string, len(entries))
+	for i, e := range entries {
+		ids[i] = e.ID
+	}
+	return ids
 }
 
 // ensureCanonicalLabelRow / splitCanonicalLabelID delegate to
@@ -191,7 +209,7 @@ func parseCanonicalLabelList(
 	gap config.GapSpec,
 	operatorAllKinds []string,
 	allowPreformedLabels bool,
-) ([]string, *opError) {
+) ([]canonicalLabelEntry, *opError) {
 	var entries []json.RawMessage
 	if err := json.Unmarshal(raw, &entries); err != nil {
 		return nil, &opError{
@@ -205,13 +223,13 @@ func parseCanonicalLabelList(
 		}
 	}
 	resolution := canonicalKindResolution(gap, operatorAllKinds)
-	out := make([]string, 0, len(entries))
+	out := make([]canonicalLabelEntry, 0, len(entries))
 	for i, entry := range entries {
-		label, perr := parseCanonicalLabelEntry(field, i, entry, resolution, allowPreformedLabels)
+		labelEntry, perr := parseCanonicalLabelEntry(field, i, entry, resolution, allowPreformedLabels)
 		if perr != nil {
 			return nil, perr
 		}
-		out = append(out, label)
+		out = append(out, labelEntry)
 	}
 	return out, nil
 }
@@ -253,10 +271,10 @@ func parseCanonicalLabelEntry(
 	raw json.RawMessage,
 	resolution map[string]struct{},
 	allowPreformedLabels bool,
-) (string, *opError) {
+) (canonicalLabelEntry, *opError) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
-		return "", &opError{
+		return canonicalLabelEntry{}, &opError{
 			status: http.StatusBadRequest,
 			code: "type_mismatch",
 			message: fmt.Sprintf("field %q[%d]: empty value", field, index),
@@ -265,8 +283,10 @@ func parseCanonicalLabelEntry(
 	switch trimmed[0] {
 	case '"':
 		// Pre-formed canonical-label string. Operator/UGC paths only.
+		// String form does NOT carry data — only the object form
+		// `{name, kind, data}` accepts the dataview payload.
 		if !allowPreformedLabels {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "type_mismatch",
 				message: fmt.Sprintf("field %q[%d]: pre-formed canonical-label string only accepted on operator-fill (got %s); use {name, kind} instead",
@@ -275,7 +295,7 @@ func parseCanonicalLabelEntry(
 		}
 		var s string
 		if err := json.Unmarshal(raw, &s); err != nil {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "type_mismatch",
 				message: fmt.Sprintf("field %q[%d]: decode string: %v", field, index, err),
@@ -283,48 +303,51 @@ func parseCanonicalLabelEntry(
 		}
 		kind, slugPart, ok := splitCanonicalLabelID(s)
 		if !ok {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "invalid_canonical_label",
 				message: fmt.Sprintf("field %q[%d]: %q is not a valid `<kind>:<slug>` canonical label", field, index, s),
 			}
 		}
 		if _, ok := resolution[kind]; !ok {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "kind_not_allowed",
 				message: fmt.Sprintf("field %q[%d]: kind %q not in the gap's resolution set", field, index, kind),
 			}
 		}
-		return kind + ":" + slugPart, nil
+		return canonicalLabelEntry{ID: kind + ":" + slugPart}, nil
 	case '{':
 		var ref canonicalRef
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&ref); err != nil {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "type_mismatch",
 				message: fmt.Sprintf("field %q[%d]: %v", field, index, err),
 			}
 		}
 		if ref.Name == "" || ref.Kind == "" {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "type_mismatch",
 				message: fmt.Sprintf("field %q[%d]: object form requires non-empty `name` AND `kind`", field, index),
 			}
 		}
 		if _, ok := resolution[ref.Kind]; !ok {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "kind_not_allowed",
 				message: fmt.Sprintf("field %q[%d]: kind %q not in the gap's resolution set", field, index, ref.Kind),
 			}
 		}
-		return ref.Kind + ":" + slug.Slug(ref.Name), nil
+		return canonicalLabelEntry{
+			ID:   ref.Kind + ":" + slug.Slug(ref.Name),
+			Data: ref.Data,
+		}, nil
 	default:
-		return "", &opError{
+		return canonicalLabelEntry{}, &opError{
 			status: http.StatusBadRequest,
 			code: "type_mismatch",
 			message: fmt.Sprintf("field %q[%d]: expected {name, kind} object%s, got %s",
@@ -336,14 +359,28 @@ func parseCanonicalLabelEntry(
 }
 
 // canonicalRef is the wire shape for one entry in the object form
-// of a canonical_type fill: `{"name": "...", "kind": "..."}`.
+// of a canonical_type fill: `{"name": "...", "kind": "...",
+// "data": {...}}`. The `data` field per yaad-index #119 is the
+// optional free-form metadata map appended as a dataview-inline
+// paragraph on the target canonical entity's body.
 // DisallowUnknownFields rejects extra keys so typo-driven fills
-// don't silently land malformed values. The same `{name, kind}`
-// shape appears uniformly across plugin emissions (ADR-0021's
-// universal-source-shape edges block) and fill paths.
+// don't silently land malformed values.
 type canonicalRef struct {
-	Name string `json:"name"`
-	Kind string `json:"kind"`
+	Name string         `json:"name"`
+	Kind string         `json:"kind"`
+	Data map[string]any `json:"data,omitempty"`
+}
+
+// canonicalLabelEntry is the per-element output of
+// parseCanonicalLabelList. The ID is the resolved canonical-
+// label id (`<kind>:<slug>`); Data is the optional free-form
+// payload to record as a dataview paragraph on the target
+// per yaad-index #119. Pre-formed-label string entries
+// (operator-fill / UGC paths) always emit empty Data — only
+// the object form `{name, kind, data}` carries it.
+type canonicalLabelEntry struct {
+	ID   string
+	Data map[string]any
 }
 
 // stringEllipsis returns s with a `…` appended after `max` runes
