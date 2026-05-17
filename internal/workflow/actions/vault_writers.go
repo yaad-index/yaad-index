@@ -38,6 +38,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yaad-index/yaad-index/internal/canonical"
+	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/eventbus"
+	"github.com/yaad-index/yaad-index/internal/slug"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
 	"github.com/yaad-index/yaad-index/internal/writelocks"
@@ -421,4 +425,151 @@ func cloneStringMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// VaultEdgeWriter is the production-default EdgeWriter for the
+// add_canonical_edge primitive (#132). Slugifies the target name
+// via the daemon's clean-slug rule, ensures a thin DB row for
+// the target canonical-label exists, creates the source→target
+// edge (idempotent via the (type, from, to) upsert in
+// store.CreateEdge), and — when data is non-empty — appends a
+// dataview-inline paragraph to the target canonical entity's
+// body via canonical.AppendDataviewParagraph (auto-materializes
+// the target vault file when missing per ADR-0021 §3).
+//
+// EdgeStore is the full store.Store interface here (rather than
+// the narrow EntityStore used by Note/Gap/Property writers)
+// because the canonical-edge + dataview-append paths need
+// CreateEdge alongside the GetEntity / UpsertEntity surface
+// EntityStore exposes.
+type VaultEdgeWriter struct {
+	store       store.Store
+	vaultReader *vault.Reader
+	vaultWriter *vault.Writer
+	writeLocks  *writelocks.Manager
+	kindReg     map[string]config.CanonicalKindConfig
+	bus         eventbus.Bus
+	logger      *slog.Logger
+}
+
+// NewVaultEdgeWriter constructs an EdgeWriter from the daemon's
+// full vault + store wiring. All non-bus/non-logger fields are
+// required; nil bus / nil logger fall through to no-op /
+// discarding behaviour (mirrors the other vault-backed writers'
+// optional-deps convention).
+func NewVaultEdgeWriter(
+	st store.Store,
+	vaultReader *vault.Reader,
+	vaultWriter *vault.Writer,
+	writeLocks *writelocks.Manager,
+	kindReg map[string]config.CanonicalKindConfig,
+	bus eventbus.Bus,
+	logger *slog.Logger,
+) *VaultEdgeWriter {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	return &VaultEdgeWriter{
+		store:       st,
+		vaultReader: vaultReader,
+		vaultWriter: vaultWriter,
+		writeLocks:  writeLocks,
+		kindReg:     kindReg,
+		bus:         bus,
+		logger:      logger,
+	}
+}
+
+// AddCanonicalEdge implements EdgeWriter. Slugifies targetName
+// via slug.Slug to produce the canonical-label id
+// (`<targetKind>:<slug>`), ensures the thin DB row exists,
+// creates the source→target edge (CreateEdge is upsert-keyed on
+// (type, from, to) — re-fires for the same tuple are idempotent
+// no-ops at the SQL layer), then optionally fires the dataview-
+// append.
+//
+// Event emission:
+//
+//   - entity.created fires once when EnsureLabelRow materializes
+//     a new target thin row (gated on the `created` return so
+//     existing rows don't re-emit).
+//   - entity.edge_added fires per CreateEdge (idempotent at the
+//     event layer too: the bus subscriber's de-dup behaviour
+//     decides whether duplicate edge events propagate).
+//   - fill.completed fires when canonical.AppendDataviewParagraph
+//     actually lands a new paragraph (gated on appended=true so
+//     a content-hash-dedup skip doesn't fire the event).
+//
+// The SourceTag on every event is `workflow:<workflow>` to
+// match the ADR-0024 vocabulary; downstream workflows can branch
+// on the source to skip self-loops.
+func (w *VaultEdgeWriter) AddCanonicalEdge(
+	ctx context.Context,
+	workflow, sourceID, edgeType, targetKind, targetName string,
+	data map[string]string,
+) error {
+	targetSlug := slug.Slug(targetName)
+	if targetSlug == "" {
+		return fmt.Errorf("slugify target name %q produced empty slug", targetName)
+	}
+	targetID := targetKind + ":" + targetSlug
+
+	source := eventbus.WorkflowSource(workflow)
+
+	created, err := canonical.EnsureLabelRow(ctx, w.store, targetID, w.logger)
+	if err != nil {
+		return fmt.Errorf("ensure label row %q: %w", targetID, err)
+	}
+	if created && w.bus != nil {
+		w.bus.Publish(ctx, eventbus.EntityCreatedEvent{
+			ID:        targetID,
+			Kind:      targetKind,
+			SourceTag: source,
+			At:        time.Now().UTC(),
+		})
+	}
+
+	if err := w.store.CreateEdge(ctx, &store.Edge{
+		Type: edgeType,
+		From: sourceID,
+		To:   targetID,
+	}); err != nil {
+		return fmt.Errorf("create edge %s -[%s]-> %s: %w", sourceID, edgeType, targetID, err)
+	}
+	if w.bus != nil {
+		w.bus.Publish(ctx, eventbus.EntityEdgeAddedEvent{
+			FromID:    sourceID,
+			ToID:      targetID,
+			EdgeType:  edgeType,
+			SourceTag: source,
+			At:        time.Now().UTC(),
+		})
+	}
+
+	if len(data) == 0 {
+		return nil
+	}
+
+	deps := canonical.DataviewAppendDeps{
+		Store:       w.store,
+		VaultReader: w.vaultReader,
+		VaultWriter: w.vaultWriter,
+		WriteLocks:  w.writeLocks,
+		KindReg:     w.kindReg,
+		Bus:         w.bus,
+		Logger:      w.logger,
+	}
+	appended, err := canonical.AppendDataviewParagraph(ctx, deps, targetID, data, edgeType, workflow)
+	if err != nil {
+		return fmt.Errorf("append dataview paragraph on %s: %w", targetID, err)
+	}
+	if appended && w.bus != nil {
+		w.bus.Publish(ctx, eventbus.FillCompletedEvent{
+			EntityID:  targetID,
+			Gap:       edgeType,
+			SourceTag: source,
+			At:        time.Now().UTC(),
+		})
+	}
+	return nil
 }

@@ -39,6 +39,47 @@ func (r *fakePluginRegistry) LookupByName(name string) (any, bool) {
 	return nil, ok
 }
 
+// fakeCanonicalRegistry satisfies CanonicalRegistry for #132
+// loader-time validation tests.
+type fakeCanonicalRegistry struct {
+	kinds     map[string]struct{}
+	edgeTypes map[string]struct{}
+}
+
+func newFakeCanonicalRegistry(kinds []string, edgeTypes []string) *fakeCanonicalRegistry {
+	r := &fakeCanonicalRegistry{
+		kinds:     make(map[string]struct{}, len(kinds)),
+		edgeTypes: make(map[string]struct{}, len(edgeTypes)),
+	}
+	for _, k := range kinds {
+		r.kinds[k] = struct{}{}
+	}
+	for _, e := range edgeTypes {
+		r.edgeTypes[e] = struct{}{}
+	}
+	return r
+}
+
+func (r *fakeCanonicalRegistry) KindExists(kind string) bool {
+	_, ok := r.kinds[kind]
+	return ok
+}
+
+func (r *fakeCanonicalRegistry) EdgeTypeExists(edgeType string) bool {
+	_, ok := r.edgeTypes[edgeType]
+	return ok
+}
+
+// addCanonicalEdgeWorkflowMarkdown returns a workflow file with a
+// single add_canonical_edge action. Used by #132 loader-time
+// validation tests.
+func addCanonicalEdgeWorkflowMarkdown(name, edgeType, targetKind, targetName string) string {
+	return fmt.Sprintf(
+		"---\nname: %s\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: manual\nactions:\n  - add_canonical_edge:\n      edge_type: '%s'\n      target:\n        kind: '%s'\n        name: '%s'\n```\n",
+		name, edgeType, targetKind, targetName,
+	)
+}
+
 // minimalWorkflowMarkdown returns a valid workflow file with
 // the given name + allowed_plugins. Tests use this to seed
 // the loader's scan directory.
@@ -511,4 +552,84 @@ func TestLoader_WorkflowsSnapshot_IsCopy(t *testing.T) {
 	require.Len(t, again, 2)
 	assert.Equal(t, "a", again[0].Name)
 	assert.Equal(t, "b", again[1].Name)
+}
+
+// TestLoader_AddCanonicalEdge_UnknownEdgeTypeRejected: a
+// workflow declaring an add_canonical_edge with edge_type not in
+// canonical_edge_types is rejected at load time per #132.
+func TestLoader_AddCanonicalEdge_UnknownEdgeTypeRejected(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "bad-edge",
+		addCanonicalEdgeWorkflowMarkdown("bad-edge", "unknown_edge", "person", "Uwe"))
+
+	var logBuf bytes.Buffer
+	l := New(Options{
+		Paths:             []string{dir},
+		PluginRegistry:    newFakeRegistry("yaad-gmail"),
+		CanonicalRegistry: newFakeCanonicalRegistry([]string{"person"}, []string{"is_about"}),
+		Logger:            slog.New(slog.NewTextHandler(&logBuf, nil)),
+	})
+	require.NoError(t, l.Load(context.Background()))
+	assert.Empty(t, l.Workflows(), "rejected workflow stays out of registry")
+	assert.Contains(t, logBuf.String(), "unknown_edge")
+}
+
+// TestLoader_AddCanonicalEdge_UnknownTargetKindRejected: target
+// kind not in canonical_kinds is rejected at load time per #132.
+func TestLoader_AddCanonicalEdge_UnknownTargetKindRejected(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "bad-kind",
+		addCanonicalEdgeWorkflowMarkdown("bad-kind", "is_about", "unknown_kind", "Whatever"))
+
+	var logBuf bytes.Buffer
+	l := New(Options{
+		Paths:             []string{dir},
+		PluginRegistry:    newFakeRegistry("yaad-gmail"),
+		CanonicalRegistry: newFakeCanonicalRegistry([]string{"person"}, []string{"is_about"}),
+		Logger:            slog.New(slog.NewTextHandler(&logBuf, nil)),
+	})
+	require.NoError(t, l.Load(context.Background()))
+	assert.Empty(t, l.Workflows(), "rejected workflow stays out of registry")
+	assert.Contains(t, logBuf.String(), "unknown_kind")
+}
+
+// TestLoader_AddCanonicalEdge_KnownRegistryAccepts: edge_type +
+// target.kind both in their respective registries → workflow
+// registers cleanly.
+func TestLoader_AddCanonicalEdge_KnownRegistryAccepts(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "good",
+		addCanonicalEdgeWorkflowMarkdown("good", "is_about", "person", "Uwe"))
+
+	l := New(Options{
+		Paths:             []string{dir},
+		PluginRegistry:    newFakeRegistry("yaad-gmail"),
+		CanonicalRegistry: newFakeCanonicalRegistry([]string{"person"}, []string{"is_about"}),
+	})
+	require.NoError(t, l.Load(context.Background()))
+	require.Len(t, l.Workflows(), 1, "valid workflow registers")
+	assert.Equal(t, "good", l.Workflows()[0].Name)
+}
+
+// TestLoader_AddCanonicalEdge_NilCanonicalRegistrySkips: when
+// the loader is constructed without a CanonicalRegistry (test +
+// dev path), add_canonical_edge actions register without
+// validation. Plugins-side allowed_plugins validation still
+// runs unaffected.
+func TestLoader_AddCanonicalEdge_NilCanonicalRegistrySkips(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "no-reg",
+		addCanonicalEdgeWorkflowMarkdown("no-reg", "any_edge", "any_kind", "Whatever"))
+
+	l := New(Options{
+		Paths:          []string{dir},
+		PluginRegistry: newFakeRegistry("yaad-gmail"),
+		// CanonicalRegistry intentionally nil.
+	})
+	require.NoError(t, l.Load(context.Background()))
+	require.Len(t, l.Workflows(), 1)
 }

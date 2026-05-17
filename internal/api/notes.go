@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/store"
@@ -197,7 +198,7 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 					fmt.Sprintf("no vault file for id %s (kind=%s)", id, got.Kind))
 				return
 			}
-			ve = newCanonicalLabelEntity(got.ID, got.Kind, kindCfg)
+			ve = canonical.NewCanonicalLabelEntity(got.ID, got.Kind, kindCfg)
 			autoMaterialize = true
 		}
 

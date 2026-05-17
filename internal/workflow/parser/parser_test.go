@@ -566,6 +566,152 @@ func TestValidate_AddGapDataSchemaEmptyKeyRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "data_schema")
 }
 
+// TestParser_AddCanonicalEdgeRoundTrip pins the wire shape of the
+// #132 add_canonical_edge action: literal edge_type + target.kind,
+// CEL-expression target.name + data values.
+func TestParser_AddCanonicalEdgeRoundTrip(t *testing.T) {
+	t.Parallel()
+	src := "---\n" +
+		"name: github-notification-classify\n" +
+		"status: active\n" +
+		"---\n" +
+		"\n" +
+		"```yaml\n" +
+		"allowed_plugins:\n" +
+		"  - yaad-gmail\n" +
+		"\n" +
+		"trigger:\n" +
+		"  type: manual\n" +
+		"\n" +
+		"actions:\n" +
+		"  - add_canonical_edge:\n" +
+		"      source: 'entity.id'\n" +
+		"      edge_type: 'is_about'\n" +
+		"      target:\n" +
+		"        kind: 'github-repository'\n" +
+		"        name: 'regex_capture(entity.data.subject, \"\\\\[([^/]+/[^\\\\]]+)\\\\]\", 1)'\n" +
+		"      data:\n" +
+		"        reference: 'regex_capture(entity.data.subject, \"#(\\\\d+)\", 1)'\n" +
+		"        type: 'entity.data.subject.contains(\"review\") ? \"review\" : \"notification\"'\n" +
+		"```\n"
+	wf, err := Parse([]byte(src))
+	require.NoError(t, err)
+	require.Len(t, wf.Actions, 1)
+	require.NotNil(t, wf.Actions[0].AddCanonicalEdge)
+	a := wf.Actions[0].AddCanonicalEdge
+	assert.Equal(t, "entity.id", a.Source)
+	assert.Equal(t, "is_about", a.EdgeType)
+	assert.Equal(t, "github-repository", a.TargetKind)
+	assert.Equal(t, `regex_capture(entity.data.subject, "\\[([^/]+/[^\\]]+)\\]", 1)`, a.TargetName)
+	require.Len(t, a.Data, 2)
+	assert.Equal(t, `regex_capture(entity.data.subject, "#(\\d+)", 1)`, a.Data["reference"])
+	assert.Equal(t, `entity.data.subject.contains("review") ? "review" : "notification"`, a.Data["type"])
+}
+
+// TestParser_AddCanonicalEdgeNoData: the data map is optional.
+// Edge-only fires (no dataview-paragraph append) parse cleanly.
+func TestParser_AddCanonicalEdgeNoData(t *testing.T) {
+	t.Parallel()
+	src := "---\n" +
+		"name: edge-only\n" +
+		"status: active\n" +
+		"---\n" +
+		"\n" +
+		"```yaml\n" +
+		"allowed_plugins:\n" +
+		"  - yaad-gmail\n" +
+		"\n" +
+		"trigger:\n" +
+		"  type: manual\n" +
+		"\n" +
+		"actions:\n" +
+		"  - add_canonical_edge:\n" +
+		"      edge_type: 'is_a'\n" +
+		"      target:\n" +
+		"        kind: 'source-type'\n" +
+		"        name: 'github-notification'\n" +
+		"```\n"
+	wf, err := Parse([]byte(src))
+	require.NoError(t, err)
+	require.NotNil(t, wf.Actions[0].AddCanonicalEdge)
+	a := wf.Actions[0].AddCanonicalEdge
+	assert.Empty(t, a.Source, "source defaults at runtime to entity.id")
+	assert.Equal(t, "is_a", a.EdgeType)
+	assert.Equal(t, "source-type", a.TargetKind)
+	assert.Equal(t, "github-notification", a.TargetName)
+	assert.Nil(t, a.Data)
+}
+
+// TestValidate_AddCanonicalEdgeRequiredFields covers the
+// non-empty edge_type / target.kind / target.name rules.
+func TestValidate_AddCanonicalEdgeRequiredFields(t *testing.T) {
+	t.Parallel()
+
+	mk := func(action *AddCanonicalEdgeAction) *Workflow {
+		wf := minimalWorkflow()
+		wf.Actions = []Action{{AddCanonicalEdge: action}}
+		return wf
+	}
+
+	// Empty edge_type rejected.
+	err := Validate(mk(&AddCanonicalEdgeAction{
+		TargetKind: "person",
+		TargetName: "Uwe",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "edge_type is required")
+
+	// Empty target.kind rejected.
+	err = Validate(mk(&AddCanonicalEdgeAction{
+		EdgeType:   "is_about",
+		TargetName: "Uwe",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "target.kind is required")
+
+	// Empty target.name rejected.
+	err = Validate(mk(&AddCanonicalEdgeAction{
+		EdgeType:   "is_about",
+		TargetKind: "person",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "target.name is required")
+
+	// Positive path validates.
+	err = Validate(mk(&AddCanonicalEdgeAction{
+		EdgeType:   "is_about",
+		TargetKind: "person",
+		TargetName: "Uwe",
+	}))
+	assert.NoError(t, err)
+}
+
+// TestValidate_AddCanonicalEdgeDataKeysAndValues mirrors the
+// #117 add_gap.data_schema validation: non-empty keys + non-empty
+// CEL expressions only.
+func TestValidate_AddCanonicalEdgeDataKeysAndValues(t *testing.T) {
+	t.Parallel()
+	mk := func(data map[string]string) *Workflow {
+		wf := minimalWorkflow()
+		wf.Actions = []Action{{AddCanonicalEdge: &AddCanonicalEdgeAction{
+			EdgeType: "is_about", TargetKind: "person", TargetName: "Uwe",
+			Data: data,
+		}}}
+		return wf
+	}
+
+	err := Validate(mk(map[string]string{"role": ""}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data")
+
+	err = Validate(mk(map[string]string{"": "expr"}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data")
+
+	err = Validate(mk(map[string]string{"role": "entity.data.role"}))
+	assert.NoError(t, err)
+}
+
 // TestValidate_AddableGapsDuplicate
 func TestValidate_AddableGapsDuplicate(t *testing.T) {
 	t.Parallel()

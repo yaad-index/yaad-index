@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
@@ -164,7 +165,7 @@ func handleEntityOperatorFill(
 
 		var ve *vault.Entity
 		if autoMaterialize {
-			ve = newCanonicalLabelEntity(got.ID, got.Kind, kindCfg)
+			ve = canonical.NewCanonicalLabelEntity(got.ID, got.Kind, kindCfg)
 		} else {
 			ve, err = vaultReader.ReadByID(got.Kind, id)
 			if err != nil {
@@ -184,7 +185,7 @@ func handleEntityOperatorFill(
 						fmt.Sprintf("no vault file for id %s (kind=%s)", id, got.Kind))
 					return
 				}
-				ve = newCanonicalLabelEntity(got.ID, got.Kind, kindCfg)
+				ve = canonical.NewCanonicalLabelEntity(got.ID, got.Kind, kindCfg)
 				autoMaterialize = true
 			}
 		}
@@ -283,7 +284,7 @@ func handleEntityOperatorFill(
 		// shape as the agent-fill path. Operator-authored data
 		// lands on the target canonical entity; auto-materialize
 		// covers a target that has only a thin DB row.
-		dataviewDeps := dataviewAppendDeps{
+		dataviewDeps := canonical.DataviewAppendDeps{
 			Store:       st,
 			VaultReader: vaultReader,
 			VaultWriter: vaultWriter,
@@ -714,43 +715,6 @@ func parseCanonicalLabelID(id string, reg map[string]config.CanonicalKindConfig)
 	}
 	return kind, slug, true
 }
-
-// newCanonicalLabelEntity constructs a fresh vault.Entity for the
-// auto-materialize path. ID + Kind come from the canonical-label
-// id; Data starts empty; Gaps is the open-gap set derived from
-// the kind's typed gap config.
-//
-// The Plugin field is set to a sentinel `operator-fill` rather
-// than a real plugin name — canonical-label vault files aren't
-// produced by any plugin emission; the operator's fill IS the
-// emission. The vault format requires a non-empty Plugin field
-// for serialization (per `Marshal`); the sentinel keeps the
-// frontmatter trace honest.
-//
-// Used when /v1/entities/{id}/operator-fill needs to create both
-// the DB row and the vault file from scratch (operator manually
-// invents canonical metadata) OR just the vault file (DB thin row
-// already exists from phase B's ingest-time materialize).
-func newCanonicalLabelEntity(id, kind string, kindCfg config.CanonicalKindConfig) *vault.Entity {
-	gaps := make([]string, 0, len(kindCfg.Gaps))
-	for name := range kindCfg.Gaps {
-		gaps = append(gaps, name)
-	}
-	sort.Strings(gaps)
-	return &vault.Entity{
-		ID: id,
-		Kind: kind,
-		Plugin: canonicalLabelPlugin,
-		Data: map[string]any{},
-		Gaps: gaps,
-	}
-}
-
-// canonicalLabelPlugin is the sentinel Plugin value stamped on
-// auto-materialized canonical-label vault files. Distinct from
-// any real plugin name so the frontmatter signals
-// "operator-authored canonical metadata" at a glance.
-const canonicalLabelPlugin = "operator-fill"
 
 // operatorFillCommitMessage produces the audit line for an
 // operator-fill write per ADR-0019. Touched lists the affected

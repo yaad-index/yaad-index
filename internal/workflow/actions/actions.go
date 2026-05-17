@@ -217,6 +217,11 @@ type Options struct {
 	// without a vault surface a clear failure.
 	PropertyWriter PropertyWriter
 
+	// EdgeWriter backs add_canonical_edge (#132). Production
+	// wires VaultEdgeWriter; nil → StubEdgeWriter rejects with
+	// ErrActionNotImplemented.
+	EdgeWriter EdgeWriter
+
 	// Bus is the eventbus the set_property runner publishes
 	// fill.completed events to (one per landed field). Nil →
 	// emission silently skipped (test/dev default — other
@@ -263,6 +268,7 @@ func New(opts Options) Runner {
 		gapWriter:        opts.GapWriter,
 		pluginDispatcher: opts.PluginDispatcher,
 		propertyWriter:   opts.PropertyWriter,
+		edgeWriter:       opts.EdgeWriter,
 		errTaskWriter:    errTaskWriter,
 		bus:              opts.Bus,
 		logger:           logger,
@@ -278,6 +284,7 @@ type dispatcher struct {
 	gapWriter        GapWriter
 	pluginDispatcher PluginDispatcher
 	propertyWriter   PropertyWriter
+	edgeWriter       EdgeWriter
 	errTaskWriter    ErrTaskWriter
 	bus              eventbus.Bus
 	logger           *slog.Logger
@@ -353,6 +360,8 @@ func (d *dispatcher) runOne(ctx context.Context, idx int, wf *parser.Workflow, a
 		return d.runPluginDispatch(ctx, idx, wf, a.PluginDispatch, dec, act)
 	case a.SetProperty != nil:
 		return d.runSetProperty(ctx, idx, wf, a.SetProperty, dec, act)
+	case a.AddCanonicalEdge != nil:
+		return d.runAddCanonicalEdge(ctx, idx, wf, a.AddCanonicalEdge, dec, act)
 	default:
 		return ActionResult{
 			ActionIdx: idx, Type: "unknown",

@@ -212,11 +212,12 @@ type Dedup struct {
 // fields is non-nil on a valid Workflow; the parser enforces
 // this.
 type Action struct {
-	TaskAppend     *TaskAppendAction
-	AddNote        *AddNoteAction
-	PluginDispatch *PluginDispatchAction
-	AddGap         *AddGapAction
-	SetProperty    *SetPropertyAction
+	TaskAppend        *TaskAppendAction
+	AddNote           *AddNoteAction
+	PluginDispatch    *PluginDispatchAction
+	AddGap            *AddGapAction
+	SetProperty       *SetPropertyAction
+	AddCanonicalEdge  *AddCanonicalEdgeAction
 }
 
 // TaskAppendAction is the `task_append` primitive per ADR-0024
@@ -316,6 +317,51 @@ type AddGapAction struct {
 // per field that lands so downstream workflows can subscribe
 // per-field, mirroring the per-gap event shape from the fill
 // pathway.
+// AddCanonicalEdgeAction is the `add_canonical_edge` primitive
+// per #132 — the deterministic-fill counterpart to `add_gap` for
+// canonical_type gaps. The workflow declares the edge target
+// inline (CEL-rendered name + literal kind) and the runner
+// creates the canonical-label edge directly, bypassing the
+// agent-fill round-trip. Optional per-entry `data:` map mirrors
+// the #119 canonical_type-fill data shape and lands as a
+// dataview-inline paragraph on the target canonical entity's
+// body, auto-materializing the target vault file if absent per
+// ADR-0021 §3.
+type AddCanonicalEdgeAction struct {
+	// Source is the CEL expression that resolves to the entity
+	// the edge originates from. Defaults to `entity.id` (the
+	// triggering entity) when omitted.
+	Source string
+
+	// EdgeType is the canonical edge type (literal, not CEL).
+	// Validated against the daemon's canonical_edge_types
+	// allowlist at workflow-registration time, not at action-
+	// fire time, so a workflow file with an unknown edge type
+	// is rejected on load.
+	EdgeType string
+
+	// TargetKind is the canonical kind of the edge target
+	// (literal, not CEL). Validated against the daemon's
+	// canonical_kinds registry at workflow-registration time.
+	TargetKind string
+
+	// TargetName is the CEL expression the runner evaluates to
+	// produce the canonical-label name. The daemon slugifies
+	// the resolved value via the deterministic clean-slug rule
+	// to produce the canonical-label id (`<TargetKind>:<slug>`)
+	// per ADR-0021 §1.
+	TargetName string
+
+	// Data is the optional per-entry data map: key → CEL
+	// expression. The runner evaluates each value and the
+	// daemon writes the resolved map as a sorted-key
+	// dataview-inline paragraph on the target canonical
+	// entity's body per #119. Empty / nil omits the paragraph
+	// append (edge-only fire). Duplicate paragraphs (same
+	// content hash) dedup at append time.
+	Data map[string]string
+}
+
 type SetPropertyAction struct {
 	// Entity is the CEL expression that resolves to the target
 	// entity id. Defaults to `entity.id` (the triggering

@@ -164,11 +164,24 @@ type dedupShape struct {
 // YAML's `mapping` shape naturally allows the operator to write
 // `- task_append: {...}` for each list entry.
 type actionShape struct {
-	TaskAppend     *taskAppendShape     `yaml:"task_append"`
-	AddNote        *addNoteShape        `yaml:"add_note"`
-	PluginDispatch *pluginDispatchShape `yaml:"plugin_dispatch"`
-	AddGap         *addGapShape         `yaml:"add_gap"`
-	SetProperty    *setPropertyShape    `yaml:"set_property"`
+	TaskAppend       *taskAppendShape       `yaml:"task_append"`
+	AddNote          *addNoteShape          `yaml:"add_note"`
+	PluginDispatch   *pluginDispatchShape   `yaml:"plugin_dispatch"`
+	AddGap           *addGapShape           `yaml:"add_gap"`
+	SetProperty      *setPropertyShape      `yaml:"set_property"`
+	AddCanonicalEdge *addCanonicalEdgeShape `yaml:"add_canonical_edge"`
+}
+
+type addCanonicalEdgeShape struct {
+	Source    string                    `yaml:"source"`
+	EdgeType  string                    `yaml:"edge_type"`
+	Target    addCanonicalEdgeTargetShape `yaml:"target"`
+	Data      map[string]string         `yaml:"data"`
+}
+
+type addCanonicalEdgeTargetShape struct {
+	Kind string `yaml:"kind"`
+	Name string `yaml:"name"`
 }
 
 type taskAppendShape struct {
@@ -326,11 +339,12 @@ func actionsFromShape(entries []actionShape) []Action {
 	out := make([]Action, len(entries))
 	for i, e := range entries {
 		out[i] = Action{
-			TaskAppend:     taskAppendFromShape(e.TaskAppend),
-			AddNote:        addNoteFromShape(e.AddNote),
-			PluginDispatch: pluginDispatchFromShape(e.PluginDispatch),
-			AddGap:         addGapFromShape(e.AddGap),
-			SetProperty:    setPropertyFromShape(e.SetProperty),
+			TaskAppend:       taskAppendFromShape(e.TaskAppend),
+			AddNote:          addNoteFromShape(e.AddNote),
+			PluginDispatch:   pluginDispatchFromShape(e.PluginDispatch),
+			AddGap:           addGapFromShape(e.AddGap),
+			SetProperty:      setPropertyFromShape(e.SetProperty),
+			AddCanonicalEdge: addCanonicalEdgeFromShape(e.AddCanonicalEdge),
 		}
 	}
 	return out
@@ -384,6 +398,26 @@ func addGapFromShape(s *addGapShape) *AddGapAction {
 		Entity:     strings.TrimSpace(s.Entity),
 		Gap:        strings.TrimSpace(s.Gap),
 		DataSchema: schema,
+	}
+}
+
+func addCanonicalEdgeFromShape(s *addCanonicalEdgeShape) *AddCanonicalEdgeAction {
+	if s == nil {
+		return nil
+	}
+	var data map[string]string
+	if len(s.Data) > 0 {
+		data = make(map[string]string, len(s.Data))
+		for k, v := range s.Data {
+			data[strings.TrimSpace(k)] = v
+		}
+	}
+	return &AddCanonicalEdgeAction{
+		Source:     strings.TrimSpace(s.Source),
+		EdgeType:   strings.TrimSpace(s.EdgeType),
+		TargetKind: strings.TrimSpace(s.Target.Kind),
+		TargetName: strings.TrimSpace(s.Target.Name),
+		Data:       data,
 	}
 }
 

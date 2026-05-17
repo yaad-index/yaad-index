@@ -233,8 +233,11 @@ func validateActions(wf *Workflow) error {
 		if a.SetProperty != nil {
 			set++
 		}
+		if a.AddCanonicalEdge != nil {
+			set++
+		}
 		if set == 0 {
-			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_note / plugin_dispatch / add_gap / set_property)", i)
+			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_note / plugin_dispatch / add_gap / set_property / add_canonical_edge)", i)
 		}
 		if set > 1 {
 			return fmt.Errorf("workflow: actions[%d] sets %d primitives (expected exactly one)", i, set)
@@ -259,6 +262,10 @@ func validateActions(wf *Workflow) error {
 		case a.SetProperty != nil:
 			if err := validateSetProperty(a.SetProperty); err != nil {
 				return fmt.Errorf("workflow: actions[%d].set_property: %w", i, err)
+			}
+		case a.AddCanonicalEdge != nil:
+			if err := validateAddCanonicalEdge(a.AddCanonicalEdge); err != nil {
+				return fmt.Errorf("workflow: actions[%d].add_canonical_edge: %w", i, err)
 			}
 		}
 	}
@@ -315,6 +322,27 @@ func validateAddGap(a *AddGapAction, addable map[string]struct{}) error {
 		}
 		if strings.TrimSpace(v) == "" {
 			return fmt.Errorf("data_schema[%q] value is empty — extraction instruction must be non-empty", k)
+		}
+	}
+	return nil
+}
+
+func validateAddCanonicalEdge(a *AddCanonicalEdgeAction) error {
+	if a.EdgeType == "" {
+		return fmt.Errorf("edge_type is required")
+	}
+	if a.TargetKind == "" {
+		return fmt.Errorf("target.kind is required")
+	}
+	if a.TargetName == "" {
+		return fmt.Errorf("target.name is required")
+	}
+	for k, v := range a.Data {
+		if k == "" {
+			return fmt.Errorf("data key is empty (after trim) — field names must be non-empty")
+		}
+		if strings.TrimSpace(v) == "" {
+			return fmt.Errorf("data[%q] value is empty — CEL expression must be non-empty", k)
 		}
 	}
 	return nil
