@@ -75,6 +75,11 @@ func handleEntityOperatorFill(
 		if !ok {
 			return
 		}
+		// #154: release first, then publish — see fill.go for the
+		// rationale. Drain defer is declared first; the
+		// release defer (declared second) runs first via LIFO.
+		var pending eventbus.PendingEvents
+		defer pending.Drain(r.Context(), bus)
 		defer release()
 
 		claim, ok := ClaimFromContext(r.Context())
@@ -273,7 +278,7 @@ func handleEntityOperatorFill(
 		// are auto-materialized as thin entity rows (mirrors the
 		// ingest-time path from phase B) so the FK on edges
 		// is satisfied.
-		if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, ops, kindCfg.Gaps, logger, bus, eventbus.SourceOperator); err != nil {
+		if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, ops, kindCfg.Gaps, logger, bus, eventbus.SourceOperator, &pending); err != nil {
 			logger.ErrorContext(r.Context(), "operator-fill canonical_type edge create/replace",
 				"err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",
@@ -293,7 +298,7 @@ func handleEntityOperatorFill(
 			Bus:         bus,
 			Logger:      logger,
 		}
-		if err := appendDataviewParagraphs(r.Context(), dataviewDeps, ops, eventbus.SourceOperator, ""); err != nil {
+		if err := appendDataviewParagraphs(r.Context(), dataviewDeps, ops, eventbus.SourceOperator, "", &pending); err != nil {
 			logger.ErrorContext(r.Context(), "operator-fill canonical_type dataview-append",
 				"err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",
@@ -317,7 +322,8 @@ func handleEntityOperatorFill(
 		sort.Strings(setOps)
 		opFillChain := eventbus.WorkflowChainFromContext(r.Context())
 		for _, gap := range setOps {
-			bus.Publish(r.Context(), eventbus.FillCompletedEvent{
+			// #154: queue for publish-after-unlock.
+			eventbus.QueueOrPublish(r.Context(), bus, &pending, eventbus.FillCompletedEvent{
 				EntityID:  ve.ID,
 				Gap:       gap,
 				SourceTag: eventbus.SourceOperator,

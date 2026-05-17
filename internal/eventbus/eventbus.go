@@ -365,3 +365,84 @@ func WorkflowChainFromContext(ctx context.Context) []string {
 	copy(out, v)
 	return out
 }
+
+// PendingEvents accumulates events to publish AFTER the
+// caller releases a per-artifact write-lock per #154.
+//
+// **Why.** The in-process bus dispatches handlers synchronously
+// on the publisher's goroutine. A handler that tries to take
+// the same write-lock the publisher is holding deadlocks until
+// the lock's timeout expires. Workflow handlers firing on
+// edge_created emitted mid-ingest racing the ingest path's
+// per-envelope hold hit this shape; the fix is to release the
+// lock BEFORE the bus emits.
+//
+// **Usage.**
+//
+//	release, err := mgr.Acquire(artifact, holder)
+//	if err != nil { return err }
+//	defer release() // safety net for early returns
+//	var pending eventbus.PendingEvents
+//	// ... work that previously called bus.Publish(...) ...
+//	pending.Add(eventbus.EntityCreatedEvent{...})
+//	// ... more work ...
+//	release()                       // explicit release
+//	pending.Drain(ctx, bus)         // publish AFTER the lock is gone
+//	return nil
+//
+// release() is idempotent (per writelocks contract); the
+// `defer release()` stays as the early-return safety net.
+type PendingEvents struct {
+	events []Event
+}
+
+// Add queues an event for later Drain. Safe to call with a
+// nil receiver — no-op, useful for callsites that thread an
+// optional *PendingEvents through subfunctions.
+func (p *PendingEvents) Add(e Event) {
+	if p == nil {
+		return
+	}
+	p.events = append(p.events, e)
+}
+
+// Drain publishes every queued event in order and resets the
+// queue. Safe to call with a nil receiver (no-op) or a nil
+// bus (no-op). Drain is one-shot; calling it twice is a no-op
+// after the first.
+func (p *PendingEvents) Drain(ctx context.Context, bus Bus) {
+	if p == nil || bus == nil {
+		return
+	}
+	for _, e := range p.events {
+		bus.Publish(ctx, e)
+	}
+	p.events = nil
+}
+
+// Len reports the queued event count. Test-only / diagnostic.
+func (p *PendingEvents) Len() int {
+	if p == nil {
+		return 0
+	}
+	return len(p.events)
+}
+
+// QueueOrPublish appends e to pending when pending is non-nil
+// (deferred publish-after-unlock per #154), or immediately
+// publishes to bus when pending is nil (caller is outside any
+// locked scope — legacy direct-publish path preserved).
+//
+// Helper for code paths that have both shapes — fill /
+// operator_fill / UGC call applyCanonicalTypeEdges with a
+// pending queue inside the source lock; future non-locked
+// callers (or tests) can pass nil to skip the queue.
+func QueueOrPublish(ctx context.Context, bus Bus, pending *PendingEvents, e Event) {
+	if pending != nil {
+		pending.Add(e)
+		return
+	}
+	if bus != nil {
+		bus.Publish(ctx, e)
+	}
+}

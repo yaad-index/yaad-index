@@ -244,9 +244,54 @@ func (t *ingestTracker) publishEntityCreated(ctx context.Context, id, kind strin
 	})
 }
 
+// queueEntityCreated is the publish-after-unlock variant per
+// #154. When the caller passes a non-nil PendingEvents queue,
+// the event is appended for Drain after the per-entity write-
+// lock releases — avoiding the in-lock synchronous Publish
+// deadlock that the prior shape produced. Nil queue falls
+// through to the legacy immediate-publish path so callers
+// outside any locked scope don't pay the indirection cost.
+func (t *ingestTracker) queueEntityCreated(ctx context.Context, pending *eventbus.PendingEvents, id, kind string) {
+	if t.bus == nil {
+		return
+	}
+	if pending == nil {
+		t.publishEntityCreated(ctx, id, kind)
+		return
+	}
+	pending.Add(eventbus.EntityCreatedEvent{
+		ID:        id,
+		Kind:      kind,
+		SourceTag: eventbus.SourceAgent,
+		At:        time.Now().UTC(),
+		Chain:     eventbus.WorkflowChainFromContext(ctx),
+	})
+}
+
 // publishEntityEdgeAdded emits entity.edge_added with SourceAgent
 // (ingest path) when bus is configured. Mirrors
 // publishEntityCreated's shape for the per-edge call sites.
+// queueEntityEdgeAdded is the publish-after-unlock variant of
+// publishEntityEdgeAdded per #154. Same nil-pending fallback
+// shape as queueEntityCreated.
+func (t *ingestTracker) queueEntityEdgeAdded(ctx context.Context, pending *eventbus.PendingEvents, e *store.Edge) {
+	if t.bus == nil || e == nil {
+		return
+	}
+	if pending == nil {
+		t.publishEntityEdgeAdded(ctx, e)
+		return
+	}
+	pending.Add(eventbus.EntityEdgeAddedEvent{
+		FromID:    e.From,
+		ToID:      e.To,
+		EdgeType:  e.Type,
+		SourceTag: eventbus.SourceAgent,
+		At:        time.Now().UTC(),
+		Chain:     eventbus.WorkflowChainFromContext(ctx),
+	})
+}
+
 func (t *ingestTracker) publishEntityEdgeAdded(ctx context.Context, e *store.Edge) {
 	if t.bus == nil || e == nil {
 		return
@@ -736,6 +781,15 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 		}
 		return fmt.Errorf("acquire write lock: %w", lockErr)
 	}
+	// #154: release first, then publish — the bus is synchronous,
+	// so handlers wanting the same lock would deadlock if we
+	// published inside the critical section. Pending collects
+	// the events; defers run LIFO, so the Drain defer
+	// (declared first) runs LAST, after the release defer
+	// (declared second) — publishes hit the bus after the lock
+	// is gone.
+	var pending eventbus.PendingEvents
+	defer pending.Drain(ctx, t.bus)
 	defer release()
 
 	provenance := result.Provenance
@@ -792,7 +846,7 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 		return fmt.Errorf("failed to persist entity: %w", err)
 	}
 	if pluginWasNew {
-		t.publishEntityCreated(ctx, result.Entity.ID, result.Entity.Kind)
+		t.queueEntityCreated(ctx, &pending, result.Entity.ID, result.Entity.Kind)
 	}
 	if err := t.store.AppendProvenance(ctx, result.Entity.ID, provenance); err != nil {
 		t.logger.Error("ingest simulator: AppendProvenance (plugin path) failed",
@@ -822,9 +876,9 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 	}
 
 	if len(result.CanonicalEdges) > 0 {
-		t.materializeThinLabelRowsFromEdges(ctx, result.CanonicalEdges, att.simulation.plugin.Name())
+		t.materializeThinLabelRowsFromEdges(ctx, &pending, result.CanonicalEdges, att.simulation.plugin.Name())
 	}
-	t.persistCanonicalEdges(ctx, result.CanonicalEdges, att.simulation.plugin.Name())
+	t.persistCanonicalEdges(ctx, &pending, result.CanonicalEdges, att.simulation.plugin.Name())
 	return nil
 }
 
@@ -1089,7 +1143,7 @@ const SourceTypeKind = canonical.SourceTypeKind
 // CreateEdge call then surfaces ErrMissingEntity for those edges
 // and they drop with a debug log — same shape as the legacy
 // canonical-stub-filtered-out path.
-func (t *ingestTracker) materializeThinLabelRowsFromEdges(ctx context.Context, edges []*store.Edge, plugin string) {
+func (t *ingestTracker) materializeThinLabelRowsFromEdges(ctx context.Context, pending *eventbus.PendingEvents, edges []*store.Edge, plugin string) {
 	seen := make(map[string]struct{}, len(edges))
 	for _, e := range edges {
 		if e == nil || e.To == "" {
@@ -1138,7 +1192,7 @@ func (t *ingestTracker) materializeThinLabelRowsFromEdges(ctx context.Context, e
 		// probe above guarantees we only reach here on the create
 		// path, so the emit is unconditional (no extra was-new
 		// gate needed).
-		t.publishEntityCreated(ctx, e.To, kind)
+		t.queueEntityCreated(ctx, pending, e.To, kind)
 		// Provenance: stamp who referenced this label and when.
 		// Mirrors persistCanonicalEntities' provenance shape so
 		// /v1/entities surfaces look uniform across legacy stubs
@@ -1162,7 +1216,7 @@ func (t *ingestTracker) materializeThinLabelRowsFromEdges(ctx context.Context, e
 // the canonical endpoint was filtered out by canonical-kinds — the
 // edge is structurally orphaned, so dropping it is correct (the
 // debug log makes the chain visible to operators investigating).
-func (t *ingestTracker) persistCanonicalEdges(ctx context.Context, candidates []*store.Edge, plugin string) {
+func (t *ingestTracker) persistCanonicalEdges(ctx context.Context, pending *eventbus.PendingEvents, candidates []*store.Edge, plugin string) {
 	for _, e := range candidates {
 		if e == nil || e.Type == "" || e.From == "" || e.To == "" {
 			continue
@@ -1199,7 +1253,7 @@ func (t *ingestTracker) persistCanonicalEdges(ctx context.Context, candidates []
 		// ADR-0024 Phase 2 — one entity.edge_added per landed
 		// canonical edge. Drops (missing endpoint, guard-filtered)
 		// don't emit; the edge never reached the graph.
-		t.publishEntityEdgeAdded(ctx, e)
+		t.queueEntityEdgeAdded(ctx, pending, e)
 	}
 }
 

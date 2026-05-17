@@ -121,6 +121,15 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 		if !ok {
 			return
 		}
+		// #154: release first, then publish — the in-process bus
+		// is synchronous, so a handler wanting the same lock would
+		// deadlock if we published inside the critical section.
+		// `pending` accumulates events; defers run LIFO, so the
+		// Drain defer (declared first) runs AFTER the release
+		// defer (declared second) — publishes hit the bus once
+		// the source lock is gone.
+		var pending eventbus.PendingEvents
+		defer pending.Drain(r.Context(), bus)
 		defer release()
 
 		got, err := st.GetEntity(r.Context(), id)
@@ -300,7 +309,7 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 		// source, ensures thin label rows for new endpoints, then
 		// CreateEdge for each.
 		if len(canonicalTypeOps) > 0 {
-			if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, canonicalTypeOps, kindCfg.Gaps, logger, bus, eventbus.SourceAgent); err != nil {
+			if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, canonicalTypeOps, kindCfg.Gaps, logger, bus, eventbus.SourceAgent, &pending); err != nil {
 				logger.ErrorContext(r.Context(), "fill canonical_type edge create/replace",
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",
@@ -320,7 +329,7 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 				Bus:         bus,
 				Logger:      logger,
 			}
-			if err := appendDataviewParagraphs(r.Context(), dataviewDeps, canonicalTypeOps, eventbus.SourceAgent, ""); err != nil {
+			if err := appendDataviewParagraphs(r.Context(), dataviewDeps, canonicalTypeOps, eventbus.SourceAgent, "", &pending); err != nil {
 				logger.ErrorContext(r.Context(), "fill canonical_type dataview-append",
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",
@@ -356,7 +365,11 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 		sort.Strings(filledGaps)
 		fillChain := eventbus.WorkflowChainFromContext(r.Context())
 		for _, gap := range filledGaps {
-			bus.Publish(r.Context(), eventbus.FillCompletedEvent{
+			// #154: queue for publish-after-unlock. pending.Drain
+			// fires from the deferred LIFO chain above; bus may
+			// be nil in DB-only test wiring (QueueOrPublish skips
+			// in that case).
+			eventbus.QueueOrPublish(r.Context(), bus, &pending, eventbus.FillCompletedEvent{
 				EntityID:  ve.ID,
 				Gap:       gap,
 				SourceTag: eventbus.SourceAgent,
