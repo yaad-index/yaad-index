@@ -1,6 +1,6 @@
 {
   "name": "yaad-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server wrapping yaad-index — the agent's door to the yaad platform (in-side: ingest / get / fill / list; out-side: stub for yaad-outbox).",
   "license": "Apache-2.0",
   "type": "module",
