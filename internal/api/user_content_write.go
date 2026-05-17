@@ -259,8 +259,7 @@ func handleUserContentCreate(
 			entityData[fieldName] = v
 		}
 		for _, op := range ucEdgeOps {
-			labels, _ := op.Value.([]string)
-			entityData[op.Field] = labels
+			entityData[op.Field] = canonicalLabelEntryIDs(op.Value)
 		}
 
 		ve := &vault.Entity{
@@ -659,8 +658,7 @@ func handleUserContentFrontmatterEdit(
 			newData[fieldName] = v
 		}
 		for _, op := range ucEdgeOps {
-			labels, _ := op.Value.([]string)
-			newData[op.Field] = labels
+			newData[op.Field] = canonicalLabelEntryIDs(op.Value)
 		}
 		ve.Data = newData
 
@@ -790,7 +788,7 @@ func buildFullEditOpsFromMappings(
 		out = append(out, operatorFillOp{
 			Field: mapping.EdgeType,
 			Kind: opSet,
-			Value: []string{},
+			Value: []canonicalLabelEntry{},
 		})
 	}
 	return out

@@ -205,6 +205,10 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 					Kind: opSet,
 					Value: labels,
 				})
+				// Frontmatter stores label IDs only; the per-
+				// entry `data` payload flows through Value to
+				// applyCanonicalTypeEdges as the dataview-append
+				// source per yaad-index #119.
 				continue
 			}
 			// Legacy untyped path — decode the raw JSON into the
@@ -230,7 +234,11 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 			if ve.Data == nil {
 				ve.Data = make(map[string]any, 1)
 			}
-			ve.Data[op.Field] = op.Value
+			// Frontmatter persists label IDs only; the per-entry
+			// `data` payload is recorded as a dataview paragraph
+			// on the target canonical entity after the source-
+			// side vault write (applyCanonicalTypeEdges).
+			ve.Data[op.Field] = canonicalLabelEntryIDs(op.Value)
 		}
 		applyFieldsToVaultEntity(ve, legacyFields)
 
@@ -296,6 +304,26 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",
 					"failed to materialize canonical_type edges")
+				return
+			}
+			// Dataview-paragraph append per yaad-index #119:
+			// for each entry with non-empty `data`, record it on
+			// the target canonical entity's body. Auto-materializes
+			// the target vault file when missing.
+			dataviewDeps := dataviewAppendDeps{
+				Store:       st,
+				VaultReader: vaultReader,
+				VaultWriter: vaultWriter,
+				WriteLocks:  writeLocks,
+				KindReg:     canonicalKindReg,
+				Bus:         bus,
+				Logger:      logger,
+			}
+			if err := appendDataviewParagraphs(r.Context(), dataviewDeps, canonicalTypeOps, eventbus.SourceAgent, ""); err != nil {
+				logger.ErrorContext(r.Context(), "fill canonical_type dataview-append",
+					"err", err, "id", id)
+				writeError(w, http.StatusInternalServerError, "internal_error",
+					"failed to append dataview paragraphs")
 				return
 			}
 		}

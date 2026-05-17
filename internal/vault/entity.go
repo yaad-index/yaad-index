@@ -45,6 +45,14 @@ type Entity struct {
 	Tags []string // plugin-emitted + agent-filled
 	Edges []Edge
 	Notes []Note
+	// Dataview is the body-section list of agent-appended
+	// dataview-inline paragraphs per yaad-index #119. Each
+	// paragraph is a `key → value` map representing one
+	// canonical-type fill event on this entity (the target).
+	// Append-only at the storage layer; dedup-on-append is
+	// implemented at the handler level (paragraph identity =
+	// sorted-key equality of every (key, value) pair).
+	Dataview []DataviewParagraph
 	Gaps []string // currently-unfilled gap field names
 
 	// Aliases is the navigation overlay surfaced in frontmatter —
@@ -224,6 +232,25 @@ type Note struct {
 	Text string `yaml:"text"`
 	Author string `yaml:"author,omitempty"`
 	Operator string `yaml:"operator,omitempty"`
+}
+
+// DataviewParagraph is one canonical-type fill event recorded on a
+// target canonical entity per yaad-index #119. Each paragraph
+// renders as a single line in the body's yaad:dataview region:
+//
+//	role:: Staff Platform Engineer  salary:: 150k+  source_email:: gmail:...
+//
+// Sorted-key rendering is the dedup contract — two paragraphs
+// with the same key→value set produce the same line, so a
+// re-fill of an already-recorded event is a content-hash no-op
+// at write time and the parser inverts cleanly.
+type DataviewParagraph struct {
+	// Fields maps the Obsidian dataview-inline key → value
+	// pairs for this paragraph. Keys are operator-meaningful
+	// field names (e.g. `role`, `salary`, `source_email`).
+	// Values are free-form strings — the daemon does not type
+	// them.
+	Fields map[string]string
 }
 
 // ProvenanceEntry records one fetch or fill attempt. Plugin-fetch entries

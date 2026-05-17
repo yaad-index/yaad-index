@@ -25,6 +25,8 @@ import (
 	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/slug"
 	"github.com/yaad-index/yaad-index/internal/store"
+	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
 // applyCanonicalTypeEdges runs the post-write edge create/replace
@@ -98,11 +100,12 @@ func applyCanonicalTypeEdges(
 		if op.Kind == opClear {
 			continue
 		}
-		labels, ok := op.Value.([]string)
+		entries, ok := op.Value.([]canonicalLabelEntry)
 		if !ok {
-			return fmt.Errorf("canonical_type op %q: expected []string value, got %T", op.Field, op.Value)
+			return fmt.Errorf("canonical_type op %q: expected []canonicalLabelEntry value, got %T", op.Field, op.Value)
 		}
-		for _, label := range labels {
+		for _, e := range entries {
+			label := e.ID
 			created, err := ensureCanonicalLabelRow(ctx, st, label, logger)
 			if err != nil {
 				return fmt.Errorf("ensure label row %q: %w", label, err)
@@ -145,6 +148,201 @@ func applyCanonicalTypeEdges(
 		}
 	}
 	return nil
+}
+
+// canonicalLabelEntryIDs extracts just the IDs from a slice of
+// canonicalLabelEntry. Frontmatter `data[<field>]` stores label
+// IDs only — the per-entry `Data` payload lands as a dataview
+// paragraph on the target canonical entity, not in the source
+// entity's frontmatter, per yaad-index #119.
+func canonicalLabelEntryIDs(v any) []string {
+	entries, ok := v.([]canonicalLabelEntry)
+	if !ok {
+		return nil
+	}
+	ids := make([]string, len(entries))
+	for i, e := range entries {
+		ids[i] = e.ID
+	}
+	return ids
+}
+
+// dataviewAppendDeps bundles the deps appendDataviewParagraphs
+// needs so the per-fill caller signature stays narrow.
+type dataviewAppendDeps struct {
+	Store       store.Store
+	VaultReader *vault.Reader
+	VaultWriter *vault.Writer
+	WriteLocks  *writelocks.Manager
+	KindReg     map[string]config.CanonicalKindConfig
+	Bus         eventbus.Bus
+	Logger      *slog.Logger
+}
+
+// appendDataviewParagraphs records each canonical_type entry's
+// `data` map as a dataview-inline paragraph on the target
+// canonical entity's body per yaad-index #119. Auto-materializes
+// the target canonical-label vault file when missing — the
+// substantive structured `data` is treated as the
+// "honest content to attach" trigger per ADR-0021 §3 spirit,
+// which justifies materializing the vault file rather than
+// dropping the paragraph.
+//
+// Per-paragraph flow:
+//
+//  1. Acquire write-lock on the target canonical-label id.
+//  2. Read its vault file; if missing, build a fresh
+//     newCanonicalLabelEntity for the target kind.
+//  3. Compute the candidate paragraph + dedup by sorted-key
+//     content-hash against existing paragraphs. Skip if
+//     identical; otherwise append.
+//  4. Write back via WriteCanonicalLabelWithCommit (atomic).
+//  5. Publish fill.completed naming the canonical-label id
+//     and the field that originated the fill (downstream
+//     workflows trigger on per-entity, per-field updates).
+//
+// Errors on any single paragraph fail the whole call so the
+// caller surfaces a consistent state — partial-success would
+// leave the source entity claiming edges to labels whose
+// dataview never recorded.
+func appendDataviewParagraphs(
+	ctx context.Context,
+	deps dataviewAppendDeps,
+	ops []operatorFillOp,
+	source eventbus.Source,
+	sourceWorkflow string,
+) error {
+	if deps.VaultReader == nil || deps.VaultWriter == nil || deps.WriteLocks == nil {
+		// Same shape as the fill / operator-fill handlers:
+		// dataview-append requires the vault wiring; a DB-only
+		// deploy silently skips (no degradation, no error).
+		return nil
+	}
+	now := time.Now().UTC()
+	for _, op := range ops {
+		if op.Kind != opSet {
+			continue
+		}
+		entries, ok := op.Value.([]canonicalLabelEntry)
+		if !ok {
+			continue
+		}
+		for _, e := range entries {
+			if len(e.Data) == 0 {
+				continue
+			}
+			if err := appendOneDataviewParagraph(ctx, deps, e, op.Field, sourceWorkflow, now); err != nil {
+				return fmt.Errorf("append dataview paragraph on %s (gap=%q): %w", e.ID, op.Field, err)
+			}
+			if deps.Bus != nil {
+				deps.Bus.Publish(ctx, eventbus.FillCompletedEvent{
+					EntityID:  e.ID,
+					Gap:       op.Field,
+					SourceTag: source,
+					At:        now,
+				})
+			}
+		}
+	}
+	return nil
+}
+
+// appendOneDataviewParagraph runs the read-merge-write loop for
+// one entry's dataview paragraph on its target canonical entity.
+// Auto-materializes the target vault file when missing per
+// the operator policy.
+func appendOneDataviewParagraph(
+	ctx context.Context,
+	deps dataviewAppendDeps,
+	e canonicalLabelEntry,
+	gapField string,
+	sourceWorkflow string,
+	now time.Time,
+) error {
+	holder := "dataview-append"
+	if sourceWorkflow != "" {
+		holder = "workflow:" + sourceWorkflow + " [dataview-append]"
+	}
+	release, err := deps.WriteLocks.Acquire(e.ID, holder)
+	if err != nil {
+		return fmt.Errorf("acquire write-lock: %w", err)
+	}
+	defer release()
+
+	kind, _, ok := splitCanonicalLabelID(e.ID)
+	if !ok {
+		return fmt.Errorf("invalid canonical label id %q", e.ID)
+	}
+
+	ve, readErr := deps.VaultReader.ReadByID(kind, e.ID)
+	if readErr != nil {
+		if !vault.IsNotExist(readErr) {
+			return fmt.Errorf("vault read: %w", readErr)
+		}
+		// Auto-materialize per the operator policy: build a fresh
+		// canonical-label entity for the target kind. Requires
+		// the kind to be in the operator's canonical_kinds
+		// config — without that, the daemon can't compute the
+		// open-gap set + plugin sentinel, so dataview-append
+		// has nothing to attach to.
+		kindCfg, kindKnown := deps.KindReg[kind]
+		if !kindKnown {
+			return fmt.Errorf("target kind %q not in canonical_kinds; cannot auto-materialize", kind)
+		}
+		ve = newCanonicalLabelEntity(e.ID, kind, kindCfg)
+	}
+
+	// Dedup by sorted-key content-hash: render the candidate the
+	// same way the writer will, compare against existing
+	// paragraphs. Skip if identical to any prior one.
+	candidate := vault.DataviewParagraph{Fields: stringifyMap(e.Data)}
+	candidateWire := vault.RenderDataviewParagraph(candidate)
+	for _, p := range ve.Dataview {
+		if vault.RenderDataviewParagraph(p) == candidateWire {
+			return nil
+		}
+	}
+	ve.Dataview = append(ve.Dataview, candidate)
+
+	commitMsg := fmt.Sprintf("dataview-append on %s (gap=%s)", e.ID, gapField)
+	commitAuthor := "agent"
+	if sourceWorkflow != "" {
+		commitAuthor = "workflow:" + sourceWorkflow
+	}
+	if writeErr := deps.VaultWriter.WriteCanonicalLabelWithCommit(ctx, ve, commitMsg, commitAuthor); writeErr != nil {
+		return fmt.Errorf("vault write: %w", writeErr)
+	}
+
+	// Mirror to store: the canonical-label row may not have any
+	// frontmatter data yet (auto-materialize path), but the row
+	// must exist for cross-package consumers (search, edge
+	// queries) to see it. ensureCanonicalLabelRow is idempotent;
+	// thin row already present → no-op.
+	if _, err := ensureCanonicalLabelRow(ctx, deps.Store, e.ID, deps.Logger); err != nil {
+		return fmt.Errorf("ensure label row: %w", err)
+	}
+	_ = now // reserved for future Note.Date-style audit
+	return nil
+}
+
+// stringifyMap converts a json.Unmarshal-derived map[string]any
+// (the wire shape for the per-entry `data` payload) into the
+// flat map[string]string the dataview paragraph stores. Non-
+// string values render via fmt.Sprintf("%v") so numerics +
+// nested maps round-trip as their string form (best-effort
+// stringification; the agent should emit string-typed values
+// when render fidelity matters).
+func stringifyMap(in map[string]any) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		switch s := v.(type) {
+		case string:
+			out[k] = s
+		default:
+			out[k] = fmt.Sprintf("%v", v)
+		}
+	}
+	return out
 }
 
 // ensureCanonicalLabelRow / splitCanonicalLabelID delegate to
@@ -191,7 +389,7 @@ func parseCanonicalLabelList(
 	gap config.GapSpec,
 	operatorAllKinds []string,
 	allowPreformedLabels bool,
-) ([]string, *opError) {
+) ([]canonicalLabelEntry, *opError) {
 	var entries []json.RawMessage
 	if err := json.Unmarshal(raw, &entries); err != nil {
 		return nil, &opError{
@@ -205,13 +403,13 @@ func parseCanonicalLabelList(
 		}
 	}
 	resolution := canonicalKindResolution(gap, operatorAllKinds)
-	out := make([]string, 0, len(entries))
+	out := make([]canonicalLabelEntry, 0, len(entries))
 	for i, entry := range entries {
-		label, perr := parseCanonicalLabelEntry(field, i, entry, resolution, allowPreformedLabels)
+		labelEntry, perr := parseCanonicalLabelEntry(field, i, entry, resolution, allowPreformedLabels)
 		if perr != nil {
 			return nil, perr
 		}
-		out = append(out, label)
+		out = append(out, labelEntry)
 	}
 	return out, nil
 }
@@ -253,10 +451,10 @@ func parseCanonicalLabelEntry(
 	raw json.RawMessage,
 	resolution map[string]struct{},
 	allowPreformedLabels bool,
-) (string, *opError) {
+) (canonicalLabelEntry, *opError) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
-		return "", &opError{
+		return canonicalLabelEntry{}, &opError{
 			status: http.StatusBadRequest,
 			code: "type_mismatch",
 			message: fmt.Sprintf("field %q[%d]: empty value", field, index),
@@ -265,8 +463,10 @@ func parseCanonicalLabelEntry(
 	switch trimmed[0] {
 	case '"':
 		// Pre-formed canonical-label string. Operator/UGC paths only.
+		// String form does NOT carry data — only the object form
+		// `{name, kind, data}` accepts the dataview payload.
 		if !allowPreformedLabels {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "type_mismatch",
 				message: fmt.Sprintf("field %q[%d]: pre-formed canonical-label string only accepted on operator-fill (got %s); use {name, kind} instead",
@@ -275,7 +475,7 @@ func parseCanonicalLabelEntry(
 		}
 		var s string
 		if err := json.Unmarshal(raw, &s); err != nil {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "type_mismatch",
 				message: fmt.Sprintf("field %q[%d]: decode string: %v", field, index, err),
@@ -283,48 +483,51 @@ func parseCanonicalLabelEntry(
 		}
 		kind, slugPart, ok := splitCanonicalLabelID(s)
 		if !ok {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "invalid_canonical_label",
 				message: fmt.Sprintf("field %q[%d]: %q is not a valid `<kind>:<slug>` canonical label", field, index, s),
 			}
 		}
 		if _, ok := resolution[kind]; !ok {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "kind_not_allowed",
 				message: fmt.Sprintf("field %q[%d]: kind %q not in the gap's resolution set", field, index, kind),
 			}
 		}
-		return kind + ":" + slugPart, nil
+		return canonicalLabelEntry{ID: kind + ":" + slugPart}, nil
 	case '{':
 		var ref canonicalRef
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&ref); err != nil {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "type_mismatch",
 				message: fmt.Sprintf("field %q[%d]: %v", field, index, err),
 			}
 		}
 		if ref.Name == "" || ref.Kind == "" {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "type_mismatch",
 				message: fmt.Sprintf("field %q[%d]: object form requires non-empty `name` AND `kind`", field, index),
 			}
 		}
 		if _, ok := resolution[ref.Kind]; !ok {
-			return "", &opError{
+			return canonicalLabelEntry{}, &opError{
 				status: http.StatusBadRequest,
 				code: "kind_not_allowed",
 				message: fmt.Sprintf("field %q[%d]: kind %q not in the gap's resolution set", field, index, ref.Kind),
 			}
 		}
-		return ref.Kind + ":" + slug.Slug(ref.Name), nil
+		return canonicalLabelEntry{
+			ID:   ref.Kind + ":" + slug.Slug(ref.Name),
+			Data: ref.Data,
+		}, nil
 	default:
-		return "", &opError{
+		return canonicalLabelEntry{}, &opError{
 			status: http.StatusBadRequest,
 			code: "type_mismatch",
 			message: fmt.Sprintf("field %q[%d]: expected {name, kind} object%s, got %s",
@@ -336,14 +539,28 @@ func parseCanonicalLabelEntry(
 }
 
 // canonicalRef is the wire shape for one entry in the object form
-// of a canonical_type fill: `{"name": "...", "kind": "..."}`.
+// of a canonical_type fill: `{"name": "...", "kind": "...",
+// "data": {...}}`. The `data` field per yaad-index #119 is the
+// optional free-form metadata map appended as a dataview-inline
+// paragraph on the target canonical entity's body.
 // DisallowUnknownFields rejects extra keys so typo-driven fills
-// don't silently land malformed values. The same `{name, kind}`
-// shape appears uniformly across plugin emissions (ADR-0021's
-// universal-source-shape edges block) and fill paths.
+// don't silently land malformed values.
 type canonicalRef struct {
-	Name string `json:"name"`
-	Kind string `json:"kind"`
+	Name string         `json:"name"`
+	Kind string         `json:"kind"`
+	Data map[string]any `json:"data,omitempty"`
+}
+
+// canonicalLabelEntry is the per-element output of
+// parseCanonicalLabelList. The ID is the resolved canonical-
+// label id (`<kind>:<slug>`); Data is the optional free-form
+// payload to record as a dataview paragraph on the target
+// per yaad-index #119. Pre-formed-label string entries
+// (operator-fill / UGC paths) always emit empty Data — only
+// the object form `{name, kind, data}` carries it.
+type canonicalLabelEntry struct {
+	ID   string
+	Data map[string]any
 }
 
 // stringEllipsis returns s with a `…` appended after `max` runes
