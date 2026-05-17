@@ -1,6 +1,54 @@
 package gmail
 
-import "strings"
+import (
+	"crypto/sha1"
+	"encoding/hex"
+	"strings"
+)
+
+// Slug-length budget so the composed `<source_namespace>/<slug>.md`
+// vault path + write-as-you-go `.tmp-NNNNNNNNNN` suffix stays under
+// the 255-byte filesystem name limit per #146:
+//
+//   - ext4 / xfs / apfs cap individual path components at 255 bytes.
+//   - The vault writer appends `.md.tmp-NNNNNNNNNN` (18 chars) when
+//     staging an atomic temp file.
+//   - The daemon's source-namespace prefix (`gmail`) is added as a
+//     directory component (not part of the slug-length budget here)
+//     but the leading dot for the dotfile + extension does eat into
+//     the byte budget on rename.
+//
+// 200 bytes for the bare slug leaves ~55 bytes for `.md.tmp-NNNN...`
+// + safety margin. Within that, individual components are capped so
+// the message-id (the identity-bearing piece) is never sacrificed
+// for a long subject.
+const (
+	// sourceSlugCap is the hard ceiling on the composed
+	// `<subject-slug>-<message-id-slug>` length. Anything over
+	// triggers the hash-on-overflow tail.
+	sourceSlugCap = 200
+
+	// sourceSubjectCap caps the subject slug before composition
+	// so a 500-char encoded MIME subject doesn't push past the
+	// ceiling on its own. 120 chars preserves enough subject for
+	// the slug to remain operator-readable in the typical case.
+	sourceSubjectCap = 120
+
+	// sourceMessageIDCap caps the message-id slug. RFC-822
+	// Message-IDs are bounded in practice but github
+	// notification envelopes can carry 100+ char ids. 80 chars
+	// is the practical ceiling that still keeps the
+	// identity-bearing tail unique.
+	sourceMessageIDCap = 80
+
+	// sourceHashTailLen is the length of the SHA-1-hex tail
+	// appended when the composed slug still exceeds the cap
+	// after per-component truncation (rare; degenerate
+	// subjects with no whitespace). 10 hex chars = 40 bits =
+	// ~4.6e-7 collision probability across 1M emails — fine
+	// for the rare path.
+	sourceHashTailLen = 10
+)
 
 // slugifyClean is the daemon's clean-slug rule applied locally to
 // header-derived strings (subject, label, address-local-parts, etc.).
@@ -51,19 +99,69 @@ func MessageIDSlug(rawMessageID string) string {
 // gmail source-shape entity id. Both pieces use the daemon's
 // clean-slug rule. When subject is empty (no Subject header), the
 // shape collapses to `<message-id-slug>` alone.
+//
+// Length-capping per #146: long encoded-MIME subjects + long
+// notification message-ids can compose to >255 bytes, which the
+// vault writer's `<slug>.md.tmp-NNNNNNNNNN` atomic-temp pattern
+// then can't write (FS name limit). The fix caps each component
+// before composition (subject ≤ 120, message-id ≤ 80) and falls
+// back to a stable SHA-1-hex tail when the composed slug still
+// exceeds the overall cap (degenerate subjects without
+// whitespace). The hash input is the raw (subject, rawMessageID)
+// pair so the same email always produces the same slug across
+// runs — important for the daemon's slug-as-idempotency-key
+// contract.
 func SourceSlug(subject, rawMessageID string) string {
-	subj := slugifyClean(subject)
-	mid := MessageIDSlug(rawMessageID)
+	subj := capSlug(slugifyClean(subject), sourceSubjectCap)
+	mid := capSlug(MessageIDSlug(rawMessageID), sourceMessageIDCap)
+	var composed string
 	switch {
 	case subj == "" && mid == "":
 		return ""
 	case subj == "":
-		return mid
+		composed = mid
 	case mid == "":
-		return subj
+		composed = subj
 	default:
-		return subj + "-" + mid
+		composed = subj + "-" + mid
 	}
+	if len(composed) <= sourceSlugCap {
+		return composed
+	}
+	// Pathological case: the cap-applied composition still
+	// exceeds the ceiling (degenerate subject without
+	// hyphenable whitespace). Truncate + append a deterministic
+	// hash of the raw input so the slug stays under the cap
+	// AND the same email re-fetches to the same id.
+	tail := hashTail(subject, rawMessageID)
+	keep := sourceSlugCap - sourceHashTailLen - 1 // -1 for the joining `-`
+	if keep < 1 {
+		keep = 1
+	}
+	if keep > len(composed) {
+		keep = len(composed)
+	}
+	return strings.TrimRight(composed[:keep], "-") + "-" + tail
+}
+
+// capSlug truncates s to at most max bytes, trimming any
+// trailing hyphen that the cut produced so the result remains
+// a well-formed clean-slug. The input must already be
+// clean-slugged (no multi-byte runes; ASCII only).
+func capSlug(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return strings.TrimRight(s[:max], "-")
+}
+
+// hashTail returns a short hex tail derived from the raw
+// (subject, rawMessageID) input — used as the
+// hash-on-overflow disambiguator in SourceSlug. SHA-1 is fine
+// here: this is a uniqueness tag, not a security primitive.
+func hashTail(subject, rawMessageID string) string {
+	sum := sha1.Sum([]byte(subject + "\x00" + rawMessageID))
+	return hex.EncodeToString(sum[:])[:sourceHashTailLen]
 }
 
 // EmailCanonicalSlug builds `gmail-<message-id-slug>` for the
