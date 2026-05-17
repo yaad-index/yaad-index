@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.5.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.4.0...yaad-index-v0.5.0) (2026-05-17)
+
+
+### Features
+
+* **workflow,actions:** add_canonical_edge primitive — workflow creates canonical edge + per-entry data directly ([#132](https://github.com/yaad-index/yaad-index/issues/132)) ([#136](https://github.com/yaad-index/yaad-index/issues/136)) ([09a3bb4](https://github.com/yaad-index/yaad-index/commit/09a3bb4f1bb4caefe97d139f8bf44ec008edb019))
+* **workflow,actions:** add_gap carries full gap spec inline ([#142](https://github.com/yaad-index/yaad-index/issues/142)) ([#144](https://github.com/yaad-index/yaad-index/issues/144)) ([4bebe7c](https://github.com/yaad-index/yaad-index/commit/4bebe7cdcc0289024c9a350e0e353f10d1b566d7))
+
+
+### Bug Fixes
+
+* **api,fill:** honor workflow-injected canonical_type spec on fill paths ([#158](https://github.com/yaad-index/yaad-index/issues/158)) ([#159](https://github.com/yaad-index/yaad-index/issues/159)) ([182354f](https://github.com/yaad-index/yaad-index/commit/182354ff726cbd41dab9615f89636697b54f5a98))
+* **api,needs_fill:** surface source-shape entities with workflow-injected gaps ([#156](https://github.com/yaad-index/yaad-index/issues/156)) ([#157](https://github.com/yaad-index/yaad-index/issues/157)) ([1f35bac](https://github.com/yaad-index/yaad-index/commit/1f35baca34e75529651d2f78b1be1893b46e5b9a))
+* **api:** release per-entity write-lock before bus publish ([#154](https://github.com/yaad-index/yaad-index/issues/154)) ([#155](https://github.com/yaad-index/yaad-index/issues/155)) ([523ff13](https://github.com/yaad-index/yaad-index/commit/523ff138bce11f42a42ab99e8c49fc2fbca71311))
+* **config:** GapSpec.Kinds decodes scalar + sequence + nil shapes uniformly ([#141](https://github.com/yaad-index/yaad-index/issues/141)) ([#143](https://github.com/yaad-index/yaad-index/issues/143)) ([f54c8a6](https://github.com/yaad-index/yaad-index/commit/f54c8a615d3b97e9bb3b1cb97229d57529306ade))
+* **gmail:** cap source slug length so vault write doesn't exceed FS name limit ([#146](https://github.com/yaad-index/yaad-index/issues/146)) ([#149](https://github.com/yaad-index/yaad-index/issues/149)) ([28c6400](https://github.com/yaad-index/yaad-index/commit/28c6400aa24d868926bd3118814b933be6039f1f))
+* **workflow:** action writers wait-with-timeout for write-lock per [#152](https://github.com/yaad-index/yaad-index/issues/152) ([#153](https://github.com/yaad-index/yaad-index/issues/153)) ([5adb043](https://github.com/yaad-index/yaad-index/commit/5adb043f96fd2ab54774120f5fa0d0fb795d2088))
+* **workflow:** entity activation nests Data under `data` key for CEL access ([#145](https://github.com/yaad-index/yaad-index/issues/145)) ([#148](https://github.com/yaad-index/yaad-index/issues/148)) ([3202d1b](https://github.com/yaad-index/yaad-index/commit/3202d1bdfcf48bdb68b8da8c80d477de77f0b728))
+* **workflow:** replace per-entity rate-limit backstop with structural cycle detection ([#147](https://github.com/yaad-index/yaad-index/issues/147)) ([#151](https://github.com/yaad-index/yaad-index/issues/151)) ([1735f6b](https://github.com/yaad-index/yaad-index/commit/1735f6b24bc81d6432f9dd2cd308b71662650890))
+
 ## [0.4.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.3.0...yaad-index-v0.4.0) (2026-05-17)
 
 
