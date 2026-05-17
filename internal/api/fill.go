@@ -306,6 +306,26 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 					"failed to materialize canonical_type edges")
 				return
 			}
+			// Dataview-paragraph append per yaad-index #119:
+			// for each entry with non-empty `data`, record it on
+			// the target canonical entity's body. Auto-materializes
+			// the target vault file when missing.
+			dataviewDeps := dataviewAppendDeps{
+				Store:       st,
+				VaultReader: vaultReader,
+				VaultWriter: vaultWriter,
+				WriteLocks:  writeLocks,
+				KindReg:     canonicalKindReg,
+				Bus:         bus,
+				Logger:      logger,
+			}
+			if err := appendDataviewParagraphs(r.Context(), dataviewDeps, canonicalTypeOps, eventbus.SourceAgent, ""); err != nil {
+				logger.ErrorContext(r.Context(), "fill canonical_type dataview-append",
+					"err", err, "id", id)
+				writeError(w, http.StatusInternalServerError, "internal_error",
+					"failed to append dataview paragraphs")
+				return
+			}
 		}
 
 		// Mark gap-call done for this fetch-cycle (per ADR-0013 §4 +

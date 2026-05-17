@@ -713,19 +713,19 @@ func writeDataviewSection(w *bytes.Buffer, paragraphs []DataviewParagraph) {
 		if len(p.Fields) == 0 {
 			continue
 		}
-		w.WriteString(renderDataviewParagraph(p))
+		w.WriteString(RenderDataviewParagraph(p))
 		w.WriteByte('\n')
 	}
 	w.WriteString(DataviewEndMarker)
 	w.WriteByte('\n')
 }
 
-// renderDataviewParagraph turns a DataviewParagraph into its
+// RenderDataviewParagraph turns a DataviewParagraph into its
 // `key:: value  key:: value` wire form with sorted-key order.
 // Exposed at the package level so the handler dedup path can
 // content-hash a candidate paragraph the same way the writer
 // will render it.
-func renderDataviewParagraph(p DataviewParagraph) string {
+func RenderDataviewParagraph(p DataviewParagraph) string {
 	if len(p.Fields) == 0 {
 		return ""
 	}
@@ -746,7 +746,7 @@ func renderDataviewParagraph(p DataviewParagraph) string {
 	return b.String()
 }
 
-// parseDataviewLine inverts renderDataviewParagraph for one
+// parseDataviewLine inverts RenderDataviewParagraph for one
 // line in a yaad:dataview block. Two-space separator between
 // key-value pairs is the cell delimiter; `::` separates a key
 // from its value. Lines without `::` (blank lines, decorative

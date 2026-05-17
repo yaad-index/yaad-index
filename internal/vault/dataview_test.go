@@ -139,5 +139,5 @@ func TestRenderDataviewParagraph_DeterministicOrder(t *testing.T) {
 	}}
 	assert.Equal(t,
 		"a_first:: a  m_mid:: m  z_last:: z",
-		renderDataviewParagraph(p))
+		RenderDataviewParagraph(p))
 }

@@ -372,6 +372,124 @@ func TestAgentFill_CanonicalType_AcceptsDataPerEntry(t *testing.T) {
 		"frontmatter must store label-IDs only, NOT the per-entry data payload")
 }
 
+// TestAgentFill_CanonicalType_DataAppendsParagraphOnTarget
+// pins yaad-index #119 dataview-append behavior: an entry
+// carrying `data` lands as a dataview paragraph on the target
+// canonical entity's body (auto-materialized when missing per
+// the policy call).
+func TestAgentFill_CanonicalType_DataAppendsParagraphOnTarget(t *testing.T) {
+	t.Parallel()
+	h, st, root, signer := newAgentFillCanonicalTypeFixture(t, []string{"person", "boardgame"})
+	tok := mintToken(t, signer, "agent", "alice")
+	const id = "source:agent-dataview-target"
+	seedSourceForAgentCanonicalTypeFill(t, st, root, id)
+
+	rec := agentFillReq(t, h, id, tok, map[string]any{
+		"subjects": []any{
+			map[string]any{
+				"name": "Brass: Birmingham",
+				"kind": "boardgame",
+				"data": map[string]any{
+					"my_rating":  "9",
+					"co_player":  "alice",
+					"played_at":  "essen-2024",
+				},
+			},
+		},
+	})
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	// Target canonical-label vault file was auto-materialized.
+	target := readVaultByID(t, root, "boardgame", "boardgame:brass-birmingham")
+	require.Len(t, target.Dataview, 1,
+		"target must carry one dataview paragraph after the fill")
+	got := target.Dataview[0].Fields
+	assert.Equal(t, "9", got["my_rating"])
+	assert.Equal(t, "alice", got["co_player"])
+	assert.Equal(t, "essen-2024", got["played_at"])
+}
+
+// TestAgentFill_CanonicalType_DataDedupesIdenticalParagraph
+// pins the dedup contract: re-filling with the exact same
+// data payload produces no duplicate paragraph on the target
+// (sorted-key content-hash equality skips the append).
+func TestAgentFill_CanonicalType_DataDedupesIdenticalParagraph(t *testing.T) {
+	t.Parallel()
+	h, st, root, signer := newAgentFillCanonicalTypeFixture(t, []string{"person", "boardgame"})
+	tok := mintToken(t, signer, "agent", "alice")
+	const id = "source:agent-dataview-dedup"
+	seedSourceForAgentCanonicalTypeFill(t, st, root, id)
+
+	payload := map[string]any{
+		"subjects": []any{
+			map[string]any{
+				"name": "Caverna",
+				"kind": "boardgame",
+				"data": map[string]any{"my_rating": "8"},
+			},
+		},
+	}
+	require.Equal(t, http.StatusOK, agentFillReq(t, h, id, tok, payload).Code,
+		"first fill must succeed")
+
+	// Re-open the gap + re-fill with the same data payload.
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	ve := readVaultByID(t, root, "source", id)
+	ve.Gaps = append(ve.Gaps, "subjects")
+	require.NoError(t, w.Write(ve))
+
+	require.Equal(t, http.StatusOK, agentFillReq(t, h, id, tok, payload).Code,
+		"second fill (same data) must succeed")
+
+	target := readVaultByID(t, root, "boardgame", "boardgame:caverna")
+	assert.Len(t, target.Dataview, 1,
+		"sorted-key dedup must skip the duplicate; one paragraph total")
+}
+
+// TestAgentFill_CanonicalType_DataAppendsSecondParagraphOnDifferentValue
+// pins the non-dedup case: a second fill with a different
+// `data` payload appends as a fresh paragraph rather than
+// replacing the prior one.
+func TestAgentFill_CanonicalType_DataAppendsSecondParagraphOnDifferentValue(t *testing.T) {
+	t.Parallel()
+	h, st, root, signer := newAgentFillCanonicalTypeFixture(t, []string{"person", "boardgame"})
+	tok := mintToken(t, signer, "agent", "alice")
+	const id = "source:agent-dataview-append-second"
+	seedSourceForAgentCanonicalTypeFill(t, st, root, id)
+
+	require.Equal(t, http.StatusOK, agentFillReq(t, h, id, tok, map[string]any{
+		"subjects": []any{
+			map[string]any{
+				"name": "Spirit Island",
+				"kind": "boardgame",
+				"data": map[string]any{"my_rating": "8"},
+			},
+		},
+	}).Code, "first fill must succeed")
+
+	// Re-open + re-fill with a different value.
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	ve := readVaultByID(t, root, "source", id)
+	ve.Gaps = append(ve.Gaps, "subjects")
+	require.NoError(t, w.Write(ve))
+
+	require.Equal(t, http.StatusOK, agentFillReq(t, h, id, tok, map[string]any{
+		"subjects": []any{
+			map[string]any{
+				"name": "Spirit Island",
+				"kind": "boardgame",
+				"data": map[string]any{"my_rating": "9"},
+			},
+		},
+	}).Code, "second fill must succeed")
+
+	target := readVaultByID(t, root, "boardgame", "boardgame:spirit-island")
+	require.Len(t, target.Dataview, 2,
+		"two distinct paragraphs accumulate (history-as-event-log)")
+}
+
 // TestAgentFill_CanonicalType_DataExtraFieldsAccepted: the
 // per-entry `data` map is free-form — daemon does not type
 // the keys. Any string-keyed map value the agent emits

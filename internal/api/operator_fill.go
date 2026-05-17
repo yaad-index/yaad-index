@@ -279,6 +279,26 @@ func handleEntityOperatorFill(
 				"failed to materialize canonical_type edges")
 			return
 		}
+		// Dataview-paragraph append per yaad-index #119 — same
+		// shape as the agent-fill path. Operator-authored data
+		// lands on the target canonical entity; auto-materialize
+		// covers a target that has only a thin DB row.
+		dataviewDeps := dataviewAppendDeps{
+			Store:       st,
+			VaultReader: vaultReader,
+			VaultWriter: vaultWriter,
+			WriteLocks:  writeLocks,
+			KindReg:     canonicalKindReg,
+			Bus:         bus,
+			Logger:      logger,
+		}
+		if err := appendDataviewParagraphs(r.Context(), dataviewDeps, ops, eventbus.SourceOperator, ""); err != nil {
+			logger.ErrorContext(r.Context(), "operator-fill canonical_type dataview-append",
+				"err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to append dataview paragraphs")
+			return
+		}
 
 		// Publish fill.completed per ADR-0024 Phase 2 — one event per
 		// `set` op landed. Clear / defer ops aren't fills (they
