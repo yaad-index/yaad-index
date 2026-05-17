@@ -77,6 +77,29 @@ func (r canonicalLoaderRegistry) EdgeTypeExists(edgeType string) bool {
 	return false
 }
 
+func (r canonicalLoaderRegistry) RegisteredGapTypes(gap string) []string {
+	seen := make(map[string]struct{})
+	for _, kindCfg := range r.kinds {
+		spec, ok := kindCfg.Gaps[gap]
+		if !ok {
+			continue
+		}
+		t := spec.Type
+		if t == "" {
+			t = "string"
+		}
+		seen[t] = struct{}{}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for t := range seen {
+		out = append(out, t)
+	}
+	return out
+}
+
 // storeEntityResolver satisfies engine.EntityResolver against
 // the production store.Store. Returns the entity's Data map
 // plus id + kind fields injected so CEL predicates can

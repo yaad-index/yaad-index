@@ -25,6 +25,37 @@ import (
 	"github.com/yaad-index/yaad-index/internal/workflow/parser"
 )
 
+// GapInjection bundles the optional inline gap metadata the
+// add_gap action can carry per #117 (DataSchema) and #142
+// (full GapSpec). All fields are independently optional; an
+// empty injection (zero value) means "just add the gap name,
+// don't touch the GapStateEntry's spec fields."
+//
+// When non-empty fields are present, the writer merges them
+// onto the gap's GapStateEntry so `/v1/needs-fill` can surface
+// the workflow-injected shape exactly as it would for an
+// operator-config-registered gap.
+type GapInjection struct {
+	// DataSchema is the optional per-key extraction guidance
+	// for canonical_type gaps carrying per-entry `data` per
+	// #117. Empty / nil preserves any pre-existing schema.
+	DataSchema map[string]string
+
+	// Type / Description / FillStrategy / Range / MaxLength /
+	// Values / Kinds carry the workflow-supplied gap shape per
+	// #142. Each field is optional individually; the parser +
+	// loader enforce internal consistency at workflow-load
+	// time. Empty Type falls through to the operator-config
+	// registration (if any) or the runtime "string" default.
+	Type         string
+	Description  string
+	FillStrategy string
+	Range        []int
+	MaxLength    int
+	Values       []string
+	Kinds        []string
+}
+
 // GapWriter is the gap-injection surface the add_gap
 // runner depends on. Production wires a vault-backed
 // implementation that appends to vault.Entity.Gaps +
@@ -40,14 +71,12 @@ type GapWriter interface {
 	// stamp the commit author as `workflow:<name>` per the
 	// ADR-0024 Source vocabulary.
 	//
-	// dataSchema is the optional per-key extraction guidance
-	// for canonical_type gaps carrying per-entry `data`. When
-	// non-empty it lands on the gap's GapStateEntry so
-	// `/v1/needs-fill` can surface it to the agent's fill
-	// prompt builder. nil / empty preserves any pre-existing
-	// schema on the entry (lets a subsequent workflow inject
-	// schema onto a gap added earlier without one).
-	AddGap(ctx context.Context, workflow, entityID, gap string, dataSchema map[string]string) error
+	// inj carries the optional inline gap metadata per #117 +
+	// #142. The writer merges non-empty fields onto the gap's
+	// GapStateEntry; empty / zero fields preserve any
+	// pre-existing state (lets a subsequent workflow refresh
+	// one aspect without clobbering others added earlier).
+	AddGap(ctx context.Context, workflow, entityID, gap string, inj GapInjection) error
 }
 
 // runAddGap executes one add_gap action: enforces the
@@ -106,7 +135,17 @@ func (d *dispatcher) runAddGap(ctx context.Context, idx int, wf *parser.Workflow
 		}
 	}
 
-	if err := d.gapWriter.AddGap(ctx, dec.Workflow, target, gap, a.DataSchema); err != nil {
+	inj := GapInjection{
+		DataSchema:   a.DataSchema,
+		Type:         a.Type,
+		Description:  a.Description,
+		FillStrategy: a.FillStrategy,
+		Range:        a.Range,
+		MaxLength:    a.MaxLength,
+		Values:       a.Values,
+		Kinds:        a.Kinds,
+	}
+	if err := d.gapWriter.AddGap(ctx, dec.Workflow, target, gap, inj); err != nil {
 		return ActionResult{
 			ActionIdx: idx,
 			Type:      "add_gap",

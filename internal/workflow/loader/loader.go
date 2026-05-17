@@ -76,6 +76,18 @@ type CanonicalRegistry interface {
 	// EdgeTypeExists reports whether the given edge type is
 	// declared in the operator's canonical_edge_types config.
 	EdgeTypeExists(edgeType string) bool
+
+	// RegisteredGapTypes returns the distinct Type values the
+	// operator's canonical_kinds registry declares for a gap
+	// with the given name across every kind. When the gap is
+	// not registered anywhere, returns nil. Used by the loader
+	// at #142 workflow-load time to reject workflows whose
+	// inline `add_gap.type` declaration contradicts the
+	// registered shape (operators can override description /
+	// fill_strategy / data_schema but not type — that would
+	// create a runtime conflict between the same gap name
+	// carrying different shapes across surfaces).
+	RegisteredGapTypes(gap string) []string
 }
 
 // Options configures a Loader. Paths is the list of directories
@@ -369,6 +381,31 @@ func (l *Loader) maybeReloadFile(ctx context.Context, path string) {
 		}
 	}
 
+	// add_gap inline-spec conflict check per #142: when the
+	// workflow declares a Type for a gap that's ALSO registered
+	// in canonical_kinds with a different Type, reject the
+	// workflow. Description / fill_strategy / data_schema can
+	// differ — operators can refine those per workflow — but
+	// Type defines the on-disk + fill-pipeline shape and must
+	// match across surfaces.
+	if l.canonicalRegistry != nil {
+		if conflicts := addGapTypeConflicts(wf, l.canonicalRegistry); len(conflicts) > 0 {
+			l.mu.Lock()
+			if prevName, was := l.perFile[path]; was {
+				delete(l.workflows, prevName)
+				delete(l.perFile, path)
+			}
+			l.mtimes[path] = mtime
+			delete(l.collisionLogged, path)
+			l.mu.Unlock()
+			l.logger.WarnContext(ctx, "workflow file rejected: add_gap inline type contradicts canonical_kinds registration",
+				"path", path,
+				"workflow_name", wf.Name,
+				"conflicts", conflicts)
+			return
+		}
+	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// Name collision check: two files declaring the same
@@ -498,4 +535,42 @@ func canonicalEdgeAuthorBugs(wf *parser.Workflow, reg CanonicalRegistry) (unknow
 		}
 	}
 	return unknownEdge, unknownKind
+}
+
+// addGapTypeConflicts walks the workflow's add_gap actions and
+// returns the gap names whose inline Type contradicts an existing
+// canonical_kinds registration. Each conflict string carries the
+// gap name + the workflow's declared type + the operator-config
+// type(s) so the rejection WARN names what to fix. Returns nil
+// when every add_gap is consistent with the registry.
+//
+// Description / FillStrategy / DataSchema / Range / MaxLength /
+// Values are workflow-overrideable and NOT checked here — only
+// Type conflicts reject (per #142).
+func addGapTypeConflicts(wf *parser.Workflow, reg CanonicalRegistry) []string {
+	var out []string
+	for _, a := range wf.Actions {
+		if a.AddGap == nil {
+			continue
+		}
+		if a.AddGap.Type == "" {
+			continue // workflow didn't declare a Type → no conflict possible
+		}
+		registered := reg.RegisteredGapTypes(a.AddGap.Gap)
+		if len(registered) == 0 {
+			continue // gap not in canonical_kinds → workflow's type stands alone
+		}
+		match := false
+		for _, t := range registered {
+			if t == a.AddGap.Type {
+				match = true
+				break
+			}
+		}
+		if !match {
+			out = append(out, fmt.Sprintf("gap=%q workflow_type=%q registered_types=%v",
+				a.AddGap.Gap, a.AddGap.Type, registered))
+		}
+	}
+	return out
 }

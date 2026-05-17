@@ -185,6 +185,22 @@ type GapStateEntry struct {
 	// = natural-language extraction instruction for the LLM.
 	// Empty / nil omits from frontmatter.
 	DataSchema map[string]string `yaml:"data_schema,omitempty"`
+
+	// Type / Description / FillStrategy / Range / MaxLength /
+	// Values / Kinds carry the workflow-injected GapSpec per
+	// #142. When set, /v1/needs-fill surfaces the workflow's
+	// shape to the agent's fill prompt builder exactly as it
+	// does for an operator-config-registered gap. Empty fields
+	// fall back to the operator's canonical_kinds registration
+	// (when present) or the runtime defaults. Persisted to
+	// vault frontmatter alongside the gap-state audit trail.
+	Type         string   `yaml:"type,omitempty"`
+	Description  string   `yaml:"description,omitempty"`
+	FillStrategy string   `yaml:"fill_strategy,omitempty"`
+	Range        []int    `yaml:"range,omitempty"`
+	MaxLength    int      `yaml:"max_length,omitempty"`
+	Values       []string `yaml:"values,omitempty"`
+	Kinds        []string `yaml:"kinds,omitempty"`
 }
 
 // Attachment is one entry in the entity's manifest per ADR-0018

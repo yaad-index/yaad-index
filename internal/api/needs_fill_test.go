@@ -870,3 +870,83 @@ func TestNeedsFill_AllGapsFiltered_EntityExcluded(t *testing.T) {
 	assert.Empty(t, got.Entities,
 		"entity with only deferred / wrong-audience gaps must be dropped, not surfaced empty")
 }
+
+// TestNeedsFill_GapMetadata_WorkflowInjectedSpec_StandsAlone:
+// when a workflow-injected gap (GapStateEntry with inline
+// Type / FillStrategy / Kinds / ...) is present on the entity
+// AND the operator-config canonical_kinds does NOT register
+// the gap, /v1/needs-fill surfaces the workflow's shape
+// standalone (per #142).
+func TestNeedsFill_GapMetadata_WorkflowInjectedSpec_StandsAlone(t *testing.T) {
+	t.Parallel()
+	reg := map[string]config.CanonicalKindConfig{
+		"boardgame": {
+			// No registration for hiring_alert_for in canonical_kinds.
+			Gaps: map[string]config.GapSpec{},
+		},
+	}
+	gapState := map[string]vault.GapStateEntry{
+		"hiring_alert_for": {
+			Type:         "canonical_type",
+			FillStrategy: "agent",
+			Kinds:        []string{"company"},
+			Description:  "the company that's hiring",
+		},
+	}
+	h, _, _ := nfFixtureWithGaps(t,
+		"boardgame:wf-standalone",
+		[]string{"hiring_alert_for"},
+		gapState, reg, false)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	got := decodeNFResponse(t, rec)
+	require.Len(t, got.Entities, 1)
+	require.Contains(t, got.Entities[0].GapMetadata, "hiring_alert_for")
+	meta := got.Entities[0].GapMetadata["hiring_alert_for"]
+	assert.Equal(t, "canonical_type", meta.Type)
+	assert.Equal(t, "agent", meta.FillStrategy)
+	assert.Equal(t, []string{"company"}, meta.Kinds)
+	assert.Equal(t, "the company that's hiring",
+		got.Entities[0].Gaps["hiring_alert_for"])
+}
+
+// TestNeedsFill_GapMetadata_WorkflowOverridesConfigPerField:
+// when both operator-config AND workflow-injected spec are
+// present, non-empty workflow fields win per-field (per #142).
+func TestNeedsFill_GapMetadata_WorkflowOverridesConfigPerField(t *testing.T) {
+	t.Parallel()
+	reg := map[string]config.CanonicalKindConfig{
+		"boardgame": {
+			Gaps: map[string]config.GapSpec{
+				"hiring_alert_for": {
+					Type:         "canonical_type",
+					FillStrategy: "operator",
+					Kinds:        []string{"person", "company"},
+					Description:  "config description",
+				},
+			},
+		},
+	}
+	gapState := map[string]vault.GapStateEntry{
+		"hiring_alert_for": {
+			Description:  "workflow override",
+			FillStrategy: "agent",
+		},
+	}
+	h, _, _ := nfFixtureWithGaps(t,
+		"boardgame:override",
+		[]string{"hiring_alert_for"},
+		gapState, reg, false)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	got := decodeNFResponse(t, rec)
+	require.Len(t, got.Entities, 1)
+	meta := got.Entities[0].GapMetadata["hiring_alert_for"]
+	assert.Equal(t, "canonical_type", meta.Type, "type falls through from config (not overridden)")
+	assert.Equal(t, "agent", meta.FillStrategy, "workflow overrides fill_strategy")
+	assert.Equal(t, []string{"person", "company"}, meta.Kinds, "kinds falls through")
+	assert.Equal(t, "workflow override",
+		got.Entities[0].Gaps["hiring_alert_for"], "workflow overrides description")
+}

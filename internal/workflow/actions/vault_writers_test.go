@@ -290,7 +290,7 @@ func TestVaultGapWriter_HappyPath(t *testing.T) {
 		now,
 	)
 	w := NewVaultGapWriter(b)
-	err := w.AddGap(context.Background(), "classify", "email:m1", "is_interesting_to_me", nil)
+	err := w.AddGap(context.Background(), "classify", "email:m1", "is_interesting_to_me", GapInjection{})
 	require.NoError(t, err)
 
 	writes := vw.snapshot()
@@ -332,7 +332,7 @@ func TestVaultGapWriter_Idempotent(t *testing.T) {
 		now,
 	)
 	w := NewVaultGapWriter(b)
-	err := w.AddGap(context.Background(), "classify", "email:m1", "is_interesting_to_me", nil)
+	err := w.AddGap(context.Background(), "classify", "email:m1", "is_interesting_to_me", GapInjection{})
 	assert.NoError(t, err)
 	assert.Empty(t, vw.snapshot(), "no vault write on idempotent add")
 	assert.Empty(t, es.upsertSnapshot(), "no DB upsert on idempotent add")
@@ -345,7 +345,7 @@ func TestVaultGapWriter_EntityNotFound(t *testing.T) {
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	b, _, _, _ := newVaultWriterBackend(t, nil, nil, now)
 	w := NewVaultGapWriter(b)
-	err := w.AddGap(context.Background(), "wf", "pr:absent", "g", nil)
+	err := w.AddGap(context.Background(), "wf", "pr:absent", "g", GapInjection{})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEntityNotFound)
 }
@@ -374,7 +374,7 @@ func TestVaultGapWriter_PreservesExistingGapState(t *testing.T) {
 		now,
 	)
 	w := NewVaultGapWriter(b)
-	err := w.AddGap(context.Background(), "wf", "email:m1", "new_gap", nil)
+	err := w.AddGap(context.Background(), "wf", "email:m1", "new_gap", GapInjection{})
 	require.NoError(t, err)
 
 	writes := vw.snapshot()
@@ -407,7 +407,7 @@ func TestVaultGapWriter_NewGapWithDataSchema(t *testing.T) {
 		"salary":    "salary range if mentioned, else omit",
 		"work_mode": "remote / hybrid / onsite if mentioned, else omit",
 	}
-	err := w.AddGap(context.Background(), "linkedin-classify", "email:m1", "hiring_alert_for", schema)
+	err := w.AddGap(context.Background(), "linkedin-classify", "email:m1", "hiring_alert_for", GapInjection{DataSchema: schema})
 	require.NoError(t, err)
 
 	writes := vw.snapshot()
@@ -438,7 +438,7 @@ func TestVaultGapWriter_DataSchemaCloned(t *testing.T) {
 	)
 	w := NewVaultGapWriter(b)
 	schema := map[string]string{"role": "extract role"}
-	err := w.AddGap(context.Background(), "wf", "email:m1", "g", schema)
+	err := w.AddGap(context.Background(), "wf", "email:m1", "g", GapInjection{DataSchema: schema})
 	require.NoError(t, err)
 
 	schema["role"] = "MUTATED"
@@ -477,7 +477,7 @@ func TestVaultGapWriter_IdempotentSkipPreservesSchema(t *testing.T) {
 		now,
 	)
 	w := NewVaultGapWriter(b)
-	err := w.AddGap(context.Background(), "wf", "email:m1", "g", nil)
+	err := w.AddGap(context.Background(), "wf", "email:m1", "g", GapInjection{})
 	require.NoError(t, err)
 	assert.Empty(t, vw.snapshot(), "no vault write on idempotent re-add with no new schema")
 	assert.Empty(t, es.upsertSnapshot(), "no DB upsert on idempotent re-add")
@@ -508,7 +508,7 @@ func TestVaultGapWriter_GapPresentReplaceSchema(t *testing.T) {
 	)
 	w := NewVaultGapWriter(b)
 	err := w.AddGap(context.Background(), "wf", "email:m1", "g",
-		map[string]string{"k": "new", "k2": "added"})
+		GapInjection{DataSchema: map[string]string{"k": "new", "k2": "added"}})
 	require.NoError(t, err)
 	writes := vw.snapshot()
 	require.Len(t, writes, 1, "schema refresh triggers a write even when the gap was present")
@@ -533,7 +533,7 @@ func TestVaultGapWriter_VaultWriteError(t *testing.T) {
 	)
 	vw.writeErr = errors.New("disk full")
 	w := NewVaultGapWriter(b)
-	err := w.AddGap(context.Background(), "wf", "email:m1", "g", nil)
+	err := w.AddGap(context.Background(), "wf", "email:m1", "g", GapInjection{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "disk full")
 }

@@ -91,6 +91,20 @@ type GapStateEntry struct {
 	// value = natural-language extraction instruction for the
 	// LLM. Empty / nil omits from the wire.
 	DataSchema map[string]string `json:"data_schema,omitempty"`
+
+	// Type / Description / FillStrategy / Range / MaxLength /
+	// Values / Kinds carry the workflow-injected GapSpec per
+	// #142. /v1/needs-fill surfaces these alongside the
+	// operator-config-derived metadata so the agent's fill
+	// prompt builder sees one unified spec regardless of which
+	// surface declared the gap.
+	Type         string   `json:"type,omitempty"`
+	Description  string   `json:"description,omitempty"`
+	FillStrategy string   `json:"fill_strategy,omitempty"`
+	Range        []int    `json:"range,omitempty"`
+	MaxLength    int      `json:"max_length,omitempty"`
+	Values       []string `json:"values,omitempty"`
+	Kinds        []string `json:"kinds,omitempty"`
 }
 
 // ArchivedFilter selects which archive-state subset of entities a

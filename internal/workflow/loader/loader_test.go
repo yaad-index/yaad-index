@@ -39,17 +39,19 @@ func (r *fakePluginRegistry) LookupByName(name string) (any, bool) {
 	return nil, ok
 }
 
-// fakeCanonicalRegistry satisfies CanonicalRegistry for #132
-// loader-time validation tests.
+// fakeCanonicalRegistry satisfies CanonicalRegistry for the
+// #132 + #142 loader-time validation tests.
 type fakeCanonicalRegistry struct {
 	kinds     map[string]struct{}
 	edgeTypes map[string]struct{}
+	gapTypes  map[string][]string
 }
 
 func newFakeCanonicalRegistry(kinds []string, edgeTypes []string) *fakeCanonicalRegistry {
 	r := &fakeCanonicalRegistry{
 		kinds:     make(map[string]struct{}, len(kinds)),
 		edgeTypes: make(map[string]struct{}, len(edgeTypes)),
+		gapTypes:  make(map[string][]string),
 	}
 	for _, k := range kinds {
 		r.kinds[k] = struct{}{}
@@ -57,6 +59,13 @@ func newFakeCanonicalRegistry(kinds []string, edgeTypes []string) *fakeCanonical
 	for _, e := range edgeTypes {
 		r.edgeTypes[e] = struct{}{}
 	}
+	return r
+}
+
+// withGapType seeds a registered (gap, type) pair so #142
+// loader tests can drive the inline-type-conflict path.
+func (r *fakeCanonicalRegistry) withGapType(gap, typ string) *fakeCanonicalRegistry {
+	r.gapTypes[gap] = append(r.gapTypes[gap], typ)
 	return r
 }
 
@@ -68,6 +77,10 @@ func (r *fakeCanonicalRegistry) KindExists(kind string) bool {
 func (r *fakeCanonicalRegistry) EdgeTypeExists(edgeType string) bool {
 	_, ok := r.edgeTypes[edgeType]
 	return ok
+}
+
+func (r *fakeCanonicalRegistry) RegisteredGapTypes(gap string) []string {
+	return r.gapTypes[gap]
 }
 
 // addCanonicalEdgeWorkflowMarkdown returns a workflow file with a
@@ -629,6 +642,101 @@ func TestLoader_AddCanonicalEdge_NilCanonicalRegistrySkips(t *testing.T) {
 		Paths:          []string{dir},
 		PluginRegistry: newFakeRegistry("yaad-gmail"),
 		// CanonicalRegistry intentionally nil.
+	})
+	require.NoError(t, l.Load(context.Background()))
+	require.Len(t, l.Workflows(), 1)
+}
+
+// addGapInlineSpecWorkflow returns a workflow markdown file with
+// a single add_gap action that declares an inline GapSpec.
+// Used by #142 loader-time validation tests.
+func addGapInlineSpecWorkflow(name, gap, gapType string) string {
+	return fmt.Sprintf(
+		"---\nname: %s\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\naddable_gaps:\n  - %s\ntrigger:\n  type: manual\nactions:\n  - add_gap:\n      gap: %s\n      type: %s\n      kinds: [company]\n```\n",
+		name, gap, gap, gapType,
+	)
+}
+
+// TestLoader_AddGap_InlineTypeMatchesRegistry: workflow's
+// inline Type matches the operator-config registered Type for
+// the same gap name → workflow registers cleanly.
+func TestLoader_AddGap_InlineTypeMatchesRegistry(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "match",
+		addGapInlineSpecWorkflow("match", "hiring_alert_for", "canonical_type"))
+
+	reg := newFakeCanonicalRegistry(nil, nil).withGapType("hiring_alert_for", "canonical_type")
+	l := New(Options{
+		Paths:             []string{dir},
+		PluginRegistry:    newFakeRegistry("yaad-gmail"),
+		CanonicalRegistry: reg,
+	})
+	require.NoError(t, l.Load(context.Background()))
+	require.Len(t, l.Workflows(), 1)
+}
+
+// TestLoader_AddGap_InlineTypeConflictRejected: workflow's
+// inline Type contradicts the operator-config registered Type
+// → reject at load time per #142.
+func TestLoader_AddGap_InlineTypeConflictRejected(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "conflict",
+		addGapInlineSpecWorkflow("conflict", "hiring_alert_for", "canonical_type"))
+
+	// Operator config has the gap registered as `int`; workflow
+	// claims it's `canonical_type`. Reject.
+	reg := newFakeCanonicalRegistry(nil, nil).withGapType("hiring_alert_for", "int")
+	var logBuf bytes.Buffer
+	l := New(Options{
+		Paths:             []string{dir},
+		PluginRegistry:    newFakeRegistry("yaad-gmail"),
+		CanonicalRegistry: reg,
+		Logger:            slog.New(slog.NewTextHandler(&logBuf, nil)),
+	})
+	require.NoError(t, l.Load(context.Background()))
+	assert.Empty(t, l.Workflows(), "type conflict rejects the workflow file")
+	assert.Contains(t, logBuf.String(), "hiring_alert_for")
+	assert.Contains(t, logBuf.String(), "canonical_type")
+	assert.Contains(t, logBuf.String(), "int")
+}
+
+// TestLoader_AddGap_InlineTypeNoRegistryEntry: workflow
+// declares Type for a gap NOT in canonical_kinds → workflow
+// stands alone, no conflict.
+func TestLoader_AddGap_InlineTypeNoRegistryEntry(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "standalone",
+		addGapInlineSpecWorkflow("standalone", "novel_gap", "canonical_type"))
+
+	reg := newFakeCanonicalRegistry(nil, nil) // novel_gap unregistered
+	l := New(Options{
+		Paths:             []string{dir},
+		PluginRegistry:    newFakeRegistry("yaad-gmail"),
+		CanonicalRegistry: reg,
+	})
+	require.NoError(t, l.Load(context.Background()))
+	require.Len(t, l.Workflows(), 1, "workflow with inline Type for unregistered gap stands alone")
+}
+
+// TestLoader_AddGap_NoInlineType_RegistryHasGap: workflow
+// adds a gap WITHOUT declaring a Type → no conflict possible
+// even when registry registers a Type for that gap name. The
+// workflow simply inherits the registry's shape.
+func TestLoader_AddGap_NoInlineType_RegistryHasGap(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Workflow file without inline type.
+	writeWorkflow(t, dir, "inherit",
+		"---\nname: inherit\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\naddable_gaps:\n  - rating\ntrigger:\n  type: manual\nactions:\n  - add_gap:\n      gap: rating\n```\n")
+
+	reg := newFakeCanonicalRegistry(nil, nil).withGapType("rating", "int")
+	l := New(Options{
+		Paths:             []string{dir},
+		PluginRegistry:    newFakeRegistry("yaad-gmail"),
+		CanonicalRegistry: reg,
 	})
 	require.NoError(t, l.Load(context.Background()))
 	require.Len(t, l.Workflows(), 1)
