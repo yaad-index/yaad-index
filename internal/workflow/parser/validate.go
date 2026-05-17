@@ -324,6 +324,120 @@ func validateAddGap(a *AddGapAction, addable map[string]struct{}) error {
 			return fmt.Errorf("data_schema[%q] value is empty — extraction instruction must be non-empty", k)
 		}
 	}
+	// #142 inline gap spec validation. Mirrors the
+	// internal/config GapSpec.Validate rules for the type +
+	// per-type extras + fill_strategy + kinds invariants.
+	if err := validateAddGapInlineSpec(a); err != nil {
+		return err
+	}
+	return nil
+}
+
+// addGapValidTypes enumerates the gap types add_gap can declare
+// inline per #142. Mirrors the config.GapSpec recognised set
+// (string/int/enum/canonical_type); bool/text/date are reserved
+// for operator-config-only declarations until workflow-side use
+// cases surface.
+var addGapValidTypes = map[string]struct{}{
+	"string":         {},
+	"int":            {},
+	"enum":           {},
+	"canonical_type": {},
+}
+
+// addGapValidFillStrategies mirrors config.validFillStrategies
+// for the inline spec path. Empty falls through to the engine /
+// loader / merge defaults; the explicit values gate against
+// operator typos.
+var addGapValidFillStrategies = map[string]struct{}{
+	"":         {},
+	"agent":    {},
+	"operator": {},
+	"both":     {},
+}
+
+func validateAddGapInlineSpec(a *AddGapAction) error {
+	// Type — when set, must be one of the recognised four.
+	if a.Type != "" {
+		if _, ok := addGapValidTypes[a.Type]; !ok {
+			return fmt.Errorf("type %q not in {string, int, enum, canonical_type}", a.Type)
+		}
+	}
+	// FillStrategy — when set, must be one of the recognised
+	// three. Empty falls through to the engine default of "both".
+	if _, ok := addGapValidFillStrategies[a.FillStrategy]; !ok {
+		return fmt.Errorf("fill_strategy %q not in {agent, operator, both}", a.FillStrategy)
+	}
+	// Type-specific cross-field invariants. Mirror
+	// config.GapSpec.Validate so the workflow-injected spec
+	// can't ship a shape the daemon-side fill pipeline rejects.
+	switch a.Type {
+	case "canonical_type":
+		if len(a.Kinds) == 0 {
+			return fmt.Errorf("type=canonical_type requires non-empty kinds list")
+		}
+	case "int":
+		if len(a.Kinds) > 0 {
+			return fmt.Errorf("kinds is only valid for type=canonical_type, got type=%q", a.Type)
+		}
+		if len(a.Range) != 0 && len(a.Range) != 2 {
+			return fmt.Errorf("range must be a [min, max] integer pair when set, got %d entries", len(a.Range))
+		}
+		if len(a.Range) == 2 && a.Range[0] > a.Range[1] {
+			return fmt.Errorf("range[min=%d] > range[max=%d]", a.Range[0], a.Range[1])
+		}
+		if a.MaxLength != 0 {
+			return fmt.Errorf("max_length is only valid for type=string, got type=int")
+		}
+		if len(a.Values) != 0 {
+			return fmt.Errorf("values is only valid for type=enum, got type=int")
+		}
+	case "string":
+		if len(a.Kinds) > 0 {
+			return fmt.Errorf("kinds is only valid for type=canonical_type, got type=%q", a.Type)
+		}
+		if a.MaxLength < 0 {
+			return fmt.Errorf("max_length must be non-negative, got %d", a.MaxLength)
+		}
+		if len(a.Range) > 0 {
+			return fmt.Errorf("range is only valid for type=int, got type=string")
+		}
+		if len(a.Values) != 0 {
+			return fmt.Errorf("values is only valid for type=enum, got type=string")
+		}
+	case "enum":
+		if len(a.Values) == 0 {
+			return fmt.Errorf("type=enum requires non-empty values list")
+		}
+		if len(a.Kinds) > 0 {
+			return fmt.Errorf("kinds is only valid for type=canonical_type, got type=enum")
+		}
+		if len(a.Range) > 0 {
+			return fmt.Errorf("range is only valid for type=int, got type=enum")
+		}
+		if a.MaxLength != 0 {
+			return fmt.Errorf("max_length is only valid for type=string, got type=enum")
+		}
+	case "":
+		// No inline type — kinds / range / max_length / values
+		// remain plausible operator-config-driven shapes; the
+		// loader's canonical_kinds cross-check enforces
+		// agreement at workflow-load time. Per-type extras
+		// without a Type are still rejected because they have
+		// no spec to bind against.
+		if len(a.Kinds) > 0 {
+			return fmt.Errorf("kinds requires type=canonical_type; declare type alongside")
+		}
+		if len(a.Range) > 0 {
+			return fmt.Errorf("range requires type=int; declare type alongside")
+		}
+		if a.MaxLength != 0 {
+			return fmt.Errorf("max_length requires type=string; declare type alongside")
+		}
+		if len(a.Values) != 0 {
+			return fmt.Errorf("values requires type=enum; declare type alongside")
+		}
+	}
 	return nil
 }
 

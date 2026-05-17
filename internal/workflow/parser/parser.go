@@ -203,9 +203,16 @@ type pluginDispatchShape struct {
 }
 
 type addGapShape struct {
-	Entity     string            `yaml:"entity"`
-	Gap        string            `yaml:"gap"`
-	DataSchema map[string]string `yaml:"data_schema"`
+	Entity       string            `yaml:"entity"`
+	Gap          string            `yaml:"gap"`
+	DataSchema   map[string]string `yaml:"data_schema"`
+	Type         string            `yaml:"type"`
+	Description  string            `yaml:"description"`
+	FillStrategy string            `yaml:"fill_strategy"`
+	Range        []int             `yaml:"range"`
+	MaxLength    int               `yaml:"max_length"`
+	Values       []string          `yaml:"values"`
+	Kinds        []string          `yaml:"kinds"`
 }
 
 type setPropertyShape struct {
@@ -394,10 +401,36 @@ func addGapFromShape(s *addGapShape) *AddGapAction {
 			schema[strings.TrimSpace(k)] = v
 		}
 	}
+	var kinds []string
+	if len(s.Kinds) > 0 {
+		kinds = make([]string, len(s.Kinds))
+		for i, k := range s.Kinds {
+			kinds[i] = strings.TrimSpace(k)
+		}
+	}
+	var values []string
+	if len(s.Values) > 0 {
+		values = make([]string, len(s.Values))
+		for i, v := range s.Values {
+			values[i] = strings.TrimSpace(v)
+		}
+	}
+	var rangePair []int
+	if len(s.Range) > 0 {
+		rangePair = make([]int, len(s.Range))
+		copy(rangePair, s.Range)
+	}
 	return &AddGapAction{
-		Entity:     strings.TrimSpace(s.Entity),
-		Gap:        strings.TrimSpace(s.Gap),
-		DataSchema: schema,
+		Entity:       strings.TrimSpace(s.Entity),
+		Gap:          strings.TrimSpace(s.Gap),
+		DataSchema:   schema,
+		Type:         strings.TrimSpace(s.Type),
+		Description:  s.Description,
+		FillStrategy: strings.TrimSpace(s.FillStrategy),
+		Range:        rangePair,
+		MaxLength:    s.MaxLength,
+		Values:       values,
+		Kinds:        kinds,
 	}
 }
 

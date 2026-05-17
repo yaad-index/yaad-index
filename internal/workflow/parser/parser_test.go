@@ -856,3 +856,140 @@ func TestValidate_SetPropertyAndAddNote_MutuallyExclusive(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expected exactly one")
 }
+
+// TestParser_AddGapInlineSpecRoundTrip pins the #142 wire shape:
+// add_gap carries type / kinds / fill_strategy / description /
+// range / max_length / values inline alongside the existing
+// gap + data_schema fields.
+func TestParser_AddGapInlineSpecRoundTrip(t *testing.T) {
+	t.Parallel()
+	src := "---\n" +
+		"name: linkedin-hiring-classify\n" +
+		"status: active\n" +
+		"---\n" +
+		"\n" +
+		"```yaml\n" +
+		"allowed_plugins:\n" +
+		"  - yaad-gmail\n" +
+		"addable_gaps:\n" +
+		"  - hiring_alert_for\n" +
+		"\n" +
+		"trigger:\n" +
+		"  type: manual\n" +
+		"\n" +
+		"actions:\n" +
+		"  - add_gap:\n" +
+		"      entity: 'edge.from'\n" +
+		"      gap: hiring_alert_for\n" +
+		"      type: canonical_type\n" +
+		"      kinds: [company]\n" +
+		"      fill_strategy: agent\n" +
+		"      description: \"The company that's hiring.\"\n" +
+		"      data_schema:\n" +
+		"        role: \"the role title\"\n" +
+		"```\n"
+	wf, err := Parse([]byte(src))
+	require.NoError(t, err)
+	require.NotNil(t, wf.Actions[0].AddGap)
+	a := wf.Actions[0].AddGap
+	assert.Equal(t, "edge.from", a.Entity)
+	assert.Equal(t, "hiring_alert_for", a.Gap)
+	assert.Equal(t, "canonical_type", a.Type)
+	assert.Equal(t, []string{"company"}, a.Kinds)
+	assert.Equal(t, "agent", a.FillStrategy)
+	assert.Equal(t, "The company that's hiring.", a.Description)
+	assert.Equal(t, "the role title", a.DataSchema["role"])
+}
+
+// TestValidate_AddGapInlineCanonicalTypeRequiresKinds: a
+// canonical_type inline declaration without `kinds` rejects
+// per the cross-field rule.
+func TestValidate_AddGapInlineCanonicalTypeRequiresKinds(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.AddableGaps = []string{"g"}
+	wf.Actions = []Action{{AddGap: &AddGapAction{
+		Gap:  "g",
+		Type: "canonical_type",
+	}}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "canonical_type requires non-empty kinds")
+}
+
+// TestValidate_AddGapInlineKindsRejectsNonCanonicalType: kinds
+// with a non-canonical_type type rejects.
+func TestValidate_AddGapInlineKindsRejectsNonCanonicalType(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.AddableGaps = []string{"g"}
+	wf.Actions = []Action{{AddGap: &AddGapAction{
+		Gap:   "g",
+		Type:  "string",
+		Kinds: []string{"person"},
+	}}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "kinds is only valid for type=canonical_type")
+}
+
+// TestValidate_AddGapInlineEnumRequiresValues: enum without
+// values rejects.
+func TestValidate_AddGapInlineEnumRequiresValues(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.AddableGaps = []string{"g"}
+	wf.Actions = []Action{{AddGap: &AddGapAction{
+		Gap:  "g",
+		Type: "enum",
+	}}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "enum requires non-empty values")
+}
+
+// TestValidate_AddGapInlineRangeRejectsNonInt: range with a
+// non-int type rejects.
+func TestValidate_AddGapInlineRangeRejectsNonInt(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.AddableGaps = []string{"g"}
+	wf.Actions = []Action{{AddGap: &AddGapAction{
+		Gap:   "g",
+		Type:  "string",
+		Range: []int{1, 10},
+	}}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "range is only valid for type=int")
+}
+
+// TestValidate_AddGapInlineTypeOnlyOnePerExtras: kinds /
+// range / max_length / values without a Type rejects.
+func TestValidate_AddGapInlineTypeOnlyOnePerExtras(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.AddableGaps = []string{"g"}
+	wf.Actions = []Action{{AddGap: &AddGapAction{
+		Gap:   "g",
+		Kinds: []string{"company"},
+	}}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "kinds requires type=canonical_type")
+}
+
+// TestValidate_AddGapInlineFillStrategy: invalid fill_strategy
+// rejects.
+func TestValidate_AddGapInlineFillStrategy(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.AddableGaps = []string{"g"}
+	wf.Actions = []Action{{AddGap: &AddGapAction{
+		Gap:          "g",
+		FillStrategy: "everyone",
+	}}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "fill_strategy")
+}

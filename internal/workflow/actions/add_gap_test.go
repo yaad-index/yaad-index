@@ -20,20 +20,20 @@ type fakeGapWriter struct {
 }
 
 type gapCall struct {
-	workflow   string
-	entityID   string
-	gap        string
-	dataSchema map[string]string
+	workflow string
+	entityID string
+	gap      string
+	inj      GapInjection
 }
 
-func (f *fakeGapWriter) AddGap(_ context.Context, workflow, entityID, gap string, dataSchema map[string]string) error {
+func (f *fakeGapWriter) AddGap(_ context.Context, workflow, entityID, gap string, inj GapInjection) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, gapCall{
-		workflow:   workflow,
-		entityID:   entityID,
-		gap:        gap,
-		dataSchema: dataSchema,
+		workflow: workflow,
+		entityID: entityID,
+		gap:      gap,
+		inj:      inj,
 	})
 	return f.writeErr
 }
@@ -151,7 +151,7 @@ func TestAddGap_WriterError(t *testing.T) {
 // ErrActionNotImplemented with the workflow + entity + gap.
 func TestStubGapWriter_ReturnsNotImplemented(t *testing.T) {
 	t.Parallel()
-	err := StubGapWriter{}.AddGap(context.Background(), "wf", "email:m1", "is_interesting_to_me", nil)
+	err := StubGapWriter{}.AddGap(context.Background(), "wf", "email:m1", "is_interesting_to_me", GapInjection{})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrActionNotImplemented)
 	assert.Contains(t, err.Error(), "wf")
@@ -183,7 +183,7 @@ func TestAddGap_DataSchemaPassedThrough(t *testing.T) {
 	assert.NoError(t, results[0].Err)
 	calls := w.snapshot()
 	require.Len(t, calls, 1)
-	assert.Equal(t, schema, calls[0].dataSchema,
+	assert.Equal(t, schema, calls[0].inj.DataSchema,
 		"data_schema flows to GapWriter verbatim")
 }
 
@@ -203,7 +203,7 @@ func TestAddGap_DataSchemaNilFlowsAsNil(t *testing.T) {
 	assert.NoError(t, results[0].Err)
 	calls := w.snapshot()
 	require.Len(t, calls, 1)
-	assert.Nil(t, calls[0].dataSchema)
+	assert.Nil(t, calls[0].inj.DataSchema)
 }
 
 // TestAddGap_WorkflowAttribution: the workflow name from the

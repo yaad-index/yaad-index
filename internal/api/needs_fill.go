@@ -313,11 +313,22 @@ func buildNeedsFillEntry(
 		if entry, ok := ve.GapState[g]; ok && entry.Deferred {
 			continue
 		}
-		spec, hasSpec := kindCfg.Gaps[g]
-		if !hasSpec {
-			// Registry doesn't declare this gap for this kind.
-			// Strict-mode skip (#4) — without an explicit registry
-			// entry there's no prompt to surface.
+		// Per-gap spec resolution layers per #142:
+		//   1. Operator-config canonical_kinds.<kind>.gaps.<g>
+		//      (the historic source).
+		//   2. Workflow-injected GapStateEntry fields (#142).
+		// When both are present, the workflow's inline shape
+		// overlays the operator-config shape per-field (any
+		// non-empty workflow field wins). When only the
+		// workflow has declared the gap, the workflow-injected
+		// shape stands alone.
+		cfgSpec, hasCfgSpec := kindCfg.Gaps[g]
+		entry, hasEntry := ve.GapState[g]
+		spec := mergeWorkflowGapSpec(cfgSpec, entry)
+		if !hasCfgSpec && !workflowGapEntryHasShape(entry) {
+			// Neither operator-config nor workflow declared a
+			// shape — strict-mode skip (#4): there's nothing to
+			// surface as a prompt.
 			continue
 		}
 		// Audience filter: skip fields whose fill_strategy doesn't
@@ -337,7 +348,7 @@ func buildNeedsFillEntry(
 			Values: spec.Values,
 			Kinds: spec.Kinds,
 		}
-		if entry, ok := ve.GapState[g]; ok && len(entry.DataSchema) > 0 {
+		if hasEntry && len(entry.DataSchema) > 0 {
 			gm.DataSchema = entry.DataSchema
 		}
 		meta[g] = gm
@@ -412,4 +423,49 @@ func decodeNeedsFillCursor(raw string) (string, bool) {
 		return "", false
 	}
 	return string(b), true
+}
+
+// workflowGapEntryHasShape reports whether the GapStateEntry
+// carries enough workflow-injected GapSpec metadata to stand
+// alone as a gap spec (without an operator-config registration
+// per ADR-0013). At minimum a Type is required; the other
+// fields are individually optional. Used by buildNeedsFillEntry
+// to decide whether a gap with no canonical_kinds registration
+// should still surface on /v1/needs-fill via its workflow-
+// injected shape (per #142).
+func workflowGapEntryHasShape(entry vault.GapStateEntry) bool {
+	return entry.Type != ""
+}
+
+// mergeWorkflowGapSpec layers the workflow-injected GapStateEntry
+// fields onto the operator-config GapSpec, returning the
+// effective spec /v1/needs-fill should surface. Non-empty
+// workflow fields win per-field; empty workflow fields fall
+// through to the operator-config value. When the operator
+// config doesn't carry the gap at all, the workflow-injected
+// fields stand alone.
+func mergeWorkflowGapSpec(cfg config.GapSpec, entry vault.GapStateEntry) config.GapSpec {
+	out := cfg
+	if entry.Type != "" {
+		out.Type = entry.Type
+	}
+	if entry.Description != "" {
+		out.Description = entry.Description
+	}
+	if entry.FillStrategy != "" {
+		out.FillStrategy = entry.FillStrategy
+	}
+	if len(entry.Range) > 0 {
+		out.Range = append([]int(nil), entry.Range...)
+	}
+	if entry.MaxLength != 0 {
+		out.MaxLength = entry.MaxLength
+	}
+	if len(entry.Values) > 0 {
+		out.Values = append([]string(nil), entry.Values...)
+	}
+	if len(entry.Kinds) > 0 {
+		out.Kinds = append([]string(nil), entry.Kinds...)
+	}
+	return out
 }

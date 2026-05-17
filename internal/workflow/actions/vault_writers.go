@@ -196,14 +196,15 @@ func NewVaultGapWriter(b *VaultWriterBackend) *VaultGapWriter {
 // AddGap implements GapWriter. Acquires the per-entity
 // write-lock, reads the vault file, appends the gap to
 // vault.Entity.Gaps (idempotent — adding a gap that's already
-// present is a no-op success), initializes a zero-value
-// GapState entry (pending — not filled, not deferred), writes
-// back, mirrors to the store. When dataSchema is non-empty
-// the entry's DataSchema is set so `/v1/needs-fill` can
-// surface the per-key extraction guidance to the agent's fill
-// prompt; calls with nil/empty schema preserve any existing
-// schema on the entry (additive, not destructive).
-func (w *VaultGapWriter) AddGap(ctx context.Context, workflow, entityID, gap string, dataSchema map[string]string) error {
+// present + no new injection is a no-op success), initializes
+// a zero-value GapState entry (pending — not filled, not
+// deferred) on first add, then merges any non-empty inj fields
+// onto the entry. Writes back; mirrors to the store. Empty /
+// zero injection fields preserve any pre-existing GapStateEntry
+// values (lets a subsequent workflow refresh one aspect — e.g.
+// extend an earlier `add_gap` with `data_schema` — without
+// clobbering others).
+func (w *VaultGapWriter) AddGap(ctx context.Context, workflow, entityID, gap string, inj GapInjection) error {
 	if w.backend == nil {
 		return fmt.Errorf("VaultGapWriter: backend not wired")
 	}
@@ -237,8 +238,10 @@ func (w *VaultGapWriter) AddGap(ctx context.Context, workflow, entityID, gap str
 			break
 		}
 	}
-	// Idempotent: gap already present + no new schema → no-op.
-	if gapPresent && len(dataSchema) == 0 {
+	// Idempotent: gap already present + no inline metadata at
+	// all → no-op. Empty injection means the workflow added the
+	// bare gap (no shape, no schema); re-firing is a no-op.
+	if gapPresent && injectionEmpty(inj) {
 		return nil
 	}
 	if ve.GapState == nil {
@@ -248,9 +251,7 @@ func (w *VaultGapWriter) AddGap(ctx context.Context, workflow, entityID, gap str
 		ve.Gaps = append(ve.Gaps, gap)
 	}
 	entry := ve.GapState[gap]
-	if len(dataSchema) > 0 {
-		entry.DataSchema = cloneStringMap(dataSchema)
-	}
+	mergeGapInjection(&entry, inj)
 	ve.GapState[gap] = entry
 
 	commitMsg := fmt.Sprintf("workflow add_gap %s on %s by %s", gap, ve.ID, workflowAuthor(workflow))
@@ -402,14 +403,69 @@ func vaultGapStateForDB(in map[string]vault.GapStateEntry) map[string]store.GapS
 	out := make(map[string]store.GapStateEntry, len(in))
 	for k, v := range in {
 		out[k] = store.GapStateEntry{
-			Source:     v.Source,
-			FilledAt:   v.FilledAt,
-			Deferred:   v.Deferred,
-			DeferredAt: v.DeferredAt,
-			DataSchema: cloneStringMap(v.DataSchema),
+			Source:       v.Source,
+			FilledAt:     v.FilledAt,
+			Deferred:     v.Deferred,
+			DeferredAt:   v.DeferredAt,
+			DataSchema:   cloneStringMap(v.DataSchema),
+			Type:         v.Type,
+			Description:  v.Description,
+			FillStrategy: v.FillStrategy,
+			Range:        append([]int(nil), v.Range...),
+			MaxLength:    v.MaxLength,
+			Values:       append([]string(nil), v.Values...),
+			Kinds:        append([]string(nil), v.Kinds...),
 		}
 	}
 	return out
+}
+
+// injectionEmpty reports whether a GapInjection carries no
+// fields at all. Used to short-circuit the no-op-add path: a
+// bare `add_gap: { gap: <name> }` re-fire stays a no-op when
+// the gap is already present and no inline metadata is
+// supplied.
+func injectionEmpty(inj GapInjection) bool {
+	return len(inj.DataSchema) == 0 &&
+		inj.Type == "" &&
+		inj.Description == "" &&
+		inj.FillStrategy == "" &&
+		len(inj.Range) == 0 &&
+		inj.MaxLength == 0 &&
+		len(inj.Values) == 0 &&
+		len(inj.Kinds) == 0
+}
+
+// mergeGapInjection layers the non-empty fields from inj onto
+// the existing GapStateEntry. Empty / zero fields preserve the
+// entry's prior value so a subsequent add_gap can refresh one
+// aspect (e.g. add data_schema to a previously bare gap) without
+// clobbering other workflow-injected metadata.
+func mergeGapInjection(entry *vault.GapStateEntry, inj GapInjection) {
+	if len(inj.DataSchema) > 0 {
+		entry.DataSchema = cloneStringMap(inj.DataSchema)
+	}
+	if inj.Type != "" {
+		entry.Type = inj.Type
+	}
+	if inj.Description != "" {
+		entry.Description = inj.Description
+	}
+	if inj.FillStrategy != "" {
+		entry.FillStrategy = inj.FillStrategy
+	}
+	if len(inj.Range) > 0 {
+		entry.Range = append([]int(nil), inj.Range...)
+	}
+	if inj.MaxLength != 0 {
+		entry.MaxLength = inj.MaxLength
+	}
+	if len(inj.Values) > 0 {
+		entry.Values = append([]string(nil), inj.Values...)
+	}
+	if len(inj.Kinds) > 0 {
+		entry.Kinds = append([]string(nil), inj.Kinds...)
+	}
 }
 
 // cloneStringMap copies a string→string map so the caller can

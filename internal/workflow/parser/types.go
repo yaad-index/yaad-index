@@ -303,6 +303,33 @@ type AddGapAction struct {
 	// `/v1/needs-fill` so the prompt builder includes the
 	// instruction set. Empty / nil omits.
 	DataSchema map[string]string
+
+	// Type / Description / FillStrategy / Range / MaxLength /
+	// Values / Kinds carry the gap's full shape inline per #142.
+	// Mirrors the operator-config GapSpec shape. When set, the
+	// runner persists them on the gap's GapStateEntry so
+	// `/v1/needs-fill` surfaces the workflow-injected gap with
+	// its shape (the same metadata an operator-config-registered
+	// gap would surface).
+	//
+	// All fields are optional individually; the parser + loader
+	// enforce internal consistency at workflow-load time:
+	//   - Type must be one of {string, int, enum, canonical_type}
+	//     when set; empty falls through to operator-config or
+	//     "string" default.
+	//   - Kinds required when Type=="canonical_type", rejected
+	//     otherwise.
+	//   - Range integer-pair, Type=="int" only.
+	//   - MaxLength positive, Type=="string" only.
+	//   - Values non-empty, Type=="enum" only and required.
+	//   - FillStrategy in {agent, operator, both}; default "both".
+	Type         string
+	Description  string
+	FillStrategy string
+	Range        []int
+	MaxLength    int
+	Values       []string
+	Kinds        []string
 }
 
 // SetPropertyAction is the `set_property` primitive — writes
