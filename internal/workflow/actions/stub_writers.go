@@ -67,3 +67,13 @@ func (StubPropertyWriter) SetProperties(_ context.Context, workflow, entityID st
 	return fmt.Errorf("%w: vault-backed set_property not wired; attempted workflow=%s entity=%s fields=%d",
 		ErrActionNotImplemented, workflow, entityID, len(fields))
 }
+
+// StubEdgeWriter is the production-default EdgeWriter retained
+// for tests + dev binaries running without a vault. Same
+// stub-reject shape as the other stub writers.
+type StubEdgeWriter struct{}
+
+func (StubEdgeWriter) AddCanonicalEdge(_ context.Context, workflow, sourceID, edgeType, targetKind, targetName string, _ map[string]string) error {
+	return fmt.Errorf("%w: vault-backed add_canonical_edge not wired; attempted workflow=%s source=%s edge_type=%s target=%s:%s",
+		ErrActionNotImplemented, workflow, sourceID, edgeType, targetKind, targetName)
+}

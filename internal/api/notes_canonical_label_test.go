@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/yaad-index/yaad-index/internal/auth"
+	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
@@ -201,7 +202,7 @@ func TestAddNote_ExistingVaultFile_NoAutoMaterializePath(t *testing.T) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: "boardgame",
-		Plugin: canonicalLabelPlugin,
+		Plugin: canonical.CanonicalLabelPlugin,
 		Data: map[string]any{"name": "Already Materialized", "rating": int64(7)},
 	}))
 

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
@@ -310,7 +311,7 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 			// for each entry with non-empty `data`, record it on
 			// the target canonical entity's body. Auto-materializes
 			// the target vault file when missing.
-			dataviewDeps := dataviewAppendDeps{
+			dataviewDeps := canonical.DataviewAppendDeps{
 				Store:       st,
 				VaultReader: vaultReader,
 				VaultWriter: vaultWriter,

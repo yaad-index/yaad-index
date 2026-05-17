@@ -53,6 +53,30 @@ func (a loaderRegistryAdapter) LookupByName(name string) (any, bool) {
 	return a.registry.LookupByName(name)
 }
 
+// canonicalLoaderRegistry satisfies loader.CanonicalRegistry
+// against the operator's merged canonical-kinds registry +
+// declared canonical_edge_types config. The loader uses this to
+// reject workflow files at load time that name an unknown
+// edge_type or target.kind in an add_canonical_edge action.
+type canonicalLoaderRegistry struct {
+	kinds     map[string]config.CanonicalKindConfig
+	edgeTypes []string
+}
+
+func (r canonicalLoaderRegistry) KindExists(kind string) bool {
+	_, ok := r.kinds[kind]
+	return ok
+}
+
+func (r canonicalLoaderRegistry) EdgeTypeExists(edgeType string) bool {
+	for _, t := range r.edgeTypes {
+		if t == edgeType {
+			return true
+		}
+	}
+	return false
+}
+
 // storeEntityResolver satisfies engine.EntityResolver against
 // the production store.Store. Returns the entity's Data map
 // plus id + kind fields injected so CEL predicates can
@@ -161,8 +185,9 @@ func (s *ServeCmd) Run() error {
 	bus := eventbus.NewMemoryBus()
 
 	var (
-		handlerOpts = []api.HandlerOption{api.WithEventBus(bus)}
-		guard       *config.CanonicalGuard
+		handlerOpts    = []api.HandlerOption{api.WithEventBus(bus)}
+		guard          *config.CanonicalGuard
+		mergedRegistry map[string]config.CanonicalKindConfig
 	)
 	if cfg != nil {
 		// ADR-0016 §4: build the merged effective canonical-kind
@@ -172,7 +197,7 @@ func (s *ServeCmd) Run() error {
 		// AI-fill prompts. Plugin-emitted canonical_kinds_emitted
 		// auto-activate via the merge (no operator re-declaration).
 		pluginGaps, pluginEmittedKinds := collectPluginCanonicalContributions(registry)
-		mergedRegistry := config.MergeCanonicalRegistry(
+		mergedRegistry = config.MergeCanonicalRegistry(
 			pluginGaps,
 			pluginEmittedKinds,
 			cfg.CanonicalKindsDefaults,
@@ -362,10 +387,11 @@ func (s *ServeCmd) Run() error {
 		// workflows into the event-bus subscriber path.
 		workflowDir := filepath.Join(cfg.Vault.Path, "workflows")
 		wfLoader := loader.New(loader.Options{
-			Paths:          []string{workflowDir},
-			PluginRegistry: loaderRegistryAdapter{registry: registry},
-			PollInterval:   loader.DefaultPollInterval,
-			Logger:         logger,
+			Paths:             []string{workflowDir},
+			PluginRegistry:    loaderRegistryAdapter{registry: registry},
+			CanonicalRegistry: canonicalLoaderRegistry{kinds: mergedRegistry, edgeTypes: cfg.CanonicalEdgeTypes},
+			PollInterval:      loader.DefaultPollInterval,
+			Logger:            logger,
 		})
 		wfCtx, wfCancel := context.WithCancel(context.Background())
 		defer wfCancel()
@@ -409,6 +435,10 @@ func (s *ServeCmd) Run() error {
 			NoteWriter:       actions.NewVaultNoteWriter(wfWriterBackend),
 			GapWriter:        actions.NewVaultGapWriter(wfWriterBackend),
 			PropertyWriter:   actions.NewVaultPropertyWriter(wfWriterBackend),
+			EdgeWriter: actions.NewVaultEdgeWriter(
+				st, reader, writer, wfWriteLocks,
+				mergedRegistry, bus, logger,
+			),
 			PluginDispatcher: wfPluginDispatcher,
 			Bus:              bus,
 			// Phase 5.B err-task pattern — systemic failures

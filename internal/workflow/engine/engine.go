@@ -1027,6 +1027,31 @@ func compileActionTemplates(ev *decision.Evaluator, a parser.Action) (map[string
 			}
 			tpls["field:"+name] = tpl
 		}
+	case a.AddCanonicalEdge != nil:
+		if a.AddCanonicalEdge.Source != "" {
+			tpl, err := template.Compile(a.AddCanonicalEdge.Source, ev)
+			if err != nil {
+				return nil, fmt.Errorf("add_canonical_edge.source: %w", err)
+			}
+			tpls["source"] = tpl
+		}
+		if a.AddCanonicalEdge.TargetName != "" {
+			tpl, err := template.Compile(a.AddCanonicalEdge.TargetName, ev)
+			if err != nil {
+				return nil, fmt.Errorf("add_canonical_edge.target.name: %w", err)
+			}
+			tpls["target.name"] = tpl
+		}
+		// Per-entry data values are CEL templates; key the
+		// rendered output under `data:<name>` to mirror
+		// set_property's `field:<name>` namespacing convention.
+		for name, expr := range a.AddCanonicalEdge.Data {
+			tpl, err := template.Compile(expr, ev)
+			if err != nil {
+				return nil, fmt.Errorf("add_canonical_edge.data[%q]: %w", name, err)
+			}
+			tpls["data:"+name] = tpl
+		}
 	}
 	return tpls, nil
 }

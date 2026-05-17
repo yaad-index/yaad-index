@@ -61,6 +61,23 @@ type PluginRegistry interface {
 	LookupByName(name string) (any, bool)
 }
 
+// CanonicalRegistry is the load-time validation surface for
+// add_canonical_edge action primitives (#132). The action names
+// a literal edge_type + target.kind; both must be in the
+// daemon's operator-configured registries at workflow-load
+// time. A workflow referencing an unknown edge_type or
+// target.kind is rejected at registration so the operator sees
+// the typo before any fire.
+type CanonicalRegistry interface {
+	// KindExists reports whether the given canonical kind is
+	// declared in the operator's canonical_kinds config.
+	KindExists(kind string) bool
+
+	// EdgeTypeExists reports whether the given edge type is
+	// declared in the operator's canonical_edge_types config.
+	EdgeTypeExists(edgeType string) bool
+}
+
 // Options configures a Loader. Paths is the list of directories
 // to scan; PluginRegistry is the load-time validator; the
 // remaining fields default sensibly when zero.
@@ -80,6 +97,15 @@ type Options struct {
 	// drift).
 	PluginRegistry PluginRegistry
 
+	// CanonicalRegistry is consulted at load time to validate
+	// every parsed workflow's add_canonical_edge actions: the
+	// literal edge_type must be in the daemon's
+	// canonical_edge_types config, and target.kind in
+	// canonical_kinds. Nil → skip the check (tests + dev
+	// binaries without the operator config can still load
+	// workflows).
+	CanonicalRegistry CanonicalRegistry
+
 	// PollInterval is the cadence of the polling reload loop.
 	// Zero (the default) → DefaultPollInterval.
 	PollInterval time.Duration
@@ -94,9 +120,10 @@ type Options struct {
 // the polling loop. Lookups + Snapshots are safe under
 // concurrent reads.
 type Loader struct {
-	paths          []string
-	pluginRegistry PluginRegistry
-	pollInterval   time.Duration
+	paths             []string
+	pluginRegistry    PluginRegistry
+	canonicalRegistry CanonicalRegistry
+	pollInterval      time.Duration
 	logger         *slog.Logger
 
 	mu        sync.RWMutex
@@ -128,10 +155,11 @@ func New(opts Options) *Loader {
 		interval = DefaultPollInterval
 	}
 	return &Loader{
-		paths:           append([]string(nil), opts.Paths...),
-		pluginRegistry:  opts.PluginRegistry,
-		pollInterval:    interval,
-		logger:          logger,
+		paths:             append([]string(nil), opts.Paths...),
+		pluginRegistry:    opts.PluginRegistry,
+		canonicalRegistry: opts.CanonicalRegistry,
+		pollInterval:      interval,
+		logger:            logger,
 		workflows:       make(map[string]*parser.Workflow),
 		perFile:         make(map[string]string),
 		mtimes:          make(map[string]time.Time),
@@ -317,6 +345,30 @@ func (l *Loader) maybeReloadFile(ctx context.Context, path string) {
 		}
 	}
 
+	// add_canonical_edge: literal edge_type + target.kind
+	// validation against the daemon's canonical_edge_types +
+	// canonical_kinds registries (#132). Defended against the
+	// typo case at workflow-load time so the operator sees the
+	// rejection before any action fires.
+	if l.canonicalRegistry != nil {
+		if unknownEdge, unknownKind := canonicalEdgeAuthorBugs(wf, l.canonicalRegistry); len(unknownEdge) > 0 || len(unknownKind) > 0 {
+			l.mu.Lock()
+			if prevName, was := l.perFile[path]; was {
+				delete(l.workflows, prevName)
+				delete(l.perFile, path)
+			}
+			l.mtimes[path] = mtime
+			delete(l.collisionLogged, path)
+			l.mu.Unlock()
+			l.logger.WarnContext(ctx, "workflow file rejected: add_canonical_edge references unknown edge_type or target.kind",
+				"path", path,
+				"workflow_name", wf.Name,
+				"unknown_edge_types", unknownEdge,
+				"unknown_target_kinds", unknownKind)
+			return
+		}
+	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// Name collision check: two files declaring the same
@@ -424,4 +476,26 @@ func (l *Loader) Lookup(name string) (*parser.Workflow, bool) {
 	defer l.mu.RUnlock()
 	wf, ok := l.workflows[name]
 	return wf, ok
+}
+
+// canonicalEdgeAuthorBugs walks the workflow's add_canonical_edge
+// actions and returns the literal edge_type + target.kind values
+// that don't appear in the canonical registry. Empty slices when
+// every reference checks out (or the workflow has no
+// add_canonical_edge actions). Used by maybeReloadFile to reject
+// workflows referencing unknown registry entries at load time so
+// the operator sees the rejection before any action fires.
+func canonicalEdgeAuthorBugs(wf *parser.Workflow, reg CanonicalRegistry) (unknownEdge, unknownKind []string) {
+	for _, a := range wf.Actions {
+		if a.AddCanonicalEdge == nil {
+			continue
+		}
+		if !reg.EdgeTypeExists(a.AddCanonicalEdge.EdgeType) {
+			unknownEdge = append(unknownEdge, a.AddCanonicalEdge.EdgeType)
+		}
+		if !reg.KindExists(a.AddCanonicalEdge.TargetKind) {
+			unknownKind = append(unknownKind, a.AddCanonicalEdge.TargetKind)
+		}
+	}
+	return unknownEdge, unknownKind
 }
