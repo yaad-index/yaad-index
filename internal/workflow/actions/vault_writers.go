@@ -47,6 +47,19 @@ import (
 	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
+// DefaultActionWriteLockTimeout is the bounded wait the
+// workflow-action vault writers apply on per-entity write-lock
+// acquisition per #152. Workflows firing on edge_created during
+// ingest race the ingest path's per-envelope write-lock hold
+// (typically tens of ms); the old fail-fast Acquire failed
+// every fire deterministically. 5 seconds is generous against
+// the typical hold window AND short enough that a
+// genuinely-wedged lock surfaces as an err-task inside one
+// workflow tick rather than blocking the action runner
+// indefinitely. HTTP-side writers keep the fail-fast Acquire
+// shape — they have an operator / agent to retry on 409.
+const DefaultActionWriteLockTimeout = 5 * time.Second
+
 // EntityStore is the narrow subset of *store.Store the vault-
 // backed writers need. Production wires *store.Store directly;
 // tests substitute fakes that record calls.
@@ -79,6 +92,21 @@ type VaultWriterBackend struct {
 	// Note. nil → time.Now. Test-only knob; production
 	// leaves it unset.
 	Clock func() time.Time
+	// LockTimeout caps the per-entity write-lock acquisition
+	// wait per #152. Zero → DefaultActionWriteLockTimeout
+	// (production). Tests that exercise the conflict-after-
+	// timeout path set this to a small value to keep the
+	// suite fast.
+	LockTimeout time.Duration
+}
+
+// lockTimeout returns the configured timeout or the package
+// default.
+func (b *VaultWriterBackend) lockTimeout() time.Duration {
+	if b.LockTimeout > 0 {
+		return b.LockTimeout
+	}
+	return DefaultActionWriteLockTimeout
 }
 
 func (b *VaultWriterBackend) clock() time.Time {
@@ -126,7 +154,7 @@ func (w *VaultNoteWriter) AppendNote(ctx context.Context, workflow, entityID, bo
 		return fmt.Errorf("VaultNoteWriter: backend not wired")
 	}
 	holder := workflowHolder(workflow, "add_note")
-	release, err := w.backend.WriteLocks.Acquire(entityID, holder)
+	release, err := w.backend.WriteLocks.AcquireWithTimeout(ctx, entityID, holder, w.backend.lockTimeout())
 	if err != nil {
 		return fmt.Errorf("acquire write-lock on %s: %w", entityID, err)
 	}
@@ -209,7 +237,7 @@ func (w *VaultGapWriter) AddGap(ctx context.Context, workflow, entityID, gap str
 		return fmt.Errorf("VaultGapWriter: backend not wired")
 	}
 	holder := workflowHolder(workflow, "add_gap")
-	release, err := w.backend.WriteLocks.Acquire(entityID, holder)
+	release, err := w.backend.WriteLocks.AcquireWithTimeout(ctx, entityID, holder, w.backend.lockTimeout())
 	if err != nil {
 		return fmt.Errorf("acquire write-lock on %s: %w", entityID, err)
 	}
@@ -297,7 +325,7 @@ func (w *VaultPropertyWriter) SetProperties(ctx context.Context, workflow, entit
 		return fmt.Errorf("VaultPropertyWriter: backend not wired")
 	}
 	holder := workflowHolder(workflow, "set_property")
-	release, err := w.backend.WriteLocks.Acquire(entityID, holder)
+	release, err := w.backend.WriteLocks.AcquireWithTimeout(ctx, entityID, holder, w.backend.lockTimeout())
 	if err != nil {
 		return fmt.Errorf("acquire write-lock on %s: %w", entityID, err)
 	}

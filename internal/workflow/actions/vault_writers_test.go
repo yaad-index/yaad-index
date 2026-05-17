@@ -224,8 +224,10 @@ func TestVaultNoteWriter_VaultFileMissing(t *testing.T) {
 }
 
 // TestVaultNoteWriter_WriteLockConflict: a concurrent
-// holder of the entity's write-lock returns a ConflictError
-// the workflow surfaces verbatim.
+// holder of the entity's write-lock that never releases
+// returns a ConflictError after the action-side
+// AcquireWithTimeout deadline (#152). The workflow surfaces
+// the conflict verbatim.
 func TestVaultNoteWriter_WriteLockConflict(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
@@ -238,8 +240,11 @@ func TestVaultNoteWriter_WriteLockConflict(t *testing.T) {
 		},
 		now,
 	)
+	// Shrink the per-backend timeout so this test doesn't
+	// burn 5s waiting for the lock-that-never-releases.
+	b.LockTimeout = 50 * time.Millisecond
 	// Acquire the lock first; the writer's Acquire should
-	// then 409.
+	// timeout after the shrunk AcquireWithTimeout deadline.
 	release, err := b.WriteLocks.Acquire("pr:1", "test-holder")
 	require.NoError(t, err)
 	defer release()
@@ -249,6 +254,40 @@ func TestVaultNoteWriter_WriteLockConflict(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, writelocks.IsConflict(unwrapToConflict(err)),
 		"writelocks.IsConflict on the unwrapped writer error")
+}
+
+// TestVaultNoteWriter_WriteLockWaitsForReleaser pins the #152
+// fix: when a concurrent holder releases the lock during the
+// action runner's bounded wait, the writer acquires + completes
+// successfully instead of failing with a 409 conflict.
+func TestVaultNoteWriter_WriteLockWaitsForReleaser(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	b, _, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"pr:1": {ID: "pr:1", Kind: "pr"},
+		},
+		map[string]*vault.Entity{
+			"pr:1": {ID: "pr:1", Kind: "pr"},
+		},
+		now,
+	)
+	// Hold the lock briefly, release after 100ms — simulates
+	// the ingest path's per-envelope hold during which a
+	// workflow fires on edge_created.
+	release, err := b.WriteLocks.Acquire("pr:1", "ingest:gmail")
+	require.NoError(t, err)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		release()
+	}()
+
+	w := NewVaultNoteWriter(b)
+	err = w.AppendNote(context.Background(), "wf", "pr:1", "post-ingest note")
+	require.NoError(t, err, "writer should wait for the ingest hold to release, not error")
+
+	writes := vw.snapshot()
+	require.Len(t, writes, 1, "write proceeds after the ingest hold releases")
 }
 
 // TestVaultNoteWriter_UpsertErrorDegradesGracefully: a
