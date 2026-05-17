@@ -1,6 +1,9 @@
 package gmail
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSlugifyClean(t *testing.T) {
 	t.Parallel()
@@ -174,5 +177,92 @@ func TestLabelSlug_NestedAndFlatProduceDistinctSlugs(t *testing.T) {
 	flat := LabelSlug("Job Search Active")
 	if nested == flat {
 		t.Errorf("nested + flat label collided: nested=%q flat=%q", nested, flat)
+	}
+}
+
+// TestSourceSlug_LongSubjectCapped pins #146: a long encoded-MIME
+// subject + long github message-id compose to >255 bytes before
+// the fix, which exceeds the ext4/xfs/apfs filename limit when
+// the vault writer appends `.md.tmp-NNNNNNNNNN`. Cap per-
+// component so the composed slug stays under the 200-byte
+// budget.
+func TestSourceSlug_LongSubjectCapped(t *testing.T) {
+	t.Parallel()
+	// Reconstruction of the failure shape from the bug report:
+	// long github review email subject + long Message-ID.
+	subject := "=?utf-8?Q?Re:_[owner/repo]_feat(?=" +
+		"?utf-8?Q?fill)_canonical_5ftype_gap_entries_carry_free-form_data_=" +
+		"e2=86=92_appended_as_=?utf-8?Q?dataview_paragraphs_on_target_(issue_119)?="
+	mid := "<owner/repo/issue/119/issue/event/25624563815@github.com>"
+
+	got := SourceSlug(subject, mid)
+	if len(got) > sourceSlugCap {
+		t.Errorf("SourceSlug exceeds cap: len=%d cap=%d got=%q", len(got), sourceSlugCap, got)
+	}
+	// The result still starts with the truncated subject prefix so
+	// operators see something readable in the slug.
+	if !strings.HasPrefix(got, "utf-8-q-re-owner-repo-feat") {
+		t.Errorf("expected slug to start with truncated subject prefix; got=%q", got)
+	}
+}
+
+// TestSourceSlug_DeterministicOnReFetch pins the idempotency
+// contract under the cap: the same (subject, rawMessageID) pair
+// must produce the same slug across calls. Required by the
+// daemon's slug-as-idempotency-key contract per ADR-0023 §4.
+func TestSourceSlug_DeterministicOnReFetch(t *testing.T) {
+	t.Parallel()
+	subject := strings.Repeat("a", 500) // forces the hash-on-overflow path
+	mid := "<msg-id@gmail.com>"
+	a := SourceSlug(subject, mid)
+	b := SourceSlug(subject, mid)
+	if a != b {
+		t.Errorf("SourceSlug not deterministic: a=%q b=%q", a, b)
+	}
+	if len(a) > sourceSlugCap {
+		t.Errorf("hash-on-overflow result exceeds cap: len=%d cap=%d got=%q", len(a), sourceSlugCap, a)
+	}
+}
+
+// TestSourceSlug_LongSubjectDistinctMidsStaysDistinct pins the
+// uniqueness contract through the cap: two distinct Message-IDs
+// produce distinct slugs even when both subjects are long
+// enough to trigger truncation. The message-id portion is what
+// preserves identity.
+func TestSourceSlug_LongSubjectDistinctMidsStaysDistinct(t *testing.T) {
+	t.Parallel()
+	subject := strings.Repeat("subject-fragment-", 30) // long subject
+	a := SourceSlug(subject, "<msg-001@gmail.com>")
+	b := SourceSlug(subject, "<msg-002@gmail.com>")
+	if a == b {
+		t.Errorf("distinct message-ids collided despite long subject: a=%q b=%q", a, b)
+	}
+}
+
+// TestSourceSlug_HashTailOnOverflow pins the fallback path: a
+// degenerate subject without hyphenable whitespace exceeds the
+// cap even after per-component truncation. The slug appends a
+// short SHA-1-hex tail so it stays under the limit.
+func TestSourceSlug_HashTailOnOverflow(t *testing.T) {
+	t.Parallel()
+	// 500-char no-whitespace input forces the per-component
+	// truncation to leave a long slug after composition; the
+	// hash-tail fallback caps it.
+	subject := strings.Repeat("a", 500)
+	mid := strings.Repeat("b", 500) + "@x"
+	got := SourceSlug(subject, mid)
+	if len(got) > sourceSlugCap {
+		t.Errorf("hash-on-overflow result exceeds cap: len=%d cap=%d got=%q",
+			len(got), sourceSlugCap, got)
+	}
+	// The tail is sourceHashTailLen hex chars.
+	if len(got) < sourceHashTailLen+1 {
+		t.Fatalf("hash-on-overflow result too short to carry tail: got=%q", got)
+	}
+	tail := got[len(got)-sourceHashTailLen:]
+	for _, r := range tail {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			t.Errorf("hash tail not lowercase-hex: got=%q tail=%q", got, tail)
+		}
 	}
 }
