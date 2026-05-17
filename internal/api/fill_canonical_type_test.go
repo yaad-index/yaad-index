@@ -595,3 +595,168 @@ func TestNeedsFill_GapMetadataKindsSurfaces(t *testing.T) {
 	assert.Equal(t, []string{"person", "boardgame"}, meta.Kinds,
 		"agent-side UI uses meta.Kinds to render the allowlist at fill-prompt time")
 }
+
+// TestAgentFill_CanonicalType_WorkflowInjectedSpec_CreatesEdge
+// is the #158 regression test. A source-shape entity (kind=gmail,
+// NOT in the operator canonical_kinds registry) with a
+// workflow-injected canonical_type gap (via add_gap per #142)
+// must route through the canonical_type code path on agent-fill,
+// landing a real edge to the target canonical entity. Prior to
+// #158 the fill silently downgraded to "store untyped data" — no
+// edge was created, no canonical entity materialized.
+//
+// Mirrors the linkedin-hiring-classify flow that surfaced the
+// bug: workflow injects `hiring_alert_for` (canonical_type,
+// kinds=[company], fill_strategy=agent) on a gmail email; agent
+// fills with `[{name: "Acme", kind: "company"}]`; daemon must
+// create the `hiring_alert_for → company:acme` edge.
+func TestAgentFill_CanonicalType_WorkflowInjectedSpec_CreatesEdge(t *testing.T) {
+	t.Parallel()
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	r, err := vault.NewReader(root)
+	require.NoError(t, err)
+
+	keyDir := t.TempDir()
+	require.NoError(t, auth.GenerateKeypair(keyDir, false))
+	signer, err := auth.LoadSigner(keyDir)
+	require.NoError(t, err)
+	verifier, err := auth.LoadVerifier(keyDir)
+	require.NoError(t, err)
+
+	// Operator config has `company` registered (it's the target
+	// canonical-label kind) but NOT `gmail` (source-shape).
+	reg := map[string]config.CanonicalKindConfig{
+		"company": {},
+	}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	h := NewHandlerWithRegistry(logger, st, testRegistryWithSeed(),
+		WithVaultIO(w, r),
+		WithAuthVerifier(verifier),
+		WithAuthRequired(true),
+		WithCanonicalKindRegistry(reg),
+	)
+
+	const id = "gmail:msg-linkedin-classify"
+	require.NoError(t, st.UpsertEntity(context.Background(), &store.Entity{
+		ID: id, Kind: "gmail",
+		Data: map[string]any{"id": id, "subject": "We're hiring at Acme"},
+	}))
+	require.NoError(t, w.Write(&vault.Entity{
+		ID: id, Kind: "gmail", Plugin: "gmail",
+		Data: map[string]any{"id": id, "subject": "We're hiring at Acme"},
+		Gaps: []string{"hiring_alert_for"},
+		GapState: map[string]vault.GapStateEntry{
+			"hiring_alert_for": {
+				Type:         config.CanonicalTypeName,
+				FillStrategy: "agent",
+				Kinds:        []string{"company"},
+				Description:  "the company that's hiring",
+			},
+		},
+		CleanContent: "Acme is hiring engineers.",
+	}))
+
+	tok := mintToken(t, signer, "agent", "alice")
+	rec := agentFillReq(t, h, id, tok, map[string]any{
+		"hiring_alert_for": []any{
+			map[string]any{"name": "Acme", "kind": "company"},
+		},
+	})
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	edges, err := st.GetEdgesFor(context.Background(), id, []string{"hiring_alert_for"})
+	require.NoError(t, err)
+	require.Len(t, edges, 1,
+		"workflow-injected canonical_type gap must create the edge on agent-fill (per #158)")
+	assert.Equal(t, "company:acme", edges[0].To)
+
+	// Thin canonical-label row for the target must materialize so
+	// the edge FK is satisfied.
+	target, err := st.GetEntity(context.Background(), "company:acme")
+	require.NoError(t, err, "canonical-label target must materialize")
+	assert.Equal(t, "company", target.Kind)
+}
+
+// TestAgentFill_CanonicalType_WorkflowInjectedSpec_RoutedNotStoredAsUntyped
+// pins the negative shape complementary to the above: the prior
+// shape would store the raw JSON list as `entity.data.<field>`
+// (legacy untyped path). Post-#158 the value should land as a
+// canonicalLabelEntryIDs `[]string` of resolved label ids, NOT
+// the raw object form.
+func TestAgentFill_CanonicalType_WorkflowInjectedSpec_RoutedNotStoredAsUntyped(t *testing.T) {
+	t.Parallel()
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	r, err := vault.NewReader(root)
+	require.NoError(t, err)
+
+	keyDir := t.TempDir()
+	require.NoError(t, auth.GenerateKeypair(keyDir, false))
+	signer, err := auth.LoadSigner(keyDir)
+	require.NoError(t, err)
+	verifier, err := auth.LoadVerifier(keyDir)
+	require.NoError(t, err)
+
+	reg := map[string]config.CanonicalKindConfig{"company": {}}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	h := NewHandlerWithRegistry(logger, st, testRegistryWithSeed(),
+		WithVaultIO(w, r),
+		WithAuthVerifier(verifier),
+		WithAuthRequired(true),
+		WithCanonicalKindRegistry(reg),
+	)
+
+	const id = "gmail:msg-routing-check"
+	require.NoError(t, st.UpsertEntity(context.Background(), &store.Entity{
+		ID: id, Kind: "gmail",
+		Data: map[string]any{"id": id},
+	}))
+	require.NoError(t, w.Write(&vault.Entity{
+		ID: id, Kind: "gmail", Plugin: "gmail",
+		Data: map[string]any{"id": id},
+		Gaps: []string{"hiring_alert_for"},
+		GapState: map[string]vault.GapStateEntry{
+			"hiring_alert_for": {
+				Type:         config.CanonicalTypeName,
+				FillStrategy: "agent",
+				Kinds:        []string{"company"},
+				Description:  "the hiring company",
+			},
+		},
+	}))
+
+	tok := mintToken(t, signer, "agent", "alice")
+	rec := agentFillReq(t, h, id, tok, map[string]any{
+		"hiring_alert_for": []any{
+			map[string]any{"name": "Foo Corp", "kind": "company"},
+		},
+	})
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	stored, err := r.ReadByID("gmail", id)
+	require.NoError(t, err)
+	got := stored.Data["hiring_alert_for"]
+	// Effective canonical_type routing stores the resolved id list,
+	// not the raw object form. After YAML round-trip through vault
+	// the slice surfaces as []interface{} of strings.
+	switch v := got.(type) {
+	case []string:
+		assert.Equal(t, []string{"company:foo-corp"}, v)
+	case []any:
+		require.Len(t, v, 1)
+		assert.Equal(t, "company:foo-corp", v[0])
+	default:
+		t.Fatalf("expected []string or []any of canonical-label ids; got %T: %#v", got, got)
+	}
+}

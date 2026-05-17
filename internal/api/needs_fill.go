@@ -490,3 +490,48 @@ func mergeWorkflowGapSpec(cfg config.GapSpec, entry vault.GapStateEntry) config.
 	}
 	return out
 }
+
+// resolveEffectiveGaps builds the per-field gap spec map the
+// fill / operator-fill / canonical-edge derivation paths route
+// against. Layers per-#142 + #158:
+//
+//  1. Operator config canonical_kinds.<kind>.gaps.<g> — the
+//     historic source.
+//  2. Workflow-injected GapStateEntry on the entity — when the
+//     workflow's `add_gap` action carries inline Type / Kinds /
+//     FillStrategy / Description / etc.
+//
+// A gap surfaces in the result when EITHER layer carries it.
+// When both carry it, mergeWorkflowGapSpec layers workflow non-
+// empty fields atop the operator config per-field. Gaps with no
+// shape from either layer don't appear — same strict-mode skip
+// semantics as buildNeedsFillEntry's per-gap loop.
+//
+// Used by the write side (#158) so source-shape entities with
+// workflow-injected canonical_type gaps route through the
+// canonical_type code path (label parse, edge create, dataview
+// append) rather than the legacy untyped-data path that just
+// stores the JSON verbatim in entity.data.
+func resolveEffectiveGaps(
+	kindGaps map[string]config.GapSpec,
+	gapState map[string]vault.GapStateEntry,
+) map[string]config.GapSpec {
+	if len(kindGaps) == 0 && len(gapState) == 0 {
+		return nil
+	}
+	out := make(map[string]config.GapSpec, len(kindGaps)+len(gapState))
+	for field, spec := range kindGaps {
+		entry := gapState[field]
+		out[field] = mergeWorkflowGapSpec(spec, entry)
+	}
+	for field, entry := range gapState {
+		if _, alreadyMerged := out[field]; alreadyMerged {
+			continue
+		}
+		if !workflowGapEntryHasShape(entry) {
+			continue
+		}
+		out[field] = mergeWorkflowGapSpec(config.GapSpec{}, entry)
+	}
+	return out
+}

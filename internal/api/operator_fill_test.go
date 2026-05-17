@@ -530,3 +530,72 @@ func TestOperatorFill_ClearRestoresField(t *testing.T) {
 	_, hasState := ve.GapState["rating"]
 	assert.False(t, hasState, "gap_state entry still removed on clear")
 }
+
+// TestOperatorFill_WorkflowInjectedSpec_RespectsAgentOnlyFillStrategy
+// is the #158 audience-filter regression: a workflow-injected
+// gap with fill_strategy=agent must reject operator-fill via
+// the same agent_only_field check as the config-side
+// TestOperatorFill_AgentOnlyField, even though the spec comes
+// from ve.GapState rather than canonical_kinds config. The
+// audience filter in parseOperatorFillOps reads the effective
+// gap-spec map; if resolveEffectiveGaps drops FillStrategy, the
+// operator could illicitly fill an agent-only workflow gap.
+//
+// Setup uses a canonical-label kind (in registry — clears the
+// operator-fill kind-must-be-in-registry guard) but the gap
+// itself is workflow-injected only (no config spec). Mirrors
+// the realistic shape where a workflow injects an agent-only
+// gap on a canonical-label entity (e.g. company.competitor-list,
+// person.linkedin-bio-summary).
+func TestOperatorFill_WorkflowInjectedSpec_RespectsAgentOnlyFillStrategy(t *testing.T) {
+	t.Parallel()
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	r, err := vault.NewReader(root)
+	require.NoError(t, err)
+	keyDir := t.TempDir()
+	require.NoError(t, auth.GenerateKeypair(keyDir, false))
+	signer, err := auth.LoadSigner(keyDir)
+	require.NoError(t, err)
+	verifier, err := auth.LoadVerifier(keyDir)
+	require.NoError(t, err)
+
+	// company kind IS in registry (canonical-label), but the
+	// `competitor` gap is workflow-injected only — no config spec.
+	reg := map[string]config.CanonicalKindConfig{"company": {}}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	h := NewHandlerWithRegistry(logger, st, testRegistryWithSeed(),
+		WithVaultIO(w, r),
+		WithAuthVerifier(verifier),
+		WithAuthRequired(true),
+		WithCanonicalKindRegistry(reg),
+	)
+
+	const id = "company:agent-only-wf-gap-target"
+	require.NoError(t, st.UpsertEntity(context.Background(), &store.Entity{
+		ID: id, Kind: "company", Data: map[string]any{"id": id},
+	}))
+	require.NoError(t, w.Write(&vault.Entity{
+		ID: id, Kind: "company", Plugin: "fixture",
+		Data: map[string]any{"id": id},
+		Gaps: []string{"competitor"},
+		GapState: map[string]vault.GapStateEntry{
+			"competitor": {
+				Type:         "string",
+				FillStrategy: "agent",
+				Description:  "agent-only workflow-injected gap",
+			},
+		},
+	}))
+
+	opTok := mintOperatorToken(t, signer, "alice")
+	rec := ugcReq(t, h, http.MethodPost, "/v1/entities/"+id+"/operator-fill", opTok,
+		map[string]any{"competitor": "Foo Corp"}, nil)
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "agent_only_field",
+		"workflow-injected fill_strategy=agent must reject operator-fill same as config-side")
+}

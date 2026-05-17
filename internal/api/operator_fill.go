@@ -205,7 +205,15 @@ func handleEntityOperatorFill(
 		}
 		sort.Strings(operatorAllKinds)
 
-		ops, opErr := parseOperatorFillOps(req, kindCfg.Gaps, operatorAllKinds)
+		// Per #158: effective gap-spec map merges operator-config
+		// canonical_kinds with workflow-injected GapStateEntry
+		// (per #142). Operator can fill a workflow-injected gap on
+		// any entity (subject to fill_strategy audience check); the
+		// canonical_type code path needs the merged shape to route
+		// correctly.
+		effectiveGaps := resolveEffectiveGaps(kindCfg.Gaps, ve.GapState)
+
+		ops, opErr := parseOperatorFillOps(req, effectiveGaps, operatorAllKinds)
 		if opErr != nil {
 			writeError(w, opErr.status, opErr.code, opErr.message)
 			return
@@ -228,7 +236,7 @@ func handleEntityOperatorFill(
 		// ve.Gaps (a prior PR cold-reviewer carry-over: clearing a previously-set
 		// field shouldn't permanently remove it from the open-gap
 		// list — the operator should be able to re-fill it).
-		applied := applyOperatorFillOps(ve, ops, clock.Now(), kindCfg.Gaps)
+		applied := applyOperatorFillOps(ve, ops, clock.Now(), effectiveGaps)
 
 		commitMsg := operatorFillCommitMessage(ve.ID, applied, claim.Subject)
 		commitAuthor := agentAuthorRef(claim.Subject)
@@ -278,7 +286,7 @@ func handleEntityOperatorFill(
 		// are auto-materialized as thin entity rows (mirrors the
 		// ingest-time path from phase B) so the FK on edges
 		// is satisfied.
-		if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, ops, kindCfg.Gaps, logger, bus, eventbus.SourceOperator, &pending); err != nil {
+		if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, ops, effectiveGaps, logger, bus, eventbus.SourceOperator, &pending); err != nil {
 			logger.ErrorContext(r.Context(), "operator-fill canonical_type edge create/replace",
 				"err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",
