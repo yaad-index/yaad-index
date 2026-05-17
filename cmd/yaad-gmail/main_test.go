@@ -190,10 +190,12 @@ func TestRun_CommandFetchNoAuthSurfaceErrorPacket(t *testing.T) {
 
 // TestBuildSourceLine_ShapeMatchesADR0021 pins the per-message
 // NDJSON wire shape `runCommandFetch` emits per ADR-0021. The
-// source emission must carry top-level `ok=true`, structured.kind
-// = "source", structured.name = the slug-only form (no namespace
-// prefix), structured.data with subject + date + body, and the
-// edges block keyed by edge type.
+// source emission carries top-level `ok=true`, structured.kind =
+// "source", structured.name = the slug-only form (no namespace
+// prefix), structured.data with subject + date (metadata only),
+// the edges block keyed by edge type, and the email body on
+// top-level `raw_content` for the daemon to wrap in yaad:plugin
+// markers in the entity's .md body per ADR-0015.
 func TestBuildSourceLine_ShapeMatchesADR0021(t *testing.T) {
 	t.Parallel()
 
@@ -224,14 +226,47 @@ func TestBuildSourceLine_ShapeMatchesADR0021(t *testing.T) {
 	if got.Structured.Data["subject"] != "Test subject" {
 		t.Errorf("structured.data.subject: got %v", got.Structured.Data["subject"])
 	}
-	if got.Structured.Data["body"] != "body content" {
-		t.Errorf("structured.data.body: got %v", got.Structured.Data["body"])
+	if got.RawContent != "body content" {
+		t.Errorf("raw_content: got %q, want %q (body lives on top-level raw_content, not data.body)",
+			got.RawContent, "body content")
+	}
+	if _, hasBody := got.Structured.Data["body"]; hasBody {
+		t.Errorf("structured.data.body: must not be set; body belongs on top-level raw_content per ADR-0008/ADR-0015")
 	}
 	if len(got.Structured.Edges["from"]) != 1 || got.Structured.Edges["from"][0].Name != "alice@example.com" {
 		t.Errorf("structured.edges[from]: got %v", got.Structured.Edges["from"])
 	}
 	if len(got.Structured.Provenance) != 1 || got.Structured.Provenance[0].Source != "gmail:fetch" {
 		t.Errorf("structured.provenance: got %v", got.Structured.Provenance)
+	}
+}
+
+// TestBuildSourceLine_EmptyBodyOmitsRawContent confirms an
+// envelope with no body produces an empty top-level raw_content
+// (which json's omitempty drops on the wire) and leaves data
+// without a body key.
+func TestBuildSourceLine_EmptyBodyOmitsRawContent(t *testing.T) {
+	t.Parallel()
+
+	env := gmail.IngestEnvelope{
+		SourceID: "gmail:msg-empty",
+		Subject: "subject only",
+	}
+	got := buildSourceLine(env, "2026-05-10T17:00:00Z")
+
+	if got.RawContent != "" {
+		t.Errorf("raw_content: got %q, want empty", got.RawContent)
+	}
+	if _, hasBody := got.Structured.Data["body"]; hasBody {
+		t.Errorf("structured.data.body: must not be set")
+	}
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(got); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if bytes.Contains(buf.Bytes(), []byte(`"raw_content"`)) {
+		t.Errorf("omitempty must drop empty raw_content from wire: %s", buf.String())
 	}
 }
 

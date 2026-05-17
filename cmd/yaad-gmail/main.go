@@ -207,6 +207,12 @@ func runInit(stdout io.Writer) error {
 type sourceLine struct {
 	OK          bool                `json:"ok"`
 	Structured  *structuredEnvelope `json:"structured,omitempty"`
+	// RawContent is the email body as plaintext markdown for the
+	// daemon to write between `<!-- yaad:plugin start/end -->`
+	// markers in the entity's .md body (per ADR-0015). Frontmatter
+	// data carries metadata only (subject, date, edges); the body
+	// — which is the substance — lives in the .md body.
+	RawContent  string              `json:"raw_content,omitempty"`
 	Attachments []attach.Attachment `json:"attachments,omitempty"`
 }
 
@@ -375,9 +381,6 @@ func buildSourceLine(env gmail.IngestEnvelope, fetchedAt string) sourceLine {
 		"subject": env.Subject,
 		"date": formatRFC3339(env.Date),
 	}
-	if len(env.Body) > 0 {
-		data["body"] = string(env.Body)
-	}
 
 	return sourceLine{
 		OK: true,
@@ -392,6 +395,7 @@ func buildSourceLine(env gmail.IngestEnvelope, fetchedAt string) sourceLine {
 				OK: true,
 			}},
 		},
+		RawContent: string(env.Body),
 	}
 }
 
