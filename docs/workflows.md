@@ -115,7 +115,7 @@ The decision pipeline uses CEL ([cel-go](https://pkg.go.dev/github.com/google/ce
 ### 3.1 Variables
 
 - `entity` — the triggering entity (dynamic map of its frontmatter `data` + injected `id` + `kind`). Always populated even when the trigger doesn't carry an entity (empty map for manual triggers without an `input`).
-- `edge` — the triggering edge (empty map when the trigger doesn't carry an edge). Fields: `type`, `from`, `to`, `from_title`, `to_title`, `timestamp`. `has(edge.type)` is the standard guard for predicates that support both edge-shape and non-edge triggers.
+- `edge` — the triggering edge (empty map when the trigger doesn't carry an edge). Fields: `type`, `from`, `to`, `from_title`, `to_title`, `timestamp`. `has(edge.type)` is the standard guard for predicates that support both edge-shape and non-edge triggers. `edge.timestamp` is a CEL `Timestamp`; wrap with `string(...)` to embed in template strings (see §3.2).
 - `<binding>` — each entry in the workflow's `context:` stanza becomes a dynamic variable with the same name. Pre-evaluated once per fire (see §4).
 
 ### 3.2 Functions
@@ -123,6 +123,7 @@ The decision pipeline uses CEL ([cel-go](https://pkg.go.dev/github.com/google/ce
 - `graph.get(id)` — fetch a canonical-id entity (`<kind>:<slug>`). Returns the entity's `data` map or null. **Missing entity** does NOT raise — instead the engine records a missing-reference note that gets attached to any task the workflow produces. The workflow proceeds; the operator decides whether to manually add the missing edge / ingest the missing entity.
 - `regex_capture(text, pattern, group_index)` (#123) — returns the matched capture group as string (0 = whole match) or `""` on no-match / out-of-range / negative index. Process-wide compiled-regex cache (#123). **Literal patterns are pre-validated at workflow-Compile time**; a malformed regex fails registration, not the first fire. Runtime-computed patterns can only fail at eval and return `""`.
 - `ext.Strings()` (#123) — the [cel-go strings extension](https://pkg.go.dev/github.com/google/cel-go/ext): `.split()`, `.replace()`, `.substring()`, `.lowerAscii()`, `.upperAscii()`, `.indexOf()`, etc. Member-shape on the CEL string type.
+- `string(value)` — CEL's standard type cast. The `string(timestamp)` overload formats RFC3339 / ISO 8601 (e.g. `"2026-05-17T19:00:00Z"`) and is the way to embed `edge.timestamp` in a template: `"- alert at " + string(edge.timestamp)`. Direct concat `"prefix " + edge.timestamp` fails with `no such overload` because CEL has no implicit string/time coercion. For date-only or time-only shapes, compose with the strings extension: `string(edge.timestamp).substring(0, 10)` → `"2026-05-17"`.
 
 ### 3.3 Result types
 
