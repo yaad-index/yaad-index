@@ -11,7 +11,7 @@
 // without rotating the operator-side trust.
 //
 // **Out of scope for a prior PR**: HTTP middleware that consumes these
-// helpers (a prior PR =), comment author validation (a prior PR =),
+// helpers (a prior PR =), note author validation (a prior PR =),
 // `/v1/jwks` public-key endpoint (a prior PR =). This package
 // lands the building blocks; the wire-side integration follows.
 //
@@ -83,7 +83,7 @@ type Claim struct {
 // signed + issued their own token. Pair-claim tokens (Subject =
 // agent, Operator = human, distinct values) represent
 // agent-on-behalf-of-operator authority — sufficient for most
-// daemon endpoints (operator-fill, comments, ingest URL-shape) but
+// daemon endpoints (operator-fill, notes, ingest URL-shape) but
 // NOT for command-shape dispatch.
 //
 // The check is structural — no separate JWT field is added. An

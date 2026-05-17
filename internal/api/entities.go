@@ -82,7 +82,7 @@ type entity struct {
 	Summary string `json:"summary,omitempty"`
 	Tags []string `json:"tags,omitempty"`
 	Gaps []string `json:"gaps,omitempty"`
-	Comments []commentEntry `json:"comments,omitempty"`
+	Notes []noteEntry `json:"notes,omitempty"`
 }
 
 func handleEntity(logger *slog.Logger, st store.Store, vaultReader *vault.Reader) http.HandlerFunc {
@@ -138,7 +138,7 @@ func handleEntity(logger *slog.Logger, st store.Store, vaultReader *vault.Reader
 		// Vault-merge for the single-hop body fields (per yaad-index
 		// the source issue a prior PR addendum). When WithVaultIO is wired, read
 		// the vault frontmatter and overlay clean_content, summary,
-		// tags, gaps, aliases, plugin, notations, comments onto the
+		// tags, gaps, aliases, plugin, notations, notes onto the
 		// wire entity. A vault read failure downgrades to the DB-only
 		// shape — the entity itself still resolves.
 		out := toAPIEntity(got)
@@ -276,7 +276,7 @@ func toAPIEntity(e *store.Entity) entity {
 }
 
 // mergeVaultEntity overlays vault-only fields (CleanContent, Summary,
-// Tags, Gaps, Aliases, Plugin, Notations, Comments) onto a wire
+// Tags, Gaps, Aliases, Plugin, Notations, Notes) onto a wire
 // entity. Per yaad-index the source issue a prior PR addendum: GetEntity (and
 // the cache-hit ingest path) should be a single hop — the agent
 // gets the body + gap state without re-fetching through the plugin.
@@ -296,10 +296,10 @@ func mergeVaultEntity(out entity, ve *vault.Entity) entity {
 	out.Summary = ve.Summary
 	out.Tags = ve.Tags
 	out.Gaps = ve.Gaps
-	if len(ve.Comments) > 0 {
-		out.Comments = make([]commentEntry, len(ve.Comments))
-		for i, c := range ve.Comments {
-			out.Comments[i] = commentEntry{
+	if len(ve.Notes) > 0 {
+		out.Notes = make([]noteEntry, len(ve.Notes))
+		for i, c := range ve.Notes {
+			out.Notes[i] = noteEntry{
 				Date: c.Date.UTC().Format(time.RFC3339),
 				Text: c.Text,
 				Author: c.Author,

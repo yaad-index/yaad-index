@@ -9,26 +9,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMarshal_CommentCountFrontmatterAndBodyTable pins the
-// contract: with 2 comments, frontmatter has `comment_count: 2`
-// (and NO `comments:`), body has the `## Comments` table with 4
+// TestMarshal_NoteCountFrontmatterAndBodyTable pins the
+// contract: with 2 notes, frontmatter has `note_count: 2`
+// (and NO `notes:`), body has the `## Notes` table with 4
 // content rows (2 entries × 2 rows each: heading then body).
-func TestMarshal_CommentCountFrontmatterAndBodyTable(t *testing.T) {
+func TestMarshal_NoteCountFrontmatterAndBodyTable(t *testing.T) {
 	t.Parallel()
 
 	e := &Entity{
 		ID: "wikipedia:foo",
 		Kind: "wikipedia-article",
 		Plugin: "wikipedia",
-		Comments: []Comment{
+		Notes: []Note{
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
-				Text: "First comment text.",
-				Author: "yaad",
+				Text: "First note text.",
+				Author: "alice",
 			},
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
-				Text: "Second comment.",
+				Text: "Second note.",
 				Author: "operator",
 			},
 		},
@@ -37,31 +37,31 @@ func TestMarshal_CommentCountFrontmatterAndBodyTable(t *testing.T) {
 	require.NoError(t, err)
 	out := string(b)
 
-	// Frontmatter: comment_count present, comments: absent.
-	assert.Contains(t, out, "comment_count: 2", "comment_count must reflect comment slice length")
-	assert.NotContains(t, out, "comments:",
-		"frontmatter must NOT carry a comments: list anymore")
+	// Frontmatter: note_count present, notes: absent.
+	assert.Contains(t, out, "note_count: 2", "note_count must reflect note slice length")
+	assert.NotContains(t, out, "notes:",
+		"frontmatter must NOT carry a notes: list anymore")
 
 	// Body table: header + separator + 4 content rows in order.
 	bodyExpected := []string{
-		"## Comments",
+		"## Notes",
 		"",
-		"| Comments |",
+		"| Notes |",
 		"|----------|",
-		"| 2026-05-03 — yaad |",
-		"| First comment text. |",
+		"| 2026-05-03 — alice |",
+		"| First note text. |",
 		"| 2026-05-03 — operator |",
-		"| Second comment. |",
+		"| Second note. |",
 	}
 	for _, line := range bodyExpected {
 		assert.Contains(t, out, line+"\n", "body must include line %q", line)
 	}
 	// Strict ordering: the heading row for entry 1 comes before the
 	// body row for entry 1, which comes before entry 2's heading.
-	idx1Head := strings.Index(out, "| 2026-05-03 — yaad |")
-	idx1Body := strings.Index(out, "| First comment text. |")
+	idx1Head := strings.Index(out, "| 2026-05-03 — alice |")
+	idx1Body := strings.Index(out, "| First note text. |")
 	idx2Head := strings.Index(out, "| 2026-05-03 — operator |")
-	idx2Body := strings.Index(out, "| Second comment. |")
+	idx2Body := strings.Index(out, "| Second note. |")
 	require.True(t, idx1Head >= 0 && idx1Body >= 0 && idx2Head >= 0 && idx2Body >= 0,
 		"all four rows present")
 	assert.Less(t, idx1Head, idx1Body, "heading-1 before body-1")
@@ -70,7 +70,7 @@ func TestMarshal_CommentCountFrontmatterAndBodyTable(t *testing.T) {
 }
 
 // TestMarshal_NoCommentsOmitsCountAndSection pins the no-noise
-// contract: zero comments → no `comment_count` key, no `## Comments`
+// contract: zero notes → no `note_count` key, no `## Notes`
 // section.
 func TestMarshal_NoCommentsOmitsCountAndSection(t *testing.T) {
 	t.Parallel()
@@ -84,14 +84,14 @@ func TestMarshal_NoCommentsOmitsCountAndSection(t *testing.T) {
 	require.NoError(t, err)
 	out := string(b)
 
-	assert.NotContains(t, out, "comment_count",
-		"comment_count omitempty must drop on zero comments")
-	assert.NotContains(t, out, "## Comments",
-		"## Comments section must be skipped when there are no comments")
+	assert.NotContains(t, out, "note_count",
+		"note_count omitempty must drop on zero notes")
+	assert.NotContains(t, out, "## Notes",
+		"## Notes section must be skipped when there are no notes")
 }
 
 // TestMarshal_CommentsRoundTrip — Marshal → Unmarshal preserves the
-// Comments slice exactly (date-only precision, text, author).
+// Notes slice exactly (date-only precision, text, author).
 func TestMarshal_CommentsRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -99,15 +99,15 @@ func TestMarshal_CommentsRoundTrip(t *testing.T) {
 		ID: "wikipedia:foo",
 		Kind: "wikipedia-article",
 		Plugin: "wikipedia",
-		Comments: []Comment{
+		Notes: []Note{
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
-				Text: "First comment.",
-				Author: "yaad",
+				Text: "First note.",
+				Author: "alice",
 			},
 			{
 				Date: mustParseTime(t, "2026-05-04T00:00:00Z"),
-				Text: "Second comment with no author.",
+				Text: "Second note with no author.",
 				Author: "",
 			},
 		},
@@ -117,18 +117,18 @@ func TestMarshal_CommentsRoundTrip(t *testing.T) {
 
 	got, err := Unmarshal(b)
 	require.NoError(t, err)
-	require.Len(t, got.Comments, 2)
-	for i := range original.Comments {
-		assert.True(t, original.Comments[i].Date.Equal(got.Comments[i].Date),
-			"comments[%d].date: want %s, got %s",
-			i, original.Comments[i].Date, got.Comments[i].Date)
-		assert.Equal(t, original.Comments[i].Text, got.Comments[i].Text, "comments[%d].text", i)
-		assert.Equal(t, original.Comments[i].Author, got.Comments[i].Author, "comments[%d].author", i)
+	require.Len(t, got.Notes, 2)
+	for i := range original.Notes {
+		assert.True(t, original.Notes[i].Date.Equal(got.Notes[i].Date),
+			"notes[%d].date: want %s, got %s",
+			i, original.Notes[i].Date, got.Notes[i].Date)
+		assert.Equal(t, original.Notes[i].Text, got.Notes[i].Text, "notes[%d].text", i)
+		assert.Equal(t, original.Notes[i].Author, got.Notes[i].Author, "notes[%d].author", i)
 	}
 }
 
 // TestMarshal_CommentsMultiParagraphRoundTrip pins the multi-
-// paragraph encoding: paragraph breaks inside a comment body cell
+// paragraph encoding: paragraph breaks inside a note body cell
 // render as `<br><br>` (so the cell stays on one table row) and
 // parse back to `\n\n` cleanly.
 func TestMarshal_CommentsMultiParagraphRoundTrip(t *testing.T) {
@@ -138,11 +138,11 @@ func TestMarshal_CommentsMultiParagraphRoundTrip(t *testing.T) {
 		ID: "wikipedia:foo",
 		Kind: "wikipedia-article",
 		Plugin: "wikipedia",
-		Comments: []Comment{
+		Notes: []Note{
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
 				Text: "First paragraph.\n\nSecond paragraph after a blank line.\n\nThird paragraph.",
-				Author: "yaad",
+				Author: "alice",
 			},
 		},
 	}
@@ -157,13 +157,13 @@ func TestMarshal_CommentsMultiParagraphRoundTrip(t *testing.T) {
 
 	got, err := Unmarshal(b)
 	require.NoError(t, err)
-	require.Len(t, got.Comments, 1)
-	assert.Equal(t, original.Comments[0].Text, got.Comments[0].Text,
+	require.Len(t, got.Notes, 1)
+	assert.Equal(t, original.Notes[0].Text, got.Notes[0].Text,
 		"multi-paragraph round-trip must preserve paragraph breaks")
 }
 
 // TestMarshal_CommentsPipeEscape pins the pipe-escaping path:
-// literal `|` chars in a comment must be escaped to `\|` on render
+// literal `|` chars in a note must be escaped to `\|` on render
 // (otherwise they'd terminate the table cell early) and decoded
 // back on parse.
 func TestMarshal_CommentsPipeEscape(t *testing.T) {
@@ -173,11 +173,11 @@ func TestMarshal_CommentsPipeEscape(t *testing.T) {
 		ID: "wikipedia:foo",
 		Kind: "wikipedia-article",
 		Plugin: "wikipedia",
-		Comments: []Comment{
+		Notes: []Note{
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
 				Text: "Has a | pipe inside the cell text.",
-				Author: "yaad",
+				Author: "alice",
 			},
 		},
 	}
@@ -188,15 +188,15 @@ func TestMarshal_CommentsPipeEscape(t *testing.T) {
 
 	got, err := Unmarshal(b)
 	require.NoError(t, err)
-	require.Len(t, got.Comments, 1)
-	assert.Equal(t, original.Comments[0].Text, got.Comments[0].Text,
+	require.Len(t, got.Notes, 1)
+	assert.Equal(t, original.Notes[0].Text, got.Notes[0].Text,
 		"pipe round-trip must preserve the literal | char")
 }
 
 // TestUnmarshal_CommentsIgnoresLegacyFrontmatterField pins the
 // no-backward-compat decision: a vault file whose
-// frontmatter still carries a `comments:` list is silently ignored
-// — only the body table populates Entity.Comments.
+// frontmatter still carries a `notes:` list is silently ignored
+// — only the body table populates Entity.Notes.
 func TestUnmarshal_CommentsIgnoresLegacyFrontmatterField(t *testing.T) {
 	t.Parallel()
 
@@ -206,9 +206,9 @@ func TestUnmarshal_CommentsIgnoresLegacyFrontmatterField(t *testing.T) {
 		"kind: wikipedia-article",
 		"plugin: wikipedia",
 		// Legacy shape — must NOT surface on the parsed entity.
-		"comments:",
+		"notes:",
 		"  - date: 2026-04-15T08:30:00Z",
-		"    text: Legacy frontmatter comment.",
+		"    text: Legacy frontmatter note.",
 		"    author: alice",
 		"---",
 		"",
@@ -216,8 +216,8 @@ func TestUnmarshal_CommentsIgnoresLegacyFrontmatterField(t *testing.T) {
 
 	got, err := Unmarshal([]byte(raw))
 	require.NoError(t, err)
-	assert.Empty(t, got.Comments,
-		"legacy frontmatter comments: list must be ignored post-")
+	assert.Empty(t, got.Notes,
+		"legacy frontmatter notes: list must be ignored post-")
 }
 
 // TestMarshal_CommentsHeadingRowFormat pins the heading-row shape:
@@ -227,21 +227,21 @@ func TestMarshal_CommentsHeadingRowFormat(t *testing.T) {
 
 	cases := []struct {
 		name string
-		comment Comment
+		note Note
 		wantRow string
 	}{
 		{
 			name: "with author",
-			comment: Comment{
+			note: Note{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
 				Text: "x",
-				Author: "yaad",
+				Author: "alice",
 			},
-			wantRow: "| 2026-05-03 — yaad |",
+			wantRow: "| 2026-05-03 — alice |",
 		},
 		{
 			name: "no author",
-			comment: Comment{
+			note: Note{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
 				Text: "x",
 			},
@@ -255,7 +255,7 @@ func TestMarshal_CommentsHeadingRowFormat(t *testing.T) {
 				ID: "wikipedia:foo",
 				Kind: "wikipedia-article",
 				Plugin: "wikipedia",
-				Comments: []Comment{c.comment},
+				Notes: []Note{c.note},
 			}
 			b, err := Marshal(e, nil)
 			require.NoError(t, err)
@@ -266,9 +266,9 @@ func TestMarshal_CommentsHeadingRowFormat(t *testing.T) {
 }
 
 // TestUnmarshal_CommentsOrphanedHeadingRowFlushesAsEmptyBody pins
-// the cold-reviewer's catch: a comments section that ends after a heading
+// the cold-reviewer's catch: a notes section that ends after a heading
 // row without a paired body row preserves the heading rather than
-// silently dropping it. The orphaned comment lands with the
+// silently dropping it. The orphaned note lands with the
 // captured date + author and an empty Text — a clear "authored
 // mid-edit" signal.
 func TestUnmarshal_CommentsOrphanedHeadingRowFlushesAsEmptyBody(t *testing.T) {
@@ -285,34 +285,39 @@ func TestUnmarshal_CommentsOrphanedHeadingRowFlushesAsEmptyBody(t *testing.T) {
 				"id: wikipedia:foo",
 				"kind: wikipedia-article",
 				"plugin: wikipedia",
-				"comment_count: 1",
+				"note_count: 1",
 				"---",
 				"",
-				"## Comments",
+				NotesStartMarker,
+				"## Notes",
 				"",
-				"| Comments |",
+				"| Notes |",
 				"|----------|",
-				"| 2026-05-03 — yaad |",
-				// no body row; section ends here.
+				"| 2026-05-03 — alice |",
+				// no body row; the end-marker terminates the
+				// orphan without ever seeing the body row.
+				NotesEndMarker,
 			}, "\n"),
 		},
 		{
-			name: "orphan before another section heading",
+			name: "orphan before end marker, more content after",
 			raw: strings.Join([]string{
 				"---",
 				"id: wikipedia:foo",
 				"kind: wikipedia-article",
 				"plugin: wikipedia",
-				"comment_count: 1",
+				"note_count: 1",
 				"---",
 				"",
-				"## Comments",
+				NotesStartMarker,
+				"## Notes",
 				"",
-				"| Comments |",
+				"| Notes |",
 				"|----------|",
-				"| 2026-05-03 — yaad |",
+				"| 2026-05-03 — alice |",
+				NotesEndMarker,
 				"",
-				"## Notes", // unknown heading flips back to clean
+				"## After-notes user heading",
 				"",
 				"some hand-authored body content",
 			}, "\n"),
@@ -323,12 +328,12 @@ func TestUnmarshal_CommentsOrphanedHeadingRowFlushesAsEmptyBody(t *testing.T) {
 			t.Parallel()
 			got, err := Unmarshal([]byte(c.raw))
 			require.NoError(t, err)
-			require.Len(t, got.Comments, 1,
-				"orphaned heading must land as a comment with empty Text, not be dropped")
-			assert.Equal(t, "yaad", got.Comments[0].Author)
-			assert.Empty(t, got.Comments[0].Text,
+			require.Len(t, got.Notes, 1,
+				"orphaned heading must land as a note with empty Text, not be dropped")
+			assert.Equal(t, "alice", got.Notes[0].Author)
+			assert.Empty(t, got.Notes[0].Text,
 				"empty Text is the signal that the heading was authored without a paired body")
-			assert.Equal(t, "2026-05-03", got.Comments[0].Date.UTC().Format("2006-01-02"))
+			assert.Equal(t, "2026-05-03", got.Notes[0].Date.UTC().Format("2006-01-02"))
 		})
 	}
 }
@@ -343,22 +348,24 @@ func TestUnmarshal_CommentsHeadingRowAuthorOptional(t *testing.T) {
 		"id: wikipedia:foo",
 		"kind: wikipedia-article",
 		"plugin: wikipedia",
-		"comment_count: 1",
+		"note_count: 1",
 		"---",
 		"",
-		"## Comments",
+		NotesStartMarker,
+		"## Notes",
 		"",
-		"| Comments |",
+		"| Notes |",
 		"|----------|",
 		"| 2026-05-03 |",
-		"| Comment with no author. |",
+		"| Note with no author. |",
+		NotesEndMarker,
 	}, "\n")
 
 	got, err := Unmarshal([]byte(raw))
 	require.NoError(t, err)
-	require.Len(t, got.Comments, 1)
-	assert.Empty(t, got.Comments[0].Author)
-	assert.Equal(t, "Comment with no author.", got.Comments[0].Text)
+	require.Len(t, got.Notes, 1)
+	assert.Empty(t, got.Notes[0].Author)
+	assert.Equal(t, "Note with no author.", got.Notes[0].Text)
 	assert.Equal(t, time.Date(2026, 5, 3, 0, 0, 0, 0, time.UTC),
-		got.Comments[0].Date.UTC())
+		got.Notes[0].Date.UTC())
 }

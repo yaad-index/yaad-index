@@ -9,8 +9,8 @@ import (
 )
 
 // TestMarshal_CommentsWrappedInMarkers pins the post-#8 write
-// contract: writing an entity with comments wraps the
-// `## Comments` section in CommentsStartMarker / CommentsEndMarker.
+// contract: writing an entity with notes wraps the
+// `## Notes` section in NotesStartMarker / NotesEndMarker.
 // New entities + re-writes of marker-wrapped entities both produce
 // the wrapped shape.
 func TestMarshal_CommentsWrappedInMarkers(t *testing.T) {
@@ -20,11 +20,11 @@ func TestMarshal_CommentsWrappedInMarkers(t *testing.T) {
 		ID:     "wikipedia:foo",
 		Kind:   "wikipedia-article",
 		Plugin: "wikipedia",
-		Comments: []Comment{
+		Notes: []Note{
 			{
 				Date:   mustParseTime(t, "2026-05-13T00:00:00Z"),
-				Text:   "First comment.",
-				Author: "yaad",
+				Text:   "First note.",
+				Author: "alice",
 			},
 		},
 	}
@@ -32,23 +32,23 @@ func TestMarshal_CommentsWrappedInMarkers(t *testing.T) {
 	require.NoError(t, err)
 	out := string(b)
 
-	assert.Contains(t, out, CommentsStartMarker,
-		"marshalled body must include the comments start marker")
-	assert.Contains(t, out, CommentsEndMarker,
-		"marshalled body must include the comments end marker")
+	assert.Contains(t, out, NotesStartMarker,
+		"marshalled body must include the notes start marker")
+	assert.Contains(t, out, NotesEndMarker,
+		"marshalled body must include the notes end marker")
 
-	startIdx := strings.Index(out, CommentsStartMarker)
-	endIdx := strings.Index(out, CommentsEndMarker)
-	headIdx := strings.Index(out, "## Comments")
+	startIdx := strings.Index(out, NotesStartMarker)
+	endIdx := strings.Index(out, NotesEndMarker)
+	headIdx := strings.Index(out, "## Notes")
 	require.Greater(t, headIdx, startIdx,
-		"`## Comments` heading must appear AFTER the start marker")
+		"`## Notes` heading must appear AFTER the start marker")
 	require.Greater(t, endIdx, headIdx,
-		"end marker must appear AFTER the `## Comments` content")
+		"end marker must appear AFTER the `## Notes` content")
 }
 
 // TestUnmarshal_MarkerWrappedRoundTrip pins the read path: a
 // marker-wrapped body round-trips through Unmarshal → Marshal with
-// comments preserved + still marker-wrapped on output.
+// notes preserved + still marker-wrapped on output.
 func TestUnmarshal_MarkerWrappedRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -56,11 +56,11 @@ func TestUnmarshal_MarkerWrappedRoundTrip(t *testing.T) {
 		ID:     "wikipedia:foo",
 		Kind:   "wikipedia-article",
 		Plugin: "wikipedia",
-		Comments: []Comment{
+		Notes: []Note{
 			{
 				Date:   mustParseTime(t, "2026-05-13T00:00:00Z"),
-				Text:   "Round-trip comment.",
-				Author: "yaad",
+				Text:   "Round-trip note.",
+				Author: "alice",
 			},
 		},
 	}
@@ -69,71 +69,60 @@ func TestUnmarshal_MarkerWrappedRoundTrip(t *testing.T) {
 
 	parsed, err := Unmarshal(b)
 	require.NoError(t, err)
-	require.Len(t, parsed.Comments, 1)
-	assert.Equal(t, "Round-trip comment.", parsed.Comments[0].Text)
-	assert.Equal(t, "yaad", parsed.Comments[0].Author)
+	require.Len(t, parsed.Notes, 1)
+	assert.Equal(t, "Round-trip note.", parsed.Notes[0].Text)
+	assert.Equal(t, "alice", parsed.Notes[0].Author)
 
 	// Re-marshal — must still be marker-wrapped (not double-wrapped,
 	// not unwrapped).
 	again, err := Marshal(parsed, nil)
 	require.NoError(t, err)
 	out := string(again)
-	startCount := strings.Count(out, CommentsStartMarker)
-	endCount := strings.Count(out, CommentsEndMarker)
+	startCount := strings.Count(out, NotesStartMarker)
+	endCount := strings.Count(out, NotesEndMarker)
 	assert.Equal(t, 1, startCount,
 		"re-marshal must produce exactly one start marker (no double-wrap)")
 	assert.Equal(t, 1, endCount,
 		"re-marshal must produce exactly one end marker")
 }
 
-// TestUnmarshal_LegacyUnmarkedFallback pins the migration path:
-// a vault file written before #8 (no markers, plain `## Comments`
-// heading + table) parses correctly. The fallback section-aware
-// parser recovers the comments; the next Marshal writes them
-// under the new marker-pair.
-func TestUnmarshal_LegacyUnmarkedFallback(t *testing.T) {
+// TestUnmarshal_BareHeadingTreatedAsCleanContent pins the marker-
+// only contract: a `## Notes` heading WITHOUT the surrounding marker
+// pair is normal user prose and lands in CleanContent unchanged.
+// Notes-mode activates strictly on the marker — this prevents a
+// user-content entity's `## Notes` heading from being silently
+// consumed by the notes-table parser.
+func TestUnmarshal_BareHeadingTreatedAsCleanContent(t *testing.T) {
 	t.Parallel()
 
-	legacy := strings.TrimSpace(`
+	body := strings.TrimSpace(`
 ---
 id: wikipedia:foo
 kind: wikipedia-article
 plugin: wikipedia
-comment_count: 1
 ---
 
 Some clean content.
 
-## Comments
+## Notes
 
-| Comments |
-|----------|
-| 2026-05-13 — yaad |
-| Legacy comment. |
+random thoughts a user typed; not the system notes table.
 `) + "\n"
 
-	parsed, err := Unmarshal([]byte(legacy))
+	parsed, err := Unmarshal([]byte(body))
 	require.NoError(t, err)
-	require.Len(t, parsed.Comments, 1,
-		"legacy un-marked Comments section must parse via section-aware fallback")
-	assert.Equal(t, "Legacy comment.", parsed.Comments[0].Text)
-	assert.Equal(t, "yaad", parsed.Comments[0].Author)
-
-	// Re-marshal — must produce marker-wrapped output (migration
-	// complete on first write).
-	out, err := Marshal(parsed, nil)
-	require.NoError(t, err)
-	body := string(out)
-	assert.Contains(t, body, CommentsStartMarker,
-		"first write under new code must wrap legacy comments in start marker")
-	assert.Contains(t, body, CommentsEndMarker,
-		"first write under new code must wrap legacy comments in end marker")
+	assert.Empty(t, parsed.Notes,
+		"bare ## Notes heading must NOT activate notes-mode without the marker pair")
+	assert.Contains(t, parsed.CleanContent, "## Notes",
+		"bare ## Notes heading must round-trip in CleanContent")
+	assert.Contains(t, parsed.CleanContent, "random thoughts",
+		"prose under bare ## Notes heading must round-trip in CleanContent")
 }
 
 // TestUnmarshal_MarkerWrappedAfterPluginBody pins the layout case
-// where the plugin body region precedes the comments region. The
-// scanner must transition from plugin-body / clean to comments mode
-// on the comments start marker, regardless of what came before.
+// where the plugin body region precedes the notes region. The
+// scanner must transition from plugin-body / clean to notes mode
+// on the notes start marker, regardless of what came before.
 func TestUnmarshal_MarkerWrappedAfterPluginBody(t *testing.T) {
 	t.Parallel()
 
@@ -142,7 +131,7 @@ func TestUnmarshal_MarkerWrappedAfterPluginBody(t *testing.T) {
 id: wikipedia:foo
 kind: wikipedia-article
 plugin: wikipedia
-comment_count: 1
+note_count: 1
 ---
 
 <!-- yaad:plugin start -->
@@ -151,20 +140,20 @@ comment_count: 1
 Plugin-emitted prose with [[brass]] wikilink.
 <!-- yaad:plugin end -->
 
-<!-- yaad:comments start -->
-## Comments
+<!-- yaad:notes start -->
+## Notes
 
-| Comments |
+| Notes |
 |----------|
-| 2026-05-13 — yaad |
-| Marker-wrapped comment. |
-<!-- yaad:comments end -->
+| 2026-05-13 — alice |
+| Marker-wrapped note. |
+<!-- yaad:notes end -->
 `) + "\n"
 
 	parsed, err := Unmarshal([]byte(body))
 	require.NoError(t, err)
-	require.Len(t, parsed.Comments, 1)
-	assert.Equal(t, "Marker-wrapped comment.", parsed.Comments[0].Text)
+	require.Len(t, parsed.Notes, 1)
+	assert.Equal(t, "Marker-wrapped note.", parsed.Notes[0].Text)
 	assert.Contains(t, parsed.CleanContent, "yaad:plugin start",
 		"plugin-body region (inside its own markers) must survive in clean_content")
 	assert.Contains(t, parsed.CleanContent, "Plugin-emitted prose with",
@@ -182,34 +171,34 @@ func TestUnmarshal_MarkerWrappedTwoComments(t *testing.T) {
 id: wikipedia:foo
 kind: wikipedia-article
 plugin: wikipedia
-comment_count: 2
+note_count: 2
 ---
 
-<!-- yaad:comments start -->
-## Comments
+<!-- yaad:notes start -->
+## Notes
 
-| Comments |
+| Notes |
 |----------|
-| 2026-05-13 — yaad |
+| 2026-05-13 — alice |
 | First. |
 | 2026-05-14 — operator |
 | Second. |
-<!-- yaad:comments end -->
+<!-- yaad:notes end -->
 `) + "\n"
 
 	parsed, err := Unmarshal([]byte(body))
 	require.NoError(t, err)
-	require.Len(t, parsed.Comments, 2)
-	assert.Equal(t, "First.", parsed.Comments[0].Text)
-	assert.Equal(t, "yaad", parsed.Comments[0].Author)
-	assert.Equal(t, "Second.", parsed.Comments[1].Text)
-	assert.Equal(t, "operator", parsed.Comments[1].Author)
+	require.Len(t, parsed.Notes, 2)
+	assert.Equal(t, "First.", parsed.Notes[0].Text)
+	assert.Equal(t, "alice", parsed.Notes[0].Author)
+	assert.Equal(t, "Second.", parsed.Notes[1].Text)
+	assert.Equal(t, "operator", parsed.Notes[1].Author)
 }
 
 // TestMergePluginBody_DoesNotTouchCommentsRegion pins the
 // independence of the two marker regions per the #8 spec: a plugin
 // body merge splices only between yaad:plugin markers; the
-// yaad:comments region outside survives verbatim.
+// yaad:notes region outside survives verbatim.
 func TestMergePluginBody_DoesNotTouchCommentsRegion(t *testing.T) {
 	t.Parallel()
 
@@ -217,14 +206,14 @@ func TestMergePluginBody_DoesNotTouchCommentsRegion(t *testing.T) {
 # Old plugin body
 <!-- yaad:plugin end -->
 
-<!-- yaad:comments start -->
-## Comments
+<!-- yaad:notes start -->
+## Notes
 
-| Comments |
+| Notes |
 |----------|
-| 2026-05-13 — yaad |
-| Pre-existing comment. |
-<!-- yaad:comments end -->`)
+| 2026-05-13 — alice |
+| Pre-existing note. |
+<!-- yaad:notes end -->`)
 
 	pluginContent := "# New plugin body\n\nUpdated."
 	merged, err := MergePluginBody(existing, pluginContent)
@@ -235,19 +224,19 @@ func TestMergePluginBody_DoesNotTouchCommentsRegion(t *testing.T) {
 		"plugin body region must update")
 	assert.NotContains(t, merged.Body, "# Old plugin body",
 		"old plugin body must be replaced")
-	assert.Contains(t, merged.Body, CommentsStartMarker,
-		"comments region must survive plugin re-ingest")
-	assert.Contains(t, merged.Body, "Pre-existing comment.",
-		"comments table content must survive plugin re-ingest")
-	assert.Contains(t, merged.Body, CommentsEndMarker,
-		"comments end marker must survive plugin re-ingest")
+	assert.Contains(t, merged.Body, NotesStartMarker,
+		"notes region must survive plugin re-ingest")
+	assert.Contains(t, merged.Body, "Pre-existing note.",
+		"notes table content must survive plugin re-ingest")
+	assert.Contains(t, merged.Body, NotesEndMarker,
+		"notes end marker must survive plugin re-ingest")
 }
 
 // TestUnmarshal_OperatorHandEditInsideMarkerRegion documents the
 // chosen merge semantic per the #8 sub-question: operator hand-
 // edits inside the marker region get the current behavior —
 // wholesale replace by the next agent-add. Markdown between the
-// table rows is discarded on re-write; the in-memory []Comment is
+// table rows is discarded on re-write; the in-memory []Note is
 // the source of truth and re-renders the table.
 //
 // Pinning this so future contributors can't quietly change the
@@ -260,26 +249,26 @@ func TestUnmarshal_OperatorHandEditInsideMarkerRegion(t *testing.T) {
 id: wikipedia:foo
 kind: wikipedia-article
 plugin: wikipedia
-comment_count: 1
+note_count: 1
 ---
 
-<!-- yaad:comments start -->
-## Comments
+<!-- yaad:notes start -->
+## Notes
 
 Operator added a paragraph here mid-edit.
 
-| Comments |
+| Notes |
 |----------|
-| 2026-05-13 — yaad |
-| Agent comment. |
-<!-- yaad:comments end -->
+| 2026-05-13 — alice |
+| Agent note. |
+<!-- yaad:notes end -->
 `) + "\n"
 
 	parsed, err := Unmarshal([]byte(bodyWithHandEdit))
 	require.NoError(t, err)
-	require.Len(t, parsed.Comments, 1,
-		"the structured comment survives despite operator hand-edit")
-	assert.Equal(t, "Agent comment.", parsed.Comments[0].Text)
+	require.Len(t, parsed.Notes, 1,
+		"the structured note survives despite operator hand-edit")
+	assert.Equal(t, "Agent note.", parsed.Notes[0].Text)
 
 	// Re-marshal — operator's hand-edited paragraph is LOST per the
 	// chosen v1 semantic (wholesale replace by structured re-render).

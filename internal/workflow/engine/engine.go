@@ -9,7 +9,7 @@
 //
 // **Phase 3.B scope.** This package ships the orchestration
 // substrate up to and including decision recording. Action
-// execution (task_append / add_comment / plugin_dispatch /
+// execution (task_append / add_note / plugin_dispatch /
 // add_gap) is Phase 4. The manual-trigger HTTP / CLI entry
 // points are Phase 3.C. The decision-recording surface (in-
 // memory ring + slog Info) gives operators visibility into
@@ -978,18 +978,18 @@ func compileActionTemplates(ev *decision.Evaluator, a parser.Action) (map[string
 			}
 			tpls["content"] = tpl
 		}
-	case a.AddComment != nil:
-		if a.AddComment.Target != "" {
-			tpl, err := template.Compile(a.AddComment.Target, ev)
+	case a.AddNote != nil:
+		if a.AddNote.Target != "" {
+			tpl, err := template.Compile(a.AddNote.Target, ev)
 			if err != nil {
-				return nil, fmt.Errorf("add_comment.target: %w", err)
+				return nil, fmt.Errorf("add_note.target: %w", err)
 			}
 			tpls["target"] = tpl
 		}
-		if a.AddComment.Content != "" {
-			tpl, err := template.Compile(a.AddComment.Content, ev)
+		if a.AddNote.Content != "" {
+			tpl, err := template.Compile(a.AddNote.Content, ev)
 			if err != nil {
-				return nil, fmt.Errorf("add_comment.content: %w", err)
+				return nil, fmt.Errorf("add_note.content: %w", err)
 			}
 			tpls["content"] = tpl
 		}

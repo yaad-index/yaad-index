@@ -7,7 +7,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { YaadIndexClient } from "./client/yaad_index.js";
-import { addCommentTool, runAddComment } from "./tools/add_comment.js";
+import { addNoteTool, runAddNote } from "./tools/add_note.js";
 import { archiveEntityTool, runArchiveEntity } from "./tools/archive_entity.js";
 import { deferGapTool, runDeferGap } from "./tools/defer_gap.js";
 import { edgesTool, runEdges } from "./tools/edges.js";
@@ -72,7 +72,7 @@ const TOOLS = [
  edgesTool,
  getEntitiesBatchTool,
  fillTool,
- addCommentTool,
+ addNoteTool,
  listEntitiesTool,
  needsFillTool,
  reindexTool,
@@ -152,8 +152,8 @@ async function dispatch(
  return runGetEntitiesBatch(client, args);
  case "fill":
  return runFill(client, args);
- case "add_comment":
- return runAddComment(client, args);
+ case "add_note":
+ return runAddNote(client, args);
  case "list_entities":
  return runListEntities(client, args);
  case "needs_fill":

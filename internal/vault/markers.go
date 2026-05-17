@@ -20,29 +20,29 @@ const (
 	PluginBodyEndMarker = "<!-- yaad:plugin end -->"
 )
 
-// CommentsStartMarker / CommentsEndMarker delimit the agent-emitted
-// `## Comments` section per yaad-index #8 (ADR-0015 marker-pair
-// pattern extended to comments). Distinct prefix (`yaad:comments`,
+// NotesStartMarker / NotesEndMarker delimit the agent-emitted
+// `## Notes` section per yaad-index #8 (ADR-0015 marker-pair
+// pattern extended to notes). Distinct prefix (`yaad:notes`,
 // not `yaad:plugin`) so a plugin re-ingest that splices its body
-// region doesn't touch the comments region — comments are append-
+// region doesn't touch the notes region — notes are append-
 // only agent-emitted, plugin body is plugin-owned, the two regions
 // have independent lifecycles.
 //
-// On read: parser detects the marker pair and parses the comments
+// On read: parser detects the marker pair and parses the notes
 // table from inside it; falls back to the legacy section-aware
-// parser for un-marked entities. On write: writeCommentsSection
+// parser for un-marked entities. On write: writeNotesSection
 // wraps the rendered table in the marker pair so the next read
 // finds them deterministically (no ambiguity from operator-titled
-// `## Comments` sections elsewhere in the body).
+// `## Notes` sections elsewhere in the body).
 //
-// Operator-hand-edits inside the marker region: comments stay
-// structured ([]Comment) — the table inside the markers is
+// Operator-hand-edits inside the marker region: notes stay
+// structured ([]Note) — the table inside the markers is
 // re-rendered from in-memory state on each write. Raw markdown
 // between table rows is discarded on next agent-add (current
 // behavior preserved, not a regression from this change).
 const (
-	CommentsStartMarker = "<!-- yaad:comments start -->"
-	CommentsEndMarker = "<!-- yaad:comments end -->"
+	NotesStartMarker = "<!-- yaad:notes start -->"
+	NotesEndMarker = "<!-- yaad:notes end -->"
 )
 
 // ErrPluginEmittedMarker is returned by MergePluginBody when the

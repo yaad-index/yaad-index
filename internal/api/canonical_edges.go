@@ -6,7 +6,7 @@
 // import these helpers — the contract was set by and reused
 // verbatim by the others, so the helpers live in one place.
 //
-// The "(per yaad-index)" / "" provenance comments
+// The "(per yaad-index)" / "" provenance notes
 // stay because that's where the contract was set; the file split
 // is a structural reorg, not a contract change.
 package api

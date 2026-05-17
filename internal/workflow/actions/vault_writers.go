@@ -1,4 +1,4 @@
-// Vault-backed CommentWriter + GapWriter implementations
+// Vault-backed NoteWriter + GapWriter implementations
 // (Phase 4.B.2). Replace the Stub*Writer production defaults
 // once the daemon wires a vault + writelock manager. Tests
 // + dev binaries without a vault continue to use the stubs.
@@ -6,7 +6,7 @@
 // **Pattern.** Each impl acquires a per-entity write-lock
 // before touching the vault file (concurrency contract per
 // ADR-0024 §"Concurrent writes" — every mutation surface other
-// than comments/edges takes the lock; comments are append-only
+// than notes/edges takes the lock; notes are append-only
 // and skip the lock in the operator-handler path, but the
 // workflow-author path goes through the lock anyway because
 // add_gap *does* mutate Gaps + GapState which are NOT
@@ -15,7 +15,7 @@
 // surface "workflow:<name>" as the active holder.
 //
 // **Workflow attribution.** Each write stamps the
-// Comment.Author / commit author as `workflow:<name>` per the
+// Note.Author / commit author as `workflow:<name>` per the
 // ADR-0024 Source vocabulary (same vocabulary fill.completed
 // events use). Operators reading the vault file or `git log`
 // see which workflow added what.
@@ -62,7 +62,7 @@ type VaultEntityWriter interface {
 }
 
 // VaultWriterBackend bundles the dependencies the vault-backed
-// CommentWriter + GapWriter share. The two writers wire
+// NoteWriter + GapWriter share. The two writers wire
 // against identical state — splitting the backend in two
 // would just duplicate every field.
 type VaultWriterBackend struct {
@@ -72,7 +72,7 @@ type VaultWriterBackend struct {
 	WriteLocks  *writelocks.Manager
 	Logger      *slog.Logger
 	// Clock supplies the timestamp stamped on each appended
-	// Comment. nil → time.Now. Test-only knob; production
+	// Note. nil → time.Now. Test-only knob; production
 	// leaves it unset.
 	Clock func() time.Time
 }
@@ -97,31 +97,31 @@ func (b *VaultWriterBackend) logger() *slog.Logger {
 // err-task pattern surfaces this on the resulting task.
 var ErrEntityNotFound = errors.New("actions: entity not found")
 
-// VaultCommentWriter is the production-default CommentWriter
+// VaultNoteWriter is the production-default NoteWriter
 // for Phase 4.B.2+. See package docstring for the pattern.
-type VaultCommentWriter struct {
+type VaultNoteWriter struct {
 	backend *VaultWriterBackend
 }
 
-// NewVaultCommentWriter constructs a CommentWriter backed by
+// NewVaultNoteWriter constructs a NoteWriter backed by
 // the given backend. Backend must be non-nil with Store +
 // VaultReader + VaultWriter + WriteLocks set; missing fields
 // panic at first call (caller bug — the daemon's main wiring
 // is the only construction site and ships fully populated).
-func NewVaultCommentWriter(b *VaultWriterBackend) *VaultCommentWriter {
-	return &VaultCommentWriter{backend: b}
+func NewVaultNoteWriter(b *VaultWriterBackend) *VaultNoteWriter {
+	return &VaultNoteWriter{backend: b}
 }
 
-// AppendComment implements CommentWriter. Acquires the per-
+// AppendNote implements NoteWriter. Acquires the per-
 // entity write-lock, reads the vault file, appends a
-// vault.Comment with Author=`workflow:<workflow>`, writes
+// vault.Note with Author=`workflow:<workflow>`, writes
 // back with a commit author of `workflow:<workflow>`, mirrors
-// the comments-text update into the store via UpsertEntity.
-func (w *VaultCommentWriter) AppendComment(ctx context.Context, workflow, entityID, body string) error {
+// the notes-text update into the store via UpsertEntity.
+func (w *VaultNoteWriter) AppendNote(ctx context.Context, workflow, entityID, body string) error {
 	if w.backend == nil {
-		return fmt.Errorf("VaultCommentWriter: backend not wired")
+		return fmt.Errorf("VaultNoteWriter: backend not wired")
 	}
-	holder := workflowHolder(workflow, "add_comment")
+	holder := workflowHolder(workflow, "add_note")
 	release, err := w.backend.WriteLocks.Acquire(entityID, holder)
 	if err != nil {
 		return fmt.Errorf("acquire write-lock on %s: %w", entityID, err)
@@ -145,18 +145,18 @@ func (w *VaultCommentWriter) AppendComment(ctx context.Context, workflow, entity
 	}
 
 	// Truncate to second precision so the YAML frontmatter
-	// + body `## Comments` section header round-trip cleanly
-	// (mirrors handleComments — without this the body loses
+	// + body `## Notes` section header round-trip cleanly
+	// (mirrors handleNotes — without this the body loses
 	// nanos and the next read-modify-write cycle would
-	// see a "new" comment on dedup).
+	// see a "new" note on dedup).
 	now := w.backend.clock().Truncate(time.Second)
-	ve.Comments = append(ve.Comments, vault.Comment{
+	ve.Notes = append(ve.Notes, vault.Note{
 		Date:   now,
 		Text:   body,
 		Author: workflowAuthor(workflow),
 	})
 
-	commitMsg := fmt.Sprintf("workflow comment on %s by %s", ve.ID, workflowAuthor(workflow))
+	commitMsg := fmt.Sprintf("workflow note on %s by %s", ve.ID, workflowAuthor(workflow))
 	if err := w.backend.VaultWriter.WriteWithCommit(ctx, ve, commitMsg, workflowAuthor(workflow)); err != nil {
 		return fmt.Errorf("vault.Writer.WriteWithCommit %s: %w", entityID, err)
 	}
@@ -169,9 +169,9 @@ func (w *VaultCommentWriter) AppendComment(ctx context.Context, workflow, entity
 		GapState:  vaultGapStateForDB(ve.GapState),
 	}); err != nil {
 		w.backend.logger().Warn(
-			"workflow add_comment: store.UpsertEntity failed (vault already written)",
+			"workflow add_note: store.UpsertEntity failed (vault already written)",
 			"entity_id", entityID, "err", err)
-		// Mirror handleComments' shape: the vault write is the
+		// Mirror handleNotes' shape: the vault write is the
 		// source of truth (ADR-0008). A failed DB mirror is a
 		// degraded-search state, not a write-side failure.
 	}
@@ -184,7 +184,7 @@ type VaultGapWriter struct {
 	backend *VaultWriterBackend
 }
 
-// NewVaultGapWriter mirrors NewVaultCommentWriter.
+// NewVaultGapWriter mirrors NewVaultNoteWriter.
 func NewVaultGapWriter(b *VaultWriterBackend) *VaultGapWriter {
 	return &VaultGapWriter{backend: b}
 }
@@ -259,7 +259,7 @@ func (w *VaultGapWriter) AddGap(ctx context.Context, workflow, entityID, gap str
 }
 
 // workflowAuthor returns the canonical `workflow:<name>`
-// attribution string used for Comment.Author + commit-author
+// attribution string used for Note.Author + commit-author
 // stamps per ADR-0024 Source vocabulary.
 func workflowAuthor(workflow string) string {
 	w := strings.TrimSpace(workflow)
@@ -291,15 +291,15 @@ func vaultEntityDataForDB(e *vault.Entity) map[string]any {
 	if len(e.Tags) > 0 {
 		out["tags"] = e.Tags
 	}
-	if len(e.Comments) > 0 {
-		parts := make([]string, 0, len(e.Comments))
-		for _, c := range e.Comments {
+	if len(e.Notes) > 0 {
+		parts := make([]string, 0, len(e.Notes))
+		for _, c := range e.Notes {
 			if c.Text != "" {
 				parts = append(parts, c.Text)
 			}
 		}
 		if len(parts) > 0 {
-			out["comments_text"] = strings.Join(parts, "\n")
+			out["notes_text"] = strings.Join(parts, "\n")
 		}
 	}
 	return out

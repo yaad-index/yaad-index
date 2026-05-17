@@ -87,7 +87,7 @@ func (f *fakeVaultReader) ReadByID(_ string, id string) (*vault.Entity, error) {
 	// Return a deep-ish copy of the slices so the writer can
 	// append without leaking back into the seeded shape.
 	cp := *e
-	cp.Comments = append([]vault.Comment(nil), e.Comments...)
+	cp.Notes = append([]vault.Note(nil), e.Notes...)
 	cp.Gaps = append([]string(nil), e.Gaps...)
 	if e.GapState != nil {
 		cp.GapState = make(map[string]vault.GapStateEntry, len(e.GapState))
@@ -118,7 +118,7 @@ func (f *fakeVaultWriter) WriteWithCommit(_ context.Context, e *vault.Entity, me
 		return f.writeErr
 	}
 	cp := *e
-	cp.Comments = append([]vault.Comment(nil), e.Comments...)
+	cp.Notes = append([]vault.Note(nil), e.Notes...)
 	cp.Gaps = append([]string(nil), e.Gaps...)
 	if e.GapState != nil {
 		cp.GapState = make(map[string]vault.GapStateEntry, len(e.GapState))
@@ -156,10 +156,10 @@ func newVaultWriterBackend(t *testing.T, storeSeed map[string]*store.Entity, vau
 	return b, es, vr, vw
 }
 
-// TestVaultCommentWriter_HappyPath: a comment lands as
-// vault.Comment with workflow:<name> author + commit author
-// + DB upsert reflecting the comments_text column.
-func TestVaultCommentWriter_HappyPath(t *testing.T) {
+// TestVaultNoteWriter_HappyPath: a note lands as
+// vault.Note with workflow:<name> author + commit author
+// + DB upsert reflecting the notes_text column.
+func TestVaultNoteWriter_HappyPath(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	b, es, _, vw := newVaultWriterBackend(t,
@@ -171,42 +171,42 @@ func TestVaultCommentWriter_HappyPath(t *testing.T) {
 		},
 		now,
 	)
-	w := NewVaultCommentWriter(b)
-	err := w.AppendComment(context.Background(), "bgg-news", "pr:1", "found a related entity")
+	w := NewVaultNoteWriter(b)
+	err := w.AppendNote(context.Background(), "bgg-news", "pr:1", "found a related entity")
 	require.NoError(t, err)
 
 	writes := vw.snapshot()
 	require.Len(t, writes, 1)
-	require.Len(t, writes[0].entity.Comments, 1)
-	assert.Equal(t, "found a related entity", writes[0].entity.Comments[0].Text)
-	assert.Equal(t, "workflow:bgg-news", writes[0].entity.Comments[0].Author)
-	assert.Equal(t, now, writes[0].entity.Comments[0].Date)
+	require.Len(t, writes[0].entity.Notes, 1)
+	assert.Equal(t, "found a related entity", writes[0].entity.Notes[0].Text)
+	assert.Equal(t, "workflow:bgg-news", writes[0].entity.Notes[0].Author)
+	assert.Equal(t, now, writes[0].entity.Notes[0].Date)
 	assert.Equal(t, "workflow:bgg-news", writes[0].author, "commit author")
-	assert.Contains(t, writes[0].message, "workflow comment on pr:1")
+	assert.Contains(t, writes[0].message, "workflow note on pr:1")
 
 	upserts := es.upsertSnapshot()
 	require.Len(t, upserts, 1)
-	assert.Equal(t, "found a related entity", upserts[0].Data["comments_text"])
+	assert.Equal(t, "found a related entity", upserts[0].Data["notes_text"])
 	assert.Equal(t, "pr:1", upserts[0].ID)
 }
 
-// TestVaultCommentWriter_EntityNotFound: workflows targeting
+// TestVaultNoteWriter_EntityNotFound: workflows targeting
 // an unknown entity surface ErrEntityNotFound (the runner's
 // caller propagates it through ActionResult.Err).
-func TestVaultCommentWriter_EntityNotFound(t *testing.T) {
+func TestVaultNoteWriter_EntityNotFound(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	b, _, _, _ := newVaultWriterBackend(t, nil, nil, now)
-	w := NewVaultCommentWriter(b)
-	err := w.AppendComment(context.Background(), "wf", "pr:absent", "hi")
+	w := NewVaultNoteWriter(b)
+	err := w.AppendNote(context.Background(), "wf", "pr:absent", "hi")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEntityNotFound)
 }
 
-// TestVaultCommentWriter_VaultFileMissing: store row exists
+// TestVaultNoteWriter_VaultFileMissing: store row exists
 // but vault file doesn't — surfaces ErrEntityNotFound too
 // (workflows don't auto-materialize per ADR-0021 amendment).
-func TestVaultCommentWriter_VaultFileMissing(t *testing.T) {
+func TestVaultNoteWriter_VaultFileMissing(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	b, _, _, _ := newVaultWriterBackend(t,
@@ -216,17 +216,17 @@ func TestVaultCommentWriter_VaultFileMissing(t *testing.T) {
 		nil, // no vault file
 		now,
 	)
-	w := NewVaultCommentWriter(b)
-	err := w.AppendComment(context.Background(), "wf", "pr:thin", "hi")
+	w := NewVaultNoteWriter(b)
+	err := w.AppendNote(context.Background(), "wf", "pr:thin", "hi")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEntityNotFound)
 	assert.Contains(t, err.Error(), "vault file missing")
 }
 
-// TestVaultCommentWriter_WriteLockConflict: a concurrent
+// TestVaultNoteWriter_WriteLockConflict: a concurrent
 // holder of the entity's write-lock returns a ConflictError
 // the workflow surfaces verbatim.
-func TestVaultCommentWriter_WriteLockConflict(t *testing.T) {
+func TestVaultNoteWriter_WriteLockConflict(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	b, _, _, _ := newVaultWriterBackend(t,
@@ -244,18 +244,18 @@ func TestVaultCommentWriter_WriteLockConflict(t *testing.T) {
 	require.NoError(t, err)
 	defer release()
 
-	w := NewVaultCommentWriter(b)
-	err = w.AppendComment(context.Background(), "wf", "pr:1", "hi")
+	w := NewVaultNoteWriter(b)
+	err = w.AppendNote(context.Background(), "wf", "pr:1", "hi")
 	require.Error(t, err)
 	assert.True(t, writelocks.IsConflict(unwrapToConflict(err)),
 		"writelocks.IsConflict on the unwrapped writer error")
 }
 
-// TestVaultCommentWriter_UpsertErrorDegradesGracefully: a
+// TestVaultNoteWriter_UpsertErrorDegradesGracefully: a
 // store.UpsertEntity failure logs a Warn but the write itself
 // still returns nil (vault is source of truth per ADR-0008;
 // DB is a search-mirror).
-func TestVaultCommentWriter_UpsertErrorDegradesGracefully(t *testing.T) {
+func TestVaultNoteWriter_UpsertErrorDegradesGracefully(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	b, es, _, vw := newVaultWriterBackend(t,
@@ -268,8 +268,8 @@ func TestVaultCommentWriter_UpsertErrorDegradesGracefully(t *testing.T) {
 		now,
 	)
 	es.upsertErr = errors.New("db down")
-	w := NewVaultCommentWriter(b)
-	err := w.AppendComment(context.Background(), "wf", "pr:1", "hi")
+	w := NewVaultNoteWriter(b)
+	err := w.AppendNote(context.Background(), "wf", "pr:1", "hi")
 	assert.NoError(t, err, "vault write succeeded; DB-mirror failure doesn't fail the call")
 	require.Len(t, vw.snapshot(), 1, "vault write still landed")
 }
@@ -339,7 +339,7 @@ func TestVaultGapWriter_Idempotent(t *testing.T) {
 }
 
 // TestVaultGapWriter_EntityNotFound: same shape as the
-// comment-writer not-found path.
+// note-writer not-found path.
 func TestVaultGapWriter_EntityNotFound(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)

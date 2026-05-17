@@ -49,7 +49,7 @@ import (
 type CacheCmd struct {
 	ListExpired CacheListExpiredCmd `cmd:"list-expired" help:"List vault entries whose cache TTL has expired."`
 	Purge CachePurgeCmd `cmd:"purge" help:"Delete expired vault entries; reindex reconciles DB rows."`
-	Refetch CacheRefetchCmd `cmd:"refetch" help:"Force-refetch expired entries via a running yaad-index daemon (preserves user-added comments / UGC Per the prior design,/)."`
+	Refetch CacheRefetchCmd `cmd:"refetch" help:"Force-refetch expired entries via a running yaad-index daemon (preserves user-added notes / UGC Per the prior design,/)."`
 }
 
 // CacheListExpiredCmd implements `yaad-index cache list-expired`.
@@ -456,8 +456,8 @@ func findOlderThanCacheEntries(logger *slog.Logger, vaultPath, pluginFilter, kin
 // refetches expired vault entries by issuing `POST /v1/ingest` with
 // `force_refetch=true` against a RUNNING yaad-index daemon. The
 // daemon's existing ingest path (post- +/) preserves
-// user-added comments and UGC sections by design (the
-// buildVaultEntity merge inherits Comments/Tags/Summary/Edges from
+// user-added notes and UGC sections by design (the
+// buildVaultEntity merge inherits Notes/Tags/Summary/Edges from
 // the existing vault file before stamping fresh plugin-provided
 // fields) — refetch via this CLI inherits that contract for free.
 //

@@ -190,7 +190,7 @@ func TestTaskResolve_NormalTask_AutoArchives(t *testing.T) {
 			AllowedPlugins: []string{"yaad-gmail"},
 			Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
 			Subject:        "entity.id",
-			Actions:        []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+			Actions:        []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 		},
 	)
 	req := httptest.NewRequest(http.MethodPost, "/v1/tasks/wf-s/resolve", nil)
@@ -235,7 +235,7 @@ func TestTaskResolve_OptedOutWorkflow_StaysInPlace(t *testing.T) {
 			AllowedPlugins:    []string{"yaad-gmail"},
 			Trigger:           parser.Trigger{Type: parser.TriggerTypeManual},
 			Subject:           "entity.id",
-			Actions:           []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+			Actions:           []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 			AutoArchiveOnDone: &autoArchiveFalse,
 		},
 	)
@@ -271,7 +271,7 @@ func TestTaskResolve_ErrTask_AlwaysAutoArchives(t *testing.T) {
 			AllowedPlugins:    []string{"yaad-gmail"},
 			Trigger:           parser.Trigger{Type: parser.TriggerTypeManual},
 			Subject:           "entity.id",
-			Actions:           []parser.Action{{AddComment: &parser.AddCommentAction{Content: "'x'"}}},
+			Actions:           []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 			AutoArchiveOnDone: &autoArchiveFalse,
 		},
 	)

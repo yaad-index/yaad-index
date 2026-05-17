@@ -1,6 +1,6 @@
-// Phase 4.B / 4.C stub-reject CommentWriter, GapWriter, and
+// Phase 4.B / 4.C stub-reject NoteWriter, GapWriter, and
 // PluginDispatcher implementations. The runner-side contracts
-// (add_comment, add_gap, plugin_dispatch) are real; these
+// (add_note, add_gap, plugin_dispatch) are real; these
 // production stubs return ErrActionNotImplemented so operators
 // see a clear "real impl pending" failure between the runner
 // PRs and the follow-up phases that wire the
@@ -20,23 +20,23 @@ import (
 	"fmt"
 )
 
-// StubCommentWriter is the Phase 4.B production-default
-// CommentWriter retained for tests + dev binaries running
+// StubNoteWriter is the Phase 4.B production-default
+// NoteWriter retained for tests + dev binaries running
 // without a vault. Returns a wrapped ErrActionNotImplemented
-// so operators see "vault-backed add_comment pending" instead
+// so operators see "vault-backed add_note pending" instead
 // of a silent skip. Phase 4.B.2 replaces this with
-// VaultCommentWriter at the production wiring layer; this
+// VaultNoteWriter at the production wiring layer; this
 // stub stays on as the zero-config default.
-type StubCommentWriter struct{}
+type StubNoteWriter struct{}
 
-func (StubCommentWriter) AppendComment(_ context.Context, workflow, entityID, body string) error {
-	return fmt.Errorf("%w: vault-backed add_comment not wired; attempted workflow=%s entity=%s body_len=%d",
+func (StubNoteWriter) AppendNote(_ context.Context, workflow, entityID, body string) error {
+	return fmt.Errorf("%w: vault-backed add_note not wired; attempted workflow=%s entity=%s body_len=%d",
 		ErrActionNotImplemented, workflow, entityID, len(body))
 }
 
 // StubGapWriter is the Phase 4.B production-default GapWriter
 // retained for tests + dev binaries running without a vault.
-// Same stub-reject shape as StubCommentWriter.
+// Same stub-reject shape as StubNoteWriter.
 type StubGapWriter struct{}
 
 func (StubGapWriter) AddGap(_ context.Context, workflow, entityID, gap string) error {

@@ -110,7 +110,7 @@ func TestWriteLock_EntityArchive_ReturnsConflictWhenHeld(t *testing.T) {
 }
 
 // TestWriteLock_Comments_BypassesLock pins the additive-write
-// skip path: comments POSTs proceed even when the entity is
+// skip path: notes POSTs proceed even when the entity is
 // locked by another writer (additive-append, no conflict possible).
 func TestWriteLock_Comments_BypassesLock(t *testing.T) {
 	t.Parallel()
@@ -122,17 +122,17 @@ func TestWriteLock_Comments_BypassesLock(t *testing.T) {
 	defer release()
 
 	req := httptest.NewRequest(http.MethodPost,
-		"/v1/entities/"+entityID+"/comments",
-		strings.NewReader(`{"text":"comment","author":"sora"}`))
+		"/v1/entities/"+entityID+"/notes",
+		strings.NewReader(`{"text":"note","author":"alice"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
-	// Comments path skips the write-lock gate entirely. The actual
+	// Notes path skips the write-lock gate entirely. The actual
 	// response may be 404 (entity doesn't exist) or other — but it
 	// MUST NOT be 409 write_conflict.
 	assert.NotEqual(t, http.StatusConflict, rec.Code,
-		"comments must bypass the write-lock gate (additive append); got body=%s", rec.Body.String())
+		"notes must bypass the write-lock gate (additive append); got body=%s", rec.Body.String())
 }
 
 // TestWriteLock_Edges_BypassesLock pins the additive-write skip

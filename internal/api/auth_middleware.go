@@ -100,7 +100,7 @@ func RequireAuth(logger *slog.Logger, verifier auth.Verifier) func(http.Handler)
 //
 // The synthetic claim's IssuedAt / ExpiresAt are deliberately the zero
 // time so handlers can detect dev-mode shape if they need to (a prior PR
-// will surface the agent identity on comment writes).
+// will surface the agent identity on note writes).
 //
 // A fresh *Claim is constructed per request — the cold-reviewer's a prior PR review
 // note 1: a prior PR may extend the Claim with per-request identity fields,
@@ -131,7 +131,7 @@ const (
 
 // IsAnonymousClaim reports whether the claim is the synthetic shape
 // stamped by AnonymousAuth in dev-mode (auth.required=false). Handlers
-// that derive enforcement from the claim's identity (e.g. comments
+// that derive enforcement from the claim's identity (e.g. notes
 // author validation per yaad-index) branch on this so dev-mode
 // preserves pre-auth behavior — there is no real identity to enforce
 // against in the bypass path.
@@ -160,7 +160,7 @@ func IsAnonymousClaim(c *auth.Claim) bool {
 // gate — there's no real operator to attribute the action to.
 //
 // Replaces the brittle Subject==Operator check that existed at the
-// operator-fill + comments call sites legacy. Those endpoints used
+// operator-fill + notes call sites legacy. Those endpoints used
 // to reject all agent-on-behalf-of-operator JWTs even though the
 // operator authority was structurally present on the pair-claim.
 func ClaimHasOperatorAuthority(c *auth.Claim) bool {

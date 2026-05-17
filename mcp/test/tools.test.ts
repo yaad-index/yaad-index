@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { YaadIndexClient, YaadIndexError } from "../src/client/yaad_index.js";
-import { runAddComment } from "../src/tools/add_comment.js";
+import { runAddNote } from "../src/tools/add_note.js";
 import { runArchiveEntity } from "../src/tools/archive_entity.js";
 import { runDeferGap } from "../src/tools/defer_gap.js";
 import { runEdges } from "../src/tools/edges.js";
@@ -175,8 +175,8 @@ describe("fill tool", () => {
  });
 });
 
-describe("add_comment tool", () => {
- test("happy path posts to /v1/entities/{id}/comments and returns the appended comment", async () => {
+describe("add_note tool", () => {
+ test("happy path posts to /v1/entities/{id}/notes and returns the appended note", async () => {
  let seenURL = "";
  let seenBody = "";
  const client = clientWith((u, init) => {
@@ -185,9 +185,9 @@ describe("add_comment tool", () => {
  return new Response(
  JSON.stringify({
  ok: true,
- comment: {
+ note: {
  date: "2026-05-05T13:45:00Z",
- text: "first comment",
+ text: "first note",
  author: "the cold-reviewer",
  operator: "alice",
  },
@@ -199,23 +199,23 @@ describe("add_comment tool", () => {
  },
  );
  });
- const got = (await runAddComment(client, {
+ const got = (await runAddNote(client, {
  entity_id: "boardgame:catan",
- text: "first comment",
+ text: "first note",
  author: "the cold-reviewer",
  })) as {
  ok: boolean;
- comment: { author?: string; operator?: string; text: string };
+ note: { author?: string; operator?: string; text: string };
  };
  expect(got.ok).toBe(true);
- expect(got.comment.author).toBe("the cold-reviewer");
- expect(got.comment.operator).toBe("alice");
- expect(got.comment.text).toBe("first comment");
+ expect(got.note.author).toBe("the cold-reviewer");
+ expect(got.note.operator).toBe("alice");
+ expect(got.note.text).toBe("first note");
  expect(seenURL).toBe(
- "http://yaad-index.test/v1/entities/boardgame%3Acatan/comments",
+ "http://yaad-index.test/v1/entities/boardgame%3Acatan/notes",
  );
  const parsed = JSON.parse(seenBody);
- expect(parsed.text).toBe("first comment");
+ expect(parsed.text).toBe("first note");
  expect(parsed.author).toBe("the cold-reviewer");
  });
 
@@ -226,7 +226,7 @@ describe("add_comment tool", () => {
  return new Response(
  JSON.stringify({
  ok: true,
- comment: {
+ note: {
  date: "2026-05-05T13:46:00Z",
  text: "no author specified",
  author: "the cold-reviewer", // server filled from JWT
@@ -240,7 +240,7 @@ describe("add_comment tool", () => {
  },
  );
  });
- await runAddComment(client, {
+ await runAddNote(client, {
  entity_id: "boardgame:catan",
  text: "no author specified",
  });
@@ -264,7 +264,7 @@ describe("add_comment tool", () => {
  },
  ),
  );
- const got = (await runAddComment(client, {
+ const got = (await runAddNote(client, {
  entity_id: "boardgame:catan",
  text: "alice2 pretending to be the cold-reviewer",
  author: "alice2",
@@ -292,7 +292,7 @@ describe("add_comment tool", () => {
  },
  ),
  );
- const got = (await runAddComment(client, {
+ const got = (await runAddNote(client, {
  entity_id: "boardgame:catan",
  text: "no token",
  })) as { ok: boolean; error: string };
@@ -306,7 +306,7 @@ describe("add_comment tool", () => {
  called = true;
  return new Response("{}", { headers: { "Content-Type": "application/json" } });
  });
- const got = (await runAddComment(client, { text: "hi" })) as {
+ const got = (await runAddNote(client, { text: "hi" })) as {
  ok: boolean;
  error: string;
  };
@@ -321,7 +321,7 @@ describe("add_comment tool", () => {
  called = true;
  return new Response("{}", { headers: { "Content-Type": "application/json" } });
  });
- const got = (await runAddComment(client, {
+ const got = (await runAddNote(client, {
  entity_id: "boardgame:catan",
  text: " \n ",
  })) as { ok: boolean; error: string };

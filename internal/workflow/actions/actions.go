@@ -6,7 +6,7 @@
 //
 // **Phase 4.A scope.** This PR ships the runner dispatch
 // substrate + the task_append primitive. The other three
-// primitives (add_comment, plugin_dispatch, add_gap) are
+// primitives (add_note, plugin_dispatch, add_gap) are
 // declared as stub-reject runners — they surface a clear
 // "not yet implemented" error so operators get an
 // actionable signal between 4.A and 4.B/C merges (mystery
@@ -34,7 +34,7 @@ import (
 )
 
 // ErrActionNotImplemented is returned by stub runners
-// (add_comment, plugin_dispatch, add_gap in Phase 4.A) so
+// (add_note, plugin_dispatch, add_gap in Phase 4.A) so
 // the engine + log surfaces "this action type is reserved
 // for a later phase" cleanly. Replaced as 4.B / 4.C lands.
 var ErrActionNotImplemented = errors.New("actions: action type not yet implemented in this phase")
@@ -105,7 +105,7 @@ type Activation struct {
 
 // ActionResult names one action attempt's outcome. One
 // entry per workflow.Actions element. Type identifies the
-// primitive (task_append / add_comment / plugin_dispatch /
+// primitive (task_append / add_note / plugin_dispatch /
 // add_gap); Err is nil on success.
 type ActionResult struct {
 	// ActionIdx is the action's position in
@@ -115,7 +115,7 @@ type ActionResult struct {
 	ActionIdx int
 
 	// Type is the action primitive name ("task_append",
-	// "add_comment", "plugin_dispatch", "add_gap").
+	// "add_note", "plugin_dispatch", "add_gap").
 	Type string
 
 	// Err is nil on a successful action run; non-nil
@@ -198,12 +198,12 @@ type Options struct {
 	// FileTaskWriter rooted at the vault path.
 	TaskWriter TaskWriter
 
-	// CommentWriter backs add_comment. Production wires a
+	// NoteWriter backs add_note. Production wires a
 	// stub (Phase 4.B) → vault-backed impl (Phase 4.B.2).
-	CommentWriter CommentWriter
+	NoteWriter NoteWriter
 
 	// GapWriter backs add_gap. Same Phase 4.B stub → 4.B.2
-	// vault-backed shape as CommentWriter.
+	// vault-backed shape as NoteWriter.
 	GapWriter GapWriter
 
 	// PluginDispatcher backs plugin_dispatch. Production wires
@@ -230,8 +230,8 @@ type Options struct {
 // returned Runner dispatches per-action by primitive:
 //   - task_append → taskAppendRunner backed by
 //     opts.TaskWriter.
-//   - add_comment → addCommentRunner backed by
-//     opts.CommentWriter.
+//   - add_note → addNoteRunner backed by
+//     opts.NoteWriter.
 //   - add_gap → addGapRunner backed by opts.GapWriter.
 //   - plugin_dispatch → pluginDispatchRunner backed by
 //     opts.PluginDispatcher.
@@ -246,7 +246,7 @@ func New(opts Options) Runner {
 	}
 	return &dispatcher{
 		taskWriter:       opts.TaskWriter,
-		commentWriter:    opts.CommentWriter,
+		commentWriter:    opts.NoteWriter,
 		gapWriter:        opts.GapWriter,
 		pluginDispatcher: opts.PluginDispatcher,
 		errTaskWriter:    errTaskWriter,
@@ -259,7 +259,7 @@ func New(opts Options) Runner {
 // methods that close over the dispatcher's fields.
 type dispatcher struct {
 	taskWriter       TaskWriter
-	commentWriter    CommentWriter
+	commentWriter    NoteWriter
 	gapWriter        GapWriter
 	pluginDispatcher PluginDispatcher
 	errTaskWriter    ErrTaskWriter
@@ -328,8 +328,8 @@ func (d *dispatcher) runOne(ctx context.Context, idx int, wf *parser.Workflow, a
 	switch {
 	case a.TaskAppend != nil:
 		return d.runTaskAppend(ctx, idx, wf, a.TaskAppend, dec, act)
-	case a.AddComment != nil:
-		return d.runAddComment(ctx, idx, wf, a.AddComment, dec, act)
+	case a.AddNote != nil:
+		return d.runAddNote(ctx, idx, wf, a.AddNote, dec, act)
 	case a.AddGap != nil:
 		return d.runAddGap(ctx, idx, wf, a.AddGap, dec, act)
 	case a.PluginDispatch != nil:
@@ -361,8 +361,8 @@ func (NopRunner) Run(_ context.Context, wf *parser.Workflow, _ Decision, _ Activ
 		switch {
 		case a.TaskAppend != nil:
 			t = "task_append"
-		case a.AddComment != nil:
-			t = "add_comment"
+		case a.AddNote != nil:
+			t = "add_note"
 		case a.PluginDispatch != nil:
 			t = "plugin_dispatch"
 		case a.AddGap != nil:

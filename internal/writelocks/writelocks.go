@@ -33,7 +33,7 @@
 // + sweep, tracked under #23's follow-up.
 //
 // **Skip-cases.** Two write classes deliberately skip the lock per
-// the #23 spec: additive comments (POST /v1/entities/{id}/comments)
+// the #23 spec: additive notes (POST /v1/entities/{id}/notes)
 // and additive edges (POST /v1/edges). Both are append-only at
 // the storage layer; concurrent appenders don't conflict. Lock
 // acquisition is the caller's responsibility, so those handlers

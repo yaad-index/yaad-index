@@ -37,7 +37,7 @@ type frontmatter struct {
 	Summary string `yaml:"summary,omitempty"`
 	Tags []string `yaml:"tags,omitempty"`
 	Edges []Edge `yaml:"edges,omitempty"`
-	CommentCount int `yaml:"comment_count,omitempty"`
+	NoteCount int `yaml:"note_count,omitempty"`
 	Gaps []string `yaml:"gaps,omitempty"`
 	CacheExpires *CacheExpires `yaml:"cache_expires,omitempty"`
 	Attachments []Attachment `yaml:"attachments,omitempty"`
@@ -46,11 +46,11 @@ type frontmatter struct {
 
 // Marshal serializes an Entity to its on-disk markdown representation:
 // `---`-delimited YAML frontmatter, then a blank line, then the body
-// (clean_content + regenerated `## Edges` + `## Comments` sections).
+// (clean_content + regenerated `## Edges` + `## Notes` sections).
 //
 // Required fields (id, kind, plugin) are validated; missing → error.
 // The body sections are deterministic in their order (Edges first, then
-// Comments) and stable across repeated writes of the same entity.
+// Notes) and stable across repeated writes of the same entity.
 //
 // canonicalKinds names the operator-enabled canonical kinds (per
 // ADR-0008's CanonicalGuard). When the entity's Kind is in this set,
@@ -81,7 +81,7 @@ func Marshal(e *Entity, canonicalKinds []string) ([]byte, error) {
 		Summary: e.Summary,
 		Tags: e.Tags,
 		Edges: e.Edges,
-		CommentCount: len(e.Comments),
+		NoteCount: len(e.Notes),
 		Gaps: e.Gaps,
 		CacheExpires: e.CacheExpires,
 		Attachments: e.Attachments,
@@ -109,14 +109,14 @@ func Marshal(e *Entity, canonicalKinds []string) ([]byte, error) {
 	}
 
 	writeEdgesSection(&buf, e.Edges)
-	writeCommentsSection(&buf, e.Comments)
+	writeNotesSection(&buf, e.Notes)
 
 	return buf.Bytes(), nil
 }
 
 // Unmarshal parses a vault file's bytes back into an Entity. Frontmatter
 // is the authoritative source for every field; body sections (`## Edges`
-// wikilinks, `## Comments` dated blocks) are parsed and merged on top —
+// wikilinks, `## Notes` dated blocks) are parsed and merged on top —
 // any wikilink or dated block found in the body that isn't already
 // represented in frontmatter is added to the returned Entity. This is
 // the read-side compensation for hand-edits per the package contract.
@@ -153,13 +153,13 @@ func Unmarshal(b []byte) (*Entity, error) {
 		return nil, err
 	}
 
-	cleanContent, bodyEdges, bodyComments := splitBody(body)
+	cleanContent, bodyEdges, bodyNotes := splitBody(body)
 	e.CleanContent = cleanContent
 	e.Edges = mergeEdges(e.Edges, bodyEdges)
-	// Comments live in the body `## Comments` section only — the
-	// frontmatter `comment_count` is informational + queryable, the
+	// Notes live in the body `## Notes` section only — the
+	// frontmatter `note_count` is informational + queryable, the
 	// body is the source of truth .
-	e.Comments = bodyComments
+	e.Notes = bodyNotes
 
 	return e, nil
 }
@@ -299,19 +299,19 @@ func splitFrontmatter(b []byte) (frontmatterBytes, body []byte, err error) {
 // captured in group 1; the optional type annotation in group 2.
 var edgeBodyLine = regexp.MustCompile(`^-\s*\[\[([^\]]+)\]\](?:\s*\(([^)]+)\))?\s*$`)
 
-// commentTableRow matches a single-column markdown-table row: a line
+// noteTableRow matches a single-column markdown-table row: a line
 // shaped like `| <content> |` (leading/trailing pipes, anything
 // between). The captured content is the raw cell text — pipe-escapes
-// (`\|`) and `<br>` paragraph markers are decoded by parseCommentRow.
-var commentTableRow = regexp.MustCompile(`^\|\s*(.*?)\s*\|\s*$`)
+// (`\|`) and `<br>` paragraph markers are decoded by parseNoteRow.
+var noteTableRow = regexp.MustCompile(`^\|\s*(.*?)\s*\|\s*$`)
 
-// commentTableSeparator matches the markdown-table separator row
+// noteTableSeparator matches the markdown-table separator row
 // (`|---|`, with any number of dashes, and optional spaces). One
-// occurrence sits between the header and the first comment row.
-var commentTableSeparator = regexp.MustCompile(`^\|\s*-+\s*\|\s*$`)
+// occurrence sits between the header and the first note row.
+var noteTableSeparator = regexp.MustCompile(`^\|\s*-+\s*\|\s*$`)
 
-// commentHeadingRow extracts `<date>`, `<date> — <author>`, or
-// `<date> — <author> @ <operator>` from a comment-table heading row's
+// noteHeadingRow extracts `<date>`, `<date> — <author>`, or
+// `<date> — <author> @ <operator>` from a note-table heading row's
 // cell content. Date is a single non-whitespace token (RFC3339 or
 // YYYY-MM-DD; both are dash-only safe). Operator is optional and
 // trailing — pre-yaad-index vault files end at the author and
@@ -320,72 +320,72 @@ var commentTableSeparator = regexp.MustCompile(`^\|\s*-+\s*\|\s*$`)
 // Group 1: date. Group 2: author (may be empty when only date present;
 // `[^@]+?` so the `@ <operator>` separator does not leak into the
 // author capture). Group 3: operator (empty when not present).
-var commentHeadingRow = regexp.MustCompile(`^(\S+)(?:\s+(?:—|-)\s+([^@]+?)(?:\s+@\s+(.+))?)?$`)
+var noteHeadingRow = regexp.MustCompile(`^(\S+)(?:\s+(?:—|-)\s+([^@]+?)(?:\s+@\s+(.+))?)?$`)
 
 // splitBody walks the body bytes and extracts (clean_content, edges,
-// comments). Lines before the first `## Edges` or `## Comments` heading
+// notes). Lines before the first `## Edges` or `## Notes` heading
 // are clean_content; subsequent sections are parsed for their content.
 // Unknown `## ` headings are tolerated and folded into clean_content
 // preceding the known headings.
 //
-// Per the prior design, the `## Comments` section is rendered as a single-column
+// Per the prior design, the `## Notes` section is rendered as a single-column
 // markdown table with alternating heading/body rows:
 //
-//	| Comments |
+//	| Notes |
 //	|----------|
 //	| 2026-05-03 — operator |
-//	| First comment text. |
+//	| First note text. |
 //	| 2026-05-03 — yaad |
-//	| Second comment, may use <br><br> for paragraph breaks. |
+//	| Second note, may use <br><br> for paragraph breaks. |
 //
-// The first non-separator row is the table's column header (`Comments`)
+// The first non-separator row is the table's column header (`Notes`)
 // and is skipped. Subsequent rows alternate between heading
 // (`<date> — <author>`) and body (raw text, with `<br><br>` decoded
 // back to `\n\n` and `\|` decoded back to `|`).
 //
-// Per yaad-index #8: the `## Comments` section is wrapped in the
-// CommentsStartMarker / CommentsEndMarker pair on write. On read,
-// the parser enters "comments" mode on encountering the start
-// marker (regardless of whether a `## Comments` heading follows
+// Per yaad-index #8: the `## Notes` section is wrapped in the
+// NotesStartMarker / NotesEndMarker pair on write. On read,
+// the parser enters "notes" mode on encountering the start
+// marker (regardless of whether a `## Notes` heading follows
 // immediately) and exits on the end marker. Legacy un-marked
-// entities continue to enter comments mode on the `## Comments`
-// heading — the fallback path lets first-read recover comments
+// entities continue to enter notes mode on the `## Notes`
+// heading — the fallback path lets first-read recover notes
 // from pre-marker vault files; the next write produces marker-
 // wrapped output.
-func splitBody(b []byte) (cleanContent string, edges []Edge, comments []Comment) {
+func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note) {
 	var (
 		section = "clean"
 		clean bytes.Buffer
 		edgesB []Edge
-		commsB []Comment
+		notesB []Note
 
-		// comment-table accumulator
-		commentTableHeaderSeen bool // ate the `| Comments |` row
-		commentTableSepSeen bool // ate the `|---|` row
-		commentExpectHeading bool // next row is a heading row
+		// note-table accumulator
+		noteTableHeaderSeen bool // ate the `| Notes |` row
+		noteTableSepSeen bool // ate the `|---|` row
+		noteExpectHeading bool // next row is a heading row
 		curDate time.Time
 		curAuthor string
 		curOperator string
 	)
 
 	// flushOrphanedHeading recovers from the edge case where the
-	// parser read a heading row but the comments section ended
+	// parser read a heading row but the notes section ended
 	// before the body row landed (truncated hand-edit, ad-hoc paste,
 	// concurrent-write surface). Without the flush, the captured
 	// date + author would be silently dropped (the cold-reviewer's catch).
-	// Empty Text on the appended Comment is a clear "this comment
+	// Empty Text on the appended Note is a clear "this note
 	// was authored mid-edit" signal that survives the parse — better
 	// than silent loss; consistent with the stated contract that
 	// hand-edits don't break round-trip.
 	flushOrphanedHeading := func() {
-		// commentExpectHeading == true means we're either at section
+		// noteExpectHeading == true means we're either at section
 		// start (no heading consumed) or the last row read was a body
 		// row (heading + body already paired and appended). false =
 		// "heading read, body still pending."
-		if commentExpectHeading {
+		if noteExpectHeading {
 			return
 		}
-		commsB = append(commsB, Comment{
+		notesB = append(notesB, Note{
 			Date: curDate,
 			Author: curAuthor,
 			Operator: curOperator,
@@ -394,20 +394,20 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, comments []Comment)
 		curDate = time.Time{}
 		curAuthor = ""
 		curOperator = ""
-		commentExpectHeading = true
+		noteExpectHeading = true
 	}
 
-	// Whether we're currently inside a marker-wrapped comments
-	// region. Distinct from `section == "comments"` because the
-	// start-marker line may precede the `## Comments` heading; we
-	// enter the comments section on the marker and ignore the
+	// Whether we're currently inside a marker-wrapped notes
+	// region. Distinct from `section == "notes"` because the
+	// start-marker line may precede the `## Notes` heading; we
+	// enter the notes section on the marker and ignore the
 	// heading inside it.
-	inCommentsMarker := false
+	inNotesMarker := false
 
-	resetCommentsState := func() {
-		commentTableHeaderSeen = false
-		commentTableSepSeen = false
-		commentExpectHeading = true
+	resetNotesState := func() {
+		noteTableHeaderSeen = false
+		noteTableSepSeen = false
+		noteExpectHeading = true
 	}
 
 	scanner := bufio.NewScanner(bytes.NewReader(b))
@@ -416,56 +416,49 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, comments []Comment)
 		line := scanner.Text()
 		trimmed := strings.TrimRight(line, " \t")
 		switch {
-		case trimmed == CommentsStartMarker:
-			// Enter comments-marker region. Comments parsing
-			// activates regardless of whether a `## Comments`
+		case trimmed == NotesStartMarker:
+			// Enter notes-marker region. Notes parsing
+			// activates regardless of whether a `## Notes`
 			// heading follows.
-			if section == "comments" {
+			if section == "notes" {
 				flushOrphanedHeading()
 			}
-			section = "comments"
-			inCommentsMarker = true
-			resetCommentsState()
+			section = "notes"
+			inNotesMarker = true
+			resetNotesState()
 			continue
-		case trimmed == CommentsEndMarker:
-			// Exit comments-marker region. Flush any orphaned
+		case trimmed == NotesEndMarker:
+			// Exit notes-marker region. Flush any orphaned
 			// heading row + return to clean section so subsequent
 			// content (rare; usually nothing follows the end
 			// marker) is captured as clean_content.
-			if section == "comments" {
+			if section == "notes" {
 				flushOrphanedHeading()
 			}
-			inCommentsMarker = false
+			inNotesMarker = false
 			section = "clean"
 			continue
 		case trimmed == "## Edges":
-			if inCommentsMarker {
+			if inNotesMarker {
 				// Inside marker region — ignore section-like
-				// headings. Comments end at the end marker.
+				// headings. Notes end at the end marker.
 				continue
 			}
-			if section == "comments" {
+			if section == "notes" {
 				flushOrphanedHeading()
 			}
 			section = "edges"
 			continue
-		case trimmed == "## Comments":
-			if inCommentsMarker {
-				// Inside marker region — the `## Comments` heading
-				// is decorative for human reading; the table parser
-				// below skips it via the column-header rule.
-				continue
-			}
-			// Legacy un-marked path: enter comments mode on the
-			// heading itself.
-			if section == "comments" {
-				flushOrphanedHeading()
-			}
-			section = "comments"
-			resetCommentsState()
+		case trimmed == "## Notes" && inNotesMarker:
+			// Inside marker region — the `## Notes` heading is
+			// decorative for human reading; the table parser below
+			// skips it via the column-header rule. Outside the
+			// marker region, `## Notes` is normal user prose (no
+			// special handling) — see the `## ` clean-section
+			// branch below.
 			continue
 		case strings.HasPrefix(line, "## "):
-			if inCommentsMarker {
+			if inNotesMarker {
 				// Inside marker region — unknown headings are
 				// folded as decorative table content (table parser
 				// below will skip non-table-row lines).
@@ -476,7 +469,7 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, comments []Comment)
 			// the canonical sections. (Once we leave a known section
 			// for an unknown one, any further content past this point
 			// is body again until another known heading appears.)
-			if section == "comments" {
+			if section == "notes" {
 				flushOrphanedHeading()
 			}
 			if section != "clean" {
@@ -495,36 +488,36 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, comments []Comment)
 					To: strings.TrimSpace(m[1]),
 				})
 			}
-		case "comments":
-			if commentTableSeparator.MatchString(strings.TrimSpace(line)) {
-				commentTableSepSeen = true
+		case "notes":
+			if noteTableSeparator.MatchString(strings.TrimSpace(line)) {
+				noteTableSepSeen = true
 				continue
 			}
-			m := commentTableRow.FindStringSubmatch(line)
+			m := noteTableRow.FindStringSubmatch(line)
 			if m == nil {
 				// Blank line / decorative content — ignore inside the
-				// comments section. Mid-table blank lines aren't
+				// notes section. Mid-table blank lines aren't
 				// produced by Marshal but tolerate them on parse so
 				// hand-edits don't break round-trip.
 				continue
 			}
-			cell := decodeCommentCell(m[1])
-			if !commentTableHeaderSeen {
-				// First row is the column header (`| Comments |`).
-				// Don't validate the literal `Comments` text — design-
+			cell := decodeNoteCell(m[1])
+			if !noteTableHeaderSeen {
+				// First row is the column header (`| Notes |`).
+				// Don't validate the literal `Notes` text — design-
 				// in-flux means the column name may move; what matters
 				// is "first row is header, rest is content."
-				commentTableHeaderSeen = true
+				noteTableHeaderSeen = true
 				continue
 			}
 			// Defensive: if the separator never showed up but rows are
 			// flowing, treat it as seen. Markdown renderers tolerate a
 			// missing separator inconsistently.
-			if !commentTableSepSeen {
-				commentTableSepSeen = true
+			if !noteTableSepSeen {
+				noteTableSepSeen = true
 			}
-			if commentExpectHeading {
-				if hm := commentHeadingRow.FindStringSubmatch(cell); hm != nil {
+			if noteExpectHeading {
+				if hm := noteHeadingRow.FindStringSubmatch(cell); hm != nil {
 					curDate = parseCommentDate(hm[1])
 					curAuthor = strings.TrimSpace(hm[2])
 					curOperator = strings.TrimSpace(hm[3])
@@ -536,11 +529,11 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, comments []Comment)
 					curAuthor = ""
 					curOperator = ""
 				}
-				commentExpectHeading = false
+				noteExpectHeading = false
 				continue
 			}
 			// Body row — pair with the buffered heading.
-			commsB = append(commsB, Comment{
+			notesB = append(notesB, Note{
 				Date: curDate,
 				Author: curAuthor,
 				Operator: curOperator,
@@ -549,13 +542,13 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, comments []Comment)
 			curDate = time.Time{}
 			curAuthor = ""
 			curOperator = ""
-			commentExpectHeading = true
+			noteExpectHeading = true
 		}
 	}
 
 	// End-of-input: flush a trailing orphaned heading row when the
 	// section ended without a paired body row.
-	if section == "comments" {
+	if section == "notes" {
 		flushOrphanedHeading()
 	}
 
@@ -565,9 +558,9 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, comments []Comment)
 	// regardless of how the caller spaced their input.
 	trimmed := strings.Trim(clean.String(), "\n")
 	if trimmed == "" {
-		return "", edgesB, commsB
+		return "", edgesB, notesB
 	}
-	return trimmed + "\n", edgesB, commsB
+	return trimmed + "\n", edgesB, notesB
 }
 
 // parseCommentDate accepts both RFC3339 timestamps (legacy from the
@@ -585,22 +578,22 @@ func parseCommentDate(s string) time.Time {
 	return time.Time{}
 }
 
-// decodeCommentCell reverses encodeCommentCell — turns `<br><br>` back
+// decodeNoteCell reverses encodeNoteCell — turns `<br><br>` back
 // into paragraph breaks (`\n\n`), single `<br>` into `\n`, and `\|`
 // back into a literal pipe. The order matters: `<br><br>` before `<br>`
 // so paragraph breaks aren't double-decoded.
-func decodeCommentCell(s string) string {
+func decodeNoteCell(s string) string {
 	s = strings.ReplaceAll(s, "<br><br>", "\n\n")
 	s = strings.ReplaceAll(s, "<br>", "\n")
 	s = strings.ReplaceAll(s, `\|`, "|")
 	return s
 }
 
-// encodeCommentCell escapes pipe characters and substitutes line
+// encodeNoteCell escapes pipe characters and substitutes line
 // breaks with `<br>` so the cell stays on one markdown-table row.
 // Paragraph boundaries (`\n\n`) become `<br><br>`; intra-paragraph
 // newlines become a single `<br>`.
-func encodeCommentCell(s string) string {
+func encodeNoteCell(s string) string {
 	s = strings.ReplaceAll(s, `|`, `\|`)
 	// Normalize paragraph breaks first so the single-newline pass
 	// doesn't see the doubled newlines as two `<br>`s.
@@ -628,32 +621,32 @@ func writeEdgesSection(w *bytes.Buffer, edges []Edge) {
 	w.WriteByte('\n')
 }
 
-// writeCommentsSection renders the entity's comments as a single-
-// column markdown table Per the prior design,. Each comment becomes two rows: a
+// writeNotesSection renders the entity's notes as a single-
+// column markdown table Per the prior design,. Each note becomes two rows: a
 // heading (`<date> — <author>`) and a body (the text, with paragraph
 // breaks encoded as `<br><br>` and pipe chars escaped as `\|`).
 //
-// The frontmatter `comment_count` field carries the count; the body
+// The frontmatter `note_count` field carries the count; the body
 // table is the source of truth.
 //
-// Per yaad-index #8: wraps the section in CommentsStartMarker /
-// CommentsEndMarker so the read path can splice deterministically
+// Per yaad-index #8: wraps the section in NotesStartMarker /
+// NotesEndMarker so the read path can splice deterministically
 // + so a plugin body re-ingest doesn't touch this region.
-func writeCommentsSection(w *bytes.Buffer, comments []Comment) {
-	if len(comments) == 0 {
+func writeNotesSection(w *bytes.Buffer, notes []Note) {
+	if len(notes) == 0 {
 		return
 	}
-	w.WriteString(CommentsStartMarker)
+	w.WriteString(NotesStartMarker)
 	w.WriteByte('\n')
-	w.WriteString("## Comments\n\n")
-	w.WriteString("| Comments |\n")
+	w.WriteString("## Notes\n\n")
+	w.WriteString("| Notes |\n")
 	w.WriteString("|----------|\n")
-	for _, c := range comments {
+	for _, c := range notes {
 		// Heading row: `| <date> — <author> @ <operator> |`. Date format
 		// is YYYY-MM-DD (not RFC3339) — the table is operator-readable
 		// shorthand; the underlying time.Time keeps the precision the
 		// API layer needs. Operator suffix is omitted when empty so
-		// pre-yaad-index comments render unchanged (backward-
+		// pre-yaad-index notes render unchanged (backward-
 		// compat); without an author, the operator suffix is also
 		// omitted (operator-without-agent is a parse anomaly).
 		w.WriteString("| ")
@@ -669,10 +662,10 @@ func writeCommentsSection(w *bytes.Buffer, comments []Comment) {
 		w.WriteString(" |\n")
 		// Body row: encoded text in a single cell.
 		w.WriteString("| ")
-		w.WriteString(encodeCommentCell(strings.TrimRight(c.Text, "\n")))
+		w.WriteString(encodeNoteCell(strings.TrimRight(c.Text, "\n")))
 		w.WriteString(" |\n")
 	}
-	w.WriteString(CommentsEndMarker)
+	w.WriteString(NotesEndMarker)
 	w.WriteByte('\n')
 }
 

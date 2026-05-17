@@ -6,7 +6,7 @@
 // PUT /v1/user-content/{id}/sections/{sec} — replace one section's body
 // DELETE /v1/user-content/{id} — delete entity
 //
-// Auth contract (mirrors a prior PR comment author validation):
+// Auth contract (mirrors a prior PR note author validation):
 //
 // - All endpoints require Bearer JWT (via the protect() middleware
 // from yaad-index). Dev-mode AnonymousAuth bypasses identity-

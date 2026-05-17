@@ -27,7 +27,7 @@ agent / operator
  │
  ▼
  POST /v1/ingest POST /v1/entities/{id}/fill
- POST /v1/entities/{id}/comments (or hand-edit a `*.md` file
+ POST /v1/entities/{id}/notes (or hand-edit a `*.md` file
  in the vault)
  │
  ▼
@@ -71,7 +71,7 @@ governs.
  [ADR-0008](adr/0008-vault-as-source-of-truth.md) in three places: snippet semantics
  (now from agent-filled `summary`, not query-time substring strip),
  fill-token mechanism (gone — entity ID is the durable callback),
- and the new `/v1/entities/{id}/comments` endpoint.
+ and the new `/v1/entities/{id}/notes` endpoint.
 - [ADR-0003 — CLI library: kong](adr/0003-cli-library-kong.md). Why `cmd/yaad-index/main.go` uses kong for
  command parsing rather than `flag`/`cobra`/etc.
 - [ADR-0004 — Logging library: slog](adr/0004-logging-library-slog.md). Standard-library `log/slog` everywhere; no third-
@@ -96,7 +96,7 @@ governs.
  architectural redesign that makes the markdown vault authoritative
  and the SQLite DB regenerable. Introduces the `vault.path` config
  key, the `canonical_kinds` / `canonical_edge_types` operator-config
- layer, comments as a first-class entity field, the
+ layer, notes as a first-class entity field, the
  `POST /v1/reindex` admin endpoint, and the entity-ID-as-durable-
  callback agent-fill model. Amends ADR-0002 in the three places
  noted above.
@@ -185,11 +185,11 @@ governs.
  `plugins clear-cache`, `reindex`). Hosts the store + registry +
  vault wiring + canonical-kinds guard bring-up + graceful shutdown.
 - `internal/api/` — HTTP handlers, middleware, response shapes,
- long-poll ingest tracker. Comment + fill endpoints write vault
+ long-poll ingest tracker. Note + fill endpoints write vault
  first, then mirror to the DB.
 - `internal/vault/` — markdown serialization (Entity ↔ file bytes),
  atomic-write Writer (temp + rename), Reader that merges body
- `## Edges` / `## Comments` into frontmatter on read so hand-edits
+ `## Edges` / `## Notes` into frontmatter on read so hand-edits
  flow through reindex. The frontmatter schema is locked by
  ADR-0008.
 - `internal/reindex/` — vault walker that (re)builds the derived
@@ -257,7 +257,7 @@ log_level: info
 
 # Pair-claim JWT auth scaffold (per yaad-index a prior PR; a prior PR
 # wires the HTTP middleware; a prior PR enforces author validation on
-# comments; a prior PR serves /v1/jwks). Operational config — keys_dir lives
+# notes; a prior PR serves /v1/jwks). Operational config — keys_dir lives
 # outside the vault by design (vault-readable means agent-readable,
 # which the operator explicitly vetoed). All three fields optional; defaults
 # are `required: true`, `keys_dir: /etc/yaad-index/keys`,
@@ -278,9 +278,9 @@ log_level: info
  dispatch. Path must be absolute, executable, an actual file.
 - **`vault.path`** — absolute path to the markdown vault root (per
  [ADR-0008 §"Vault layout"](adr/0008-vault-as-source-of-truth.md)). Required for `POST /v1/ingest`,
- `POST /v1/entities/{id}/fill`, `POST /v1/entities/{id}/comments`,
+ `POST /v1/entities/{id}/fill`, `POST /v1/entities/{id}/notes`,
  and `POST /v1/reindex` to function. Without it, ingest stays
- DB-only and the fill / comments / reindex endpoints return
+ DB-only and the fill / notes / reindex endpoints return
  503 `vault_required` (or are unregistered, in reindex's case).
 - **`vault.auto_commit`** + auto-commit fields — when the vault root
  is a git working tree, yaad-index records every successful write
@@ -289,7 +289,7 @@ log_level: info
  `auto_commit`: nil (default) auto-detects `.git/`; `true` requires
  it (Validate fails fast otherwise); `false` opts out regardless.
  Templates: `ingest: <id>`, `re-ingest: <id> [force_refetch=true|ttl_expired]`,
- `fill: <id> [field1, field2, ...]`, `comment: <id> by <author>`.
+ `fill: <id> [field1, field2, ...]`, `note: <id> by <author>`.
  `auto_commit_debounce_seconds: N` (>0) collapses bursty writes
  into one rollup commit per N-second window with a summarized
  message (`bulk: ingest 12, fill 3`); 0 (default) is per-operation.
@@ -421,7 +421,7 @@ log_level: info
  surface). a prior PR wires the HTTP middleware that extracts
  `Authorization: Bearer <token>` and attaches the parsed claim
  to the request context. a prior PR enforces that
- `POST /v1/entities/{id}/comments` `author` matches the JWT's
+ `POST /v1/entities/{id}/notes` `author` matches the JWT's
  `sub`. a prior PR serves `GET /v1/jwks` (RFC 7517) so peer
  agents can verify yaad-index-issued tokens without out-of-band
  key sharing — the route is public, `Cache-Control: public, max-age=3600`,
@@ -462,7 +462,7 @@ as reserved.
 |-----------------|------------------------------|------------|
 | `summary` | `vault.Entity.Summary` | a prior PR (snippet from summary) |
 | `tags` | `vault.Entity.Tags` | a prior PR (fill vault-first) |
-| `comments_text` | `\n`-joined `vault.Entity.Comments[].Text` (FTS-only — full structured comments live in `vault.Entity.Comments`) | a prior PR (comments endpoint) |
+| `comments_text` | `\n`-joined `vault.Entity.Notes[].Text` (FTS-only — full structured notes live in `vault.Entity.Notes`) | a prior PR (notes endpoint) |
 
 (See `internal/api/fill.go::vaultEntityDataForDB` for the projection
 function. Plugins emitting `summary` / `tags` / `comments_text` as
@@ -489,7 +489,7 @@ lookup-first cache; full walkthrough in [`docs/plugin-flow.md`](docs/plugin-flow
  `CanonicalEntities` / `CanonicalEdges`.
 4. yaad-index writes the entity to the vault as `<vault>/<kind>/<slug>.md`
  with full frontmatter (id, kind, plugin, data, provenance,
- notations, gaps, summary, tags, edges, comments). Atomic temp +
+ notations, gaps, summary, tags, edges, notes). Atomic temp +
  rename — there is never a partially-written destination file.
 5. yaad-index mirrors the entity into the DB via `UpsertEntity` +
  `AppendProvenance` + `ReplaceNotations` (the cache pre-
@@ -500,7 +500,7 @@ lookup-first cache; full walkthrough in [`docs/plugin-flow.md`](docs/plugin-flow
 7. Response carries `state` (`complete` / `needs_fill` / `queued` /
  `disambiguation`) and the entity (with the single-hop body —
  `clean_content`, `summary`, `tags`, `gaps`, `aliases`, `plugin`,
- `notations`, `comments` — via the `mergeVaultEntity` overlay).
+ `notations`, `notes` — via the `mergeVaultEntity` overlay).
  The **entity ID is the durable callback handle**: agents use
  `POST /v1/entities/{id}/fill` later (seconds, hours, days)
  without any server-side token.
@@ -537,16 +537,16 @@ per yaad-index the source issue):
  + linked Confluence doc + canonical process stub) in one
  round-trip without per-hop client loops.
 
-Comment append (`POST /v1/entities/{id}/comments`):
+Note append (`POST /v1/entities/{id}/notes`):
 
 1. `{text, author?}` body. Server stamps `date` (UTC, second-
  precision so body and frontmatter round-trip identically).
- Append-only in v1; edit / delete by comment ID is a follow-up.
-2. Vault frontmatter is canonical; the body `## Comments` section
+ Append-only in v1; edit / delete by note ID is a follow-up.
+2. Vault frontmatter is canonical; the body `## Notes` section
  is regenerated from the list on every write. Hand-edits to the
  body section flow through the next `vault.Reader.ReadByID` call
  that reads the file (the reader merges body → frontmatter on
- read). Comment text is FTS-searchable via the
+ read). Note text is FTS-searchable via the
  `data["comments_text"]` projection.
 
 Reindex (`yaad-index reindex` CLI or `POST /v1/reindex`):
@@ -657,7 +657,7 @@ agent-reachable):
  vault BEFORE updating the DB. A vault-write failure aborts the
  request with 500 `internal_error` and the DB stays untouched.
  Without `vault.path` configured, `POST /v1/entities/{id}/fill` and
- `POST /v1/entities/{id}/comments` return 503 `vault_required`;
+ `POST /v1/entities/{id}/notes` return 503 `vault_required`;
  ingest stays DB-only as a backwards-compatible fallback.
 - **Error envelope.** Every non-2xx response is
  `{"ok": false, "error": "<code>", "message": "<human-readable>"}`

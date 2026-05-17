@@ -455,15 +455,15 @@ func removeKeysFromList(in []string, keys map[string]any) []string {
 
 // vaultEntityDataForDB projects a vault entity into the data map the
 // store sees. Top-level vault fields that the DB tracks (summary,
-// tags, comments) are folded into data so that GET /v1/entities/{id}
+// tags, notes) are folded into data so that GET /v1/entities/{id}
 // returns them via the entity data field — preserving the existing
 // wire shape. Future PRs may adjust the API surface to expose these
 // as top-level fields too.
 //
-// `comments_text` is a derived concatenation of every comment's Text
+// `notes_text` is a derived concatenation of every note's Text
 // joined by newlines — stored under that key so the DB-side
 // LIKE-on-data search (a prior PR's snippet-from-summary contract) can
-// find comment content. The actual comment list (with date + author)
+// find note content. The actual note list (with date + author)
 // stays in the vault file's frontmatter, which is the canonical
 // source.
 func vaultEntityDataForDB(e *vault.Entity) map[string]any {
@@ -477,15 +477,15 @@ func vaultEntityDataForDB(e *vault.Entity) map[string]any {
 	if len(e.Tags) > 0 {
 		out["tags"] = e.Tags
 	}
-	if len(e.Comments) > 0 {
-		parts := make([]string, 0, len(e.Comments))
-		for _, c := range e.Comments {
+	if len(e.Notes) > 0 {
+		parts := make([]string, 0, len(e.Notes))
+		for _, c := range e.Notes {
 			if c.Text != "" {
 				parts = append(parts, c.Text)
 			}
 		}
 		if len(parts) > 0 {
-			out["comments_text"] = strings.Join(parts, "\n")
+			out["notes_text"] = strings.Join(parts, "\n")
 		}
 	}
 	return out

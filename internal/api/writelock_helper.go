@@ -21,7 +21,7 @@ import (
 // an in-flight request.
 //
 // **When to call:** every handler that produces a vault.Writer
-// invocation. Skip for additive surfaces (comments, edges) per the
+// invocation. Skip for additive surfaces (notes, edges) per the
 // #23 spec — those don't conflict at the storage layer.
 func acquireWriteLock(w http.ResponseWriter, r *http.Request, mgr *writelocks.Manager, artifact string) (release func(), ok bool) {
 	holder := writeHolderForRequest(r)

@@ -12,7 +12,7 @@
 // ADR-0023 unified plugin response protocol lands as a later
 // phase; the stub keeps the operator-visible failure mode
 // clear ("vault-backed impl pending" semantics, same shape as
-// PR-83's add_comment / add_gap stubs).
+// PR-83's add_note / add_gap stubs).
 
 package actions
 
