@@ -546,3 +546,65 @@ func TestParse_CRLF_Frontmatter(t *testing.T) {
 	require.NoError(t, err, "CRLF should parse same as LF")
 	assert.Equal(t, "boardgame-news", wf.Name)
 }
+
+// TestParse_SetProperty_HappyPath: a workflow with a
+// set_property action parses cleanly; fields map preserves
+// keys + values verbatim.
+func TestParse_SetProperty_HappyPath(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: classify\n---\n\n```yaml\nallowed_plugins: [a]\ntrigger: {type: manual}\nactions:\n  - set_property:\n      entity: 'entity.id'\n      fields:\n        repo: \"'example-org/my-project'\"\n        type: \"'note'\"\n```\n"
+	wf, err := Parse([]byte(md))
+	require.NoError(t, err)
+	require.Len(t, wf.Actions, 1)
+	sp := wf.Actions[0].SetProperty
+	require.NotNil(t, sp, "set_property action should be populated")
+	assert.Equal(t, "entity.id", sp.Entity)
+	assert.Equal(t, "'example-org/my-project'", sp.Fields["repo"])
+	assert.Equal(t, "'note'", sp.Fields["type"])
+}
+
+// TestParse_SetProperty_DefaultEntity: omitting `entity:`
+// leaves it empty — the runner defaults to dec.EntityID at
+// execution time (mirrors add_note's default-target shape).
+func TestParse_SetProperty_DefaultEntity(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: sp-default\n---\n\n```yaml\nallowed_plugins: [a]\ntrigger: {type: manual}\nactions:\n  - set_property:\n      fields:\n        x: \"'y'\"\n```\n"
+	wf, err := Parse([]byte(md))
+	require.NoError(t, err)
+	require.Len(t, wf.Actions, 1)
+	require.NotNil(t, wf.Actions[0].SetProperty)
+	assert.Empty(t, wf.Actions[0].SetProperty.Entity,
+		"empty entity flows through; runner applies the default at exec time")
+}
+
+// TestValidate_SetProperty_EmptyFieldsRejected: parser
+// rejects a set_property with no fields.
+func TestValidate_SetProperty_EmptyFieldsRejected(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: sp-empty\n---\n\n```yaml\nallowed_plugins: [a]\ntrigger: {type: manual}\nactions:\n  - set_property:\n      entity: 'entity.id'\n```\n"
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "fields is required")
+}
+
+// TestValidate_SetProperty_EmptyValueRejected: a field with
+// an empty value (whitespace-only or "") is rejected — the
+// runner has nothing to evaluate.
+func TestValidate_SetProperty_EmptyValueRejected(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: sp-empty-val\n---\n\n```yaml\nallowed_plugins: [a]\ntrigger: {type: manual}\nactions:\n  - set_property:\n      fields:\n        x: ''\n```\n"
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty")
+}
+
+// TestValidate_SetPropertyAndAddNote_MutuallyExclusive: a
+// single Action with both set_property and another primitive
+// trips the multi-primitive guard.
+func TestValidate_SetPropertyAndAddNote_MutuallyExclusive(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: x\n---\n\n```yaml\nallowed_plugins: [a]\ntrigger: {type: manual}\nactions:\n  - set_property:\n      fields: {x: \"'y'\"}\n    add_note: {content: hi}\n```\n"
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "expected exactly one")
+}

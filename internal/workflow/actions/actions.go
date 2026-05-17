@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/workflow/parser"
 )
 
@@ -210,6 +211,18 @@ type Options struct {
 	// a stub (Phase 4.C) → registry-backed impl (Phase 4.C.2).
 	PluginDispatcher PluginDispatcher
 
+	// PropertyWriter backs set_property. Production wires
+	// VaultPropertyWriter; nil → StubPropertyWriter rejects
+	// with ErrActionNotImplemented so tests / dev binaries
+	// without a vault surface a clear failure.
+	PropertyWriter PropertyWriter
+
+	// Bus is the eventbus the set_property runner publishes
+	// fill.completed events to (one per landed field). Nil →
+	// emission silently skipped (test/dev default — other
+	// action runners stay decoupled).
+	Bus eventbus.Bus
+
 	// ErrTaskWriter backs the err-task pattern per ADR-0024
 	// §"Runtime errors". Production wires
 	// FileErrTaskWriter. Nil → StubErrTaskWriter discards
@@ -249,7 +262,9 @@ func New(opts Options) Runner {
 		commentWriter:    opts.NoteWriter,
 		gapWriter:        opts.GapWriter,
 		pluginDispatcher: opts.PluginDispatcher,
+		propertyWriter:   opts.PropertyWriter,
 		errTaskWriter:    errTaskWriter,
+		bus:              opts.Bus,
 		logger:           logger,
 	}
 }
@@ -262,7 +277,9 @@ type dispatcher struct {
 	commentWriter    NoteWriter
 	gapWriter        GapWriter
 	pluginDispatcher PluginDispatcher
+	propertyWriter   PropertyWriter
 	errTaskWriter    ErrTaskWriter
+	bus              eventbus.Bus
 	logger           *slog.Logger
 }
 
@@ -334,6 +351,8 @@ func (d *dispatcher) runOne(ctx context.Context, idx int, wf *parser.Workflow, a
 		return d.runAddGap(ctx, idx, wf, a.AddGap, dec, act)
 	case a.PluginDispatch != nil:
 		return d.runPluginDispatch(ctx, idx, wf, a.PluginDispatch, dec, act)
+	case a.SetProperty != nil:
+		return d.runSetProperty(ctx, idx, wf, a.SetProperty, dec, act)
 	default:
 		return ActionResult{
 			ActionIdx: idx, Type: "unknown",
@@ -367,6 +386,8 @@ func (NopRunner) Run(_ context.Context, wf *parser.Workflow, _ Decision, _ Activ
 			t = "plugin_dispatch"
 		case a.AddGap != nil:
 			t = "add_gap"
+		case a.SetProperty != nil:
+			t = "set_property"
 		}
 		out[i] = ActionResult{ActionIdx: i, Type: t}
 	}

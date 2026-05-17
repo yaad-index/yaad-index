@@ -230,8 +230,11 @@ func validateActions(wf *Workflow) error {
 		if a.AddGap != nil {
 			set++
 		}
+		if a.SetProperty != nil {
+			set++
+		}
 		if set == 0 {
-			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_note / plugin_dispatch / add_gap)", i)
+			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_note / plugin_dispatch / add_gap / set_property)", i)
 		}
 		if set > 1 {
 			return fmt.Errorf("workflow: actions[%d] sets %d primitives (expected exactly one)", i, set)
@@ -252,6 +255,10 @@ func validateActions(wf *Workflow) error {
 		case a.AddGap != nil:
 			if err := validateAddGap(a.AddGap, gapSet); err != nil {
 				return fmt.Errorf("workflow: actions[%d].add_gap: %w", i, err)
+			}
+		case a.SetProperty != nil:
+			if err := validateSetProperty(a.SetProperty); err != nil {
+				return fmt.Errorf("workflow: actions[%d].set_property: %w", i, err)
 			}
 		}
 	}
@@ -301,6 +308,21 @@ func validateAddGap(a *AddGapAction, addable map[string]struct{}) error {
 	}
 	if _, ok := addable[a.Gap]; !ok {
 		return fmt.Errorf("gap %q is not in the workflow's addable_gaps vocabulary", a.Gap)
+	}
+	return nil
+}
+
+func validateSetProperty(a *SetPropertyAction) error {
+	if len(a.Fields) == 0 {
+		return fmt.Errorf("fields is required (at least one field)")
+	}
+	for name, expr := range a.Fields {
+		if name == "" {
+			return fmt.Errorf("fields key is empty (after trim) — field names must be non-empty")
+		}
+		if strings.TrimSpace(expr) == "" {
+			return fmt.Errorf("fields[%q] value is empty", name)
+		}
 	}
 	return nil
 }

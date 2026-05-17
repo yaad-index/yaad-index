@@ -57,3 +57,13 @@ func (StubPluginDispatcher) Dispatch(_ context.Context, plugin, command string, 
 	return fmt.Errorf("%w: registry-backed plugin_dispatch pending (Phase 4.C.2); attempted plugin=%s command=%s args_len=%d",
 		ErrActionNotImplemented, plugin, command, len(args))
 }
+
+// StubPropertyWriter is the production-default PropertyWriter
+// retained for tests + dev binaries running without a vault.
+// Same stub-reject shape as StubNoteWriter / StubGapWriter.
+type StubPropertyWriter struct{}
+
+func (StubPropertyWriter) SetProperties(_ context.Context, workflow, entityID string, fields map[string]any) error {
+	return fmt.Errorf("%w: vault-backed set_property not wired; attempted workflow=%s entity=%s fields=%d",
+		ErrActionNotImplemented, workflow, entityID, len(fields))
+}
