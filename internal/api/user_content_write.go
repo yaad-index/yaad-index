@@ -310,6 +310,7 @@ func handleUserContentCreate(
 				Kind:      userContentKind,
 				SourceTag: eventbus.SourceOperator,
 				At:        time.Now().UTC(),
+				Chain:     eventbus.WorkflowChainFromContext(r.Context()),
 			})
 		}
 

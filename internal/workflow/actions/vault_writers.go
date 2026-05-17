@@ -571,6 +571,7 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 	targetID := targetKind + ":" + targetSlug
 
 	source := eventbus.WorkflowSource(workflow)
+	chain := eventbus.WorkflowChainFromContext(ctx)
 
 	created, err := canonical.EnsureLabelRow(ctx, w.store, targetID, w.logger)
 	if err != nil {
@@ -582,6 +583,7 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 			Kind:      targetKind,
 			SourceTag: source,
 			At:        time.Now().UTC(),
+			Chain:     chain,
 		})
 	}
 
@@ -599,6 +601,7 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 			EdgeType:  edgeType,
 			SourceTag: source,
 			At:        time.Now().UTC(),
+			Chain:     chain,
 		})
 	}
 
@@ -625,6 +628,7 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 			Gap:       edgeType,
 			SourceTag: source,
 			At:        time.Now().UTC(),
+			Chain:     chain,
 		})
 	}
 	return nil

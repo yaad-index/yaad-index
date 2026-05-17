@@ -354,12 +354,14 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 			filledGaps = append(filledGaps, k)
 		}
 		sort.Strings(filledGaps)
+		fillChain := eventbus.WorkflowChainFromContext(r.Context())
 		for _, gap := range filledGaps {
 			bus.Publish(r.Context(), eventbus.FillCompletedEvent{
 				EntityID:  ve.ID,
 				Gap:       gap,
 				SourceTag: eventbus.SourceAgent,
 				At:        fillAt,
+				Chain:     fillChain,
 			})
 		}
 

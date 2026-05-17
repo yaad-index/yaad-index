@@ -112,6 +112,7 @@ func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Reg
 			EdgeType:  se.Type,
 			SourceTag: eventbus.SourceAgent,
 			At:        se.UpdatedAt.UTC(),
+			Chain:     eventbus.WorkflowChainFromContext(r.Context()),
 		})
 
 		// Edge provenance isn't persisted today (the store doesn't write
