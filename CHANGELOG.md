@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.5.0...yaad-index-v0.6.0) (2026-05-18)
+
+
+### Features
+
+* **workflow,actions:** always-on Via breadcrumbs + wikilink emission ([#163](https://github.com/yaad-index/yaad-index/issues/163)) ([#165](https://github.com/yaad-index/yaad-index/issues/165)) ([99fa6b8](https://github.com/yaad-index/yaad-index/commit/99fa6b868fca52b638fca8ce0832bcae82d9dfef))
+* **workflow,actions:** archive_entity action ([#150](https://github.com/yaad-index/yaad-index/issues/150)) ([#162](https://github.com/yaad-index/yaad-index/issues/162)) ([bbb17e5](https://github.com/yaad-index/yaad-index/commit/bbb17e538e022c4934715aa5f61e4d84a2a5a9f2))
+
 ## [0.5.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.4.0...yaad-index-v0.5.0) (2026-05-17)
 
 
