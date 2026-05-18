@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.6.0...yaad-index-v0.7.0) (2026-05-18)
+
+
+### Features
+
+* **workflow,actions:** extend wikilink emission to add_note + set_property ([#166](https://github.com/yaad-index/yaad-index/issues/166)) ([#167](https://github.com/yaad-index/yaad-index/issues/167)) ([25fd5fd](https://github.com/yaad-index/yaad-index/commit/25fd5fdd4f4912fde626c1b8b95f9a58c3e30467))
+
 ## [0.6.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.5.0...yaad-index-v0.6.0) (2026-05-18)
 
 
