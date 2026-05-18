@@ -97,6 +97,13 @@ type VaultWriterBackend struct {
 	VaultWriter VaultEntityWriter
 	WriteLocks  *writelocks.Manager
 	Logger      *slog.Logger
+	// Kinds is the operator's canonical-kinds registry,
+	// threaded into maybeWrapEntity by writers that emit
+	// vault content referencing entities (add_note body +
+	// set_property values per #166). Nil-safe: an unset /
+	// empty registry disables wikilink wrapping (every
+	// string passes through unchanged).
+	Kinds map[string]config.CanonicalKindConfig
 	// Clock supplies the timestamp stamped on each appended
 	// Note. nil → time.Now. Test-only knob; production
 	// leaves it unset.
@@ -184,6 +191,15 @@ func (w *VaultNoteWriter) AppendNote(ctx context.Context, workflow, entityID, bo
 		}
 		return fmt.Errorf("vault.Reader.ReadByID %s: %w", entityID, err)
 	}
+
+	// Per #166, wrap a body that renders to a `<kind>:<id>`
+	// entity-shape into `[[ ]]` so Obsidian surfaces the
+	// backlink. Non-matching bodies pass through unchanged.
+	// Whole-string wrap matches the task_append + Via-section
+	// semantics from #163 — prose with embedded entity refs
+	// isn't auto-scanned; workflow authors who want a wikilink
+	// in mid-text render the bare id and let the helper wrap.
+	body = maybeWrapEntity(body, w.backend.Kinds)
 
 	// Truncate to second precision so the YAML frontmatter
 	// + body `## Notes` section header round-trip cleanly
@@ -360,7 +376,7 @@ func (w *VaultPropertyWriter) SetProperties(ctx context.Context, workflow, entit
 		ve.Data = make(map[string]any, len(fields))
 	}
 	for k, v := range fields {
-		ve.Data[k] = v
+		ve.Data[k] = wrapEntityValue(v, w.backend.Kinds)
 	}
 
 	commitMsg := fmt.Sprintf("workflow set_property on %s by %s", ve.ID, workflowAuthor(workflow))
