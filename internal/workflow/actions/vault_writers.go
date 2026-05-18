@@ -62,10 +62,15 @@ const DefaultActionWriteLockTimeout = 5 * time.Second
 
 // EntityStore is the narrow subset of *store.Store the vault-
 // backed writers need. Production wires *store.Store directly;
-// tests substitute fakes that record calls.
+// tests substitute fakes that record calls. ArchiveEntity is
+// the #150 archive_entity surface; ErrNotFound from this method
+// is the soft-skip signal (entity may have been archived by
+// another path) and the runner forwards success rather than
+// failing the workflow chain.
 type EntityStore interface {
 	GetEntity(ctx context.Context, id string) (*store.Entity, error)
 	UpsertEntity(ctx context.Context, e *store.Entity) error
+	ArchiveEntity(ctx context.Context, id string) error
 }
 
 // VaultEntityReader is the narrow subset of *vault.Reader.
@@ -74,8 +79,12 @@ type VaultEntityReader interface {
 }
 
 // VaultEntityWriter is the narrow subset of *vault.Writer.
+// ArchiveWithCommit is the #150 archive_entity surface
+// (move active → _archive). The production *vault.Writer
+// idempotently treats already-at-destination as a no-op.
 type VaultEntityWriter interface {
 	WriteWithCommit(ctx context.Context, e *vault.Entity, message, author string) error
+	ArchiveWithCommit(ctx context.Context, kind, id, message, author string) error
 }
 
 // VaultWriterBackend bundles the dependencies the vault-backed
@@ -389,6 +398,106 @@ func workflowAuthor(workflow string) string {
 // next caller sees which workflow holds the lock.
 func workflowHolder(workflow, action string) string {
 	return fmt.Sprintf("%s [%s]", workflowAuthor(workflow), action)
+}
+
+// VaultArchiveWriter is the production-default ArchiveWriter
+// per #150. Combines `vault.Writer.ArchiveWithCommit` (move
+// active → _archive) with `store.Store.ArchiveEntity` (DB
+// toggle) behind a per-entity write-lock acquired via
+// AcquireWithTimeout — same async-side contention shape as
+// VaultNoteWriter / VaultGapWriter / VaultPropertyWriter per
+// PR-153.
+//
+// Idempotence: the vault layer's already-at-destination
+// short-circuit (returns nil without a commit when src is
+// missing AND dst exists) and the store's
+// `COALESCE(archived_at, ?)` clause both preserve the original
+// archive timestamp, so a re-fire is a clean no-op.
+//
+// Soft-skip semantics: when the store's GetEntity reports
+// ErrNotFound for the resolved id, the writer logs at debug
+// and returns nil (success). The entity may have been archived
+// by another path between the trigger event and this action;
+// failing the workflow chain over that would surface noise
+// without giving the operator anything actionable.
+type VaultArchiveWriter struct {
+	backend *VaultWriterBackend
+}
+
+// NewVaultArchiveWriter mirrors the other writer constructors.
+// Backend must be non-nil with Store + VaultWriter + WriteLocks
+// set; missing fields panic at first call.
+func NewVaultArchiveWriter(b *VaultWriterBackend) *VaultArchiveWriter {
+	return &VaultArchiveWriter{backend: b}
+}
+
+// ArchiveEntity implements ArchiveWriter. Reads the entity to
+// learn its kind for the vault move, acquires the per-entity
+// write-lock via AcquireWithTimeout, runs the vault move, then
+// flips the DB row. Vault-first per ADR-0008 vault-as-source-
+// of-truth — a vault failure aborts before the DB toggle; a
+// DB failure after the vault move logs loudly (reindex
+// reconciles future state from the vault side).
+//
+// `reason` is folded into the commit message so the audit
+// trail names the workflow's stated reason inline with the
+// archive event.
+func (w *VaultArchiveWriter) ArchiveEntity(ctx context.Context, workflow, entityID, reason string) error {
+	if w.backend == nil {
+		return fmt.Errorf("VaultArchiveWriter: backend not wired")
+	}
+	holder := workflowHolder(workflow, "archive_entity")
+	release, err := w.backend.WriteLocks.AcquireWithTimeout(ctx, entityID, holder, w.backend.lockTimeout())
+	if err != nil {
+		return fmt.Errorf("acquire write-lock on %s: %w", entityID, err)
+	}
+	defer release()
+
+	got, err := w.backend.Store.GetEntity(ctx, entityID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			// Soft skip per #150 — the entity may have been
+			// archived (and the row dropped) by another path
+			// between trigger and fire.
+			w.backend.logger().DebugContext(ctx,
+				"workflow archive_entity: entity not found in store; soft-skipping",
+				"workflow", workflow, "entity_id", entityID)
+			return nil
+		}
+		return fmt.Errorf("store.GetEntity %s: %w", entityID, err)
+	}
+
+	commitMsg := fmt.Sprintf("archive: %s", entityID)
+	if reason != "" {
+		commitMsg = fmt.Sprintf("archive: %s (%s)", entityID, reason)
+	}
+	author := workflowAuthor(workflow)
+
+	// Vault move first. Already-archived (source missing AND
+	// destination present) returns nil from the vault layer
+	// without a commit — the writer treats that as success +
+	// proceeds to ensure the DB toggle is also set. Other
+	// vault errors surface verbatim.
+	if err := w.backend.VaultWriter.ArchiveWithCommit(ctx, got.Kind, entityID, commitMsg, author); err != nil {
+		return fmt.Errorf("vault archive %s: %w", entityID, err)
+	}
+
+	// DB toggle. Already-archived rows keep their original
+	// archived_at via the store's COALESCE clause —
+	// idempotent. ErrNotFound here means the row was dropped
+	// between GetEntity and ArchiveEntity (rare race); same
+	// soft-skip shape as the GetEntity branch above.
+	if err := w.backend.Store.ArchiveEntity(ctx, entityID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			w.backend.logger().DebugContext(ctx,
+				"workflow archive_entity: store row vanished between GetEntity and ArchiveEntity; vault already moved",
+				"workflow", workflow, "entity_id", entityID)
+			return nil
+		}
+		// Vault move already succeeded; reindex will reconcile.
+		return fmt.Errorf("store.ArchiveEntity %s (vault already moved): %w", entityID, err)
+	}
+	return nil
 }
 
 // vaultEntityDataForDB extracts the searchable map the DB

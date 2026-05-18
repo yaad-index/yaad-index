@@ -25,6 +25,8 @@ type fakeEntityStore struct {
 	entities  map[string]*store.Entity
 	upserts   []*store.Entity
 	upsertErr error
+	// archives counts ArchiveEntity calls per id (per #150).
+	archives map[string]int
 }
 
 func newFakeEntityStore(seed map[string]*store.Entity) *fakeEntityStore {
@@ -53,6 +55,30 @@ func (f *fakeEntityStore) UpsertEntity(_ context.Context, e *store.Entity) error
 	cp := *e
 	f.upserts = append(f.upserts, &cp)
 	return nil
+}
+
+func (f *fakeEntityStore) ArchiveEntity(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	e, ok := f.entities[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	if f.archives == nil {
+		f.archives = map[string]int{}
+	}
+	f.archives[id]++
+	if e.ArchivedAt == nil {
+		now := time.Now().UTC()
+		e.ArchivedAt = &now
+	}
+	return nil
+}
+
+func (f *fakeEntityStore) archiveCount(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.archives[id]
 }
 
 func (f *fakeEntityStore) upsertSnapshot() []*store.Entity {
@@ -100,13 +126,22 @@ func (f *fakeVaultReader) ReadByID(_ string, id string) (*vault.Entity, error) {
 
 // fakeVaultWriter records the latest WriteWithCommit call.
 type fakeVaultWriter struct {
-	mu       sync.Mutex
-	writes   []vaultWrite
-	writeErr error
+	mu          sync.Mutex
+	writes      []vaultWrite
+	writeErr    error
+	archives    []archiveVaultCall
+	archiveErr  error
 }
 
 type vaultWrite struct {
 	entity  *vault.Entity
+	message string
+	author  string
+}
+
+type archiveVaultCall struct {
+	kind    string
+	id      string
 	message string
 	author  string
 }
@@ -135,6 +170,26 @@ func (f *fakeVaultWriter) snapshot() []vaultWrite {
 	defer f.mu.Unlock()
 	out := make([]vaultWrite, len(f.writes))
 	copy(out, f.writes)
+	return out
+}
+
+func (f *fakeVaultWriter) ArchiveWithCommit(_ context.Context, kind, id, message, author string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.archiveErr != nil {
+		return f.archiveErr
+	}
+	f.archives = append(f.archives, archiveVaultCall{
+		kind: kind, id: id, message: message, author: author,
+	})
+	return nil
+}
+
+func (f *fakeVaultWriter) archiveSnapshot() []archiveVaultCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]archiveVaultCall, len(f.archives))
+	copy(out, f.archives)
 	return out
 }
 
@@ -601,4 +656,166 @@ func unwrapToConflict(err error) error {
 		}
 	}
 	return fmt.Errorf("no conflict in chain")
+}
+
+// TestVaultArchiveWriter_HappyPath: archive_entity flows through
+// vault move → store toggle behind the per-entity write-lock,
+// with the workflow name in the commit author + commit msg.
+func TestVaultArchiveWriter_HappyPath(t *testing.T) {
+	t.Parallel()
+	const id = "gmail:msg-1"
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	b, es, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			id: {ID: id, Kind: "gmail", Data: map[string]any{"id": id}},
+		},
+		map[string]*vault.Entity{
+			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+		},
+		now,
+	)
+	w := NewVaultArchiveWriter(b)
+	err := w.ArchiveEntity(context.Background(),
+		"classify-and-archive", id, "classified-into-canonical-edge")
+	require.NoError(t, err)
+
+	vaults := vw.archiveSnapshot()
+	require.Len(t, vaults, 1)
+	assert.Equal(t, "gmail", vaults[0].kind)
+	assert.Equal(t, id, vaults[0].id)
+	assert.Equal(t, "archive: gmail:msg-1 (classified-into-canonical-edge)", vaults[0].message)
+	assert.Equal(t, "workflow:classify-and-archive", vaults[0].author)
+	assert.Equal(t, 1, es.archiveCount(id))
+}
+
+// TestVaultArchiveWriter_ReasonOptional: empty reason yields a
+// bare commit message without the parenthesized suffix.
+func TestVaultArchiveWriter_ReasonOptional(t *testing.T) {
+	t.Parallel()
+	const id = "gmail:msg-no-reason"
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	b, _, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			id: {ID: id, Kind: "gmail", Data: map[string]any{"id": id}},
+		},
+		map[string]*vault.Entity{
+			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+		},
+		now,
+	)
+	w := NewVaultArchiveWriter(b)
+	require.NoError(t, w.ArchiveEntity(context.Background(), "wf", id, ""))
+
+	vaults := vw.archiveSnapshot()
+	require.Len(t, vaults, 1)
+	assert.Equal(t, "archive: gmail:msg-no-reason", vaults[0].message,
+		"empty reason → bare commit message without parenthesized suffix")
+}
+
+// TestVaultArchiveWriter_NotFound_SoftSkip: ErrNotFound from
+// store.GetEntity returns nil (success) per #150 — the entity
+// may have been archived by another path. No vault move runs;
+// no store toggle runs.
+func TestVaultArchiveWriter_NotFound_SoftSkip(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	b, es, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{}, // empty store → ErrNotFound
+		map[string]*vault.Entity{},
+		now,
+	)
+	w := NewVaultArchiveWriter(b)
+	err := w.ArchiveEntity(context.Background(),
+		"wf", "gmail:missing", "any-reason")
+	require.NoError(t, err, "not-found is a soft-skip success per #150")
+	assert.Empty(t, vw.archiveSnapshot(), "no vault move on soft-skip")
+	assert.Equal(t, 0, es.archiveCount("gmail:missing"), "no store toggle on soft-skip")
+}
+
+// TestVaultArchiveWriter_Idempotent: re-firing on an already-
+// archived row succeeds (vault layer + store both idempotent).
+// The fake's archive counter increments since the fake doesn't
+// model COALESCE — but production *store.Store does. The test
+// pins the runner-side success contract: re-fire returns nil.
+func TestVaultArchiveWriter_Idempotent(t *testing.T) {
+	t.Parallel()
+	const id = "gmail:msg-idem"
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	b, _, _, _ := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			id: {ID: id, Kind: "gmail", Data: map[string]any{"id": id}},
+		},
+		map[string]*vault.Entity{
+			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+		},
+		now,
+	)
+	w := NewVaultArchiveWriter(b)
+	require.NoError(t, w.ArchiveEntity(context.Background(), "wf", id, ""))
+	require.NoError(t, w.ArchiveEntity(context.Background(), "wf", id, ""),
+		"re-fire on already-archived returns nil — workflow chain continues")
+}
+
+// TestVaultArchiveWriter_BackendNotWired: a writer constructed
+// with a nil backend surfaces a clear configuration error
+// rather than panicking.
+func TestVaultArchiveWriter_BackendNotWired(t *testing.T) {
+	t.Parallel()
+	w := &VaultArchiveWriter{}
+	err := w.ArchiveEntity(context.Background(), "wf", "gmail:x", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "backend not wired")
+}
+
+// TestVaultArchiveWriter_VaultError_NoDBToggle: a vault-move
+// failure aborts before the DB is touched (vault-first per
+// ADR-0008).
+func TestVaultArchiveWriter_VaultError_NoDBToggle(t *testing.T) {
+	t.Parallel()
+	const id = "gmail:msg-vault-err"
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	b, es, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			id: {ID: id, Kind: "gmail", Data: map[string]any{"id": id}},
+		},
+		map[string]*vault.Entity{
+			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+		},
+		now,
+	)
+	vw.archiveErr = errors.New("disk full")
+	w := NewVaultArchiveWriter(b)
+	err := w.ArchiveEntity(context.Background(), "wf", id, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "disk full")
+	assert.Equal(t, 0, es.archiveCount(id),
+		"DB toggle skipped when vault move fails")
+}
+
+// TestVaultArchiveWriter_LockConflictTimesOut: when another
+// holder grabs the per-entity lock first, AcquireWithTimeout
+// surfaces a ConflictError after the per-backend timeout.
+func TestVaultArchiveWriter_LockConflictTimesOut(t *testing.T) {
+	t.Parallel()
+	const id = "gmail:msg-locked"
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	b, _, _, _ := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			id: {ID: id, Kind: "gmail"},
+		},
+		map[string]*vault.Entity{
+			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+		},
+		now,
+	)
+	b.LockTimeout = 50 * time.Millisecond
+	release, err := b.WriteLocks.Acquire(id, "intruder")
+	require.NoError(t, err)
+	defer release()
+
+	w := NewVaultArchiveWriter(b)
+	err = w.ArchiveEntity(context.Background(), "wf", id, "")
+	require.Error(t, err)
+	assert.True(t, writelocks.IsConflict(unwrapToConflict(err)),
+		"err chain carries the writelocks.ConflictError")
 }

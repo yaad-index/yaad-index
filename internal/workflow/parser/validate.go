@@ -236,8 +236,11 @@ func validateActions(wf *Workflow) error {
 		if a.AddCanonicalEdge != nil {
 			set++
 		}
+		if a.ArchiveEntity != nil {
+			set++
+		}
 		if set == 0 {
-			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_note / plugin_dispatch / add_gap / set_property / add_canonical_edge)", i)
+			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_note / plugin_dispatch / add_gap / set_property / add_canonical_edge / archive_entity)", i)
 		}
 		if set > 1 {
 			return fmt.Errorf("workflow: actions[%d] sets %d primitives (expected exactly one)", i, set)
@@ -267,8 +270,23 @@ func validateActions(wf *Workflow) error {
 			if err := validateAddCanonicalEdge(a.AddCanonicalEdge); err != nil {
 				return fmt.Errorf("workflow: actions[%d].add_canonical_edge: %w", i, err)
 			}
+		case a.ArchiveEntity != nil:
+			if err := validateArchiveEntity(a.ArchiveEntity); err != nil {
+				return fmt.Errorf("workflow: actions[%d].archive_entity: %w", i, err)
+			}
 		}
 	}
+	return nil
+}
+
+// validateArchiveEntity is the load-time check for #150's
+// `archive_entity` action. Both `entity` and `reason` are
+// optional CEL strings (Entity defaults to `entity.id` at runner
+// time; Reason is purely audit metadata). The validation surface
+// is intentionally permissive — there's no required field —
+// because workflow authors writing `- archive_entity: {}` to
+// archive the triggering entity is a legitimate shape.
+func validateArchiveEntity(_ *ArchiveEntityAction) error {
 	return nil
 }
 

@@ -218,6 +218,7 @@ type Action struct {
 	AddGap            *AddGapAction
 	SetProperty       *SetPropertyAction
 	AddCanonicalEdge  *AddCanonicalEdgeAction
+	ArchiveEntity     *ArchiveEntityAction
 }
 
 // TaskAppendAction is the `task_append` primitive per ADR-0024
@@ -400,6 +401,37 @@ type SetPropertyAction struct {
 	// Required non-empty; empty field names rejected at
 	// validate time.
 	Fields map[string]string
+}
+
+// ArchiveEntityAction is the `archive_entity` primitive per
+// #150 — flips an entity into ADR-0018's archived state from
+// inside the workflow action vocabulary. Thin adapter onto the
+// operator-side archive surface (the same `vault.Writer.ArchiveWithCommit`
+// + `store.ArchiveEntity` pair the HTTP handler uses); the
+// workflow runner just resolves the target id + reason via CEL,
+// hands them to the writer, and writers acquire the per-entity
+// write-lock via `AcquireWithTimeout` for async-side contention
+// shape per PR-153.
+//
+// Idempotent: archiving an already-archived entity is a no-op
+// (the vault-side already-at-destination short-circuit + the
+// store-side `COALESCE(archived_at, ?)` both preserve the
+// original archive timestamp). Entity-not-found is a soft skip:
+// the runner logs and returns success so the workflow chain
+// continues — the entity may have been archived by another
+// path before this action fired.
+type ArchiveEntityAction struct {
+	// Entity is the CEL expression that resolves to the target
+	// entity id. Defaults to `entity.id` (the triggering
+	// entity) when omitted — same shape as add_note / add_gap /
+	// set_property.
+	Entity string
+
+	// Reason is the optional CEL expression the runner evaluates
+	// to produce a free-form audit string recorded with the
+	// archive event. Empty (or empty after render) leaves the
+	// workflow name as the implicit source.
+	Reason string
 }
 
 // Trigger type constants — the v1 closed set per ADR-0024

@@ -1006,6 +1006,24 @@ func compileActionTemplates(ev *decision.Evaluator, a parser.Action) (map[string
 			}
 			tpls["data:"+name] = tpl
 		}
+	case a.ArchiveEntity != nil:
+		// archive_entity.entity is the target id (defaults to
+		// `entity.id` at runner time when empty); reason is an
+		// optional audit string. Both are CEL templates per #150.
+		if a.ArchiveEntity.Entity != "" {
+			tpl, err := template.Compile(a.ArchiveEntity.Entity, ev)
+			if err != nil {
+				return nil, fmt.Errorf("archive_entity.entity: %w", err)
+			}
+			tpls["entity"] = tpl
+		}
+		if a.ArchiveEntity.Reason != "" {
+			tpl, err := template.Compile(a.ArchiveEntity.Reason, ev)
+			if err != nil {
+				return nil, fmt.Errorf("archive_entity.reason: %w", err)
+			}
+			tpls["reason"] = tpl
+		}
 	}
 	return tpls, nil
 }
