@@ -470,6 +470,7 @@ func (s *ServeCmd) Run() error {
 			VaultWriter: writer,
 			WriteLocks:  wfWriteLocks,
 			Logger:      logger,
+			Kinds:       mergedRegistry,
 		}
 		wfPluginDispatcher, err := actions.NewRegistryPluginDispatcher(registry)
 		if err != nil {

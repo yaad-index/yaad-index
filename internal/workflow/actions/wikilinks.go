@@ -41,6 +41,45 @@ func wrapWorkflow(name string) string {
 	return "[[" + name + "]]"
 }
 
+// wrapEntityValue applies maybeWrapEntity per element type
+// to a value emitted into vault frontmatter `data` per #166.
+// String values pass through maybeWrapEntity; array values
+// recurse element-wise (the spec's mixed-array case — some
+// elements wrap, others don't, per individual match against
+// the registry); other types (bool, int, nested map) pass
+// through unchanged because they can't be entity refs.
+//
+// Used by VaultPropertyWriter.SetProperties to wrap workflow-
+// emitted property values before they land in the vault file.
+// Add_note bodies go through maybeWrapEntity directly (no
+// per-element dispatch — body is always a string).
+func wrapEntityValue(v any, kinds map[string]config.CanonicalKindConfig) any {
+	switch x := v.(type) {
+	case string:
+		return maybeWrapEntity(x, kinds)
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = wrapEntityValue(e, kinds)
+		}
+		return out
+	case []string:
+		// CEL templates rendering a homogeneous string slice
+		// surface as []string before vault Marshal. Wrap each
+		// element + return the same shape so the YAML output
+		// stays a list of strings rather than `[]any` round-
+		// trip (cosmetic — yaml.v3 handles both, but []string
+		// is what the operator-config side emits).
+		out := make([]string, len(x))
+		for i, e := range x {
+			out[i] = maybeWrapEntity(e, kinds)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 // maybeWrapEntity inspects s for the `<kind>:<id>` entity-slug
 // shape and wraps it in `[[ ]]` only when:
 //

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
 	"github.com/yaad-index/yaad-index/internal/writelocks"
@@ -818,4 +819,229 @@ func TestVaultArchiveWriter_LockConflictTimesOut(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, writelocks.IsConflict(unwrapToConflict(err)),
 		"err chain carries the writelocks.ConflictError")
+}
+
+// withKindsRegistry returns a fresh backend wired to the
+// canonical-kinds registry the wikilink tests use. Mirrors
+// the canonicalKindsForTest helper used by wikilinks_test.go
+// — three known kinds (boardgame, person, gmail) plus the
+// company kind that the linkedin workflow chain references.
+func withKindsRegistry(b *VaultWriterBackend) {
+	b.Kinds = map[string]config.CanonicalKindConfig{
+		"boardgame": {},
+		"person":    {},
+		"gmail":     {},
+		"company":   {},
+	}
+}
+
+// TestVaultNoteWriter_WrapsEntityShapedBody (#166): when the
+// add_note CEL template renders to a `<kind>:<id>` string and
+// the kind is in the registry, the body lands as a `[[ ]]`
+// wikilink so Obsidian surfaces the backlink.
+func TestVaultNoteWriter_WrapsEntityShapedBody(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	b, _, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{"pr:1": {ID: "pr:1", Kind: "pr"}},
+		map[string]*vault.Entity{"pr:1": {ID: "pr:1", Kind: "pr"}},
+		now,
+	)
+	withKindsRegistry(b)
+	w := NewVaultNoteWriter(b)
+	require.NoError(t, w.AppendNote(context.Background(),
+		"link-watcher", "pr:1", "gmail:msg-abc"))
+
+	writes := vw.snapshot()
+	require.Len(t, writes, 1)
+	require.Len(t, writes[0].entity.Notes, 1)
+	assert.Equal(t, "[[gmail:msg-abc]]", writes[0].entity.Notes[0].Text,
+		"entity-shaped body wraps via maybeWrapEntity per #166")
+}
+
+// TestVaultNoteWriter_PassesThroughProseBody (#166): a body
+// that isn't a single `<kind>:<id>` (prose with spaces /
+// multiple colons / unknown kind) passes through unchanged.
+func TestVaultNoteWriter_PassesThroughProseBody(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	b, _, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{"pr:1": {ID: "pr:1", Kind: "pr"}},
+		map[string]*vault.Entity{"pr:1": {ID: "pr:1", Kind: "pr"}},
+		now,
+	)
+	withKindsRegistry(b)
+	w := NewVaultNoteWriter(b)
+
+	cases := []string{
+		"see gmail:msg-1 for context", // prose with embedded ref → no wrap (kind portion isn't bare)
+		"2026-05-18T17:30:00Z",        // multiple colons (timestamp)
+		"package:foo-bar",             // single-colon shape but kind not in registry
+		"plain text no colon",
+	}
+	for _, body := range cases {
+		require.NoError(t, w.AppendNote(context.Background(),
+			"wf", "pr:1", body))
+	}
+
+	writes := vw.snapshot()
+	require.Len(t, writes, len(cases))
+	for i, body := range cases {
+		// fakeVaultReader.ReadByID returns the seeded entity
+		// fresh each call (empty Notes), so each write's
+		// entity.Notes contains exactly the just-appended note.
+		require.NotEmpty(t, writes[i].entity.Notes, "write %d should carry a note", i)
+		got := writes[i].entity.Notes[0].Text
+		assert.NotContains(t, got, "[[",
+			"prose body %d should not be wrapped: %q", i, body)
+		assert.Equal(t, body, got,
+			"prose body %d passes through unchanged", i)
+	}
+}
+
+// TestVaultNoteWriter_NoRegistryNoWrap (#166): a backend with
+// no Kinds registry leaves the body untouched even when the
+// shape matches `<kind>:<id>`. Guards the test-friendly nil-
+// kinds path; production sets backend.Kinds = mergedRegistry.
+func TestVaultNoteWriter_NoRegistryNoWrap(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	b, _, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{"pr:1": {ID: "pr:1", Kind: "pr"}},
+		map[string]*vault.Entity{"pr:1": {ID: "pr:1", Kind: "pr"}},
+		now,
+	)
+	// b.Kinds intentionally unset.
+	w := NewVaultNoteWriter(b)
+	require.NoError(t, w.AppendNote(context.Background(),
+		"wf", "pr:1", "gmail:msg-1"))
+
+	writes := vw.snapshot()
+	require.Len(t, writes, 1)
+	assert.Equal(t, "gmail:msg-1", writes[0].entity.Notes[0].Text,
+		"nil registry → no wrap; body passes through")
+}
+
+// TestVaultPropertyWriter_WrapsStringValue (#166): a string
+// field with `<kind>:<id>` shape lands as `[[<kind>:<id>]]`
+// in vault.Entity.Data.
+func TestVaultPropertyWriter_WrapsStringValue(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	b, _, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{"gmail:msg-1": {ID: "gmail:msg-1", Kind: "gmail"}},
+		map[string]*vault.Entity{"gmail:msg-1": {ID: "gmail:msg-1", Kind: "gmail"}},
+		now,
+	)
+	withKindsRegistry(b)
+	w := NewVaultPropertyWriter(b)
+	require.NoError(t, w.SetProperties(context.Background(),
+		"linkedin-classify", "gmail:msg-1",
+		map[string]any{
+			"hiring_alert_for": "company:acme-corp",
+			"summary":          "plain text passes through",
+		}))
+
+	writes := vw.snapshot()
+	require.Len(t, writes, 1)
+	assert.Equal(t, "[[company:acme-corp]]",
+		writes[0].entity.Data["hiring_alert_for"],
+		"entity-shaped string value wraps")
+	assert.Equal(t, "plain text passes through",
+		writes[0].entity.Data["summary"],
+		"non-matching value passes through unchanged")
+}
+
+// TestVaultPropertyWriter_WrapsArrayElements (#166): the
+// spec's mixed-array case. A `[]any` field where some
+// elements match the entity shape + others don't — each
+// element is wrapped independently.
+func TestVaultPropertyWriter_WrapsArrayElements(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	b, _, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{"gmail:msg-1": {ID: "gmail:msg-1", Kind: "gmail"}},
+		map[string]*vault.Entity{"gmail:msg-1": {ID: "gmail:msg-1", Kind: "gmail"}},
+		now,
+	)
+	withKindsRegistry(b)
+	w := NewVaultPropertyWriter(b)
+	require.NoError(t, w.SetProperties(context.Background(),
+		"wf", "gmail:msg-1",
+		map[string]any{
+			"refs": []any{
+				"boardgame:acme-game",
+				"plain string",
+				"company:foo-corp",
+				"unknown-kind:value",
+			},
+		}))
+
+	writes := vw.snapshot()
+	require.Len(t, writes, 1)
+	refs, ok := writes[0].entity.Data["refs"].([]any)
+	require.True(t, ok, "refs preserved as []any after wrap")
+	require.Len(t, refs, 4)
+	assert.Equal(t, "[[boardgame:acme-game]]", refs[0])
+	assert.Equal(t, "plain string", refs[1])
+	assert.Equal(t, "[[company:foo-corp]]", refs[2])
+	assert.Equal(t, "unknown-kind:value", refs[3])
+}
+
+// TestVaultPropertyWriter_WrapsStringSliceShape (#166): a
+// `[]string` field (the CEL-template homogeneous-slice
+// surface) wraps each element + returns the same `[]string`
+// shape so the YAML emission stays a list of strings rather
+// than `[]any` round-trip.
+func TestVaultPropertyWriter_WrapsStringSliceShape(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	b, _, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{"gmail:msg-1": {ID: "gmail:msg-1", Kind: "gmail"}},
+		map[string]*vault.Entity{"gmail:msg-1": {ID: "gmail:msg-1", Kind: "gmail"}},
+		now,
+	)
+	withKindsRegistry(b)
+	w := NewVaultPropertyWriter(b)
+	require.NoError(t, w.SetProperties(context.Background(),
+		"wf", "gmail:msg-1",
+		map[string]any{
+			"tags": []string{"person:alex-example", "plain-tag"},
+		}))
+
+	writes := vw.snapshot()
+	tags, ok := writes[0].entity.Data["tags"].([]string)
+	require.True(t, ok, "tags stays []string after element-wise wrap")
+	assert.Equal(t, []string{"[[person:alex-example]]", "plain-tag"}, tags)
+}
+
+// TestVaultPropertyWriter_NonStringTypesPassThrough (#166):
+// values whose runtime type isn't string / []any / []string
+// (booleans, integers, nested maps) can't be entity refs by
+// shape — pass through unchanged regardless of registry state.
+func TestVaultPropertyWriter_NonStringTypesPassThrough(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	b, _, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{"gmail:msg-1": {ID: "gmail:msg-1", Kind: "gmail"}},
+		map[string]*vault.Entity{"gmail:msg-1": {ID: "gmail:msg-1", Kind: "gmail"}},
+		now,
+	)
+	withKindsRegistry(b)
+	w := NewVaultPropertyWriter(b)
+	require.NoError(t, w.SetProperties(context.Background(),
+		"wf", "gmail:msg-1",
+		map[string]any{
+			"is_archived": true,
+			"priority":    int64(3),
+			"metadata":    map[string]any{"nested": "string"},
+		}))
+
+	writes := vw.snapshot()
+	assert.Equal(t, true, writes[0].entity.Data["is_archived"])
+	assert.Equal(t, int64(3), writes[0].entity.Data["priority"])
+	m, ok := writes[0].entity.Data["metadata"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "string", m["nested"],
+		"nested map values aren't recursed — pass through verbatim")
 }
