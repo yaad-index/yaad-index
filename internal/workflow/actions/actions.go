@@ -172,11 +172,16 @@ type Runner interface {
 //   - task file absent (no task_append wrote yet) → no-op
 //     (there's no task to annotate).
 type TaskWriter interface {
+	// entityID is the triggering entity id per #163 — recorded
+	// in the task's `via` breadcrumb list + body `## Via`
+	// section. Empty input is normalized to the `unknown`
+	// literal at the writer layer.
 	AppendTaskSection(
 		ctx context.Context,
 		workflow string,
 		subject string,
 		dedupKey string,
+		entityID string,
 		section string,
 		content string,
 		ifAlreadyPresent string,

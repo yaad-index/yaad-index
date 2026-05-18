@@ -46,14 +46,29 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/yaad-index/yaad-index/internal/config"
 )
 
 // FileTaskWriter writes task files under the given vault
 // root. Construct via NewFileTaskWriter; safe for
 // concurrent use across goroutines (an internal mutex
 // serializes reads + writes per task file).
+//
+// **Frontmatter handling (per #163).** Every append re-marshals
+// the frontmatter to maintain the `via:` breadcrumb list +
+// regenerate the `## Via` body section. yaml.Marshal does NOT
+// preserve YAML comments and re-orders any operator-added
+// fields under the `Extras` inline catch-all. Task files are
+// workflow-managed; operators rarely hand-edit the frontmatter,
+// so this v1 trade-off is acceptable.
 type FileTaskWriter struct {
 	vaultRoot string
+	// kinds is the operator's canonical-kinds registry, used
+	// by maybeWrapEntity to wrap `<kind>:<id>`-shaped strings
+	// in `[[ ]]` per #163. Nil-safe: a nil/empty registry
+	// disables wikilink wrapping (every string passes through).
+	kinds map[string]config.CanonicalKindConfig
 
 	// mu serializes the read-modify-write cycle so a single
 	// task_append on the same file path can't race. For
@@ -65,8 +80,14 @@ type FileTaskWriter struct {
 // NewFileTaskWriter constructs a writer rooted at the
 // vault path. The `<vault>/tasks/` directory is created
 // on first write; callers don't need to ensure it exists.
-func NewFileTaskWriter(vaultRoot string) *FileTaskWriter {
-	return &FileTaskWriter{vaultRoot: vaultRoot}
+//
+// kinds is the operator's canonical-kinds registry, threaded
+// through to maybeWrapEntity per #163 — `<kind>:<id>`-shaped
+// strings in task content + breadcrumb entity refs wrap into
+// `[[ ]]` only when `kind` is in this registry. Pass nil to
+// disable wikilink wrapping (test-friendly default).
+func NewFileTaskWriter(vaultRoot string, kinds map[string]config.CanonicalKindConfig) *FileTaskWriter {
+	return &FileTaskWriter{vaultRoot: vaultRoot, kinds: kinds}
 }
 
 // MissingRefsSectionName is the body section the task_append
@@ -81,10 +102,22 @@ const MissingRefsSectionName = "Missing references"
 // per the if_already_present policy. See package doc for
 // the full semantics. dedupKey is written to the
 // frontmatter on first create per ADR-0024 §"Per-pattern
-// de-duplication"; subsequent appends to the same file
-// don't re-stamp (the existing frontmatter is preserved
-// verbatim by mergeSection).
-func (w *FileTaskWriter) AppendTaskSection(_ context.Context, workflow, subject, dedupKey, section, content, ifAlreadyPresent string) error {
+// de-duplication"; subsequent appends preserve the
+// existing dedupKey (the original frontmatter value wins).
+//
+// entityID is the triggering entity for the workflow fire
+// (per #163). When non-empty it's recorded as the `entity`
+// half of the breadcrumb; empty input is stored + rendered
+// as the literal `unknown`. The (workflow, entityID) pair
+// dedups across multiple appends; a repeat fire leaves the
+// breadcrumb list unchanged.
+//
+// content is wrapped via maybeWrapEntity before write — a
+// CEL template that rendered to a `<kind>:<id>` shape with
+// `kind` in the canonical-kinds registry becomes
+// `[[<kind>:<id>]]` in the task body. Strings outside that
+// shape pass through unchanged.
+func (w *FileTaskWriter) AppendTaskSection(_ context.Context, workflow, subject, dedupKey, entityID, section, content, ifAlreadyPresent string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -100,21 +133,96 @@ func (w *FileTaskWriter) AppendTaskSection(_ context.Context, workflow, subject,
 		return fmt.Errorf("mkdir tasks dir: %w", err)
 	}
 
+	wrappedContent := maybeWrapEntity(content, w.kinds)
+	entry := viaEntry{Workflow: workflow, Entity: w.viaEntityValue(entityID)}
+
 	existing, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		// First write — create the file with frontmatter +
-		// section header + content line.
-		return w.writeFile(path, freshTaskBody(workflow, subject, dedupKey, section, content))
+		// `## Via` section + named section + content line.
+		body, err := w.freshTaskBodyWithVia(workflow, subject, dedupKey, entry, section, wrappedContent)
+		if err != nil {
+			return err
+		}
+		return w.writeFile(path, body)
 	}
 	if err != nil {
 		return fmt.Errorf("read existing task %q: %w", path, err)
 	}
 
-	body, err := mergeSection(string(existing), section, content, ifAlreadyPresent)
+	body, err := w.appendWithVia(string(existing), entry, section, wrappedContent, ifAlreadyPresent)
 	if err != nil {
 		return err
 	}
 	return w.writeFile(path, []byte(body))
+}
+
+// viaEntityValue normalizes the entity id into the value the
+// via list stores: the raw id when non-empty, else the
+// `unknown` sentinel literal.
+func (w *FileTaskWriter) viaEntityValue(entityID string) string {
+	entityID = strings.TrimSpace(entityID)
+	if entityID == "" {
+		return viaUnknownEntity
+	}
+	return entityID
+}
+
+// freshTaskBodyWithVia renders the first-create task body —
+// frontmatter (with the seeded via entry) + body `## Via`
+// section + the named section header + content line. The
+// via section is the canonical body-top placement per #163.
+func (w *FileTaskWriter) freshTaskBodyWithVia(workflow, subject, dedupKey string, entry viaEntry, section, content string) ([]byte, error) {
+	fm := taskFrontmatter{
+		Kind:      "task",
+		Workflow:  workflow,
+		Subject:   subject,
+		DedupKey:  dedupKey,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Via:       []viaEntry{entry},
+	}
+	fmStr, err := renderTaskFrontmatter(fm)
+	if err != nil {
+		return nil, err
+	}
+	viaSection := renderViaBodySection(fm.Via, w.formatViaEntity)
+	body := fmStr + "\n" + viaSection + "\n## " + section + "\n\n" + content + "\n"
+	return []byte(body), nil
+}
+
+// appendWithVia is the existing-file path: parse the
+// frontmatter, dedup-and-prepend the new via entry, re-
+// render frontmatter + body via section, then apply the
+// named-section merge for the new content line.
+func (w *FileTaskWriter) appendWithVia(existing string, entry viaEntry, section, content, ifAlreadyPresent string) (string, error) {
+	fm, body, err := parseTaskFrontmatter(existing)
+	if err != nil {
+		return "", err
+	}
+	fm.Via = dedupAndPrepend(fm.Via, entry)
+	fmStr, err := renderTaskFrontmatter(fm)
+	if err != nil {
+		return "", err
+	}
+	viaSection := renderViaBodySection(fm.Via, w.formatViaEntity)
+	body = upsertViaBodySection(body, viaSection)
+	body, err = mergeSection(body, section, content, ifAlreadyPresent)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(body, "\n") {
+		body = "\n" + body
+	}
+	return fmStr + body, nil
+}
+
+// formatViaEntity is the per-writer formatter passed to
+// renderViaBodySection — wraps `<kind>:<id>` shapes where
+// `kind` is in the configured registry; leaves other strings
+// (slugs, names) bare so the renderer can hand them straight
+// to Obsidian as plain text.
+func (w *FileTaskWriter) formatViaEntity(id string) string {
+	return maybeWrapEntity(id, w.kinds)
 }
 
 // EnsureMissingRefsSection idempotently rewrites the task
@@ -257,29 +365,6 @@ func slugify(s string) string {
 		}
 	}
 	return strings.Trim(b.String(), "-")
-}
-
-// freshTaskBody renders the initial task file body —
-// frontmatter + section header + content line. dedupKey,
-// when non-empty, is stamped as `dedup_key: <value>` so
-// cross-fire identity stays inspectable per ADR-0024
-// §"Per-pattern de-duplication".
-func freshTaskBody(workflow, subject, dedupKey, section, content string) []byte {
-	var b strings.Builder
-	b.WriteString("---\n")
-	b.WriteString("kind: task\n")
-	b.WriteString("workflow: " + workflow + "\n")
-	if subject != "" {
-		b.WriteString("subject: " + subject + "\n")
-	}
-	if dedupKey != "" {
-		b.WriteString("dedup_key: " + dedupKey + "\n")
-	}
-	b.WriteString("created_at: " + time.Now().UTC().Format(time.RFC3339) + "\n")
-	b.WriteString("---\n\n")
-	b.WriteString("## " + section + "\n\n")
-	b.WriteString(content + "\n")
-	return []byte(b.String())
 }
 
 // writeFile writes body to path atomically (temp file +

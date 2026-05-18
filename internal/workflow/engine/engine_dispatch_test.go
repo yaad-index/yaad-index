@@ -807,7 +807,7 @@ func TestEngine_Cycle_HighVolumeDistinctEntitiesNotSuppressed(t *testing.T) {
 // without exercising real writer side effects.
 type noopTaskWriter struct{}
 
-func (*noopTaskWriter) AppendTaskSection(_ context.Context, _, _, _, _, _, _ string) error {
+func (*noopTaskWriter) AppendTaskSection(_ context.Context, _, _, _, _, _, _, _ string) error {
 	return nil
 }
 

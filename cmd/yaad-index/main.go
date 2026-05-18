@@ -476,7 +476,7 @@ func (s *ServeCmd) Run() error {
 			return fmt.Errorf("init workflow plugin dispatcher: %w", err)
 		}
 		wfRunner := actions.New(actions.Options{
-			TaskWriter:       actions.NewFileTaskWriter(cfg.Vault.Path),
+			TaskWriter:       actions.NewFileTaskWriter(cfg.Vault.Path, mergedRegistry),
 			NoteWriter:       actions.NewVaultNoteWriter(wfWriterBackend),
 			GapWriter:        actions.NewVaultGapWriter(wfWriterBackend),
 			PropertyWriter:   actions.NewVaultPropertyWriter(wfWriterBackend),

@@ -30,6 +30,7 @@ type taskWriterCall struct {
 	workflow         string
 	subject          string
 	dedupKey         string
+	entityID         string
 	section          string
 	content          string
 	ifAlreadyPresent string
@@ -41,13 +42,14 @@ type missingRefsCall struct {
 	refs     []string
 }
 
-func (f *fakeTaskWriter) AppendTaskSection(_ context.Context, workflow, subject, dedupKey, section, content, ifAlreadyPresent string) error {
+func (f *fakeTaskWriter) AppendTaskSection(_ context.Context, workflow, subject, dedupKey, entityID, section, content, ifAlreadyPresent string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, taskWriterCall{
 		workflow:         workflow,
 		subject:          subject,
 		dedupKey:         dedupKey,
+		entityID:         entityID,
 		section:          section,
 		content:          content,
 		ifAlreadyPresent: ifAlreadyPresent,
@@ -136,11 +138,11 @@ func TestRunner_TaskAppend_HappyPath(t *testing.T) {
 	wf := wfWithActions("review-queue",
 		parser.Action{TaskAppend: &parser.TaskAppendAction{
 			Section:          "candidates",
-			Content:          "Brass: Birmingham (2018)",
+			Content:          "Acme Game (2026)",
 			IfAlreadyPresent: parser.IfAlreadyPresentSkip,
 		}},
 	)
-	dec := Decision{Workflow: "review-queue", Subject: "boardgame-brass"}
+	dec := Decision{Workflow: "review-queue", Subject: "boardgame-acme"}
 
 	results := r.Run(context.Background(), wf, dec, Activation{})
 	require.Len(t, results, 1)
@@ -150,9 +152,9 @@ func TestRunner_TaskAppend_HappyPath(t *testing.T) {
 	calls := w.snapshot()
 	require.Len(t, calls, 1)
 	assert.Equal(t, "review-queue", calls[0].workflow)
-	assert.Equal(t, "boardgame-brass", calls[0].subject)
+	assert.Equal(t, "boardgame-acme", calls[0].subject)
 	assert.Equal(t, "candidates", calls[0].section)
-	assert.Equal(t, "Brass: Birmingham (2018)", calls[0].content)
+	assert.Equal(t, "Acme Game (2026)", calls[0].content)
 	assert.Equal(t, parser.IfAlreadyPresentSkip, calls[0].ifAlreadyPresent)
 }
 
