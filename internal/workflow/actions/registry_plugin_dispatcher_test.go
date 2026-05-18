@@ -215,7 +215,7 @@ func TestRegistryPluginDispatcher_ArgsAreOpaque(t *testing.T) {
 	require.NoError(t, err)
 
 	err = d.Dispatch(context.Background(), "yaad-bgg", "fetch", map[string]any{
-		"id":   "boardgame:brass-birmingham",
+		"id":   "boardgame:acme-game",
 		"hint": "rerun",
 	})
 	require.NoError(t, err)
