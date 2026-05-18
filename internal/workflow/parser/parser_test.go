@@ -993,3 +993,116 @@ func TestValidate_AddGapInlineFillStrategy(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fill_strategy")
 }
+
+// TestParser_ArchiveEntityRoundTrip pins the #150 archive_entity
+// wire shape: both entity (CEL) and reason (CEL) are optional;
+// the action with no fields archives the triggering entity.
+func TestParser_ArchiveEntityRoundTrip(t *testing.T) {
+	t.Parallel()
+	src := "---\n" +
+		"name: linkedin-post-classify\n" +
+		"status: active\n" +
+		"---\n" +
+		"\n" +
+		"```yaml\n" +
+		"allowed_plugins:\n" +
+		"  - yaad-gmail\n" +
+		"\n" +
+		"trigger:\n" +
+		"  type: manual\n" +
+		"\n" +
+		"actions:\n" +
+		"  - archive_entity:\n" +
+		"      entity: 'entity.id'\n" +
+		"      reason: 'classified-into-canonical-edge'\n" +
+		"```\n"
+	wf, err := Parse([]byte(src))
+	require.NoError(t, err)
+	require.Len(t, wf.Actions, 1)
+	require.NotNil(t, wf.Actions[0].ArchiveEntity)
+	a := wf.Actions[0].ArchiveEntity
+	assert.Equal(t, "entity.id", a.Entity)
+	assert.Equal(t, "classified-into-canonical-edge", a.Reason)
+}
+
+// TestParser_ArchiveEntityDefaults: both entity + reason omitted
+// parses cleanly. Runner-side, entity will default to
+// dec.EntityID at fire time.
+func TestParser_ArchiveEntityDefaults(t *testing.T) {
+	t.Parallel()
+	src := "---\n" +
+		"name: archive-no-fields\n" +
+		"status: active\n" +
+		"---\n" +
+		"\n" +
+		"```yaml\n" +
+		"allowed_plugins:\n" +
+		"  - yaad-gmail\n" +
+		"\n" +
+		"trigger:\n" +
+		"  type: manual\n" +
+		"\n" +
+		"actions:\n" +
+		"  - archive_entity: {}\n" +
+		"```\n"
+	wf, err := Parse([]byte(src))
+	require.NoError(t, err)
+	require.NotNil(t, wf.Actions[0].ArchiveEntity)
+	a := wf.Actions[0].ArchiveEntity
+	assert.Empty(t, a.Entity, "entity defaults at runtime to entity.id")
+	assert.Empty(t, a.Reason, "reason is purely optional audit metadata")
+}
+
+// TestParser_ArchiveEntityReasonOnly: reason without entity is
+// a legitimate shape — the workflow archives the triggering
+// entity with an explicit audit string.
+func TestParser_ArchiveEntityReasonOnly(t *testing.T) {
+	t.Parallel()
+	src := "---\n" +
+		"name: archive-reason-only\n" +
+		"status: active\n" +
+		"---\n" +
+		"\n" +
+		"```yaml\n" +
+		"allowed_plugins:\n" +
+		"  - yaad-gmail\n" +
+		"\n" +
+		"trigger:\n" +
+		"  type: manual\n" +
+		"\n" +
+		"actions:\n" +
+		"  - archive_entity:\n" +
+		"      reason: '\"workflow-cleanup-\" + entity.id'\n" +
+		"```\n"
+	wf, err := Parse([]byte(src))
+	require.NoError(t, err)
+	require.NotNil(t, wf.Actions[0].ArchiveEntity)
+	a := wf.Actions[0].ArchiveEntity
+	assert.Empty(t, a.Entity)
+	assert.Equal(t, `"workflow-cleanup-" + entity.id`, a.Reason)
+}
+
+// TestValidate_ArchiveEntityAcceptsEmpty pins that an
+// `archive_entity: {}` shape passes Validate — both fields are
+// optional, no required-field check applies.
+func TestValidate_ArchiveEntityAcceptsEmpty(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Actions = []Action{{ArchiveEntity: &ArchiveEntityAction{}}}
+	require.NoError(t, Validate(wf))
+}
+
+// TestValidate_ArchiveEntityRejectsMultiplePrimitives: setting
+// archive_entity alongside another primitive on the same Action
+// trips the exactly-one-primitive guard.
+func TestValidate_ArchiveEntityRejectsMultiplePrimitives(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Actions = []Action{{
+		ArchiveEntity: &ArchiveEntityAction{},
+		AddNote:       &AddNoteAction{Content: "x"},
+	}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sets 2 primitives")
+}

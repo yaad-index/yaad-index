@@ -170,6 +170,12 @@ type actionShape struct {
 	AddGap           *addGapShape           `yaml:"add_gap"`
 	SetProperty      *setPropertyShape      `yaml:"set_property"`
 	AddCanonicalEdge *addCanonicalEdgeShape `yaml:"add_canonical_edge"`
+	ArchiveEntity    *archiveEntityShape    `yaml:"archive_entity"`
+}
+
+type archiveEntityShape struct {
+	Entity string `yaml:"entity"`
+	Reason string `yaml:"reason"`
 }
 
 type addCanonicalEdgeShape struct {
@@ -352,6 +358,7 @@ func actionsFromShape(entries []actionShape) []Action {
 			AddGap:           addGapFromShape(e.AddGap),
 			SetProperty:      setPropertyFromShape(e.SetProperty),
 			AddCanonicalEdge: addCanonicalEdgeFromShape(e.AddCanonicalEdge),
+			ArchiveEntity:    archiveEntityFromShape(e.ArchiveEntity),
 		}
 	}
 	return out
@@ -465,5 +472,15 @@ func setPropertyFromShape(s *setPropertyShape) *SetPropertyAction {
 	return &SetPropertyAction{
 		Entity: strings.TrimSpace(s.Entity),
 		Fields: fields,
+	}
+}
+
+func archiveEntityFromShape(s *archiveEntityShape) *ArchiveEntityAction {
+	if s == nil {
+		return nil
+	}
+	return &ArchiveEntityAction{
+		Entity: strings.TrimSpace(s.Entity),
+		Reason: strings.TrimSpace(s.Reason),
 	}
 }

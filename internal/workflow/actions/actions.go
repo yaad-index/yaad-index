@@ -222,6 +222,12 @@ type Options struct {
 	// ErrActionNotImplemented.
 	EdgeWriter EdgeWriter
 
+	// ArchiveWriter backs archive_entity (#150). Production
+	// wires VaultArchiveWriter (vault move + DB toggle behind a
+	// per-entity write-lock via AcquireWithTimeout); nil →
+	// StubArchiveWriter rejects with ErrActionNotImplemented.
+	ArchiveWriter ArchiveWriter
+
 	// Bus is the eventbus the set_property runner publishes
 	// fill.completed events to (one per landed field). Nil →
 	// emission silently skipped (test/dev default — other
@@ -269,6 +275,7 @@ func New(opts Options) Runner {
 		pluginDispatcher: opts.PluginDispatcher,
 		propertyWriter:   opts.PropertyWriter,
 		edgeWriter:       opts.EdgeWriter,
+		archiveWriter:    opts.ArchiveWriter,
 		errTaskWriter:    errTaskWriter,
 		bus:              opts.Bus,
 		logger:           logger,
@@ -285,6 +292,7 @@ type dispatcher struct {
 	pluginDispatcher PluginDispatcher
 	propertyWriter   PropertyWriter
 	edgeWriter       EdgeWriter
+	archiveWriter    ArchiveWriter
 	errTaskWriter    ErrTaskWriter
 	bus              eventbus.Bus
 	logger           *slog.Logger
@@ -362,6 +370,8 @@ func (d *dispatcher) runOne(ctx context.Context, idx int, wf *parser.Workflow, a
 		return d.runSetProperty(ctx, idx, wf, a.SetProperty, dec, act)
 	case a.AddCanonicalEdge != nil:
 		return d.runAddCanonicalEdge(ctx, idx, wf, a.AddCanonicalEdge, dec, act)
+	case a.ArchiveEntity != nil:
+		return d.runArchiveEntity(ctx, idx, wf, a.ArchiveEntity, dec, act)
 	default:
 		return ActionResult{
 			ActionIdx: idx, Type: "unknown",
@@ -397,6 +407,10 @@ func (NopRunner) Run(_ context.Context, wf *parser.Workflow, _ Decision, _ Activ
 			t = "add_gap"
 		case a.SetProperty != nil:
 			t = "set_property"
+		case a.AddCanonicalEdge != nil:
+			t = "add_canonical_edge"
+		case a.ArchiveEntity != nil:
+			t = "archive_entity"
 		}
 		out[i] = ActionResult{ActionIdx: i, Type: t}
 	}

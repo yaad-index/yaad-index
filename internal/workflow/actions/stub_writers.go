@@ -77,3 +77,13 @@ func (StubEdgeWriter) AddCanonicalEdge(_ context.Context, workflow, sourceID, ed
 	return fmt.Errorf("%w: vault-backed add_canonical_edge not wired; attempted workflow=%s source=%s edge_type=%s target=%s:%s",
 		ErrActionNotImplemented, workflow, sourceID, edgeType, targetKind, targetName)
 }
+
+// StubArchiveWriter is the production-default ArchiveWriter
+// retained for tests + dev binaries running without a vault.
+// Same stub-reject shape as the other stub writers per #150.
+type StubArchiveWriter struct{}
+
+func (StubArchiveWriter) ArchiveEntity(_ context.Context, workflow, entityID, reason string) error {
+	return fmt.Errorf("%w: vault-backed archive_entity not wired; attempted workflow=%s entity=%s reason=%q",
+		ErrActionNotImplemented, workflow, entityID, reason)
+}
