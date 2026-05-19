@@ -134,6 +134,7 @@ type bodyShape struct {
 	Actions           []actionShape    `yaml:"actions"`
 	AddableGaps       []string         `yaml:"addable_gaps"`
 	AutoArchiveOnDone *bool            `yaml:"auto_archive_on_done"`
+	CatchAll          bool             `yaml:"catch_all"`
 }
 
 type triggerShape struct {
@@ -171,7 +172,10 @@ type actionShape struct {
 	SetProperty      *setPropertyShape      `yaml:"set_property"`
 	AddCanonicalEdge *addCanonicalEdgeShape `yaml:"add_canonical_edge"`
 	ArchiveEntity    *archiveEntityShape    `yaml:"archive_entity"`
+	ClaimEntity      *claimEntityShape      `yaml:"claim_entity"`
 }
+
+type claimEntityShape struct{}
 
 type archiveEntityShape struct {
 	Entity string `yaml:"entity"`
@@ -259,6 +263,7 @@ func decode(frontmatter, yamlBody []byte) (*Workflow, error) {
 		Actions:           actionsFromShape(body.Actions),
 		AddableGaps:       body.AddableGaps,
 		AutoArchiveOnDone: body.AutoArchiveOnDone,
+		CatchAll:          body.CatchAll,
 	}
 	if wf.Version == 0 {
 		wf.Version = 1
@@ -359,6 +364,7 @@ func actionsFromShape(entries []actionShape) []Action {
 			SetProperty:      setPropertyFromShape(e.SetProperty),
 			AddCanonicalEdge: addCanonicalEdgeFromShape(e.AddCanonicalEdge),
 			ArchiveEntity:    archiveEntityFromShape(e.ArchiveEntity),
+			ClaimEntity:      claimEntityFromShape(e.ClaimEntity),
 		}
 	}
 	return out
@@ -483,4 +489,11 @@ func archiveEntityFromShape(s *archiveEntityShape) *ArchiveEntityAction {
 		Entity: strings.TrimSpace(s.Entity),
 		Reason: strings.TrimSpace(s.Reason),
 	}
+}
+
+func claimEntityFromShape(s *claimEntityShape) *ClaimEntityAction {
+	if s == nil {
+		return nil
+	}
+	return &ClaimEntityAction{}
 }

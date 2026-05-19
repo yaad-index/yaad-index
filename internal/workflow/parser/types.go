@@ -121,6 +121,30 @@ type Workflow struct {
 	// explicitly set false" — the engine treats nil as the
 	// default (true).
 	AutoArchiveOnDone *bool
+
+	// Filename is the source file's base name (e.g.
+	// `01-classify-linkedin.md`). Stamped by the loader after
+	// Parse; not parsed from frontmatter. The engine uses this
+	// for the deterministic filename-alphabetical ordering of
+	// pass-1 + pass-2 workflows per #169 — operators name files
+	// `01-`, `02-` to control evaluation order within an event.
+	// Tests that build a Workflow inline can leave this empty;
+	// the engine's sort falls back to lexicographic-empty-first
+	// in that case.
+	Filename string
+
+	// CatchAll marks the workflow as a pass-2 fallback per #169.
+	// Regular workflows (CatchAll=false) run in the per-event
+	// pass-1 chain; catch_all workflows run in pass-2 only when
+	// no pass-1 workflow claimed the event. Catch-alls must NOT
+	// declare a `condition` field — the only allowed scoping is
+	// the trigger's kind filter (any further condition collapses
+	// the catch-all into a low-priority regular workflow, which
+	// is the wrong shape). The loader enforces uniqueness:
+	// exactly one catch_all workflow may match a given trigger
+	// type + kind combination; the global wildcard slot
+	// (kind-empty) is its own unique entry.
+	CatchAll bool
 }
 
 // Trigger names the event the workflow subscribes to.
@@ -219,6 +243,7 @@ type Action struct {
 	SetProperty       *SetPropertyAction
 	AddCanonicalEdge  *AddCanonicalEdgeAction
 	ArchiveEntity     *ArchiveEntityAction
+	ClaimEntity       *ClaimEntityAction
 }
 
 // TaskAppendAction is the `task_append` primitive per ADR-0024
@@ -402,6 +427,21 @@ type SetPropertyAction struct {
 	// validate time.
 	Fields map[string]string
 }
+
+// ClaimEntityAction is the `claim_entity` primitive per #169.
+// When the workflow's per-event chain runs, a fired
+// claim_entity flags the event as claimed and stops further
+// workflow dispatch for that event (no remaining pass-1
+// workflows fire, no pass-2 catch_all fires). The action
+// itself produces no side effect outside the engine's
+// in-process queue state.
+//
+// v1 has no fields — the action is a bare `- claim_entity: {}`
+// invocation. A future revision may add a `reason: string` for
+// audit purposes if operators want to record why a particular
+// workflow claimed (separate from the workflow name, which is
+// already tracked in the queue's claimed_by field).
+type ClaimEntityAction struct{}
 
 // ArchiveEntityAction is the `archive_entity` primitive per
 // #150 — flips an entity into ADR-0018's archived state from

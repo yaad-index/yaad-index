@@ -306,6 +306,14 @@ func (l *Loader) maybeReloadFile(ctx context.Context, path string) {
 	}
 
 	wf, err := parser.ParseFile(path)
+	if wf != nil {
+		// Stamp the source filename so the engine can sort
+		// pass-1 + pass-2 workflows by it per #169. Set before
+		// the err check so a partially-parsed workflow still
+		// carries the field (the err path drops the workflow
+		// anyway, but the assignment is cheap + uniform).
+		wf.Filename = filepath.Base(path)
+	}
 	if err != nil {
 		// Parse / validate failure — drop any previous
 		// registration for this path so a previously-good
@@ -431,6 +439,25 @@ func (l *Loader) maybeReloadFile(ctx context.Context, path string) {
 		}
 		return
 	}
+	// Per #169: catch-all workflows are unique per
+	// (trigger.type, kind). Two catch-all workflows matching
+	// the same kind would race in pass-2; reject the LATER
+	// registrant the same way name collisions are rejected.
+	// The wildcard slot (empty kind/target_kind) is its own
+	// unique entry per trigger.type.
+	if wf.CatchAll {
+		if priorPath, priorName := catchAllConflictsWith(l.workflows, l.perFile, wf, path); priorName != "" {
+			if _, alreadyLogged := l.collisionLogged[path]; !alreadyLogged {
+				l.logger.WarnContext(ctx, "workflow file rejected: catch_all collision (another catch_all workflow already matches the same trigger.type + kind)",
+					"path", path,
+					"workflow_name", wf.Name,
+					"prior_path", priorPath,
+					"prior_workflow", priorName)
+				l.collisionLogged[path] = struct{}{}
+			}
+			return
+		}
+	}
 	// If this path previously mapped to a different name (operator
 	// renamed the workflow), drop the prior registration.
 	if prevName, was := l.perFile[path]; was && prevName != wf.Name {
@@ -467,6 +494,63 @@ func nameRegisteredElsewhere(perFile map[string]string, name, skipPath string) (
 		}
 	}
 	return "", false
+}
+
+// catchAllConflictsWith reports a prior catch-all workflow
+// registration that would collide with `candidate` per #169
+// — same trigger.type AND same kind/target_kind filter.
+// Returns (priorPath, priorName) on collision; ("", "") when
+// no conflict exists. Empty kind filter (the wildcard `*`
+// slot) is its own unique entry per trigger.type.
+//
+// The skipPath argument is the path currently being
+// registered (its prior registration is the candidate, not
+// a conflict).
+func catchAllConflictsWith(
+	registered map[string]*parser.Workflow,
+	perFile map[string]string,
+	candidate *parser.Workflow,
+	skipPath string,
+) (priorPath, priorName string) {
+	candKind := catchAllKindKey(candidate)
+	for path, name := range perFile {
+		if path == skipPath {
+			continue
+		}
+		prior, ok := registered[name]
+		if !ok || !prior.CatchAll {
+			continue
+		}
+		if prior.Trigger.Type != candidate.Trigger.Type {
+			continue
+		}
+		if catchAllKindKey(prior) != candKind {
+			continue
+		}
+		return path, name
+	}
+	return "", ""
+}
+
+// catchAllKindKey returns the kind-filter slot the catch-all
+// workflow occupies. Per #169 each (trigger.type, kind) pair
+// is a unique slot; the wildcard slot is the empty string.
+// Mirrors the engine's isCatchAllWildcard logic so the
+// loader's rejection criterion matches the engine's pass-2
+// dispatch criterion exactly.
+func catchAllKindKey(wf *parser.Workflow) string {
+	switch wf.Trigger.Type {
+	case parser.TriggerTypeEdgeCreated:
+		return wf.Trigger.Match.TargetKind
+	case parser.TriggerTypeEntityCreated:
+		return wf.Trigger.Match.Kind
+	default:
+		// FillCompleted catch-alls have no kind field; every
+		// fill catch-all is the wildcard slot for its
+		// trigger.type. Return empty so two fill catch-alls
+		// collide as expected.
+		return ""
+	}
 }
 
 // Run starts the polling reload loop. Performs an initial Load

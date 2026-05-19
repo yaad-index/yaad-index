@@ -156,6 +156,7 @@ func TestEngine_EdgeCreated_FiresPredicate(t *testing.T) {
 		SourceTag: eventbus.SourceAgent,
 		At:        time.Now(),
 	})
+	eng.WaitForIdle()
 
 	decisions := eng.Decisions()
 	require.Len(t, decisions, 1)
@@ -194,6 +195,7 @@ func TestEngine_EdgeCreated_PredicateFalse_RecordsDecision(t *testing.T) {
 		SourceTag: eventbus.SourceAgent,
 		At:        time.Now(),
 	})
+	eng.WaitForIdle()
 
 	decisions := eng.Decisions()
 	require.Len(t, decisions, 1)
@@ -227,6 +229,7 @@ func TestEngine_EdgeCreated_EdgeTypeFilter(t *testing.T) {
 		SourceTag: eventbus.SourceAgent,
 		At:        time.Now(),
 	})
+	eng.WaitForIdle()
 
 	assert.Empty(t, eng.Decisions(),
 		"non-matching edge_type → no decision recorded")
@@ -259,10 +262,12 @@ func TestEngine_EdgeCreated_TargetKindFilter(t *testing.T) {
 		FromID: "src", ToID: "person:p", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 	bus.Publish(context.Background(), eventbus.EntityEdgeAddedEvent{
 		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 
 	decs := eng.Decisions()
 	require.Len(t, decs, 1, "only the boardgame target fires")
@@ -291,10 +296,12 @@ func TestEngine_EntityCreated_KindFilter(t *testing.T) {
 	bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
 		ID: "person:p", Kind: "person", SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 	// Right kind — fires.
 	bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
 		ID: "boardgame:b", Kind: "boardgame", SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
 	assert.Equal(t, "boardgame:b", decs[0].EntityID)
@@ -329,16 +336,19 @@ func TestEngine_FillCompleted_GapAndSourceFilter(t *testing.T) {
 	bus.Publish(context.Background(), eventbus.FillCompletedEvent{
 		EntityID: "source:x", Gap: "other_gap", SourceTag: eventbus.SourceOperator,
 	})
+	eng.WaitForIdle()
 	// Right gap but wrong source → no fire (self-loop break).
 	bus.Publish(context.Background(), eventbus.FillCompletedEvent{
 		EntityID: "source:x", Gap: "is_interesting_to_me",
 		SourceTag: eventbus.WorkflowSource("answer-listener"),
 	})
+	eng.WaitForIdle()
 	// Right gap + operator source → fires.
 	bus.Publish(context.Background(), eventbus.FillCompletedEvent{
 		EntityID: "source:x", Gap: "is_interesting_to_me",
 		SourceTag: eventbus.SourceOperator,
 	})
+	eng.WaitForIdle()
 
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
@@ -373,6 +383,7 @@ func TestEngine_ContextBindings_FedIntoCondition(t *testing.T) {
 		FromID: "src", ToID: "boardgame:edition-2", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
@@ -408,6 +419,7 @@ func TestEngine_MissingRefs_SurfaceOnDecision(t *testing.T) {
 		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
@@ -436,6 +448,7 @@ func TestEngine_ResolveFailure_OnTriggerEntity(t *testing.T) {
 	bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
 		ID: "gone", Kind: "boardgame", SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
@@ -470,6 +483,7 @@ func TestEngine_ConditionRuntimeError_RecordsErr(t *testing.T) {
 		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
@@ -509,6 +523,7 @@ func TestEngine_Decisions_RingBufferBound(t *testing.T) {
 			FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
 			SourceTag: eventbus.SourceAgent, At: time.Now(),
 		})
+		eng.WaitForIdle()
 	}
 	assert.Len(t, eng.Decisions(), 3, "ring size caps the buffer to 3 most-recent")
 }
@@ -549,6 +564,7 @@ func TestEngine_Reconcile_HotReloadRebuildsRegistration(t *testing.T) {
 		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 	require.Len(t, eng.Decisions(), 1)
 	assert.False(t, eng.Decisions()[0].Fired, "v1: rating 5 fails the > 7 condition")
 
@@ -561,6 +577,7 @@ func TestEngine_Reconcile_HotReloadRebuildsRegistration(t *testing.T) {
 		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 	decs := eng.Decisions()
 	require.Len(t, decs, 2, "second event recorded under v2")
 	assert.True(t, decs[1].Fired, "v2: rating 5 satisfies > 0")
@@ -591,6 +608,7 @@ func TestEngine_UnregisteredWorkflow_DoesNotFire(t *testing.T) {
 		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 	assert.Empty(t, eng.Decisions(),
 		"unregistered workflow's bus subscription was torn down")
 }
@@ -616,6 +634,7 @@ func TestEngine_NilResolver_TriggerEntityMissing(t *testing.T) {
 	bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
 		ID: "any", Kind: "boardgame", SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
 	require.Len(t, decs[0].MissingRefs, 1)
@@ -646,6 +665,7 @@ func TestEngine_SubjectTemplate_Rendered(t *testing.T) {
 		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
 	assert.Equal(t, "brass-birmingham", decs[0].Subject)
@@ -680,6 +700,7 @@ func TestEngine_DedupMissingRefs(t *testing.T) {
 		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
 	assert.Len(t, decs[0].MissingRefs, 1, "duplicate missing-ref across stages dedups to 1")
@@ -717,6 +738,7 @@ func TestEngine_ErrEntityNotFound_SentinelTranslation(t *testing.T) {
 		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
@@ -781,6 +803,7 @@ func TestEngine_ActionTemplates_RenderedAndPassedToRunner(t *testing.T) {
 		SourceTag: eventbus.SourceAgent,
 		At:        time.Now(),
 	})
+	eng.WaitForIdle()
 
 	calls := rec.snapshot()
 	require.Len(t, calls, 1)

@@ -462,6 +462,7 @@ func TestEngine_EdgeFields_FullSet(t *testing.T) {
 		SourceTag: eventbus.SourceAgent,
 		At:        now,
 	})
+	eng.WaitForIdle()
 
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
@@ -496,6 +497,7 @@ func TestEngine_EdgeFields_MissingTitle_OmittedGracefully(t *testing.T) {
 		FromID: "source:s", ToID: "boardgame:b", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
@@ -529,6 +531,7 @@ func TestEngine_EdgeFields_TimestampAvailable(t *testing.T) {
 		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
 	assert.True(t, decs[0].Fired, "edge.timestamp populated")
@@ -641,6 +644,7 @@ func TestEngine_Cycle_SuppressedWhenWorkflowInChain(t *testing.T) {
 		At:        time.Now().UTC(),
 		Chain:     []string{"loop"}, // <-- workflow already in chain
 	})
+	eng.WaitForIdle()
 
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
@@ -689,6 +693,7 @@ func TestEngine_Cycle_RepeatedTripsDoNotSpamErrTask(t *testing.T) {
 			At:        time.Now().UTC(),
 			Chain:     []string{"loop"},
 		})
+		eng.WaitForIdle()
 	}
 
 	decs := eng.Decisions()
@@ -736,12 +741,14 @@ func TestEngine_Cycle_DistinctChainsLogIndependently(t *testing.T) {
 		At:        time.Now().UTC(),
 		Chain:     []string{"router", "tagger"},
 	})
+	eng.WaitForIdle()
 	bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
 		ID: "e:1", Kind: "any",
 		SourceTag: eventbus.WorkflowSource("router"),
 		At:        time.Now().UTC(),
 		Chain:     []string{"router", "enricher"},
 	})
+	eng.WaitForIdle()
 
 	calls := errWriter.snapshot()
 	require.Len(t, calls, 2, "distinct chain shapes log independently")
@@ -791,6 +798,7 @@ func TestEngine_Cycle_HighVolumeDistinctEntitiesNotSuppressed(t *testing.T) {
 			At:        time.Now().UTC(),
 			// No chain — fresh ingest from agent.
 		})
+		eng.WaitForIdle()
 	}
 
 	decs := eng.Decisions()
@@ -966,6 +974,7 @@ func TestEngine_RunsActionsOnFired(t *testing.T) {
 		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 
 	calls := runner.snapshot()
 	require.Len(t, calls, 1, "runner.Run called once on Fired=true")
@@ -1004,6 +1013,7 @@ func TestEngine_SkipsActionsOnFiredFalse(t *testing.T) {
 		FromID: "src", ToID: "boardgame:b", EdgeType: "is_about",
 		SourceTag: eventbus.SourceAgent, At: time.Now(),
 	})
+	eng.WaitForIdle()
 
 	assert.Empty(t, runner.snapshot(),
 		"Fired=false: runner not invoked")

@@ -127,6 +127,15 @@ type ActionResult struct {
 	// underlying primitive's failure (vault write,
 	// plugin dispatch timeout, etc.).
 	Err error
+
+	// Claim is the #169 claim-stop signal. The claim_entity
+	// runner sets this to true; the engine reads it AFTER the
+	// per-workflow action chain completes and halts further
+	// workflow dispatch for the current event (no remaining
+	// pass-1 workflows fire, no pass-2 catch_all fires). False
+	// on every other action type — the engine treats absence
+	// as "not claimed" identical to nil.
+	Claim bool
 }
 
 // Runner is the public dispatch surface. The engine holds
@@ -377,6 +386,8 @@ func (d *dispatcher) runOne(ctx context.Context, idx int, wf *parser.Workflow, a
 		return d.runAddCanonicalEdge(ctx, idx, wf, a.AddCanonicalEdge, dec, act)
 	case a.ArchiveEntity != nil:
 		return d.runArchiveEntity(ctx, idx, wf, a.ArchiveEntity, dec, act)
+	case a.ClaimEntity != nil:
+		return d.runClaimEntity(idx)
 	default:
 		return ActionResult{
 			ActionIdx: idx, Type: "unknown",
@@ -416,6 +427,8 @@ func (NopRunner) Run(_ context.Context, wf *parser.Workflow, _ Decision, _ Activ
 			t = "add_canonical_edge"
 		case a.ArchiveEntity != nil:
 			t = "archive_entity"
+		case a.ClaimEntity != nil:
+			t = "claim_entity"
 		}
 		out[i] = ActionResult{ActionIdx: i, Type: t}
 	}

@@ -233,6 +233,7 @@ func (s *ServeCmd) Run() error {
 		handlerOpts    = []api.HandlerOption{api.WithEventBus(bus)}
 		guard          *config.CanonicalGuard
 		mergedRegistry map[string]config.CanonicalKindConfig
+		wfEngine       *engine.Engine
 	)
 	if cfg != nil {
 		// ADR-0016 §4: build the merged effective canonical-kind
@@ -500,7 +501,7 @@ func (s *ServeCmd) Run() error {
 			// than silently using raw CEL source.
 			Logger: logger,
 		})
-		wfEngine, err := engine.New(engine.Options{
+		wfEngine, err = engine.New(engine.Options{
 			Bus:          bus,
 			Resolver:     wfResolver,
 			Runner:       wfRunner,
@@ -588,6 +589,15 @@ func (s *ServeCmd) Run() error {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("graceful shutdown: %w", err)
+	}
+	// Drain the workflow engine's #169 event queue before
+	// exit. The worker stops accepting new events + finishes
+	// processing whatever was already buffered. HTTP server
+	// shutdown above already terminated the request paths
+	// that publish bus events; the queue should drain
+	// quickly.
+	if wfEngine != nil {
+		wfEngine.Shutdown()
 	}
 	logger.Info("shutdown complete")
 	return nil
