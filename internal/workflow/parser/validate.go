@@ -65,6 +65,27 @@ func Validate(wf *Workflow) error {
 	if err := validateActions(wf); err != nil {
 		return err
 	}
+	if err := validateCatchAll(wf); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateCatchAll enforces the #169 catch-all constraints on a
+// single workflow: catch-alls cannot carry a `condition` field
+// (the only allowed scoping is trigger.kind; any further
+// condition collapses the catch-all into a low-priority regular
+// workflow which is the wrong shape). Uniqueness-per-kind is
+// enforced at load time (loader sees the full registered set);
+// this per-workflow check is the lighter "is this workflow's
+// own shape valid" gate.
+func validateCatchAll(wf *Workflow) error {
+	if !wf.CatchAll {
+		return nil
+	}
+	if strings.TrimSpace(wf.Condition) != "" {
+		return fmt.Errorf("workflow: catch_all=true forbids `condition` (the only allowed scoping is trigger.kind; per-event filtering collapses the catch-all into a regular workflow)")
+	}
 	return nil
 }
 
@@ -239,8 +260,11 @@ func validateActions(wf *Workflow) error {
 		if a.ArchiveEntity != nil {
 			set++
 		}
+		if a.ClaimEntity != nil {
+			set++
+		}
 		if set == 0 {
-			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_note / plugin_dispatch / add_gap / set_property / add_canonical_edge / archive_entity)", i)
+			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_note / plugin_dispatch / add_gap / set_property / add_canonical_edge / archive_entity / claim_entity)", i)
 		}
 		if set > 1 {
 			return fmt.Errorf("workflow: actions[%d] sets %d primitives (expected exactly one)", i, set)
@@ -274,6 +298,10 @@ func validateActions(wf *Workflow) error {
 			if err := validateArchiveEntity(a.ArchiveEntity); err != nil {
 				return fmt.Errorf("workflow: actions[%d].archive_entity: %w", i, err)
 			}
+		case a.ClaimEntity != nil:
+			// claim_entity is a bare flag — no fields to validate
+			// per #169 v1. The engine reads the action presence
+			// and halts the per-event chain when fired.
 		}
 	}
 	return nil

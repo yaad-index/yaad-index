@@ -256,7 +256,44 @@ type Engine struct {
 	// constraint).
 	dedupMu   sync.Mutex
 	dedupSeen map[dedupID]struct{}
+
+	// Per #169: in-memory FIFO event queue + single worker
+	// goroutine. The engine subscribes ONCE per topic (not
+	// per workflow) and each handler enqueues a queuedEvent;
+	// the worker drains the queue + runs the two-pass
+	// evaluation. Bounded buffered chan: at capacity the
+	// engine-level handler blocks the bus publisher; the
+	// expected steady-state is far below capacity (workflow
+	// fires lag bus emits by milliseconds).
+	queue       chan queuedEvent
+	workerWG    sync.WaitGroup
+	topicSubs   []eventbus.Subscription
+	shutdownCh  chan struct{}
+	startedOnce sync.Once
 }
+
+// queuedEvent carries the bus event + dispatch context into
+// the engine's FIFO queue. The worker dequeues + runs the
+// two-pass evaluation per #169.
+//
+// When `barrier` is non-nil the event is a synchronization
+// marker (no real event payload): the worker closes the
+// barrier channel after processing every event ahead of it
+// in the queue. WaitForIdle uses this to let tests assert
+// post-event state without polling.
+type queuedEvent struct {
+	ctx     context.Context
+	event   eventbus.Event
+	barrier chan struct{}
+}
+
+// queueCapacity is the buffered chan size for the engine's
+// event queue. Sized generously — the worker should drain at
+// near-zero latency vs the bus emit rate; capacity exists to
+// absorb bursts (multiple bus emits inside a single
+// PendingEvents.Drain, for example) without backpressuring
+// the publisher.
+const queueCapacity = 1024
 
 // dedupID names the engine-internal dedup-set key — the
 // (workflow, rendered-key) pair under policy-suppression
@@ -268,8 +305,10 @@ type dedupID struct {
 
 // backstopKey names the engine-internal runaway-fire
 // registeredWorkflow holds the per-workflow runtime state:
-// the parsed Workflow, its compiled programs, and its bus
-// subscriptions. Released atomically on Unregister.
+// the parsed Workflow + its compiled programs. Per #169 the
+// engine no longer subscribes per-workflow; bus topics are
+// subscribed once at engine level + the worker matches each
+// event against the registered set.
 type registeredWorkflow struct {
 	workflow     *parser.Workflow
 	evaluator    *decision.Evaluator
@@ -285,7 +324,16 @@ type registeredWorkflow struct {
 	// activation and ships the rendered values to the
 	// action runner via actions.Activation.RenderedTemplates.
 	actionTemplates []map[string]*template.Template
-	subscriptions   []eventbus.Subscription
+	// filename is the parser-stamped source filename (e.g.
+	// "01-classify-linkedin.md"). The worker sorts pass-1 +
+	// pass-2 workflows by this field for deterministic
+	// execution order per #169 — operators use `01-`, `02-`
+	// prefixes to control priority within a kind.
+	filename string
+	// catchAll is the parser-stamped catch_all flag mirrored
+	// here for fast partitioning into pass-1 (regular,
+	// catchAll=false) vs pass-2 (fallback, catchAll=true).
+	catchAll bool
 }
 
 // compiledBinding ties a workflow's context entry to its
@@ -318,7 +366,7 @@ func New(opts Options) (*Engine, error) {
 	if ingestTimeout <= 0 {
 		ingestTimeout = DefaultIngestTimeout
 	}
-	return &Engine{
+	e := &Engine{
 		bus:           opts.Bus,
 		resolver:      opts.Resolver,
 		runner:        runner,
@@ -330,7 +378,129 @@ func New(opts Options) (*Engine, error) {
 		workflows:     make(map[string]*registeredWorkflow),
 		dedupSeen:     make(map[dedupID]struct{}),
 		cycleLogged:   make(map[string]struct{}),
-	}, nil
+		queue:         make(chan queuedEvent, queueCapacity),
+		shutdownCh:    make(chan struct{}),
+	}
+	// Auto-start the worker + subscribe to bus topics so
+	// production main.go doesn't need an explicit Start +
+	// existing tests construct the engine the same way they
+	// did pre-#169. Tests that need to assert post-event
+	// state call WaitForIdle to barrier through the queue.
+	e.Start()
+	return e, nil
+}
+
+// Start subscribes the engine to bus topics (one subscription
+// per topic — NOT per-workflow per #169) + spawns the single
+// worker goroutine that drains the event queue. Idempotent:
+// subsequent calls are no-ops; the engine wires its bus
+// subscriptions exactly once over its lifetime.
+//
+// Callers (typically main.go right after engine.New) must
+// invoke Start before the first Reconcile so the queue is
+// live when events arrive. Shutdown must be called before
+// process exit to drain in-flight events.
+func (e *Engine) Start() {
+	e.startedOnce.Do(func() {
+		e.topicSubs = []eventbus.Subscription{
+			e.bus.Subscribe(eventbus.TopicEntityEdgeAdded, e.enqueueEvent),
+			e.bus.Subscribe(eventbus.TopicEntityCreated, e.enqueueEvent),
+			e.bus.Subscribe(eventbus.TopicFillCompleted, e.enqueueEvent),
+		}
+		e.workerWG.Add(1)
+		go e.workerLoop()
+	})
+}
+
+// Shutdown stops the engine's worker + drains in-flight
+// events. Unsubscribes from the bus first so no new events
+// enqueue, then closes the queue + waits for the worker to
+// finish processing whatever was already buffered. Safe to
+// call multiple times (subsequent calls are no-ops via the
+// shutdownCh close-once semantics).
+//
+// Workflow re-registration via Reconcile after Shutdown is
+// undefined; callers should treat the engine as terminal
+// after Shutdown returns.
+func (e *Engine) Shutdown() {
+	select {
+	case <-e.shutdownCh:
+		// Already shut down.
+		return
+	default:
+	}
+	close(e.shutdownCh)
+	for _, s := range e.topicSubs {
+		s.Unsubscribe()
+	}
+	e.topicSubs = nil
+	close(e.queue)
+	e.workerWG.Wait()
+}
+
+// enqueueEvent is the engine-level bus handler — subscribed
+// once per topic by Start. Each bus emit lands a queuedEvent
+// in the FIFO queue; the worker processes events in arrival
+// order per #169. Blocks the bus publisher when the queue is
+// at capacity (per the steady-state assumption documented on
+// queueCapacity).
+func (e *Engine) enqueueEvent(ctx context.Context, ev eventbus.Event) {
+	if ev == nil {
+		return
+	}
+	select {
+	case <-e.shutdownCh:
+		// Engine is shutting down; drop the event.
+		return
+	default:
+	}
+	select {
+	case e.queue <- queuedEvent{ctx: ctx, event: ev}:
+	case <-e.shutdownCh:
+		// Shutdown raced with enqueue; drop.
+	}
+}
+
+// workerLoop drains the event queue + processes each event
+// with the two-pass evaluation per #169. Exits when the queue
+// channel is closed by Shutdown. Barrier events (qe.barrier
+// non-nil) skip processEvent and close the barrier channel
+// so WaitForIdle can return.
+func (e *Engine) workerLoop() {
+	defer e.workerWG.Done()
+	for qe := range e.queue {
+		if qe.barrier != nil {
+			close(qe.barrier)
+			continue
+		}
+		e.processEvent(qe)
+	}
+}
+
+// WaitForIdle blocks until the worker has processed every
+// event currently in the queue. Implements the barrier-event
+// pattern: enqueue a marker, wait for the worker to reach
+// it. Tests use this to barrier through async dispatch
+// before asserting post-event state.
+//
+// Returns immediately if the engine is already shut down
+// (the worker has exited and won't process new events).
+func (e *Engine) WaitForIdle() {
+	select {
+	case <-e.shutdownCh:
+		return
+	default:
+	}
+	barrier := make(chan struct{})
+	select {
+	case e.queue <- queuedEvent{barrier: barrier}:
+	case <-e.shutdownCh:
+		return
+	}
+	select {
+	case <-barrier:
+	case <-e.shutdownCh:
+	}
 }
 
 // Reconcile diffs the desired workflow set against the
@@ -403,6 +573,8 @@ func (e *Engine) registerLocked(wf *parser.Workflow) error {
 	reg := &registeredWorkflow{
 		workflow:  wf,
 		evaluator: ev,
+		filename:  wf.Filename,
+		catchAll:  wf.CatchAll,
 	}
 
 	if wf.Condition != "" {
@@ -451,21 +623,19 @@ func (e *Engine) registerLocked(wf *parser.Workflow) error {
 		reg.actionTemplates[i] = tpls
 	}
 
-	// Subscribe to bus topics per Trigger.Type. Manual
-	// triggers (Phase 3.C entry-points) skip the bus subscribe.
+	// Per #169 the engine subscribes to bus topics ONCE at
+	// engine level (in Start). registerLocked no longer wires
+	// per-workflow subscriptions; the worker matches each
+	// dequeued event against the registered set instead. The
+	// trigger.type still gates which TopicX events the worker
+	// considers for this workflow — see workerLoop +
+	// matchesWorkflow.
 	switch wf.Trigger.Type {
-	case parser.TriggerTypeEdgeCreated:
-		sub := e.bus.Subscribe(eventbus.TopicEntityEdgeAdded, e.makeEdgeHandler(reg))
-		reg.subscriptions = append(reg.subscriptions, sub)
-	case parser.TriggerTypeEntityCreated:
-		sub := e.bus.Subscribe(eventbus.TopicEntityCreated, e.makeEntityHandler(reg))
-		reg.subscriptions = append(reg.subscriptions, sub)
-	case parser.TriggerTypeFillCompleted:
-		sub := e.bus.Subscribe(eventbus.TopicFillCompleted, e.makeFillHandler(reg))
-		reg.subscriptions = append(reg.subscriptions, sub)
-	case parser.TriggerTypeManual:
-		// No bus subscribe; Phase 3.C entry-points invoke
-		// the engine's Dispatch path directly.
+	case parser.TriggerTypeEdgeCreated,
+		parser.TriggerTypeEntityCreated,
+		parser.TriggerTypeFillCompleted,
+		parser.TriggerTypeManual:
+		// Recognized trigger types — registration proceeds.
 	default:
 		return fmt.Errorf("unsupported trigger.type %q", wf.Trigger.Type)
 	}
@@ -478,76 +648,237 @@ func (e *Engine) registerLocked(wf *parser.Workflow) error {
 	return nil
 }
 
-// unregisterLocked tears down a workflow's subscriptions +
-// removes it from the map. Called with e.mu held.
-func (e *Engine) unregisterLocked(name string, reg *registeredWorkflow) {
-	for _, s := range reg.subscriptions {
-		s.Unsubscribe()
-	}
+// unregisterLocked removes the workflow from the engine's
+// registered set. Per #169 bus subscriptions live at engine
+// level; nothing to unsubscribe per-workflow. Called with
+// e.mu held.
+func (e *Engine) unregisterLocked(name string, _ *registeredWorkflow) {
 	delete(e.workflows, name)
 	e.logger.Info("workflow unregistered", "workflow", name)
 }
 
-// makeEdgeHandler returns a bus handler that routes an
-// entity.edge_added event to the workflow's predicate-eval
-// pipeline when the event's edge type + target kind match
-// the trigger's match filter.
-func (e *Engine) makeEdgeHandler(reg *registeredWorkflow) eventbus.Handler {
-	return func(ctx context.Context, ev eventbus.Event) {
-		edge, ok := ev.(eventbus.EntityEdgeAddedEvent)
-		if !ok {
-			return
+// processEvent is the per-event two-pass evaluator per #169.
+// Called from the worker on each dequeued queuedEvent;
+// enumerates matching workflows, partitions into pass-1
+// (regular) + pass-2 (catch_all), sorts each by filename,
+// and iterates with claim-stop chain semantics.
+//
+// Pass-1: every regular workflow whose trigger matches the
+// event fires in filename order. The first claim_entity
+// action that lands halts the pass + suppresses pass-2.
+//
+// Pass-2: only runs if pass-1 ended without a claim. Within
+// pass-2 kind-specific catch-alls win over the global
+// wildcard (`*` = trigger.match kind/target_kind empty);
+// the wildcard fires only when no kind-specific catch-all
+// matched the event's entity kind. Same claim-stop chain
+// applies in pass-2.
+func (e *Engine) processEvent(qe queuedEvent) {
+	regs := e.snapshotRegistered()
+
+	pass1, pass2 := e.partitionMatching(qe, regs)
+	sortByFilename(pass1)
+	if e.runChain(qe, pass1) {
+		return
+	}
+	sortByFilename(pass2)
+	pass2KindSpecific, pass2Wildcard := partitionCatchAllSpecificity(pass2)
+	if len(pass2KindSpecific) > 0 {
+		_ = e.runChain(qe, pass2KindSpecific)
+		return
+	}
+	if len(pass2Wildcard) > 0 {
+		_ = e.runChain(qe, pass2Wildcard)
+	}
+}
+
+// snapshotRegistered returns a stable slice of the engine's
+// currently-registered workflows. Taken under e.mu so the
+// worker's iteration can't race with Reconcile.
+func (e *Engine) snapshotRegistered() []*registeredWorkflow {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]*registeredWorkflow, 0, len(e.workflows))
+	for _, r := range e.workflows {
+		out = append(out, r)
+	}
+	return out
+}
+
+// partitionMatching filters the registered set down to
+// workflows whose trigger matches the queuedEvent, then
+// splits them into pass-1 (regular) + pass-2 (catch_all)
+// per #169. Type-switches on the event shape internally.
+func (e *Engine) partitionMatching(qe queuedEvent, regs []*registeredWorkflow) (pass1, pass2 []*registeredWorkflow) {
+	for _, r := range regs {
+		if !e.matchesEvent(qe, r) {
+			continue
 		}
-		m := reg.workflow.Trigger.Match
-		if m.EdgeType != "" && edge.EdgeType != m.EdgeType {
-			return
+		if r.catchAll {
+			pass2 = append(pass2, r)
+		} else {
+			pass1 = append(pass1, r)
 		}
-		// TargetKind filter requires resolving the edge.ToID
-		// to its kind. For Phase 3.B we resolve it via the
-		// resolver — if resolution fails, the predicate
-		// can't run anyway, so a missing-reference shape
-		// makes more sense than a silent skip.
-		entityID := edge.ToID
-		var toEntity, fromEntity map[string]any
-		toResolved := false
+	}
+	return pass1, pass2
+}
+
+// matchesEvent reports whether the workflow's trigger.type
+// + trigger.match filters match the queuedEvent. Mirrors the
+// per-type filtering that the pre-#169 makeXHandler functions
+// did inline. TargetKind resolution may need the entity
+// resolver — failures land as engine-error records and
+// return false (the workflow can't fire without the kind).
+func (e *Engine) matchesEvent(qe queuedEvent, reg *registeredWorkflow) bool {
+	m := reg.workflow.Trigger.Match
+	switch ev := qe.event.(type) {
+	case eventbus.EntityEdgeAddedEvent:
+		if reg.workflow.Trigger.Type != parser.TriggerTypeEdgeCreated {
+			return false
+		}
+		if m.EdgeType != "" && ev.EdgeType != m.EdgeType {
+			return false
+		}
 		if m.TargetKind != "" {
-			got, err := e.resolveEntity(ctx, entityID)
+			got, err := e.resolveEntity(qe.ctx, ev.ToID)
 			if err != nil {
-				e.recordEngineError(reg, entityID, fmt.Errorf("target_kind probe: %w", err))
-				return
+				e.recordEngineError(reg, ev.ToID, fmt.Errorf("target_kind probe: %w", err))
+				return false
 			}
 			if kindOf(got) != m.TargetKind {
-				return
+				return false
 			}
-			toEntity = got
-			toResolved = true
 		}
-		// Build the full edge field set per ADR-0024 §"Decision
-		// logic": type / from / to / from_title / to_title /
-		// timestamp. Title fields are resolved through the
-		// EntityResolver; on missing/empty the title field is
-		// omitted so predicates can use has() to guard.
-		// Timestamp is the event's At (publisher-stamped on
-		// emit, per eventbus contract).
-		edgeMap := map[string]any{
-			"type":      edge.EdgeType,
-			"from":      edge.FromID,
-			"to":        edge.ToID,
-			"timestamp": edge.At,
+		return true
+	case eventbus.EntityCreatedEvent:
+		if reg.workflow.Trigger.Type != parser.TriggerTypeEntityCreated {
+			return false
 		}
-		// Resolve from/to titles. Skip the to-resolve if we
-		// already did it above for the target_kind filter.
-		if !toResolved {
-			toEntity, _ = e.resolveEntity(ctx, edge.ToID)
+		if m.Kind != "" && ev.Kind != m.Kind {
+			return false
 		}
-		fromEntity, _ = e.resolveEntity(ctx, edge.FromID)
-		if title := titleOf(fromEntity); title != "" {
-			edgeMap["from_title"] = title
+		return true
+	case eventbus.FillCompletedEvent:
+		if reg.workflow.Trigger.Type != parser.TriggerTypeFillCompleted {
+			return false
 		}
-		if title := titleOf(toEntity); title != "" {
-			edgeMap["to_title"] = title
+		if m.Gap != "" && ev.Gap != m.Gap {
+			return false
 		}
-		e.evaluateAndRecord(ctx, reg, entityID, edgeMap, edge.Chain)
+		if m.Source != "" && string(ev.SourceTag) != m.Source {
+			return false
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+// runChain iterates the workflows in order, evaluating each
+// against the queuedEvent. Returns true on the first
+// claim_entity action — the worker halts the per-event
+// dispatch on a true return per #169.
+func (e *Engine) runChain(qe queuedEvent, regs []*registeredWorkflow) bool {
+	for _, r := range regs {
+		if e.runWorkflowAgainstEvent(qe, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// runWorkflowAgainstEvent shapes the event into the
+// activation (entity / edge / chain) the existing
+// evaluateAndRecord path expects, then evaluates. Returns
+// whether claim_entity fired during this workflow's action
+// dispatch (the engine reads the flag to halt the per-event
+// chain per #169).
+func (e *Engine) runWorkflowAgainstEvent(qe queuedEvent, reg *registeredWorkflow) bool {
+	switch ev := qe.event.(type) {
+	case eventbus.EntityEdgeAddedEvent:
+		return e.evaluateEdgeEvent(qe.ctx, reg, ev)
+	case eventbus.EntityCreatedEvent:
+		return e.evaluateAndRecord(qe.ctx, reg, ev.ID, nil, ev.Chain)
+	case eventbus.FillCompletedEvent:
+		return e.evaluateAndRecord(qe.ctx, reg, ev.EntityID, nil, ev.Chain)
+	default:
+		return false
+	}
+}
+
+// evaluateEdgeEvent runs the per-edge activation prep
+// (edgeMap with from/to titles + timestamp) the old
+// makeEdgeHandler did inline, then evaluates against the
+// workflow. The TargetKind filter check has already
+// happened in matchesEvent — here we only resolve the
+// to-entity for title (cheap dictionary read) since the
+// kind has been validated upstream.
+func (e *Engine) evaluateEdgeEvent(ctx context.Context, reg *registeredWorkflow, edge eventbus.EntityEdgeAddedEvent) bool {
+	edgeMap := map[string]any{
+		"type":      edge.EdgeType,
+		"from":      edge.FromID,
+		"to":        edge.ToID,
+		"timestamp": edge.At,
+	}
+	toEntity, _ := e.resolveEntity(ctx, edge.ToID)
+	fromEntity, _ := e.resolveEntity(ctx, edge.FromID)
+	if title := titleOf(fromEntity); title != "" {
+		edgeMap["from_title"] = title
+	}
+	if title := titleOf(toEntity); title != "" {
+		edgeMap["to_title"] = title
+	}
+	return e.evaluateAndRecord(ctx, reg, edge.ToID, edgeMap, edge.Chain)
+}
+
+// sortByFilename orders workflows by their parser-stamped
+// Filename in ascending lexicographic order — operators use
+// `01-`, `02-` prefixes to pin priority within a kind per
+// #169. Stable so equal-filename workflows preserve their
+// snapshot order (defensive — Reconcile rejects name
+// duplicates upstream).
+func sortByFilename(regs []*registeredWorkflow) {
+	sort.SliceStable(regs, func(i, j int) bool {
+		return regs[i].filename < regs[j].filename
+	})
+}
+
+// partitionCatchAllSpecificity splits a pass-2 catch-all set
+// into kind-specific (trigger.match has a kind/target_kind
+// filter) and wildcard (no filter — the global `*` slot)
+// halves. Per #169 the wildcard fires only when no
+// kind-specific catch-all matched.
+func partitionCatchAllSpecificity(regs []*registeredWorkflow) (kindSpecific, wildcard []*registeredWorkflow) {
+	for _, r := range regs {
+		if isCatchAllWildcard(r) {
+			wildcard = append(wildcard, r)
+		} else {
+			kindSpecific = append(kindSpecific, r)
+		}
+	}
+	return kindSpecific, wildcard
+}
+
+// isCatchAllWildcard reports whether the catch_all
+// workflow's trigger declares no kind filter — the global
+// `*` slot in pass-2's specificity hierarchy. A catch_all
+// without any kind/target_kind filter is the operator's
+// last-resort floor; with a filter it's kind-specific.
+func isCatchAllWildcard(reg *registeredWorkflow) bool {
+	m := reg.workflow.Trigger.Match
+	switch reg.workflow.Trigger.Type {
+	case parser.TriggerTypeEdgeCreated:
+		return m.TargetKind == ""
+	case parser.TriggerTypeEntityCreated:
+		return m.Kind == ""
+	case parser.TriggerTypeFillCompleted:
+		// fill events have no kind in the event payload;
+		// every fill catch-all is the wildcard slot for
+		// its trigger.type by construction. Loader-side
+		// uniqueness still enforces one-per-trigger-type.
+		return true
+	default:
+		return true
 	}
 }
 
@@ -571,53 +902,19 @@ func titleOf(entity map[string]any) string {
 	return s
 }
 
-// makeEntityHandler returns a bus handler for
-// entity.created events. Kind filter applies (operator-
-// declared Match.Kind).
-func (e *Engine) makeEntityHandler(reg *registeredWorkflow) eventbus.Handler {
-	return func(ctx context.Context, ev eventbus.Event) {
-		created, ok := ev.(eventbus.EntityCreatedEvent)
-		if !ok {
-			return
-		}
-		m := reg.workflow.Trigger.Match
-		if m.Kind != "" && created.Kind != m.Kind {
-			return
-		}
-		e.evaluateAndRecord(ctx, reg, created.ID, nil, created.Chain)
-	}
-}
-
-// makeFillHandler returns a bus handler for fill.completed
-// events. Filters by Gap + Source. The Source filter
-// implements ADR-0024 §"Self-loop detection" — a workflow
-// X listening to fill.completed with Source: workflow:X
-// would loop, so workflows commonly filter to
-// Source: operator (the answered-by-human shape).
-func (e *Engine) makeFillHandler(reg *registeredWorkflow) eventbus.Handler {
-	return func(ctx context.Context, ev eventbus.Event) {
-		fill, ok := ev.(eventbus.FillCompletedEvent)
-		if !ok {
-			return
-		}
-		m := reg.workflow.Trigger.Match
-		if m.Gap != "" && fill.Gap != m.Gap {
-			return
-		}
-		if m.Source != "" && string(fill.SourceTag) != m.Source {
-			return
-		}
-		e.evaluateAndRecord(ctx, reg, fill.EntityID, nil, fill.Chain)
-	}
-}
-
 // evaluateAndRecord is the per-event evaluation core:
 // resolve entity → evaluate context bindings → evaluate
 // condition predicate → render subject → record Decision.
 // Each step's failure mode is folded into the recorded
 // Decision (Err or MissingRefs) so the engine never blocks
 // on a single workflow's misbehavior.
-func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow, entityID string, edge map[string]any, chain []string) {
+//
+// Returns true when a claim_entity action fired during this
+// workflow's dispatch — the per-#169 signal that halts the
+// worker's per-event chain. False on cycle-suppress, condition
+// false, dedup-skip, or any action chain that didn't include
+// claim_entity.
+func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow, entityID string, edge map[string]any, chain []string) bool {
 	dec := Decision{
 		Workflow: reg.workflow.Name,
 		EntityID: entityID,
@@ -630,7 +927,7 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 	// a loop. Suppress + record an err-task on the first
 	// suppression of this chain shape.
 	if e.applyCycleCheck(ctx, &dec, chain) {
-		return
+		return false
 	}
 
 	// Append this workflow to the chain for downstream events
@@ -647,7 +944,7 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 	if err != nil {
 		dec.MissingRefs = append(dec.MissingRefs, decision.MissingRef{ID: entityID})
 		e.recordDecision(dec)
-		return
+		return false
 	}
 
 	act := decision.Activation{
@@ -664,7 +961,7 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 		if err != nil {
 			dec.Err = fmt.Errorf("context.%s.via: %w", cb.name, err)
 			e.recordDecision(dec)
-			return
+			return false
 		}
 		dec.MissingRefs = append(dec.MissingRefs, bres.MissingRefs...)
 		act.Bindings[cb.name] = val
@@ -679,7 +976,7 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 		if err != nil {
 			dec.Err = fmt.Errorf("condition: %w", err)
 			e.recordDecision(dec)
-			return
+			return false
 		}
 		dec.MissingRefs = append(dec.MissingRefs, cres.MissingRefs...)
 		fired = got
@@ -695,7 +992,7 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 		if err != nil {
 			dec.Err = fmt.Errorf("subject: %w", err)
 			e.recordDecision(dec)
-			return
+			return false
 		}
 		dec.MissingRefs = append(dec.MissingRefs, sres.MissingRefs...)
 		dec.MissingRefs = dedupMissingRefs(dec.MissingRefs)
@@ -718,9 +1015,14 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 	// circuit. Failures from individual actions log at
 	// WARN; Phase 5's err-task pattern absorbs the per-
 	// failure surface (5.B+).
+	//
+	// runActions returns true when any action set the #169
+	// Claim flag — propagates up to the worker so the
+	// per-event chain halts.
 	if dec.Fired && e.runner != nil && dispatch {
-		e.runActions(ctx, reg, dec, entity, edge, act)
+		return e.runActions(ctx, reg, dec, entity, edge, act)
 	}
+	return false
 }
 
 // applyCycleCheck implements the #147 structural cycle
@@ -854,13 +1156,21 @@ func (e *Engine) applyDedupPolicy(ctx context.Context, reg *registeredWorkflow, 
 // runEvaluation (Dispatch target-less path) so both surface
 // the same per-action logs + stay in sync when Phase 5 adds
 // err-task routing.
-func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec Decision, entity, edge map[string]any, act decision.Activation) {
+// runActions returns true when any action in the workflow's
+// dispatch set the #169 Claim flag (the claim_entity
+// primitive). The worker reads this signal to halt the
+// per-event chain — no further pass-1 workflows fire, no
+// pass-2 catch_all fires. False on every other outcome,
+// including action errors (errors don't claim by design;
+// the err-task pattern handles the failure surface
+// separately).
+func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec Decision, entity, edge map[string]any, act decision.Activation) bool {
 	rendered, err := e.renderActionTemplates(ctx, reg, act)
 	if err != nil {
 		e.logger.Warn("workflow action templates render failed; skipping action dispatch",
 			"workflow", dec.Workflow,
 			"err", err.Error())
-		return
+		return false
 	}
 	missingRefIDs := make([]string, 0, len(dec.MissingRefs))
 	for _, mr := range dec.MissingRefs {
@@ -881,7 +1191,11 @@ func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec De
 			Bindings:          act.Bindings,
 			RenderedTemplates: rendered,
 		})
+	claimed := false
 	for _, r := range results {
+		if r.Claim {
+			claimed = true
+		}
 		if r.Err != nil {
 			e.logger.Warn("workflow action failed",
 				"workflow", dec.Workflow,
@@ -910,6 +1224,7 @@ func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec De
 			"action_idx", r.ActionIdx,
 			"type", r.Type)
 	}
+	return claimed
 }
 
 // compileActionTemplates picks out the CEL-templated fields

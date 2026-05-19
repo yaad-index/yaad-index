@@ -741,3 +741,77 @@ func TestLoader_AddGap_NoInlineType_RegistryHasGap(t *testing.T) {
 	require.NoError(t, l.Load(context.Background()))
 	require.Len(t, l.Workflows(), 1)
 }
+
+// TestLoader_CatchAllUniquenessPerKind (#169): registering
+// two workflows both flagged `catch_all: true` with the
+// same trigger.type + kind filter must reject the second
+// (alphabetically later) one with a clear collision log.
+// The first registration keeps its slot.
+func TestLoader_CatchAllUniquenessPerKind(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	catchAllSrc := func(name string) string {
+		return fmt.Sprintf("---\nname: %s\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: entity_created\n  match:\n    kind: gmail\ncatch_all: true\nactions:\n  - claim_entity: {}\n```\n", name)
+	}
+	writeWorkflow(t, dir, "01-first-catch", catchAllSrc("first-catch"))
+	writeWorkflow(t, dir, "02-second-catch", catchAllSrc("second-catch"))
+
+	l := New(Options{
+		Paths:             []string{dir},
+		PluginRegistry:    newFakeRegistry("yaad-gmail"),
+		CanonicalRegistry: newFakeCanonicalRegistry(nil, nil),
+	})
+	require.NoError(t, l.Load(context.Background()))
+
+	wfs := l.Workflows()
+	require.Len(t, wfs, 1,
+		"second catch-all rejected; first keeps the slot")
+	assert.Equal(t, "first-catch", wfs[0].Name)
+}
+
+// TestLoader_CatchAllUniqueness_DifferentKindsCoexist:
+// two catch-all workflows with DIFFERENT kind filters
+// register cleanly — each occupies its own kind slot per
+// #169.
+func TestLoader_CatchAllUniqueness_DifferentKindsCoexist(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	catchAllSrcKind := func(name, kind string) string {
+		return fmt.Sprintf("---\nname: %s\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: entity_created\n  match:\n    kind: %s\ncatch_all: true\nactions:\n  - claim_entity: {}\n```\n", name, kind)
+	}
+	writeWorkflow(t, dir, "01-catch-gmail", catchAllSrcKind("catch-gmail", "gmail"))
+	writeWorkflow(t, dir, "02-catch-email", catchAllSrcKind("catch-email", "email"))
+
+	l := New(Options{
+		Paths:             []string{dir},
+		PluginRegistry:    newFakeRegistry("yaad-gmail"),
+		CanonicalRegistry: newFakeCanonicalRegistry(nil, nil),
+	})
+	require.NoError(t, l.Load(context.Background()))
+	require.Len(t, l.Workflows(), 2,
+		"different kind filters → different slots → both register")
+}
+
+// TestLoader_CatchAllUniqueness_WildcardOwnsItsSlot:
+// the wildcard slot (empty kind) is unique against itself
+// per trigger.type. Two wildcard catch-alls on the same
+// trigger.type collide; the second is rejected.
+func TestLoader_CatchAllUniqueness_WildcardOwnsItsSlot(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	catchAllSrcNoKind := func(name string) string {
+		return fmt.Sprintf("---\nname: %s\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: entity_created\ncatch_all: true\nactions:\n  - claim_entity: {}\n```\n", name)
+	}
+	writeWorkflow(t, dir, "01-wildcard-a", catchAllSrcNoKind("wildcard-a"))
+	writeWorkflow(t, dir, "02-wildcard-b", catchAllSrcNoKind("wildcard-b"))
+
+	l := New(Options{
+		Paths:             []string{dir},
+		PluginRegistry:    newFakeRegistry("yaad-gmail"),
+		CanonicalRegistry: newFakeCanonicalRegistry(nil, nil),
+	})
+	require.NoError(t, l.Load(context.Background()))
+	wfs := l.Workflows()
+	require.Len(t, wfs, 1, "wildcard slot is unique per trigger.type")
+	assert.Equal(t, "wildcard-a", wfs[0].Name)
+}

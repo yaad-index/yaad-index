@@ -1106,3 +1106,104 @@ func TestValidate_ArchiveEntityRejectsMultiplePrimitives(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sets 2 primitives")
 }
+
+// TestParser_ClaimEntityRoundTrip pins the #169 wire shape:
+// the action is a bare `- claim_entity: {}` invocation; no
+// fields v1.
+func TestParser_ClaimEntityRoundTrip(t *testing.T) {
+	t.Parallel()
+	src := "---\n" +
+		"name: linkedin-classify\n" +
+		"status: active\n" +
+		"---\n" +
+		"\n" +
+		"```yaml\n" +
+		"allowed_plugins:\n" +
+		"  - yaad-gmail\n" +
+		"\n" +
+		"trigger:\n" +
+		"  type: manual\n" +
+		"\n" +
+		"actions:\n" +
+		"  - claim_entity: {}\n" +
+		"```\n"
+	wf, err := Parse([]byte(src))
+	require.NoError(t, err)
+	require.Len(t, wf.Actions, 1)
+	require.NotNil(t, wf.Actions[0].ClaimEntity)
+}
+
+// TestParser_CatchAllRoundTrip pins the catch_all frontmatter
+// field per #169. Defaults to false when omitted; explicit
+// true round-trips.
+func TestParser_CatchAllRoundTrip(t *testing.T) {
+	t.Parallel()
+	src := "---\n" +
+		"name: review-orphans\n" +
+		"status: active\n" +
+		"---\n" +
+		"\n" +
+		"```yaml\n" +
+		"allowed_plugins:\n" +
+		"  - yaad-gmail\n" +
+		"\n" +
+		"trigger:\n" +
+		"  type: entity_created\n" +
+		"\n" +
+		"catch_all: true\n" +
+		"\n" +
+		"actions:\n" +
+		"  - claim_entity: {}\n" +
+		"```\n"
+	wf, err := Parse([]byte(src))
+	require.NoError(t, err)
+	assert.True(t, wf.CatchAll, "catch_all: true round-trips")
+}
+
+// TestParser_CatchAllDefaultFalse: workflows that omit
+// catch_all parse as regular (CatchAll == false).
+func TestParser_CatchAllDefaultFalse(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	assert.False(t, wf.CatchAll,
+		"omitted catch_all defaults to false (regular workflow)")
+}
+
+// TestValidate_CatchAllForbidsCondition: a catch_all workflow
+// with a `condition` is rejected — per #169 the only allowed
+// scoping is trigger.kind; per-event filtering would collapse
+// the catch-all into a regular workflow.
+func TestValidate_CatchAllForbidsCondition(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.CatchAll = true
+	wf.Condition = "entity.kind == \"gmail\""
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "catch_all=true forbids `condition`")
+}
+
+// TestValidate_CatchAllNoConditionPasses: a catch_all without
+// a condition is the canonical shape.
+func TestValidate_CatchAllNoConditionPasses(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.CatchAll = true
+	wf.Condition = ""
+	require.NoError(t, Validate(wf))
+}
+
+// TestValidate_ClaimEntityRejectsMultiplePrimitives: claim_entity
+// alongside another primitive on the same Action trips the
+// exactly-one-primitive guard.
+func TestValidate_ClaimEntityRejectsMultiplePrimitives(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Actions = []Action{{
+		ClaimEntity: &ClaimEntityAction{},
+		AddNote:     &AddNoteAction{Content: "x"},
+	}}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sets 2 primitives")
+}
