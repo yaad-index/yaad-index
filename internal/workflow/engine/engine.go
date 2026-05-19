@@ -148,6 +148,16 @@ type Decision struct {
 	// trace W1→W2→W3→W1 loops by name. Empty when not
 	// suppressed.
 	CycleChain []string
+
+	// Claimed reports whether this workflow's action chain
+	// fired a `claim_entity` action per #169. The engine
+	// reads the bool to halt the per-event chain (no further
+	// pass-1 workflows fire, no pass-2 catch-all fires); the
+	// recorded Decision carries it for post-event
+	// observability so operators can trace which workflow
+	// took ownership of a given event without re-deriving
+	// from the action-result log.
+	Claimed bool
 }
 
 // Options configures an Engine.
@@ -223,7 +233,7 @@ type Engine struct {
 	logger        *slog.Logger
 	ringSize      int
 
-	mu        sync.Mutex
+	mu        sync.RWMutex
 	workflows map[string]*registeredWorkflow
 
 	decMu     sync.Mutex
@@ -265,11 +275,19 @@ type Engine struct {
 	// engine-level handler blocks the bus publisher; the
 	// expected steady-state is far below capacity (workflow
 	// fires lag bus emits by milliseconds).
-	queue       chan queuedEvent
-	workerWG    sync.WaitGroup
-	topicSubs   []eventbus.Subscription
-	shutdownCh  chan struct{}
-	startedOnce sync.Once
+	//
+	// **Lifecycle invariant.** The queue is created in New
+	// + NEVER closed. Senders (`enqueueEvent`, `WaitForIdle`)
+	// gate their send on `shutdownCh` via select; the worker
+	// drains the queue + exits when `shutdownCh` closes. This
+	// avoids the send-to-closed-channel panic that occurs
+	// when Shutdown races with an in-flight enqueue.
+	queue        chan queuedEvent
+	workerWG     sync.WaitGroup
+	topicSubs    []eventbus.Subscription
+	shutdownCh   chan struct{}
+	startedOnce  sync.Once
+	shutdownOnce sync.Once
 }
 
 // queuedEvent carries the bus event + dispatch context into
@@ -412,38 +430,40 @@ func (e *Engine) Start() {
 	})
 }
 
-// Shutdown stops the engine's worker + drains in-flight
-// events. Unsubscribes from the bus first so no new events
-// enqueue, then closes the queue + waits for the worker to
-// finish processing whatever was already buffered. Safe to
-// call multiple times (subsequent calls are no-ops via the
-// shutdownCh close-once semantics).
+// Shutdown stops the engine's worker. Unsubscribes from the
+// bus first so no new events enqueue, signals the worker
+// via shutdownCh, then waits for the worker to finish its
+// current event + exit. Safe to call concurrently from
+// multiple goroutines (sync.Once guards the body).
+//
+// **Drain semantics.** The worker exits as soon as
+// shutdownCh fires — any events currently buffered in the
+// queue are NOT processed. For in-memory v1 this matches
+// the upstream-emitter shape (publishers re-emit on
+// restart). Callers expecting a full-drain shutdown need
+// to ensure no new events enqueue before Shutdown returns.
 //
 // Workflow re-registration via Reconcile after Shutdown is
 // undefined; callers should treat the engine as terminal
 // after Shutdown returns.
 func (e *Engine) Shutdown() {
-	select {
-	case <-e.shutdownCh:
-		// Already shut down.
-		return
-	default:
-	}
-	close(e.shutdownCh)
-	for _, s := range e.topicSubs {
-		s.Unsubscribe()
-	}
-	e.topicSubs = nil
-	close(e.queue)
-	e.workerWG.Wait()
+	e.shutdownOnce.Do(func() {
+		for _, s := range e.topicSubs {
+			s.Unsubscribe()
+		}
+		e.topicSubs = nil
+		close(e.shutdownCh)
+		e.workerWG.Wait()
+	})
 }
 
 // enqueueEvent is the engine-level bus handler — subscribed
 // once per topic by Start. Each bus emit lands a queuedEvent
 // in the FIFO queue; the worker processes events in arrival
-// order per #169. Blocks the bus publisher when the queue is
-// at capacity (per the steady-state assumption documented on
-// queueCapacity).
+// order per #169. The send is gated on shutdownCh so a
+// concurrent Shutdown can never panic this caller — the
+// queue is NEVER closed (Shutdown signals via shutdownCh
+// only). When shutdown fires the event is dropped.
 func (e *Engine) enqueueEvent(ctx context.Context, ev eventbus.Event) {
 	if ev == nil {
 		return
@@ -452,28 +472,35 @@ func (e *Engine) enqueueEvent(ctx context.Context, ev eventbus.Event) {
 	case <-e.shutdownCh:
 		// Engine is shutting down; drop the event.
 		return
-	default:
-	}
-	select {
 	case e.queue <- queuedEvent{ctx: ctx, event: ev}:
-	case <-e.shutdownCh:
-		// Shutdown raced with enqueue; drop.
 	}
 }
 
 // workerLoop drains the event queue + processes each event
-// with the two-pass evaluation per #169. Exits when the queue
-// channel is closed by Shutdown. Barrier events (qe.barrier
-// non-nil) skip processEvent and close the barrier channel
-// so WaitForIdle can return.
+// with the two-pass evaluation per #169. Exits when
+// shutdownCh closes. Barrier events (qe.barrier non-nil)
+// skip processEvent and close the barrier channel so
+// WaitForIdle can return.
+//
+// Select chooses pseudo-randomly between shutdownCh +
+// queue when both are ready — buffered events may or may
+// not be processed during shutdown. Matches the
+// "drain current event, then exit" shape documented on
+// Shutdown; upstream emitters re-fire on restart so
+// dropped buffered events are not load-bearing for v1.
 func (e *Engine) workerLoop() {
 	defer e.workerWG.Done()
-	for qe := range e.queue {
-		if qe.barrier != nil {
-			close(qe.barrier)
-			continue
+	for {
+		select {
+		case <-e.shutdownCh:
+			return
+		case qe := <-e.queue:
+			if qe.barrier != nil {
+				close(qe.barrier)
+				continue
+			}
+			e.processEvent(qe)
 		}
-		e.processEvent(qe)
 	}
 }
 
@@ -485,17 +512,14 @@ func (e *Engine) workerLoop() {
 //
 // Returns immediately if the engine is already shut down
 // (the worker has exited and won't process new events).
+// The barrier-send is gated on shutdownCh so a concurrent
+// Shutdown can never panic this caller.
 func (e *Engine) WaitForIdle() {
-	select {
-	case <-e.shutdownCh:
-		return
-	default:
-	}
 	barrier := make(chan struct{})
 	select {
-	case e.queue <- queuedEvent{barrier: barrier}:
 	case <-e.shutdownCh:
 		return
+	case e.queue <- queuedEvent{barrier: barrier}:
 	}
 	select {
 	case <-barrier:
@@ -640,6 +664,20 @@ func (e *Engine) registerLocked(wf *parser.Workflow) error {
 		return fmt.Errorf("unsupported trigger.type %q", wf.Trigger.Type)
 	}
 
+	// Per #169 the engine is the authoritative gate on
+	// catch-all uniqueness per (trigger.type, kind). The
+	// loader rejects collisions at parse time as the
+	// early-warn surface; this registerLocked check is the
+	// defense-in-depth — a future programmatic registration
+	// path (operator-CLI, hot-reload race) can't slip in a
+	// second catch-all on the same slot.
+	if wf.CatchAll {
+		if prior := e.findCatchAllConflict(wf); prior != "" {
+			return fmt.Errorf("catch_all collision: workflow %q already occupies the (%s, %q) catch_all slot",
+				prior, wf.Trigger.Type, catchAllRegistryKey(wf))
+		}
+	}
+
 	e.workflows[wf.Name] = reg
 	e.logger.Info("workflow registered",
 		"workflow", wf.Name,
@@ -693,11 +731,14 @@ func (e *Engine) processEvent(qe queuedEvent) {
 }
 
 // snapshotRegistered returns a stable slice of the engine's
-// currently-registered workflows. Taken under e.mu so the
-// worker's iteration can't race with Reconcile.
+// currently-registered workflows. Taken under e.mu.RLock so
+// concurrent event-processing snapshots don't serialize
+// against each other (single-worker model means this is
+// mostly theoretical today, but tightens the contract).
+// Reconcile + register/unregister take the write lock.
 func (e *Engine) snapshotRegistered() []*registeredWorkflow {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	out := make([]*registeredWorkflow, 0, len(e.workflows))
 	for _, r := range e.workflows {
 		out = append(out, r)
@@ -859,6 +900,46 @@ func partitionCatchAllSpecificity(regs []*registeredWorkflow) (kindSpecific, wil
 	return kindSpecific, wildcard
 }
 
+// findCatchAllConflict returns the name of an
+// already-registered catch_all workflow that occupies the
+// same (trigger.type, kind) slot as `wf`. Returns "" when
+// no conflict exists. Called from registerLocked with e.mu
+// held.
+func (e *Engine) findCatchAllConflict(wf *parser.Workflow) string {
+	key := catchAllRegistryKey(wf)
+	for name, reg := range e.workflows {
+		if name == wf.Name {
+			continue
+		}
+		if !reg.catchAll {
+			continue
+		}
+		if reg.workflow.Trigger.Type != wf.Trigger.Type {
+			continue
+		}
+		if catchAllRegistryKey(reg.workflow) != key {
+			continue
+		}
+		return name
+	}
+	return ""
+}
+
+// catchAllRegistryKey returns the kind-slot key the
+// catch-all workflow occupies. Mirrors the loader-side
+// catchAllKindKey so engine + loader agree on what counts
+// as a collision.
+func catchAllRegistryKey(wf *parser.Workflow) string {
+	switch wf.Trigger.Type {
+	case parser.TriggerTypeEdgeCreated:
+		return wf.Trigger.Match.TargetKind
+	case parser.TriggerTypeEntityCreated:
+		return wf.Trigger.Match.Kind
+	default:
+		return ""
+	}
+}
+
 // isCatchAllWildcard reports whether the catch_all
 // workflow's trigger declares no kind filter — the global
 // `*` slot in pass-2's specificity hierarchy. A catch_all
@@ -1008,7 +1089,6 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 	if dec.Fired {
 		dec.DedupKey, dec.DedupPolicyApplied, dispatch = e.applyDedupPolicy(ctx, reg, act)
 	}
-	e.recordDecision(dec)
 
 	// Dispatch actions to the configured Runner when the
 	// workflow fired AND the dedup policy didn't short-
@@ -1017,12 +1097,17 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 	// failure surface (5.B+).
 	//
 	// runActions returns true when any action set the #169
-	// Claim flag — propagates up to the worker so the
-	// per-event chain halts.
+	// Claim flag — stamp Claimed on the Decision BEFORE
+	// recordDecision so observers see the post-action
+	// state, then propagate the bool up to the worker so
+	// the per-event chain halts.
+	claimed := false
 	if dec.Fired && e.runner != nil && dispatch {
-		return e.runActions(ctx, reg, dec, entity, edge, act)
+		claimed = e.runActions(ctx, reg, dec, entity, edge, act)
 	}
-	return false
+	dec.Claimed = claimed
+	e.recordDecision(dec)
+	return claimed
 }
 
 // applyCycleCheck implements the #147 structural cycle

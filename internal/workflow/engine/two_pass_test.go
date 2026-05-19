@@ -323,3 +323,269 @@ func (r *sequenceRunner) entityIDs() []string {
 	copy(out, r.seen)
 	return out
 }
+
+// TestEngine_ConcurrentShutdown_NoPanic (#169 fold-in): two
+// goroutines call Shutdown simultaneously; the second waits
+// for the first via sync.Once. Neither panics.
+func TestEngine_ConcurrentShutdown_NoPanic(t *testing.T) {
+	t.Parallel()
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(nil)
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+
+	done := make(chan struct{}, 2)
+	go func() { eng.Shutdown(); done <- struct{}{} }()
+	go func() { eng.Shutdown(); done <- struct{}{} }()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatalf("Shutdown call %d hung — concurrent-Shutdown deadlock", i)
+		}
+	}
+}
+
+// TestEngine_ShutdownDuringProcessing_DrainsCurrentEvent
+// (#169 fold-in): Shutdown fires while the worker is mid-
+// event. The current event finishes; Shutdown returns once
+// the worker exits.
+func TestEngine_ShutdownDuringProcessing_DrainsCurrentEvent(t *testing.T) {
+	t.Parallel()
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"gmail:msg-1": {"id": "gmail:msg-1", "kind": "gmail"},
+	})
+	// blockingRunner: the runner blocks until the test signals
+	// `proceed`. While it blocks, Shutdown is invoked from the
+	// test goroutine; the worker must drain THIS event before
+	// the Shutdown returns.
+	proceed := make(chan struct{})
+	started := make(chan struct{})
+	runner := &blockingRunner{started: started, proceed: proceed}
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{
+		wfEntityCreated("regular", "", false),
+	}))
+
+	bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
+		ID:        "gmail:msg-1",
+		Kind:      "gmail",
+		SourceTag: eventbus.SourceAgent,
+		At:        time.Now().UTC(),
+	})
+	// Wait until the worker has actually started the event.
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("worker never started processing the event")
+	}
+
+	// Kick off Shutdown from a goroutine; verify the runner
+	// can still complete.
+	shutdownDone := make(chan struct{})
+	go func() {
+		eng.Shutdown()
+		close(shutdownDone)
+	}()
+	// Give Shutdown a moment to register, then release the
+	// blocking runner.
+	time.Sleep(20 * time.Millisecond)
+	close(proceed)
+
+	select {
+	case <-shutdownDone:
+	case <-time.After(time.Second):
+		t.Fatal("Shutdown didn't return after worker finished the event")
+	}
+	assert.Equal(t, int32(1), runner.calls.Load(),
+		"worker drained the current event before exit")
+}
+
+type blockingRunner struct {
+	started chan struct{}
+	proceed chan struct{}
+	calls   atomic.Int32
+}
+
+func (r *blockingRunner) Run(_ context.Context, _ *parser.Workflow, _ actions.Decision, _ actions.Activation) []actions.ActionResult {
+	r.calls.Add(1)
+	// Signal once (the first call). Subsequent calls don't
+	// signal again — tests that check the started channel
+	// don't expect more than one signal per fixture.
+	select {
+	case r.started <- struct{}{}:
+	default:
+	}
+	<-r.proceed
+	return nil
+}
+
+// TestEngine_SendToShutdownEngine_NoPanic (#169 fold-in):
+// regression cover for the send-to-closed-channel concern.
+// Publish events on the bus AFTER Shutdown; the enqueue
+// path drops them silently rather than panicking.
+func TestEngine_SendToShutdownEngine_NoPanic(t *testing.T) {
+	t.Parallel()
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(nil)
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+	eng.Shutdown()
+
+	// Multiple publishes after shutdown — must not panic.
+	for i := 0; i < 10; i++ {
+		assert.NotPanics(t, func() {
+			bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
+				ID:        "gmail:msg-after-shutdown",
+				Kind:      "gmail",
+				SourceTag: eventbus.SourceAgent,
+				At:        time.Now().UTC(),
+			})
+		})
+	}
+	// WaitForIdle on a shutdown engine returns immediately.
+	assert.NotPanics(t, func() { eng.WaitForIdle() })
+}
+
+// TestEngine_RegisterCatchAllCollision_Rejects (#169
+// fold-in): registerLocked is the authoritative
+// catch-all-uniqueness gate. Two workflows with
+// `catch_all=true` on the same (trigger.type, kind) slot
+// can't both register; the second returns an error.
+func TestEngine_RegisterCatchAllCollision_Rejects(t *testing.T) {
+	t.Parallel()
+	eng, _ := newEngineWithBus(t, nil)
+	first := wfEntityCreated("first-catch", "gmail", true)
+	second := wfEntityCreated("second-catch", "gmail", true)
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{first, second}))
+	registered := eng.Registered()
+	// Only one of the two registered (the loader-style
+	// behavior is preserved at the engine-side rejection too:
+	// the first one wins, the second's registerLocked errors,
+	// reconcile WARNs + skips).
+	assert.Len(t, registered, 1,
+		"engine-side rejection drops the second catch-all on the same slot")
+}
+
+// TestTwoPass_EdgeTrigger_FilenameOrder (#169 fold-in):
+// edge_created trigger fires multiple matching workflows in
+// filename order with claim-stop chain. Verifies the
+// matchesEvent edge-type filter + the worker's per-event
+// sort.
+func TestTwoPass_EdgeTrigger_FilenameOrder(t *testing.T) {
+	t.Parallel()
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"gmail:msg-1":      {"id": "gmail:msg-1", "kind": "gmail"},
+		"email:msg-target": {"id": "email:msg-target", "kind": "email"},
+	})
+	runner := newTwoPassRunner("a-first")
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+	wfs := []*parser.Workflow{
+		{Name: "a-first", Filename: "01-a-first.md", Version: 1, Status: parser.StatusActive,
+			AllowedPlugins: []string{"p"},
+			Trigger: parser.Trigger{Type: parser.TriggerTypeEdgeCreated,
+				Match: parser.TriggerMatch{EdgeType: "is_about"}},
+			Subject: "edge.to",
+			Actions: []parser.Action{{ClaimEntity: &parser.ClaimEntityAction{}}}},
+		{Name: "b-second", Filename: "02-b-second.md", Version: 1, Status: parser.StatusActive,
+			AllowedPlugins: []string{"p"},
+			Trigger: parser.Trigger{Type: parser.TriggerTypeEdgeCreated,
+				Match: parser.TriggerMatch{EdgeType: "is_about"}},
+			Subject: "edge.to",
+			Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}}},
+	}
+	require.NoError(t, eng.Reconcile(wfs))
+
+	bus.Publish(context.Background(), eventbus.EntityEdgeAddedEvent{
+		FromID:    "gmail:msg-1",
+		ToID:      "email:msg-target",
+		EdgeType:  "is_about",
+		SourceTag: eventbus.SourceAgent,
+		At:        time.Now().UTC(),
+	})
+	eng.WaitForIdle()
+	assert.Equal(t, []string{"a-first"}, runner.fired,
+		"edge_created: first claim halts the chain; b-second skipped")
+}
+
+// TestTwoPass_FillTrigger_FilenameOrder (#169 fold-in):
+// fill_completed trigger fires multiple matching workflows
+// in filename order with claim-stop chain.
+func TestTwoPass_FillTrigger_FilenameOrder(t *testing.T) {
+	t.Parallel()
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"gmail:msg-1": {"id": "gmail:msg-1", "kind": "gmail"},
+	})
+	runner := newTwoPassRunner("first-fill")
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+	wfs := []*parser.Workflow{
+		{Name: "first-fill", Filename: "01-first-fill.md", Version: 1, Status: parser.StatusActive,
+			AllowedPlugins: []string{"p"},
+			Trigger: parser.Trigger{Type: parser.TriggerTypeFillCompleted,
+				Match: parser.TriggerMatch{Gap: "hiring_alert_for"}},
+			Subject: "entity.id",
+			Actions: []parser.Action{{ClaimEntity: &parser.ClaimEntityAction{}}}},
+		{Name: "second-fill", Filename: "02-second-fill.md", Version: 1, Status: parser.StatusActive,
+			AllowedPlugins: []string{"p"},
+			Trigger: parser.Trigger{Type: parser.TriggerTypeFillCompleted,
+				Match: parser.TriggerMatch{Gap: "hiring_alert_for"}},
+			Subject: "entity.id",
+			Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}}},
+	}
+	require.NoError(t, eng.Reconcile(wfs))
+
+	bus.Publish(context.Background(), eventbus.FillCompletedEvent{
+		EntityID:  "gmail:msg-1",
+		Gap:       "hiring_alert_for",
+		SourceTag: eventbus.SourceAgent,
+		At:        time.Now().UTC(),
+	})
+	eng.WaitForIdle()
+	assert.Equal(t, []string{"first-fill"}, runner.fired,
+		"fill_completed: first claim halts; second-fill skipped")
+}
+
+// TestEngine_Decision_ClaimedFlagRecorded (#169 fold-in):
+// Decision.Claimed reflects the per-event claim state.
+// Operators can read the recorded decision and see which
+// workflow claimed without re-deriving from the action-result
+// log.
+func TestEngine_Decision_ClaimedFlagRecorded(t *testing.T) {
+	t.Parallel()
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"gmail:msg-1": {"id": "gmail:msg-1", "kind": "gmail"},
+	})
+	runner := newTwoPassRunner("claims")
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{
+		wfEntityCreated("claims", "", false),
+	}))
+
+	publishEntity(bus, eng, "gmail:msg-1", "gmail")
+
+	decs := eng.Decisions()
+	require.Len(t, decs, 1)
+	assert.True(t, decs[0].Claimed,
+		"Decision.Claimed records the post-action claim state")
+	assert.Equal(t, "claims", decs[0].Workflow)
+}
