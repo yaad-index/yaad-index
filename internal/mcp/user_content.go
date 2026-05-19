@@ -22,10 +22,11 @@ func registerCreateUserContent(s *server.MCPServer, b *bridge) {
 				"`title` to derive `id = user-content:<slug>`, stamps "+
 				"`author` from the JWT subject and `operator` from the "+
 				"pair-claim. Returns the full entity envelope plus an "+
-				"`etag` for chaining edits. 409 conflict on slug "+
-				"collision. Optional `data` carries frontmatter fields; "+
-				"fields declared in `user_content_frontmatter_edges:` "+
-				"config produce canonical-label edges.",
+				"`etag` (lifted from the HTTP ETag header onto the JSON "+
+				"body) for chaining edits. 409 conflict on slug collision. "+
+				"Optional `data` carries frontmatter fields; fields "+
+				"declared in `user_content_frontmatter_edges:` config "+
+				"produce canonical-label edges. `body` may be empty.",
 		),
 		mcp.WithString("title",
 			mcp.Required(),
@@ -37,8 +38,7 @@ func registerCreateUserContent(s *server.MCPServer, b *bridge) {
 			mcp.Items(map[string]any{"type": "string"}),
 		),
 		mcp.WithString("body",
-			mcp.Required(),
-			mcp.Description("Markdown body. Empty allowed."),
+			mcp.Description("Markdown body. Empty allowed; omit or pass \"\"."),
 		),
 		mcp.WithObject("data",
 			mcp.Description("Optional frontmatter map. See description for edge-derivation rules."),
@@ -67,7 +67,7 @@ func registerCreateUserContent(s *server.MCPServer, b *bridge) {
 		if err != nil {
 			return mcp.NewToolResultError("encode args: " + err.Error()), nil
 		}
-		return b.callTool(ctx, "POST", "/v1/user-content", bytes.NewReader(bodyBytes))
+		return b.callToolWithEtagLift(ctx, "POST", "/v1/user-content", bytes.NewReader(bodyBytes), nil)
 	})
 }
 
@@ -89,7 +89,7 @@ func registerGetUserContent(s *server.MCPServer, b *bridge) {
 		if id == "" {
 			return mcp.NewToolResultError("`id` is required"), nil
 		}
-		return b.callTool(ctx, "GET", "/v1/user-content/"+url.PathEscape(id), nil)
+		return b.callToolWithEtagLift(ctx, "GET", "/v1/user-content/"+url.PathEscape(id), nil, nil)
 	})
 }
 
@@ -120,7 +120,9 @@ func registerListUserContentSections(s *server.MCPServer, b *bridge) {
 			"List the parsed `## section` headings on a UGC entity's "+
 				"body. Returns each section's address (slug or positional "+
 				"index) + heading text — addresses are what `edit_user_"+
-				"content_section` accepts.",
+				"content_section` accepts. Response carries `etag` "+
+				"(lifted from the HTTP ETag header) so callers can chain "+
+				"a section edit without a second read.",
 		),
 		mcp.WithString("id",
 			mcp.Required(),
@@ -132,7 +134,7 @@ func registerListUserContentSections(s *server.MCPServer, b *bridge) {
 		if id == "" {
 			return mcp.NewToolResultError("`id` is required"), nil
 		}
-		return b.callTool(ctx, "GET", "/v1/user-content/"+url.PathEscape(id)+"/sections", nil)
+		return b.callToolWithEtagLift(ctx, "GET", "/v1/user-content/"+url.PathEscape(id)+"/sections", nil, nil)
 	})
 }
 
@@ -162,7 +164,7 @@ func registerGetUserContentSection(s *server.MCPServer, b *bridge) {
 		if sec == "" {
 			return mcp.NewToolResultError("`sec` is required"), nil
 		}
-		return b.callTool(ctx, "GET", fmt.Sprintf("/v1/user-content/%s/sections/%s", url.PathEscape(id), url.PathEscape(sec)), nil)
+		return b.callToolWithEtagLift(ctx, "GET", fmt.Sprintf("/v1/user-content/%s/sections/%s", url.PathEscape(id), url.PathEscape(sec)), nil, nil)
 	})
 }
 
@@ -171,9 +173,12 @@ func registerEditUserContentSection(s *server.MCPServer, b *bridge) {
 		mcp.WithDescription(
 			"Replace one section's body on a UGC entity. THE ETAG IS "+
 				"REQUIRED: read it from a prior `get_user_content` / "+
-				"`get_user_content_section` call and pass it back here as "+
-				"If-Match concurrency. Errors as JSON envelopes: "+
-				"`precondition_failed` (412, stale etag), "+
+				"`get_user_content_section` call (response JSON carries "+
+				"`etag` lifted from the HTTP ETag header) and pass it "+
+				"back here as If-Match concurrency. Success returns the "+
+				"post-edit envelope with a fresh `etag`. Errors as JSON "+
+				"envelopes: `precondition_failed` (412, stale etag — "+
+				"envelope carries `current_etag` for retry), "+
 				"`precondition_required` (428, missing etag), "+
 				"`author_mismatch` (403, JWT doesn't match author/operator).",
 		),
@@ -218,6 +223,6 @@ func registerEditUserContentSection(s *server.MCPServer, b *bridge) {
 			return mcp.NewToolResultError("encode args: " + err.Error()), nil
 		}
 		headers := map[string]string{"If-Match": etag}
-		return b.callToolWithHeaders(ctx, "PUT", fmt.Sprintf("/v1/user-content/%s/sections/%s", url.PathEscape(id), url.PathEscape(sec)), bytes.NewReader(bodyBytes), headers)
+		return b.callToolWithEtagLift(ctx, "PUT", fmt.Sprintf("/v1/user-content/%s/sections/%s", url.PathEscape(id), url.PathEscape(sec)), bytes.NewReader(bodyBytes), headers)
 	})
 }

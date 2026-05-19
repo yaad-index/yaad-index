@@ -47,11 +47,15 @@ func newBridge(handler http.Handler) *bridge {
 }
 
 // callResult is the bridge's normalized response shape — the
-// HTTP status + body bytes the inner route emitted. Tool
-// handlers translate these into mcp.CallToolResult values.
+// HTTP status + body bytes + response headers the inner route
+// emitted. Tool handlers translate these into mcp.CallToolResult
+// values. Headers are captured so tools whose contract carries
+// metadata in headers (UGC etag concurrency, see
+// `callToolWithEtagLift`) can lift them onto the body JSON.
 type callResult struct {
-	status int
-	body   []byte
+	status  int
+	body    []byte
+	headers http.Header
 }
 
 // callWithHeaders synthesizes an http.Request with the given
@@ -68,14 +72,21 @@ type callResult struct {
 func (b *bridge) callWithHeaders(ctx context.Context, method, path string, body io.Reader, headers map[string]string) (*callResult, error) {
 	req := httptest.NewRequest(method, path, body)
 	req = req.WithContext(ctx)
-	if auth := authHeaderFromContext(ctx); auth != "" {
-		req.Header.Set("Authorization", auth)
-	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	for k, v := range headers {
+		// Authorization is sourced from ctx (per-request JWT);
+		// silently dropping an extra-header map's Authorization
+		// prevents tools from accidentally overwriting the
+		// auth-middleware-extracted token.
+		if http.CanonicalHeaderKey(k) == "Authorization" {
+			continue
+		}
 		req.Header.Set(k, v)
+	}
+	if auth := authHeaderFromContext(ctx); auth != "" {
+		req.Header.Set("Authorization", auth)
 	}
 	rec := httptest.NewRecorder()
 	b.handler.ServeHTTP(rec, req)
@@ -83,7 +94,11 @@ func (b *bridge) callWithHeaders(ctx context.Context, method, path string, body 
 	if err != nil {
 		return nil, fmt.Errorf("read recorded response body: %w", err)
 	}
-	return &callResult{status: rec.Code, body: respBody}, nil
+	return &callResult{
+		status:  rec.Code,
+		body:    respBody,
+		headers: rec.Result().Header,
+	}, nil
 }
 
 // isSuccess reports whether the recorded status falls in the
@@ -121,11 +136,20 @@ func (r *callResult) asMCPError() string {
 		Error   string `json:"error"`
 		Message string `json:"message"`
 	}
-	if err := json.Unmarshal(r.body, &env); err == nil && env.Error != "" {
-		if env.Message != "" {
+	if err := json.Unmarshal(r.body, &env); err == nil {
+		switch {
+		case env.Error != "" && env.Message != "":
 			return fmt.Sprintf("%s: %s", env.Error, env.Message)
+		case env.Error != "":
+			return env.Error
+		case env.Message != "":
+			// Some upstream-middleware error paths emit
+			// `{ok:false, message:"..."}` without an error
+			// code (e.g. body-decode failures). Surface the
+			// message so callers see the cause rather than
+			// dropping to the verbose-body fallback.
+			return env.Message
 		}
-		return env.Error
 	}
 	return fmt.Sprintf("HTTP %d: %s", r.status, r.bodyString())
 }
@@ -161,4 +185,55 @@ func (b *bridge) callToolWithHeaders(ctx context.Context, method, path string, b
 		return mcp.NewToolResultError(res.asMCPError()), nil
 	}
 	return mcp.NewToolResultText(res.bodyString()), nil
+}
+
+// callToolWithEtagLift is the UGC etag-capture variant of
+// callTool. The daemon's UGC routes emit the entity's etag via
+// the `ETag` HTTP response header only — never in the JSON body
+// — so the bridge has to lift it for the MCP caller to chain
+// edits. On success the lifted etag lands on the body JSON as
+// `etag`; on a 412 stale-etag response it lands as
+// `current_etag` so callers can re-issue with the fresh etag.
+// Other error statuses fall back to the standard `<code>: <msg>`
+// projection. Bodies that don't decode to a JSON object are
+// passed through verbatim.
+func (b *bridge) callToolWithEtagLift(ctx context.Context, method, path string, body io.Reader, headers map[string]string) (*mcp.CallToolResult, error) {
+	res, err := b.callWithHeaders(ctx, method, path, body, headers)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("bridge call: %v", err)), nil
+	}
+	etag := res.headers.Get("ETag")
+	if etag != "" {
+		field := "etag"
+		if res.status == http.StatusPreconditionFailed {
+			field = "current_etag"
+		}
+		res.body = liftJSONField(res.body, field, etag)
+	}
+	if !res.isSuccess() {
+		// 412 + current_etag: surface the enriched envelope JSON
+		// verbatim so callers can parse out current_etag for retry.
+		// Other errors keep the `<code>: <msg>` projection.
+		if res.status == http.StatusPreconditionFailed && etag != "" {
+			return mcp.NewToolResultError(res.bodyString()), nil
+		}
+		return mcp.NewToolResultError(res.asMCPError()), nil
+	}
+	return mcp.NewToolResultText(res.bodyString()), nil
+}
+
+// liftJSONField parses body as a JSON object and sets the named
+// field to value, returning the re-marshaled body. If the body
+// doesn't decode to a JSON object, returns the input unchanged.
+func liftJSONField(body []byte, field, value string) []byte {
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil || parsed == nil {
+		return body
+	}
+	parsed[field] = value
+	out, err := json.Marshal(parsed)
+	if err != nil {
+		return body
+	}
+	return out
 }

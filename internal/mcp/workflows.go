@@ -82,6 +82,11 @@ func registerWorkflowTrigger(s *server.MCPServer, b *bridge) {
 		if name == "" {
 			return mcp.NewToolResultError("`name` is required"), nil
 		}
+		// Daemon's workflowTriggerRequest is `{name, input string}`;
+		// absent + empty-string both deserialize to "" and
+		// engine.Dispatch treats them identically — empty input
+		// fires a target-less manual workflow, the same as omitting.
+		// So always emitting `input` is harmless on the wire.
 		args := map[string]any{
 			"name":  name,
 			"input": req.GetString("input", ""),

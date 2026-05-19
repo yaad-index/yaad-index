@@ -88,7 +88,11 @@ func registerSearchUpstream(s *server.MCPServer, b *bridge) {
 			return mcp.NewToolResultError("`query` is required"), nil
 		}
 		args := map[string]any{"query": query}
-		if v := req.GetArguments()["plugins"]; v != nil {
+		// Empty array is the same intent as omit ("federate to
+		// every opted-in plugin") on the daemon side — drop it
+		// so we don't send `plugins: []` which the route's
+		// codepath treats as "filter to zero plugins."
+		if v, ok := req.GetArguments()["plugins"].([]any); ok && len(v) > 0 {
 			args["plugins"] = v
 		}
 		if limit := req.GetFloat("limit", 0); limit > 0 {
