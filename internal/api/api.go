@@ -12,6 +12,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/auth"
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
+	"github.com/yaad-index/yaad-index/internal/mcp"
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
@@ -165,6 +166,22 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 			mux.Handle("POST /v1/tasks/{id}/resolve", protect(http.HandlerFunc(handleTaskResolve(logger, cfg.tasksReader, cfg.tasksWriter, cfg.workflowEngine))))
 		}
 	}
+
+	// MCP-over-HTTP per #101 — Streamable HTTP MCP server.
+	// Each MCP tool wraps an existing `/v1/...` route via the
+	// bridge in internal/mcp; the bridge re-enters the mux
+	// in-process (httptest.ResponseRecorder, no network
+	// loopback) so auth + per-route logic stay identical.
+	// The /mcp route itself sits behind the same `protect`
+	// auth gate as every other protected route — the JWT is
+	// validated at MCP entry AND again when the tool's
+	// bridged request re-enters the mux. Two-layer validation
+	// is intentional: each tool fires an independent request.
+	mcpHandler := mcp.NewHandler(mux, cfg.mcpServerVersion)
+	mux.Handle("POST /mcp", protect(mcpHandler))
+	mux.Handle("GET /mcp", protect(mcpHandler))
+	mux.Handle("DELETE /mcp", protect(mcpHandler))
+
 	return withRequestID(withRecover(logger)(mux))
 }
 
@@ -264,6 +281,12 @@ type handlerConfig struct {
 	// any of the three is missing the resolve route stays
 	// unregistered.
 	tasksWriter *tasks.Writer
+	// mcpServerVersion is the version string the MCP server
+	// surfaces in its initialize handshake per #101. Empty
+	// when not explicitly set; the MCP library tolerates an
+	// empty version gracefully. Production main.go wires
+	// the daemon's build version.
+	mcpServerVersion string
 }
 
 // WithReindexHandler registers a handler for POST /v1/reindex. When
@@ -521,4 +544,13 @@ func WithTasksWriter(w *tasks.Writer) HandlerOption {
 // that don't wire the shared shape.
 func WithSyncIngester(s SyncIngester) HandlerOption {
 	return func(c *handlerConfig) { c.syncIngester = s }
+}
+
+// WithMCPServerVersion sets the version string the
+// MCP-over-HTTP server reports in its initialize handshake
+// per #101. Production main.go wires the daemon's build
+// version; tests / dev binaries can omit (the empty default
+// is tolerated by the MCP library).
+func WithMCPServerVersion(v string) HandlerOption {
+	return func(c *handlerConfig) { c.mcpServerVersion = v }
 }

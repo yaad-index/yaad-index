@@ -1,0 +1,102 @@
+// Package mcp exposes the yaad-index daemon's HTTP API as a
+// Model Context Protocol server per #101. Built on
+// mark3labs/mcp-go's Streamable HTTP transport: a single
+// `/mcp` endpoint speaks MCP JSON-RPC + SSE; per-tool
+// handlers bridge into the daemon's existing HTTP routes via
+// httptest.ResponseRecorder + the same mux that serves the
+// REST surface (no network loopback, same auth gate, same
+// per-route logic).
+//
+// **Design contract**: each MCP tool is a thin wrapper around
+// an existing `/v1/...` route. The bridge synthesizes an
+// http.Request, hands it to the daemon's mux, reads the
+// recorded response — zero new business logic in the MCP
+// layer. Future-tracked refactor (#101 follow-up) may extract
+// per-route core functions for a cleaner abstraction; for
+// Cut 1 the bridge approach minimizes handler-carving cost.
+//
+// **Auth**: the `/mcp` route lives behind the same
+// `buildAuthMiddleware` chain as every other protected
+// route, so the JWT is validated once at MCP entry. The
+// Authorization header is extracted into the per-request
+// context via `WithHTTPContextFunc` so the bridge can pass
+// it through to the inner route's own auth check. Two-layer
+// validation (the entry middleware AND the bridged route's
+// middleware) is intentional: each MCP tool re-enters the
+// mux from scratch so the route's own auth gate fires
+// regardless of the entry-point check.
+package mcp
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/mark3labs/mcp-go/server"
+)
+
+// authContextKey carries the Authorization header from the
+// incoming MCP HTTP request through to the bridge. Unexported
+// type prevents collision with other packages' context keys.
+type authContextKey struct{}
+
+// NewHandler constructs the Streamable HTTP MCP handler.
+// apiHandler is the daemon's full mux (the SAME instance that
+// also routes /mcp itself — the bridge re-enters the mux for
+// each tool invocation). version is surfaced in the MCP
+// initialize handshake.
+//
+// The returned handler is mounted under the daemon's auth
+// middleware in main.go — same protect() chain that wraps
+// every /v1/... protected route.
+func NewHandler(apiHandler http.Handler, version string) http.Handler {
+	srv := server.NewMCPServer(
+		"yaad-index",
+		version,
+		server.WithToolCapabilities(false),
+		// WithRecovery is the safety net for tool handler
+		// panics — translates a panic into a structured
+		// error result rather than crashing the worker.
+		server.WithRecovery(),
+	)
+
+	bridge := newBridge(apiHandler)
+	registerGetEntity(srv, bridge)
+
+	// Stateless session management (every request stands
+	// alone, server-side keeps no session state) is the
+	// natural fit for the daemon's JWT pair-claim model:
+	// each MCP request carries its own Bearer token, which
+	// the auth middleware validates independently. Stateful
+	// session affinity is unnecessary — there's no per-
+	// session server state to preserve across requests.
+	// This resolves open-question #2 from #101.
+	return server.NewStreamableHTTPServer(srv,
+		server.WithHTTPContextFunc(extractAuthHeader),
+		server.WithStateLess(true),
+	)
+}
+
+// extractAuthHeader is invoked on every incoming MCP HTTP
+// request. Stashes the Authorization header in the per-
+// request context so the bridge can re-attach it to the
+// synthesized http.Request that re-enters the mux for a
+// tool's underlying /v1/... route.
+func extractAuthHeader(ctx context.Context, r *http.Request) context.Context {
+	auth := r.Header.Get("Authorization")
+	if auth != "" {
+		ctx = context.WithValue(ctx, authContextKey{}, auth)
+	}
+	return ctx
+}
+
+// authHeaderFromContext returns the Authorization header
+// stashed by extractAuthHeader, or "" when the MCP request
+// arrived without one (which the daemon's auth middleware
+// rejects upstream when auth.required=true; the empty
+// fallback is for the auth-disabled / test path).
+func authHeaderFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(authContextKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
