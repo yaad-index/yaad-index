@@ -23,6 +23,7 @@ import (
 	"github.com/alecthomas/kong"
 
 	"github.com/yaad-index/yaad-index/internal/api"
+	"github.com/yaad-index/yaad-index/internal/buildinfo"
 	"github.com/yaad-index/yaad-index/internal/attachments"
 	"github.com/yaad-index/yaad-index/internal/auth"
 	"github.com/yaad-index/yaad-index/internal/clock"
@@ -297,6 +298,7 @@ func (s *ServeCmd) Run() error {
 			logger.Info("fill_instruction configured (per ADR-0013)",
 				"len", len(cfg.FillInstruction))
 		}
+		handlerOpts = append(handlerOpts, api.WithMCPServerVersion(buildinfo.Version))
 		if len(mergedRegistry) > 0 {
 			handlerOpts = append(handlerOpts, api.WithCanonicalKindRegistry(mergedRegistry))
 			logger.Info("canonical_kinds registry merged + surfaced (per ADR-0013 §2 a prior PR, ADR-0016 §4 four-layer merge)",
