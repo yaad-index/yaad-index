@@ -75,6 +75,50 @@ curl -X POST http://localhost:7433/v1/ingest \
 curl http://localhost:7433/v1/entities/boardgame:brass-birmingham
 ```
 
+## Connecting AI agents (MCP)
+
+The daemon exposes its full tool surface as an MCP server at
+`/mcp` over Streamable HTTP, alongside the REST `/v1/...` routes.
+An AI agent (Claude Code, Claude Desktop, Cursor, anything that
+speaks Streamable-HTTP MCP) connects directly to the daemon —
+no wrapper process to install or manage.
+
+**Endpoint:** `<base-url>/mcp` (same host + port the REST surface
+serves, e.g. `http://localhost:7433/mcp`).
+
+**Auth:** the same Bearer JWT that protects `/v1/...` routes —
+issue a token with `yaad-index issue-token --operator <op> --agent <name>`,
+configure the agent to send it as `Authorization: Bearer <token>`.
+
+**Tools:** every daemon HTTP route is exposed as an MCP tool —
+`ingest`, `get_entity`, `list_entities`, `fill`, `add_note`,
+the UGC + workflow + task families, and so on. Live inventory
+via `tools/list`; for the per-tool reference and usage patterns
+see [`mcp/SKILL.md`](mcp/SKILL.md).
+
+**Claude Code config example:**
+
+```json
+{
+ "mcpServers": {
+ "yaad-index": {
+ "type": "http",
+ "url": "http://localhost:7433/mcp",
+ "headers": { "Authorization": "Bearer <token>" }
+ }
+ }
+}
+```
+
+**Dual path during the transition.** The legacy `mcp/` TypeScript
+wrapper (a separate Node process speaking stdio MCP, forwarding
+to the daemon's `/v1/...` routes) is still bundled and still
+works. Until the direct `/mcp` path is field-tested across
+operators' integrations, both connection paths are supported. The
+TS wrapper's removal is a later operator-driven step (see
+[issue #101](https://github.com/yaad-index/yaad-index/issues/101)),
+not a near-term cutover.
+
 ## Repo layout
 
 - `adr/` — Architecture Decision Records. Read these before making design changes.
