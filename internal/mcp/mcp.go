@@ -60,7 +60,7 @@ func NewHandler(apiHandler http.Handler, version string) http.Handler {
 	)
 
 	bridge := newBridge(apiHandler)
-	registerGetEntity(srv, bridge)
+	registerAll(srv, bridge)
 
 	// Stateless session management (every request stands
 	// alone, server-side keeps no session state) is the
@@ -74,6 +74,67 @@ func NewHandler(apiHandler http.Handler, version string) http.Handler {
 		server.WithHTTPContextFunc(extractAuthHeader),
 		server.WithStateLess(true),
 	)
+}
+
+// registerAll wires every tool the daemon exposes via MCP.
+// Grouped by responsibility — entities / search / ingest /
+// fill / edges / notes / system / user-content / workflows /
+// tasks — matching the per-file layout under internal/mcp/.
+// Adding a tool means appending one `register*` call here and
+// dropping the implementation in the appropriate file.
+func registerAll(s *server.MCPServer, b *bridge) {
+	// Entity reads + lifecycle.
+	registerGetEntity(s, b)
+	registerGetEntitiesBatch(s, b)
+	registerGetEntityWithContext(s, b)
+	registerListEntities(s, b)
+	registerArchiveEntity(s, b)
+	registerRestoreEntity(s, b)
+	registerDeleteEntity(s, b)
+
+	// Search.
+	registerSearchLocal(s, b)
+	registerSearchUpstream(s, b)
+
+	// Ingest.
+	registerIngest(s, b)
+
+	// Fill (canonical-kind gap workflow).
+	registerFill(s, b)
+	registerSetOperatorFill(s, b)
+	registerDeferGap(s, b)
+	registerNeedsFill(s, b)
+	registerCVStatus(s, b)
+
+	// Edges.
+	registerEdges(s, b)
+
+	// Notes (entity-level ADR-0020 notes).
+	registerAddNote(s, b)
+
+	// System metadata.
+	registerStructure(s, b)
+	registerKinds(s, b)
+	registerPlugins(s, b)
+	registerReindex(s, b)
+
+	// User content (UGC).
+	registerCreateUserContent(s, b)
+	registerGetUserContent(s, b)
+	registerDeleteUserContent(s, b)
+	registerListUserContentSections(s, b)
+	registerGetUserContentSection(s, b)
+	registerEditUserContentSection(s, b)
+
+	// Workflows.
+	registerWorkflowList(s, b)
+	registerWorkflowDiscover(s, b)
+	registerWorkflowTrigger(s, b)
+
+	// Tasks.
+	registerTaskList(s, b)
+	registerTaskLoad(s, b)
+	registerTaskResolve(s, b)
 }
 
 // extractAuthHeader is invoked on every incoming MCP HTTP
