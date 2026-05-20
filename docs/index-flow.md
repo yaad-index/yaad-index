@@ -133,7 +133,7 @@ updated_at: 2026-01-10T14:30:00Z
 
 Per-field notes for the lookup-overlay fields:
 
-- `aliases:` — alternative-label list driving Obsidian wikilink resolution and agent reverse-lookup (per ADR-0011 + #3). Bare strings render as wikilink targets; typed `<edge-type>: <label>` prefixes carry a reverse-lookup hint. Reindex re-derives the DB row from this frontmatter list. Full contract: [`docs/plugin-flow.md`](plugin-flow.md) §4 (`FetchResult.Aliases`).
+- `aliases:` — alternative-label list driving Obsidian wikilink resolution and agent reverse-lookup (per ADR-0011 + #3). The YAML field already accepts both bare strings (wikilink targets) and typed `<edge-type>: <label>` prefixes (reverse-lookup hints); plugins emit them via `FetchResult.Aliases`, the vault writer merges with the title-synthesized alias per ADR-0011, and the reader returns the flat list. **A DB-side `entity_aliases` derived index + search-side JOIN is pending #3** — until that lands, reindex doesn't re-derive aliases into the DB and `/v1/search` doesn't LIKE-match alias text. Full contract: [`docs/plugin-flow.md`](plugin-flow.md) §4 (`FetchResult.Aliases`).
 - `notations:` — every input form (canonical URL, mobile-subdomain URL, shorthand `<plugin>: <id>`, …) that resolves to this entity. Originating notation first; reindex calls `store.ReplaceNotations` (vault wins, orphan DB rows dropped). Powers the lookup-first ingest cache. Full contract: [`docs/plugin-flow.md`](plugin-flow.md) §2a.
 - `gap_state:` — per-field operator-fill state-machine metadata per ADR-0019 §Storage. Records who filled a gap (agent vs. operator), when, and whether the operator deferred it. Mirrored DB-side on the `entities.gap_state` JSON column for `/v1/needs-fill` audience routing.
 
