@@ -26,7 +26,7 @@ Full handshake. Stdout MUST be a valid JSON capabilities document (shape in §3)
 
 ### `<binary>` (fetch path)
 
-The ingest path. Per ADR-0023 the wire shape is **NDJSON on stdout** — one JSON envelope per line, flushed after each line. Stdin carries the per-request `{"operation": "ingest", "url": "..."}` payload; the daemon's per-fetch timeout (default 5s, plugin-overridable via `Capabilities.FetchTimeoutSeconds`) bounds the call.
+The ingest path. Per ADR-0023 the wire shape is **NDJSON on stdout** — one JSON envelope per line, flushed after each line. Stdin carries the per-request `{"operation": "ingest", "url": "..."}` payload; the daemon's per-fetch timeout (default 60s — `subprocess.DefaultFetchTimeout`, operator-overridable per plugin via the `fetch_timeout` field on the config's `plugins:` entry) bounds the call.
 
 Two envelope categories on the wire:
 
@@ -154,8 +154,7 @@ One `ProvenanceEntry` stamped by the plugin: `{source, fetched_at, ok}`. If a pl
   "supports_search": true,
   "commands": [],
   "source_namespace": "wikipedia",
-  "cache_ttl_seconds": 604800,
-  "fetch_timeout_seconds": 10
+  "cache_ttl_seconds": 604800
 }
 ```
 
@@ -169,7 +168,8 @@ One `ProvenanceEntry` stamped by the plugin: `{source, fetched_at, ok}`. If a pl
 - **`commands[]`** — command-shape invocation names per ADR-0022 (e.g. `yaad-gmail` declares `["fetch"]`, invoked via `gmail: !fetch`).
 - **`source_namespace`** — the `<source_namespace>` prefix on emitted entity ids (`<source_namespace>:<slug>`).
 - **`cache_ttl_seconds`** — plugin-level TTL override. See §4.
-- **`fetch_timeout_seconds`** — per-fetch wall-clock budget the daemon enforces.
+
+The per-fetch subprocess timeout is operator-side config (not plugin-declared) — see the `fetch_timeout` field on the operator's `plugins:` config entry in [`docs/configs.md`](./configs.md). Default `subprocess.DefaultFetchTimeout` (60s) applies when the operator hasn't set it.
 
 ## 4. Cache TTL — three-level resolution
 
