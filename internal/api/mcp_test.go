@@ -236,3 +236,78 @@ func TestMCP_ToolsList_ReturnsGetEntity(t *testing.T) {
 	assert.Contains(t, names, "get_entity",
 		"tools/list returns the registered get_entity tool; got %v", names)
 }
+
+// TestMCP_ExpiredJWTRejected (#173): a JWT whose
+// ExpiresAt is in the past is rejected by the outer
+// protect() middleware before the MCP server is reached.
+// Pairs with TestMCP_GetEntity_NoAuthRejected — together
+// they prove the auth gate fires on both the missing-
+// token AND the expired-token paths.
+func TestMCP_ExpiredJWTRejected(t *testing.T) {
+	t.Parallel()
+	h, signer, _ := newAuthedMCPHandler(t)
+
+	now := time.Now().UTC()
+	expiredTok, err := signer.Sign(auth.Claim{
+		Subject:   "agent:alice",
+		Operator:  "alice",
+		IssuedAt:  now.Add(-2 * time.Hour),
+		ExpiresAt: now.Add(-time.Hour),
+	})
+	require.NoError(t, err)
+
+	rec := mcpCall(t, h, expiredTok, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "get_entity",
+			"arguments": map[string]any{"id": "x"},
+		},
+	})
+	assert.GreaterOrEqual(t, rec.Code, 400,
+		"expired-token MCP request rejected; got %d body=%s", rec.Code, rec.Body.String())
+	assert.Less(t, rec.Code, 500)
+}
+
+// TestMCP_TamperedJWTRejected (#173): a JWT signed by a
+// SECOND keypair the daemon doesn't trust is rejected.
+// The wire shape is a valid JWT in every respect except
+// the signature key — proves the verifier checks the
+// signature against its loaded public key, not just the
+// claim shape. A regression that swapped the verifier for
+// a no-op (or matched on `iss` instead of signature) would
+// be caught here.
+func TestMCP_TamperedJWTRejected(t *testing.T) {
+	t.Parallel()
+	h, _, _ := newAuthedMCPHandler(t)
+
+	// Generate a SECOND keypair the daemon has never seen;
+	// sign a structurally-valid claim with it.
+	otherKeyDir := t.TempDir()
+	require.NoError(t, auth.GenerateKeypair(otherKeyDir, false))
+	otherSigner, err := auth.LoadSigner(otherKeyDir)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	tamperedTok, err := otherSigner.Sign(auth.Claim{
+		Subject:   "agent:alice",
+		Operator:  "alice",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(time.Hour),
+	})
+	require.NoError(t, err)
+
+	rec := mcpCall(t, h, tamperedTok, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "get_entity",
+			"arguments": map[string]any{"id": "x"},
+		},
+	})
+	assert.GreaterOrEqual(t, rec.Code, 400,
+		"wrong-key MCP request rejected; got %d body=%s", rec.Code, rec.Body.String())
+	assert.Less(t, rec.Code, 500)
+}
