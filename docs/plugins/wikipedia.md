@@ -56,7 +56,7 @@ Two input shapes match the registered URL patterns:
 
 Both shapes produce the same `data.url` for the same article — the canonical URL — so an entity reached via shorthand is structurally indistinguishable from one reached via URL.
 
-Per [ADR-0021](../../adr/0021-daemon-owns-slug.md) the `entity_kinds[].name` is the universal `"source"` value — every yaad-wikipedia envelope carries `structured.kind: "source"`. Source-type identity (`source-type:wikipedia-article-record`) materializes on the `is_a` edge.
+Per [ADR-0021](../../adr/0021-daemon-owns-slug.md) the `entity_kinds[].name` is the universal `"source"` value — every yaad-wikipedia envelope carries `structured.kind: "source"`. Source-type identity (`source-type:wikipedia-article`) materializes on the `is_a` edge.
 
 `canonical_kinds_emitted` + `canonical_edge_types_emitted` declare the cross-source canonical layer the plugin MAY emit; the operator's `canonical_kinds:` / `canonical_edge_types:` config decides which actually materialize. Declaring them here surfaces the discoverability gap in startup logs when a plugin emits a kind the operator hasn't enabled (per [ADR-0008](../../adr/0008-vault-as-source-of-truth.md)).
 
@@ -82,7 +82,7 @@ The plugin reads `{"operation": "ingest", "url": "..."}` from stdin and writes o
       "url": "https://en.wikipedia.org/wiki/Sample_Article_Title"
     },
     "edges": {
-      "is_a":     [ { "name": "wikipedia-article-record", "kind": "source-type" } ],
+      "is_a":     [ { "name": "wikipedia-article", "kind": "source-type" } ],
       "is_about": [ { "name": "Sample Article Title",     "kind": "person" } ]
     },
     "provenance": [
@@ -112,7 +112,7 @@ Field-by-field (per [`docs/plugin-flow.md`](../plugin-flow.md) §2):
 - **`structured.kind`** — always `"source"` per [ADR-0021](../../adr/0021-daemon-owns-slug.md). The plugin does NOT emit a pre-formed entity id; the daemon derives it from `<source_namespace>:<slug.Slug(name)>` (`wikipedia-article:<slug>`).
 - **`structured.name`** — descriptive article title; daemon slugifies.
 - **`structured.data`** — metadata: `title`, `lang`, `url`. The article body lives in `raw_content`, NOT under `data.body` (per #125 source-shape body inversion).
-- **`structured.edges`** — keyed by edge type; each value is a list of `{name, kind}` descriptive refs the daemon resolves to canonical-label edges via `canonical.EnsureLabelRow`. Universally emits `is_a` to `source-type:wikipedia-article-record` per [ADR-0021](../../adr/0021-daemon-owns-slug.md); on a Wikidata Q-id match (Q-id table below) emits `is_about` to the matched canonical-kind label.
+- **`structured.edges`** — keyed by edge type; each value is a list of `{name, kind}` descriptive refs the daemon resolves to canonical-label edges via `canonical.EnsureLabelRow`. Universally emits `is_a` to `source-type:wikipedia-article` per [ADR-0021](../../adr/0021-daemon-owns-slug.md); on a Wikidata Q-id match (Q-id table below) emits `is_about` to the matched canonical-kind label.
 - **`raw_content`** — full article body in plaintext, fetched via MediaWiki action API (`/w/api.php?action=query&prop=extracts&explaintext=1`). Load-bearing for the agent fill flow: the agent's AI reads this to derive the gap field values. A failed action-API call leaves `raw_content` empty without failing the whole fetch — the source entity still lands.
 - **`gaps`** — `{field-name → AI-prompt}` map. yaad-wikipedia declares `summary` + `tags` universally and merges in kind-specific gaps from `wikipedia.kindGaps(<kind>)` when a canonical kind is detected (see Q-id pipeline below).
 - **`notations`** — every input form yaad-wikipedia knows resolves to this entity. Originating notation first (self-roundtrip invariant — see [`docs/plugin-flow.md`](../plugin-flow.md) §2 `notations`); the example above is URL-form, so the canonical desktop URL leads. A shorthand-form request reorders the array so `"wikipedia: Sample Article Title"` is at index 0.
@@ -139,7 +139,7 @@ The canonical-kind detection chain runs on every successful article fetch:
 
 1. The Wikipedia summary endpoint returns `wikibase_item: <Q-id>` alongside the article body (when one is associated).
 2. `fetchKindByQID` calls Wikidata's EntityData API for that Q-id, decodes only the `claims["P31"]` ("instance of") entries, and matches the P31 values against the plugin's `kindByQID` lookup table. The plugin ships 18 Wikidata-domain mappings; the **operator's `canonical_kinds:` config gates which of those actually materialize**. Adding interest in a new domain = enabling the kind in operator config; no plugin change needed.
-3. On a match, the plugin emits an `is_about` edge from the source-shape entity to the canonical-label target. Universally, every source emission carries an `is_a` edge to `source-type:wikipedia-article-record` per [ADR-0021](../../adr/0021-daemon-owns-slug.md).
+3. On a match, the plugin emits an `is_about` edge from the source-shape entity to the canonical-label target. Universally, every source emission carries an `is_a` edge to `source-type:wikipedia-article` per [ADR-0021](../../adr/0021-daemon-owns-slug.md).
 4. Failures along the chain — empty `wikibase_item`, Wikidata API error, P31 doesn't match the table — are logged to stderr and the source-shape article still lands without a canonical layer.
 
 ### Currently mapped Q-id → canonical kind
