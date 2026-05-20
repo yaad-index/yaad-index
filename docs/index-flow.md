@@ -10,12 +10,15 @@ This is a **living reference** (not an ADR). ADRs record decisions; this map des
 flowchart LR
  subgraph Vault["Vault (filesystem)"]
  F1["&lt;kind&gt;/&lt;slug&gt;.md<br/>(frontmatter + body)"]
+ F2["_archive/&lt;kind&gt;/&lt;slug&gt;.md<br/>(archived; skipped on walk)"]
+ F3["workflows/&lt;name&gt;.md<br/>tasks/&lt;id&gt;.md<br/>(workflow surface)"]
  end
 
  subgraph Index["yaad-index"]
  Reindex["reindex<br/>(walker)"]
  WipeFn["WipeDerivedState"]
- Upsert["UpsertEntity<br/>CreateEdge"]
+ Upsert["UpsertEntity<br/>ReplaceProvenance<br/>ReplaceNotations<br/>applyVaultEdges"]
+ ClearCounters["ClearDroppedCanonical<br/>Kinds/Edges<br/>(end-of-pass)"]
  end
 
  subgraph DB["SQLite (derived index)"]
@@ -23,23 +26,35 @@ flowchart LR
  T2[edges]
  T3[provenance]
  T4[reindex_files<br/>bookkeeping]
- T5["plugin_capabilities<br/>(NOT wiped)"]
+ T5[entity_notations<br/>cache]
+ T6["dropped_canonical_*<br/>(drift counters)"]
+ T7["plugin_capabilities<br/>(NOT wiped)"]
  end
 
  F1 -->|walk + parse| Reindex
+ F2 -.skipped.-> Reindex
+ F3 -.skipped.-> Reindex
  Reindex -->|"--full only"| WipeFn
  WipeFn -.drops.-> T1
  WipeFn -.drops.-> T2
  WipeFn -.drops.-> T3
  WipeFn -.drops.-> T4
- WipeFn -.preserves.-> T5
+ WipeFn -.drops via FK cascade.-> T5
+ WipeFn -.preserves.-> T6
+ WipeFn -.preserves.-> T7
  Reindex --> Upsert
  Upsert --> T1
  Upsert --> T2
+ Upsert --> T3
  Upsert --> T4
+ Upsert --> T5
+ Reindex --> ClearCounters
+ ClearCounters -.clears.-> T6
 ```
 
 The vault is the source of truth. The DB is a derived index — losing it is recoverable via `yaad-index reindex`. Losing the vault is NOT recoverable from yaad-index alone (operator's responsibility: Syncthing, Git, backups).
+
+The walker covers active `<kind>/<slug>.md` files only. The `_archive/` subtree (per ADR-0018) is explicitly skipped — archived entities live in the DB with `archived_at` set; their vault files survive but aren't re-walked. The `workflows/` + `tasks/` subtrees (per ADR-0024) are also outside the entity-walk path; workflows are loaded at startup by the workflow engine, tasks are managed by the tasks reader / writer separately from the entity derivation flow.
 
 ## 1. Vault as source of truth
 
@@ -50,10 +65,21 @@ Per [ADR-0008](../adr/0008-vault-as-source-of-truth.md): every state mutation wr
 ```
 <vault.path>/
  <kind>/
- <slug>.md ← one entity per file
+ <slug>.md          ← one entity per file (active set)
+ _archive/
+ <kind>/
+ <slug>.md          ← archived entities (ADR-0018; reindex walker skips)
+ workflows/
+ <name>.md            ← workflow definitions (ADR-0024; loaded by engine, not by walker)
+ tasks/
+ <id>.md              ← workflow-produced tasks (ADR-0024; managed by tasks reader/writer)
+ _archive/
+ <id>.md            ← resolved + auto-archived tasks
 ```
 
-`kind` is the entity kind (e.g. `boardgame`, `wikipedia`, `person`). `slug` is the entity ID's slug part (e.g. `boardgame:brass-birmingham` → `brass-birmingham.md`).
+`kind` is the entity kind (e.g. `boardgame`, `wikipedia`, `person`). `slug` is the entity ID's slug part (e.g. `boardgame:brass-birmingham` → `brass-birmingham.md`). The `_archive/` subtree at the vault root mirrors the active `<kind>/<slug>.md` layout — archive lives at `<vault>/_archive/<kind>/<slug>.md`. Per the ADR-0018 lifecycle, archive moves the file there + stamps `archived_at`; restore moves it back + clears the flag.
+
+`workflows/` + `tasks/` are workflow-surface directories per ADR-0024; their files are NOT entities and don't flow through the `reindex.upsertEntity` path. The reindex walker skips both subtrees.
 
 ### Frontmatter schema
 
@@ -65,7 +91,8 @@ id: wikipedia:susanna-clarke
 kind: wikipedia
 plugin: wikipedia
 aliases:
- - Susanna Clarke # bare-string per ADR-0011 + plugin-emit
+ - Susanna Clarke              # bare-string per ADR-0011 + plugin-emit
+ - "author: Piranesi"          # typed prefix per #3
 notations:
  - https://en.wikipedia.org/wiki/Susanna_Clarke
  - https://en.m.wikipedia.org/wiki/Susanna_Clarke
@@ -73,8 +100,11 @@ notations:
 data:
  title: Susanna Clarke
  lang: en
- # ... plugin-emitted fields + agent-filled fields
-gaps: [] # remaining unfilled gap field names
+ # ... plugin-emitted metadata + agent-filled fields
+gaps: []                         # remaining unfilled gap field names
+gap_state:                       # per-field fill metadata (ADR-0019)
+ summary: { source: operator, filled_at: 2026-01-10T14:30:00Z }
+ birth_date: { deferred: true, deferred_at: 2026-01-10T14:30:00Z }
 provenance:
  - source: wikipedia
  fetched_at: 2025-12-15T10:00:00Z
@@ -82,21 +112,38 @@ provenance:
 edges:
  - type: authored
  to: book:jonathan-strange-and-mr-norrell
-comments_text: | # derived projection of note threads
+comments_text: |                 # derived projection of note threads
  ...
 created_at: 2025-12-15T10:00:00Z
 updated_at: 2026-01-10T14:30:00Z
 ---
 
-# Optional body content below the frontmatter
+<!-- yaad:plugin start -->
+... plugin-emitted body (source-shape entities — the substance per #125) ...
+<!-- yaad:plugin end -->
+
+<!-- yaad:dataview start -->
+... agent-filled dataview-inline paragraphs (canonical entities per #119) ...
+<!-- yaad:dataview end -->
+
+<!-- yaad:notes start -->
+... agent / operator notes (ADR-0020) ...
+<!-- yaad:notes end -->
 ```
 
 Per-field notes for the lookup-overlay fields:
 
-- `aliases:` — alternative-label list driving Obsidian wikilink resolution and agent reverse-lookup (per / ADR-0011). Bare strings render as wikilink targets; typed `<edge-type>: <label>` prefixes carry a reverse-lookup hint. Reindex re-derives the DB row from this frontmatter list. Full contract: [`docs/plugin-flow.md`](plugin-flow.md) §4 (`FetchResult.Aliases`).
-- `notations:` — every input form (canonical URL, mobile-subdomain URL, shorthand `<plugin>: <id>`, …) that resolves to this entity (per a prior PR). Originating notation first; reindex calls `store.ReplaceNotations` (vault wins, orphan DB rows dropped). Powers the lookup-first ingest cache. Full contract: [`docs/plugin-flow.md`](plugin-flow.md) §2a.
+- `aliases:` — alternative-label list driving Obsidian wikilink resolution and agent reverse-lookup (per ADR-0011 + #3). The YAML field already accepts both bare strings (wikilink targets) and typed `<edge-type>: <label>` prefixes (reverse-lookup hints); plugins emit them via `FetchResult.Aliases`, the vault writer merges with the title-synthesized alias per ADR-0011, and the reader returns the flat list. **A DB-side `entity_aliases` derived index + search-side JOIN is pending #3** — until that lands, reindex doesn't re-derive aliases into the DB and `/v1/search` doesn't LIKE-match alias text. Full contract: [`docs/plugin-flow.md`](plugin-flow.md) §4 (`FetchResult.Aliases`).
+- `notations:` — every input form (canonical URL, mobile-subdomain URL, shorthand `<plugin>: <id>`, …) that resolves to this entity. Originating notation first; reindex calls `store.ReplaceNotations` (vault wins, orphan DB rows dropped). Powers the lookup-first ingest cache. Full contract: [`docs/plugin-flow.md`](plugin-flow.md) §2a.
+- `gap_state:` — per-field operator-fill state-machine metadata per ADR-0019 §Storage. Records who filled a gap (agent vs. operator), when, and whether the operator deferred it. Mirrored DB-side on the `entities.gap_state` JSON column for `/v1/needs-fill` audience routing.
 
-The body content is preserved verbatim across writes (the writer doesn't re-flow Markdown body text), but the index doesn't derive any state from the body — only the frontmatter is authoritative for entity state.
+The body content is NOT inert — three marker-paired sections (per ADR-0015 + #125 + #119) carry meaningful state:
+
+- **`<!-- yaad:plugin start/end -->`** — plugin-emitted body content (extended by #125 so source-shape entity bodies — e.g. raw email content from yaad-gmail — live HERE rather than under `data.body` in frontmatter). Re-ingest replaces the section verbatim.
+- **`<!-- yaad:dataview start/end -->`** — agent-filled `canonical_type` data-paragraphs appended per #119. Each fill against a canonical entity (e.g. `company:acme-corp`) accumulates one paragraph with Obsidian dataview-inline `field:: value` syntax. Append-only; never re-flowed.
+- **`<!-- yaad:notes start/end -->`** — agent / operator notes per ADR-0020. Bidirectional: notes are written via `POST /v1/entities/{id}/notes` to frontmatter `notes:`, mirrored into the body section on every vault write; hand-edits to the body section flow back into frontmatter on the next reindex via the reader's body-to-frontmatter merge.
+
+The pre-marker, between-marker, and post-marker prose is preserved verbatim across writes (the writer doesn't re-flow Markdown body text outside the marker pairs).
 
 ### Atomic writes
 
@@ -152,33 +199,41 @@ flowchart TD
  WipeQ -->|yes| Wipe[WipeDerivedState]
  WipeQ -->|no| Walk
  Wipe --> Walk
- Walk[filepath.WalkDir vault.path] --> Each["for each *.md (skip hidden)"]
+ Walk[filepath.WalkDir vault.path] --> Skip{"_archive/, workflows/,<br/>tasks/, hidden dirs?"}
+ Skip -->|yes| SkipDir[SkipDir]
+ SkipDir --> Walk
+ Skip -->|no| Each["for each *.md<br/>(skip hidden + non-.md)"]
  Each --> Read[stat + read file]
  Read --> Sig{"(mtime, hash) match<br/>reindex_files row?"}
  Sig -->|"yes (skipped++)"| Each
  Sig -->|no or new| Parse[vault.Unmarshal]
- Parse --> UpsertE[upsertEntity:<br/>store.UpsertEntity]
- UpsertE --> EdgeLoop["for each edge:<br/>CreateEdge"]
- EdgeLoop --> Bookkeep[UpsertReindexFile]
+ Parse --> UpsertE["upsertEntity:<br/>UpsertEntity +<br/>ReplaceProvenance +<br/>ReplaceNotations"]
+ UpsertE --> EdgeApply["applyVaultEdges:<br/>bucket by edge_type +<br/>AllowEdgeType gate +<br/>DeleteEdgesByTypeFrom +<br/>auto-materialize thin row +<br/>AllowKind gate +<br/>CreateEdge"]
+ EdgeApply --> Bookkeep[UpsertReindexFile]
  Bookkeep --> Each
  Each --> WalkDone([walk done])
  WalkDone --> Cleanup{"any prior files<br/>not seen this walk?"}
  Cleanup -->|yes| Cascade["DeleteEntityCascade<br/>(file disappeared)"]
- Cleanup -->|no| Summary
- Cascade --> Summary([Summary])
+ Cleanup -->|no| ClearDrift
+ Cascade --> ClearDrift["ClearDroppedCanonicalKinds +<br/>ClearDroppedCanonicalEdges<br/>(drift counters refresh<br/>against this pass)"]
+ ClearDrift --> Summary([Summary])
 ```
 
 Single-goroutine, synchronous. At personal-vault scale (thousands of files), well under a second on a warm filesystem; file I/O dominates over CPU. A future PR can parallelize parsing if benchmarks justify it.
 
 ### What gets re-derived per file
 
-For each parsed file (`Reindexer.upsertEntity` in `internal/reindex/reindex.go`):
+For each parsed file (`Reindexer.upsertEntity` + `Reindexer.applyVaultEdges` in `internal/reindex/reindex.go`):
 
-1. **Entity row** — `id`, `kind`, `data` (full frontmatter `data:` block as JSON), `created_at`, `updated_at` → `store.UpsertEntity`.
+1. **Entity row** — `id`, `kind`, `data` (full frontmatter `data:` block as JSON) → `store.UpsertEntity`. Note: `gap_state`, `archived_at`, and `gap_call_done_at` are NOT re-derived from vault — they're DB-only columns set by their respective write paths (`POST /v1/entities/{id}/operator-fill`, `POST /v1/entities/{id}/archive`, fill endpoint). Reindex preserves these columns on UPDATE (the upsert overwrites only `kind`, `data`, `updated_at`). For `gap_state` specifically, the vault frontmatter mirror is informational; the DB is canonical for the state machine.
 2. **Provenance rows** — every entry in frontmatter `provenance:` → `store.ReplaceProvenance` (per ADR-0009). DELETE-prior + INSERT-each in one tx; the vault list is canonical, the DB row-set reconciles to match on every walk. Hand-edits to the vault frontmatter flow through the next reindex into the DB.
-3. **Notation rows** — every entry in frontmatter `notations:` → `store.ReplaceNotations` . Same DELETE+INSERT shape as `ReplaceProvenance`; the vault list is canonical, **vault wins**, orphan DB rows the vault no longer carries are dropped. Powers the lookup-first ingest cache (see [`docs/plugin-flow.md`](plugin-flow.md) §2a). Empty/missing frontmatter `notations:` clears the entity's DB rows — opting out of cache pre-registration without rebuilding the table by hand.
-4. **Edge rows** — every entry in frontmatter `edges:` → `store.CreateEdge` with `Type`, `From: entity.ID`, `To: edge.To`. Forward references (edge target not yet upserted in this walk) emit `ErrMissingEntity` from `CreateEdge`; the walker captures the error in `Summary.Errors` and continues. A subsequent walk after the target appears resolves the edge.
+3. **Notation rows** — every entry in frontmatter `notations:` → `store.ReplaceNotations`. Same DELETE+INSERT shape as `ReplaceProvenance`; the vault list is canonical, **vault wins**, orphan DB rows the vault no longer carries are dropped. Powers the lookup-first ingest cache (see [`docs/plugin-flow.md`](plugin-flow.md) §2a). Empty/missing frontmatter `notations:` clears the entity's DB rows — opting out of cache pre-registration without rebuilding the table by hand.
+4. **Edge rows** — every entry in frontmatter `edges:` flows through `applyVaultEdges`: bucket by edge_type, apply the operator's `canonical_edge_types:` `AllowEdgeType` gate (drops increment `dropped_canonical_edges` against a synthetic `reindex` plugin attribution), `DeleteEdgesByTypeFrom` to wipe prior edges of that type from the entity, then per-edge: split the target into `(kind, slug)`, apply the operator's `canonical_kinds:` `AllowKind` gate (with the `source-type` kind bypass; drops increment `dropped_canonical_kinds`), `canonical.EnsureLabelRow` to auto-materialize the thin canonical-label row if absent (per ADR-0016 — keeps the FK on the edges table satisfied without waiting for the target's own walk), then `store.CreateEdge`. The auto-materialize step removes the legacy "forward reference emits `ErrMissingEntity`" surface: with the guard on, every edge target has a row before CreateEdge fires. (Permissive nil-guard mode preserves the legacy walk-twice resolve path.)
 5. **Reindex bookkeeping** — `reindex_files` row with `(path, mtime, content_hash, last_indexed_at)` → `store.UpsertReindexFile`.
+
+### End-of-pass drift-counter refresh
+
+After the walk completes (success OR with non-fatal errors), the walker calls `store.ClearDroppedCanonicalKinds` + `store.ClearDroppedCanonicalEdges`. The drift counters reflect drops observed during THIS pass; they don't accumulate across reindex runs. Live ingest / fill drops continue to increment between passes; the next reindex refreshes them against the canonical vault. `/v1/cv-status` reads from these tables — agents polling drift state see a clean per-pass snapshot rather than a monotonic accumulator. Failures here surface in `summary.Errors` but don't fail the reindex itself.
 
 **Reindex is non-destructive on the vault.** It derives DB rows from the vault, never the other way around. A vault file with stale or expired content stays as it is; reindex faithfully reflects whatever the frontmatter says. Past-TTL gates the lookup path only (see [`docs/plugin-flow.md`](plugin-flow.md) §2b); the next ingest of a stale entity goes through the plugin, which re-writes the vault. There is no automatic vault purge anywhere — cache cleanup is operator-triggered (planned CLI in). Future reindex evolutions MUST preserve this invariant.
 
@@ -233,8 +288,9 @@ Preserved across the wipe — NOT vault-derived:
 
 | Table | Why it's preserved |
 |------------------------|------------------------------------------------------------------------------------------------------------------------|
-| `plugin_capabilities` | Operator-config-driven plugin loader cache (ADR-0006 +). Wiping forces every plugin to re-run `--init` on the next start. Operator clears this via `yaad-index plugins clear-cache` if needed. |
+| `plugin_capabilities` | Operator-config-driven plugin loader cache (ADR-0006). Wiping forces every plugin to re-run `--init` on the next start. Operator clears this via `yaad-index plugins clear-cache` if needed. |
 | `schema_migrations` | Migration accounting. Dropping rows would force the next start to re-apply every migration; breaks schema-version checks. |
+| `dropped_canonical_kinds` / `dropped_canonical_edges` | Drift counters per ADR-0013 §3 / `/v1/cv-status`. Preserved across `WipeDerivedState` (the wipe runs BEFORE the walk; counters would lose pre-walk live-ingest drops). The end-of-pass `ClearDroppedCanonicalKinds` / `ClearDroppedCanonicalEdges` calls refresh them against THIS pass — see "End-of-pass drift-counter refresh" above. |
 
 ### FK-safety constraint
 
@@ -294,10 +350,13 @@ For reindex specifically: each file's `upsertEntity` + `CreateEdge` loop runs as
 
 ## 5. What this doc deliberately does NOT cover
 
-- **Plugin-touching surfaces** (startup/cache, ingest, fill, plugin contract) — see [`docs/plugin-flow.md`](plugin-flow.md).
-- **Operator config schema** (`yaad-index.yaml`, `canonical_kinds:`, plugin allowlist) — see `AGENTS.md` and ADR-0006.
-- **Notes / search / batch endpoints** — `POST /v1/entities/{id}/notes`, `GET /v1/search`, `POST /v1/entities/batch` are agent-facing surfaces, not index-internal flows. Their persistence paths use the upsert invariants above; their wire shapes are in ADR-0002.
-- **Agent authentication** — currently stub-shaped (`agent:stub` source on provenance per `internal/api/edges.go` + `internal/api/fill.go`). Real authn is a future ADR.
+- **Plugin-touching surfaces** (startup/cache, ingest, fill, plugin contract) — see [`docs/plugin-flow.md`](plugin-flow.md) (or its successor [`docs/ingest.md`](ingest.md) for the agent-facing view).
+- **Operator config schema** (`yaad-index.yaml`, `canonical_kinds:`, `canonical_edge_types:`, plugin allowlist) — see `AGENTS.md` + ADR-0006 + ADR-0008. Live agent-facing view: [`docs/configs.md`](configs.md).
+- **Gap-fill mechanics** (agent + operator fill paths, gap state machine, `canonical_type` shape) — see [`docs/fill-gap.md`](fill-gap.md) and ADR-0019.
+- **Workflow engine + tasks** — `workflows/<name>.md` definitions, the FIFO queue + two-pass eval, task spawn / resolve / auto-archive — see [`docs/workflows.md`](workflows.md), [`docs/tasks.md`](tasks.md), and ADR-0024. The workflow surface is layered on top of the entity store but doesn't flow through the reindex walker.
+- **Archive lifecycle** — `POST /v1/entities/{id}/archive` + `restore` + `DELETE` two-step state machine. Reindex skips the `_archive/` subtree per ADR-0018; archive moves the vault file + stamps the DB column, restore inverts. ADR-0018 has the full lifecycle.
+- **Notes / search / batch endpoints** — `POST /v1/entities/{id}/notes`, `GET /v1/search`, `POST /v1/entities/batch` are agent-facing surfaces, not index-internal flows. Their persistence paths use the upsert invariants above; their wire shapes are in ADR-0002 + ADR-0020 (notes).
+- **JWT pair-claim auth** — the operator/agent token shape that gates every `/v1/...` route. Operational config + key management lives in `AGENTS.md` "Configuration" + the auth ADR series; agent-facing surfaces are token-transparent.
 
 ## Maintenance discipline
 
