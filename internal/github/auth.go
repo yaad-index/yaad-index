@@ -79,6 +79,12 @@ func newClient(httpClient *http.Client, baseURL, token string) (*gogithub.Client
 		httpClient = &http.Client{Timeout: 30 * time.Second}
 	}
 	client := gogithub.NewClient(httpClient)
+	// Per-plugin User-Agent so operator log filtering + GitHub's
+	// abuse-detection attribution see the plugin identity rather
+	// than the generic `go-github` default. Set before any
+	// auth/base-URL chaining so every chained-client copy
+	// inherits it.
+	client.UserAgent = PluginName + "/" + PluginVersion
 	if token != "" {
 		client = client.WithAuthToken(token)
 	}

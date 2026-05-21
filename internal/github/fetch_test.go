@@ -197,6 +197,29 @@ func TestFetchTarget_IssueEndpointReturnsPR_ReRoutesToPullsEndpoint(t *testing.T
 	assert.Equal(t, "feat/p", item.HeadBranch)
 }
 
+func TestFetchTarget_UserAgent_ContainsPluginIdentity(t *testing.T) {
+	t.Parallel()
+	// Per-plugin User-Agent: operator log filtering + GitHub's
+	// abuse-detection attribution both rely on the plugin
+	// identity being visible. The go-github default (`go-github`)
+	// is too generic — pin that `yaad-github` shows up in the UA.
+	var capturedUA string
+	fs := newFakeServer(t)
+	fs.serve("/repos/o/r/pulls/1", func(w http.ResponseWriter, r *http.Request) {
+		capturedUA = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`{"number":1,"user":{"login":"u"}}`))
+	})
+	srv := fs.start()
+	defer srv.Close()
+
+	_, err := FetchTarget(context.Background(),
+		FetchOptions{BaseURL: srv.URL},
+		Target{Owner: "o", Repo: "r", Kind: ItemKindPR, Number: 1})
+	require.NoError(t, err)
+	assert.Contains(t, capturedUA, PluginName,
+		"User-Agent must carry the plugin identity for log-filtering + abuse-detection attribution; got %q", capturedUA)
+}
+
 func TestFetchTarget_AuthBearer_AppliedWhenTokenSet(t *testing.T) {
 	t.Parallel()
 	var capturedAuth string
