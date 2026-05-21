@@ -1,0 +1,136 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/yaad-index/yaad-index/internal/github"
+)
+
+func TestRun_VersionMode_PrintsPluginVersion(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--version"}, nil, &stdout, &stderr)
+	assert.Equal(t, 0, code)
+	assert.Equal(t, github.PluginVersion+"\n", stdout.String())
+	assert.Empty(t, stderr.String())
+}
+
+func TestRun_InitMode_EmitsCapabilitiesJSON(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--init"}, nil, &stdout, &stderr)
+	require.Equal(t, 0, code, "stderr=%s", stderr.String())
+
+	var doc capabilitiesDoc
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &doc),
+		"--init output must be valid JSON; got: %s", stdout.String())
+
+	// Pin every field against ADR-0026 §1.
+	assert.Equal(t, "github", doc.Name)
+	assert.Equal(t, github.PluginVersion, doc.Version)
+	assert.Len(t, doc.URLPatterns, 3, "three patterns: PR / issue / shorthand")
+	require.Len(t, doc.EntityKinds, 1)
+	assert.Equal(t, "source", doc.EntityKinds[0].Name, "ADR-0021 universal source kind")
+	assert.Empty(t, doc.EdgeKinds, "edge_kinds is reserved for plugin-emitted source-shape edge type registry; yaad-github emits via canonical_edge_types_emitted")
+	assert.Equal(t, github.KnownCanonicalKinds, doc.CanonicalKindsEmitted)
+	assert.Equal(t, github.KnownCanonicalEdgeTypes, doc.CanonicalEdgeTypesEmitted)
+	assert.False(t, doc.SupportsSearch, "ADR-0026 §1: supports_search=false")
+	assert.Equal(t, "github", doc.SourceNamespace, "ADR-0026 §2 Option A: single namespace")
+	assert.Equal(t, 900, doc.CacheTTLSeconds, "ADR-0026 §1: 15min default")
+	assert.Equal(t, []string{"fetch"}, doc.Commands)
+}
+
+func TestRun_InitMode_RespectsInstanceNameEnv(t *testing.T) {
+	// ADR-0026 §7: an operator running two instances of the
+	// same binary distinguishes them via the YAML's `name:`
+	// entry; the binary mirrors that into the shorthand
+	// pattern via EnvInstanceName.
+	t.Setenv(EnvInstanceName, "github-work")
+	t.Setenv(github.EnvBaseURL, "https://ghes.example.com/api/v3")
+
+	var stdout bytes.Buffer
+	code := run([]string{"--init"}, nil, &stdout, &bytes.Buffer{})
+	require.Equal(t, 0, code)
+
+	var doc capabilitiesDoc
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &doc))
+	require.Len(t, doc.URLPatterns, 3)
+	assert.Contains(t, doc.URLPatterns[0], "ghes\\.example\\.com",
+		"PR pattern must use the GHES host")
+	assert.Contains(t, doc.URLPatterns[2], "github-work",
+		"shorthand pattern must use the operator-chosen instance name")
+	assert.NotContains(t, doc.URLPatterns[2], "(?i)^github:",
+		"GHES instance must not claim the bare 'github:' shorthand")
+}
+
+func TestRun_BadFlag_ReturnsTwo(t *testing.T) {
+	t.Parallel()
+	var stderr bytes.Buffer
+	code := run([]string{"--no-such-flag"}, nil, &bytes.Buffer{}, &stderr)
+	assert.Equal(t, 2, code)
+	assert.NotEmpty(t, stderr.String(), "bad flag must emit to stderr")
+}
+
+func TestRun_CommandFetch_StubbedForCut1(t *testing.T) {
+	t.Parallel()
+	// Cut 1: the `--command fetch` path is wired (validates the
+	// command name) but the bulk fetch itself is deferred to
+	// Cut 3. The binary surfaces a clear stub message + exit
+	// non-zero rather than fall through silently — operators
+	// invoking the command on a Cut-1 build see the placeholder
+	// instead of a confusing success/no-output.
+	var stderr bytes.Buffer
+	code := run([]string{"--command", "fetch"}, nil, &bytes.Buffer{}, &stderr)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr.String(), "not implemented yet")
+	assert.Contains(t, stderr.String(), "Cut 3")
+}
+
+func TestRun_CommandUnknown_ReturnsTwo(t *testing.T) {
+	t.Parallel()
+	var stderr bytes.Buffer
+	code := run([]string{"--command", "no-such-command"}, nil, &bytes.Buffer{}, &stderr)
+	assert.Equal(t, 2, code, "unknown commands must exit with a flag-error code")
+	assert.Contains(t, stderr.String(), "unknown --command")
+	assert.Contains(t, stderr.String(), "no-such-command")
+}
+
+func TestResolveOperatorLogin_NoToken_ReturnsErrTokenMissing(t *testing.T) {
+	// Auth-wiring sanity for Cut 1: the helper Cut 2 + Cut 3
+	// will call must fail closed when the operator hasn't wired
+	// YAAD_GITHUB_TOKEN. Exercised via the public env-var path
+	// so the test mirrors how the binary's main() reaches the
+	// helper at fetch time.
+	t.Setenv(github.EnvToken, "")
+	t.Setenv(github.EnvBaseURL, "")
+	_, err := resolveOperatorLogin(t.Context())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, github.ErrTokenMissing,
+		"resolveOperatorLogin must surface ErrTokenMissing so main() fails fast at fetch invocation")
+}
+
+func TestAuthTimeout_IsConservative(t *testing.T) {
+	// Pin the startup-budget constant. Cut-2/Cut-3 callers
+	// expect this to stay short (plugin --init / fetch entry
+	// points can't hang on a slow upstream).
+	assert.LessOrEqual(t, authTimeout.Seconds(), float64(30),
+		"authTimeout must stay ≤30s so daemon-side plugin startup doesn't stall on a dead network")
+}
+
+func TestRun_URLShapeStdin_StubbedForCut2(t *testing.T) {
+	t.Parallel()
+	// Cut 1: URL-shape stdin ingest is similarly stubbed. Same
+	// rationale — a Cut-1 build that fields a URL-shape request
+	// shouldn't pretend to succeed.
+	var stderr bytes.Buffer
+	code := run([]string{}, strings.NewReader(`{"operation":"ingest","url":"https://github.com/o/r/pull/1"}`), &bytes.Buffer{}, &stderr)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr.String(), "not implemented yet")
+	assert.Contains(t, stderr.String(), "Cut 2")
+}
