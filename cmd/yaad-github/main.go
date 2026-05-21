@@ -99,19 +99,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	if *commandName != "" {
-		// Command-shape dispatch lands in Cut 3. Reject
-		// unknown commands explicitly so an operator who
-		// mistypes (`!fetc`) sees a clear error rather than
-		// silently falling through to a stub.
+		// Command-shape dispatch per ADR-0022 + ADR-0026 §1.
+		// Unknown commands return exit 2 (flag-error) so an
+		// operator who mistypes sees a clear error rather
+		// than silently falling through.
 		if *commandName != github.CommandFetch {
 			_, _ = fmt.Fprintf(stderr,
 				"yaad-github: unknown --command %q (declared: %v)\n",
 				*commandName, github.DeclaredCommands)
 			return 2
 		}
-		_, _ = fmt.Fprintln(stderr,
-			"yaad-github --command fetch: not implemented yet (Cut 3 / issue #187)")
-		return 1
+		if err := runCommandFetch(stdout, stderr); err != nil {
+			_, _ = fmt.Fprintf(stderr, "yaad-github --command fetch: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	// URL-shape stdin ingest. Reads the `{operation, url}`
@@ -179,8 +181,8 @@ func runInit(stdout io.Writer) error {
 // token it splices into the GitHub search query
 // (`is:open involves:<login>` per ADR-0026 §4). Defined here
 // so the auth-resolve path stays in one place; the bulk
-// fetch path will call this from runCommandFetch when it
-// lands.
+// fetch path calls this once per invocation (login is
+// stable for the process lifetime).
 //
 // Returns ErrTokenMissing when the operator hasn't wired the
 // PAT.
@@ -189,6 +191,157 @@ func resolveOperatorLogin(ctx context.Context) (string, error) {
 	baseURL := os.Getenv(github.EnvBaseURL)
 	client := &http.Client{Timeout: authTimeout}
 	return github.ResolveUserLogin(ctx, client, baseURL, token)
+}
+
+// commandFetchTimeout caps the whole `--command fetch` run
+// via the outer context. Generous enough to walk a few dozen
+// repos with several items each. Operators with large
+// backlogs override via the daemon-side `fetch_timeout:`
+// config knob (per the subprocess wrapper).
+const commandFetchTimeout = 10 * time.Minute
+
+// commandFetchItemTimeout caps each individual HTTP round-trip
+// (search page, per-item GET) so a stuck connection fails
+// fast instead of swallowing the broader run budget. The
+// outer ctx still enforces the overall ceiling; this lives
+// on the shared `*http.Client.Timeout` so net/http enforces
+// it per request.
+const commandFetchItemTimeout = 30 * time.Second
+
+// summaryPacket is the ADR-0023 control packet emitted at
+// end-of-stream. Trailing `_summary` mirrors what yaad-gmail
+// emits — same shape so the daemon's NDJSON consumer treats
+// both plugins uniformly.
+type summaryPacket struct {
+	Summary summaryFields `json:"_summary"`
+}
+
+type summaryFields struct {
+	Repos          int   `json:"repos"`
+	Emitted        int   `json:"emitted"`
+	Errors         int   `json:"errors"`
+	DurationMillis int64 `json:"duration_ms"`
+}
+
+// errorPacket is the ADR-0023 per-envelope error shape — used
+// when the bulk-fetch run encounters an unrecoverable
+// pre-condition (missing token, missing repo list). The
+// daemon's NDJSON consumer logs the message; the binary
+// also exits non-zero.
+type errorPacket struct {
+	Error        string `json:"_error"`
+	ErrorMessage string `json:"_error_message,omitempty"`
+}
+
+// runCommandFetch is the bulk-fetch path per ADR-0026 §1 +
+// §4. Resolves the operator login from the PAT (single
+// `GET /user` call per process invocation), reads the repo
+// list from EnvRepos, runs `is:open involves:<login>` per
+// repo, and streams one source-shape envelope per matched
+// item via the existing WriteEnvelope. Terminates with a
+// `_summary` control packet.
+//
+// Pre-conditions enforced via `_error` envelopes + non-zero
+// exit: missing token, missing repo list. Operator-JWT
+// validation happens daemon-side per ADR-0005 before
+// dispatch; this binary trusts the invocation as authorized.
+//
+// Closed-since-last-sync sweep + archive-lifecycle wiring
+// are deferred to Cut 4 (the two design questions on
+// last-sync-state-location + plugin-vs-daemon archive
+// ownership are still open).
+func runCommandFetch(stdout, stderr io.Writer) error {
+	startedAt := time.Now()
+
+	repos, err := github.ParseRepoList(os.Getenv(github.EnvRepos))
+	if err != nil {
+		emitError(stdout, "config_missing", err.Error())
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), commandFetchTimeout)
+	defer cancel()
+
+	login, err := resolveOperatorLogin(ctx)
+	if err != nil {
+		emitError(stdout, "auth_failed", err.Error())
+		return err
+	}
+
+	instance := os.Getenv(EnvInstanceName)
+	baseURL := os.Getenv(github.EnvBaseURL)
+	token := os.Getenv(github.EnvToken)
+
+	// One shared client across every search + per-item fetch
+	// this invocation. http.Client.Timeout enforces the
+	// per-request ceiling; the outer ctx enforces the run
+	// budget.
+	client, err := github.NewClient(
+		&http.Client{Timeout: commandFetchItemTimeout},
+		baseURL,
+		token,
+	)
+	if err != nil {
+		emitError(stdout, "client_init", err.Error())
+		return err
+	}
+
+	emitted := 0
+	errCount := 0
+
+	for _, repo := range repos {
+		targets, err := client.SearchInvolvedOpen(ctx, repo, login)
+		if err != nil {
+			errCount++
+			_, _ = fmt.Fprintf(stderr, "yaad-github: search %s: %v\n", repo.Slash(), err)
+			continue
+		}
+
+		for _, target := range targets {
+			item, err := client.FetchTarget(ctx, target)
+			if err != nil {
+				errCount++
+				_, _ = fmt.Fprintf(stderr, "yaad-github: fetch %s/%s#%d: %v\n",
+					target.Owner, target.Repo, target.Number, err)
+				continue
+			}
+			fetchedAt := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+			if err := github.WriteEnvelope(stdout, item, instance, baseURL, "", fetchedAt); err != nil {
+				errCount++
+				_, _ = fmt.Fprintf(stderr, "yaad-github: write envelope %s/%s#%d: %v\n",
+					target.Owner, target.Repo, target.Number, err)
+				continue
+			}
+			emitted++
+		}
+	}
+
+	return emitSummary(stdout, summaryFields{
+		Repos:          len(repos),
+		Emitted:        emitted,
+		Errors:         errCount,
+		DurationMillis: time.Since(startedAt).Milliseconds(),
+	})
+}
+
+// emitError writes a single `_error` control packet to
+// stdout. Best-effort: a write failure on stderr is
+// non-fatal (the binary's exit code carries the failure
+// signal).
+func emitError(stdout io.Writer, code, message string) {
+	enc := json.NewEncoder(stdout)
+	_ = enc.Encode(errorPacket{Error: code, ErrorMessage: message})
+}
+
+// emitSummary writes the trailing `_summary` control
+// packet. Returns the encoder error so the caller can
+// surface a write-failure on a busy stdout.
+func emitSummary(stdout io.Writer, fields summaryFields) error {
+	enc := json.NewEncoder(stdout)
+	if err := enc.Encode(summaryPacket{Summary: fields}); err != nil {
+		return fmt.Errorf("write _summary: %w", err)
+	}
+	return nil
 }
 
 // fetchTimeout caps the wall-clock budget for one URL-shape
