@@ -72,7 +72,7 @@ func main() {
 // than calling os.Exit so tests can drive runInit / runVersion
 // directly with a buffer pair. Exit codes: 0 success, 1 runtime
 // error, 2 bad flags.
-func run(args []string, _ io.Reader, stdout, stderr io.Writer) int {
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("yaad-github", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	initMode := fs.Bool("init", false,
@@ -114,10 +114,15 @@ func run(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	// URL-shape stdin ingest lands in Cut 2.
-	_, _ = fmt.Fprintln(stderr,
-		"yaad-github: URL-shape ingest not implemented yet (Cut 2 / issue #187)")
-	return 1
+	// URL-shape stdin ingest. Reads the `{operation, url}`
+	// request body the daemon writes per ADR-0005, parses
+	// the URL into a target, fetches the PR/issue, and emits
+	// one source-shape envelope per ADR-0023 on stdout.
+	if err := runURLShapeFetch(stdin, stdout); err != nil {
+		_, _ = fmt.Fprintf(stderr, "yaad-github: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 // capabilitiesDoc mirrors the wire shape yaad-index's
@@ -169,21 +174,86 @@ func runInit(stdout io.Writer) error {
 	return enc.Encode(doc)
 }
 
-// resolveOperatorLogin is the startup-side helper Cut 2 + Cut 3
-// will call to derive the `<operator-login>` token they splice
-// into the GitHub search query (`is:open involves:<login>` per
-// ADR-0026 §4). Defined here in Cut 1 so the auth-resolve path
-// is exercised + tested up-front; the URL-shape + command-shape
-// paths in later cuts use the same helper rather than
-// re-implementing the GET /user round-trip.
+// resolveOperatorLogin is the startup-side helper Cut 3
+// (`--command fetch`) calls to derive the `<operator-login>`
+// token it splices into the GitHub search query
+// (`is:open involves:<login>` per ADR-0026 §4). Defined here
+// so the auth-resolve path stays in one place; the bulk
+// fetch path will call this from runCommandFetch when it
+// lands.
 //
 // Returns ErrTokenMissing when the operator hasn't wired the
-// PAT; the binary's main() should surface this to stderr + exit
-// non-zero rather than fall through to a fetch that would hit
-// the GitHub anonymous quota.
+// PAT.
 func resolveOperatorLogin(ctx context.Context) (string, error) {
 	token := os.Getenv(github.EnvToken)
 	baseURL := os.Getenv(github.EnvBaseURL)
 	client := &http.Client{Timeout: authTimeout}
 	return github.ResolveUserLogin(ctx, client, baseURL, token)
+}
+
+// fetchTimeout caps the wall-clock budget for one URL-shape
+// fetch (parse + GET + emit). Generous enough that a slow
+// upstream doesn't trip on the median round-trip; tight
+// enough that a stuck connection doesn't hang the daemon's
+// per-plugin timeout per ADR-0005.
+const fetchTimeout = 30 * time.Second
+
+// fetchRequest mirrors the wire shape yaad-index writes to
+// the plugin's stdin per ADR-0005 — the operation +
+// originating input the daemon parsed from `/v1/ingest`.
+// Decode-only; the plugin doesn't write this shape.
+type fetchRequest struct {
+	Operation string `json:"operation"`
+	URL       string `json:"url"`
+}
+
+// runURLShapeFetch is the URL-shape ingest path per
+// ADR-0026 §1 + ADR-0021. Reads the request, parses the
+// target out of the input URL, fetches the PR or issue, and
+// emits one source-shape envelope on stdout per ADR-0023.
+//
+// The token lookup is best-effort: an unauthenticated call
+// is permitted (GitHub allows ~60 anonymous requests/hour),
+// but the operator's intended path is to wire
+// YAAD_GITHUB_TOKEN. We surface the unauthenticated path so
+// the plugin works for one-off public-repo dispatches
+// without forcing a PAT.
+func runURLShapeFetch(stdin io.Reader, stdout io.Writer) error {
+	var req fetchRequest
+	dec := json.NewDecoder(stdin)
+	if err := dec.Decode(&req); err != nil {
+		if err == io.EOF {
+			return fmt.Errorf("yaad-github: empty stdin (expected ingest request JSON)")
+		}
+		return fmt.Errorf("yaad-github: decode ingest request: %w", err)
+	}
+	if req.Operation != "" && req.Operation != "ingest" {
+		return fmt.Errorf("yaad-github: unsupported operation %q (only \"ingest\" is implemented)", req.Operation)
+	}
+
+	target, err := github.ParseTarget(req.URL)
+	if err != nil {
+		return fmt.Errorf("yaad-github: parse target: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	defer cancel()
+
+	opts := github.FetchOptions{
+		Client:  &http.Client{Timeout: fetchTimeout},
+		BaseURL: os.Getenv(github.EnvBaseURL),
+		Token:   os.Getenv(github.EnvToken),
+	}
+	item, err := github.FetchTarget(ctx, opts, *target)
+	if err != nil {
+		return fmt.Errorf("yaad-github: fetch %s: %w", req.URL, err)
+	}
+
+	fetchedAt := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	instance := os.Getenv(EnvInstanceName)
+	baseURL := os.Getenv(github.EnvBaseURL)
+	if err := github.WriteEnvelope(stdout, item, instance, baseURL, req.URL, fetchedAt); err != nil {
+		return fmt.Errorf("yaad-github: write envelope: %w", err)
+	}
+	return nil
 }

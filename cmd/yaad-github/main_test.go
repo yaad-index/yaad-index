@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -123,14 +125,80 @@ func TestAuthTimeout_IsConservative(t *testing.T) {
 		"authTimeout must stay ≤30s so daemon-side plugin startup doesn't stall on a dead network")
 }
 
-func TestRun_URLShapeStdin_StubbedForCut2(t *testing.T) {
+func TestRun_URLShapeStdin_FetchesAndEmitsEnvelope(t *testing.T) {
+	// URL-shape ingest path (Cut 2): the binary reads the
+	// ingest request, parses the URL, hits the GitHub REST
+	// API, and emits one source-shape envelope on stdout.
+	// This exercises the wiring end-to-end against a
+	// stubbed upstream.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/acme/proj/pulls/42" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"number": 42,
+			"state": "open",
+			"title": "End-to-end test PR",
+			"body": "Hello from a stub.",
+			"html_url": "https://github.com/acme/proj/pull/42",
+			"user": {"login": "test-user"}
+		}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv(github.EnvBaseURL, srv.URL)
+	t.Setenv(github.EnvToken, "ghp_stub")
+
+	var stdout, stderr bytes.Buffer
+	stdin := strings.NewReader(`{"operation":"ingest","url":"https://github.com/acme/proj/pull/42"}`)
+	code := run([]string{}, stdin, &stdout, &stderr)
+	require.Equal(t, 0, code, "stderr=%s", stderr.String())
+
+	// Envelope is single-line NDJSON ending in `\n`.
+	out := stdout.String()
+	require.True(t, strings.HasSuffix(out, "\n"))
+	var env struct {
+		OK         bool `json:"ok"`
+		Structured struct {
+			Kind string         `json:"kind"`
+			Name string         `json:"name"`
+			Data map[string]any `json:"data"`
+		} `json:"structured"`
+		RawContent string   `json:"raw_content"`
+		Notations  []string `json:"notations"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &env))
+	assert.True(t, env.OK)
+	assert.Equal(t, "source", env.Structured.Kind)
+	assert.Equal(t, "acme_proj_pr_42", env.Structured.Name,
+		"ADR-0026 §2 slug-target shape via daemon slug.Slug(name)")
+	assert.Equal(t, "pr", env.Structured.Data["type"])
+	assert.Equal(t, "Hello from a stub.", env.RawContent)
+	require.NotEmpty(t, env.Notations)
+	assert.Equal(t, "https://github.com/acme/proj/pull/42", env.Notations[0])
+}
+
+func TestRun_URLShapeStdin_EmptyStdin_Errors(t *testing.T) {
 	t.Parallel()
-	// Cut 1: URL-shape stdin ingest is similarly stubbed. Same
-	// rationale — a Cut-1 build that fields a URL-shape request
-	// shouldn't pretend to succeed.
 	var stderr bytes.Buffer
-	code := run([]string{}, strings.NewReader(`{"operation":"ingest","url":"https://github.com/o/r/pull/1"}`), &bytes.Buffer{}, &stderr)
+	code := run([]string{}, strings.NewReader(""), &bytes.Buffer{}, &stderr)
 	assert.Equal(t, 1, code)
-	assert.Contains(t, stderr.String(), "not implemented yet")
-	assert.Contains(t, stderr.String(), "Cut 2")
+	assert.Contains(t, stderr.String(), "empty stdin")
+}
+
+func TestRun_URLShapeStdin_UnsupportedOperation_Errors(t *testing.T) {
+	t.Parallel()
+	var stderr bytes.Buffer
+	code := run([]string{}, strings.NewReader(`{"operation":"frobnicate","url":"x"}`), &bytes.Buffer{}, &stderr)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr.String(), "unsupported operation")
+}
+
+func TestRun_URLShapeStdin_MalformedTarget_Errors(t *testing.T) {
+	t.Parallel()
+	var stderr bytes.Buffer
+	code := run([]string{}, strings.NewReader(`{"operation":"ingest","url":"not a target"}`), &bytes.Buffer{}, &stderr)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr.String(), "parse target")
 }
