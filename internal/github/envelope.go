@@ -16,12 +16,12 @@ import (
 // `<!-- yaad:plugin start/end -->` markers per ADR-0015. We
 // stream it through verbatim; the daemon owns the markering.
 type envelopeDoc struct {
-	OK              bool               `json:"ok"`
+	OK              bool                `json:"ok"`
 	Structured      *structuredEnvelope `json:"structured,omitempty"`
-	RawContent      string             `json:"raw_content,omitempty"`
-	Notations       []string           `json:"notations,omitempty"`
-	Aliases         []string           `json:"aliases,omitempty"`
-	CacheTTLSeconds *int               `json:"cache_ttl_seconds,omitempty"`
+	RawContent      string              `json:"raw_content,omitempty"`
+	Notations       []string            `json:"notations,omitempty"`
+	Aliases         []string            `json:"aliases,omitempty"`
+	CacheTTLSeconds *int                `json:"cache_ttl_seconds,omitempty"`
 }
 
 // structuredEnvelope mirrors yaad-index's
@@ -29,11 +29,11 @@ type envelopeDoc struct {
 // universal-source-shape contract. `kind: "source"` +
 // descriptive `name` + `data` + `edges` map-keyed-by-type.
 type structuredEnvelope struct {
-	Kind       string                       `json:"kind"`
-	Name       string                       `json:"name,omitempty"`
-	Data       map[string]any               `json:"data,omitempty"`
-	Edges      map[string][]edgeTargetDoc   `json:"edges,omitempty"`
-	Provenance []provenanceEntryDoc         `json:"provenance,omitempty"`
+	Kind       string                     `json:"kind"`
+	Name       string                     `json:"name,omitempty"`
+	Data       map[string]any             `json:"data,omitempty"`
+	Edges      map[string][]edgeTargetDoc `json:"edges,omitempty"`
+	Provenance []provenanceEntryDoc       `json:"provenance,omitempty"`
 }
 
 // edgeTargetDoc is one `{name, kind}` descriptive ref the

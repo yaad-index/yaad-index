@@ -204,9 +204,9 @@ func TestWriteEnvelope_InstanceName_ThreadsIntoShorthand(t *testing.T) {
 	item := sampleItem(ItemKindPR)
 	var buf bytes.Buffer
 	require.NoError(t, WriteEnvelope(&buf, item,
-		"github-work",                                        // instance name
-		"https://ghes.example.com/api/v3",                    // base URL
-		"https://github.com/acme/proj/pull/42",               // originating URL
+		"github-work",                          // instance name
+		"https://ghes.example.com/api/v3",      // base URL
+		"https://github.com/acme/proj/pull/42", // originating URL
 		"2026-05-20T12:00:00Z"))
 	doc := decodeEnvelope(t, &buf)
 	require.Len(t, doc.Notations, 2)

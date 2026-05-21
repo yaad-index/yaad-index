@@ -79,19 +79,140 @@ func TestRun_BadFlag_ReturnsTwo(t *testing.T) {
 	assert.NotEmpty(t, stderr.String(), "bad flag must emit to stderr")
 }
 
-func TestRun_CommandFetch_StubbedForCut1(t *testing.T) {
-	t.Parallel()
-	// Cut 1: the `--command fetch` path is wired (validates the
-	// command name) but the bulk fetch itself is deferred to
-	// Cut 3. The binary surfaces a clear stub message + exit
-	// non-zero rather than fall through silently — operators
-	// invoking the command on a Cut-1 build see the placeholder
-	// instead of a confusing success/no-output.
-	var stderr bytes.Buffer
-	code := run([]string{"--command", "fetch"}, nil, &bytes.Buffer{}, &stderr)
+func TestRun_CommandFetch_MissingRepos_EmitsErrorEnvelope(t *testing.T) {
+	// Empty YAAD_GITHUB_REPOS must surface as a single
+	// `_error` control packet on stdout + exit non-zero, so
+	// the daemon-side NDJSON consumer logs the cause + the
+	// run terminates cleanly without an inflight GitHub call.
+	t.Setenv(github.EnvRepos, "")
+	t.Setenv(github.EnvToken, "ghp_stub")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--command", "fetch"}, nil, &stdout, &stderr)
 	assert.Equal(t, 1, code)
-	assert.Contains(t, stderr.String(), "not implemented yet")
-	assert.Contains(t, stderr.String(), "Cut 3")
+
+	var pkt struct {
+		Error        string `json:"_error"`
+		ErrorMessage string `json:"_error_message"`
+	}
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &pkt),
+		"stdout should be a single JSON line: %q", stdout.String())
+	assert.Equal(t, "config_missing", pkt.Error)
+	assert.Contains(t, pkt.ErrorMessage, "YAAD_GITHUB_REPOS")
+	assert.Contains(t, stderr.String(), "YAAD_GITHUB_REPOS")
+}
+
+func TestRun_CommandFetch_MissingToken_EmitsAuthErrorEnvelope(t *testing.T) {
+	// Token unset surfaces as `auth_failed` after the repo
+	// list parses; the operator-login resolution path is the
+	// first network-touching step and fails closed.
+	t.Setenv(github.EnvRepos, "acme/proj")
+	t.Setenv(github.EnvToken, "")
+	t.Setenv(github.EnvBaseURL, "")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--command", "fetch"}, nil, &stdout, &stderr)
+	assert.Equal(t, 1, code)
+
+	var pkt struct {
+		Error string `json:"_error"`
+	}
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &pkt))
+	assert.Equal(t, "auth_failed", pkt.Error)
+}
+
+func TestRun_CommandFetch_HappyPath_StreamsEnvelopesAndSummary(t *testing.T) {
+	// End-to-end bulk fetch against a stubbed upstream:
+	//   - GET /user resolves the operator login once.
+	//   - Search returns two open items (one PR, one issue).
+	//   - Each item's full GET produces a source-shape envelope.
+	//   - A trailing `_summary` control packet closes the stream.
+	//
+	// Mirrors yaad-gmail's `{"_summary": {...}}` shape so the
+	// daemon's NDJSON consumer treats both plugins uniformly.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/user":
+			_, _ = w.Write([]byte(`{"login":"test-operator"}`))
+		case "/search/issues":
+			q := r.URL.Query().Get("q")
+			if !strings.Contains(q, "involves:test-operator") || !strings.Contains(q, "repo:acme/proj") {
+				http.Error(w, "bad query: "+q, http.StatusBadRequest)
+				return
+			}
+			_, _ = w.Write([]byte(`{
+				"total_count": 2,
+				"items": [
+					{"number": 7, "pull_request": {"url": "https://api.example.test/repos/acme/proj/pulls/7"}, "state": "open", "title": "PR seven"},
+					{"number": 9, "state": "open", "title": "Issue nine"}
+				]
+			}`))
+		case "/repos/acme/proj/pulls/7":
+			_, _ = w.Write([]byte(`{
+				"number": 7,
+				"state": "open",
+				"title": "PR seven",
+				"body": "pr body",
+				"html_url": "https://github.com/acme/proj/pull/7",
+				"user": {"login": "author-a"}
+			}`))
+		case "/repos/acme/proj/issues/9":
+			_, _ = w.Write([]byte(`{
+				"number": 9,
+				"state": "open",
+				"title": "Issue nine",
+				"body": "issue body",
+				"html_url": "https://github.com/acme/proj/issues/9",
+				"user": {"login": "author-b"}
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	t.Setenv(github.EnvBaseURL, srv.URL)
+	t.Setenv(github.EnvToken, "ghp_stub")
+	t.Setenv(github.EnvRepos, "acme/proj")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--command", "fetch"}, nil, &stdout, &stderr)
+	require.Equal(t, 0, code, "stderr=%s", stderr.String())
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	require.Len(t, lines, 3, "two envelopes + one _summary: %q", stdout.String())
+
+	// First two lines must be source-shape envelopes (not _summary).
+	for i := 0; i < 2; i++ {
+		var env struct {
+			OK         bool `json:"ok"`
+			Structured struct {
+				Kind string         `json:"kind"`
+				Name string         `json:"name"`
+				Data map[string]any `json:"data"`
+			} `json:"structured"`
+			Summary map[string]any `json:"_summary"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(lines[i]), &env), "line %d: %s", i, lines[i])
+		assert.Nil(t, env.Summary, "line %d should be an envelope, not _summary", i)
+		assert.True(t, env.OK)
+		assert.Equal(t, "source", env.Structured.Kind)
+	}
+
+	// Trailing line must be the _summary packet.
+	var summary struct {
+		Summary struct {
+			Repos          int   `json:"repos"`
+			Emitted        int   `json:"emitted"`
+			Errors         int   `json:"errors"`
+			DurationMillis int64 `json:"duration_ms"`
+		} `json:"_summary"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(lines[2]), &summary), "_summary: %s", lines[2])
+	assert.Equal(t, 1, summary.Summary.Repos)
+	assert.Equal(t, 2, summary.Summary.Emitted)
+	assert.Equal(t, 0, summary.Summary.Errors)
+	assert.GreaterOrEqual(t, summary.Summary.DurationMillis, int64(0))
 }
 
 func TestRun_CommandUnknown_ReturnsTwo(t *testing.T) {
