@@ -70,8 +70,11 @@ const (
 	CanonicalKindUser       = "github-user"
 )
 
-// KnownCanonicalKinds is the alphabetized set yaad-github
-// declares in `canonical_kinds_emitted` at `--init`.
+// KnownCanonicalKinds is the set yaad-github declares in
+// `canonical_kinds_emitted` at `--init`. Order matches ADR-
+// 0026 §1's `canonical_kinds_emitted` listing so the wire
+// shape stays bit-for-bit identical to what the ADR pins;
+// tests in github_test.go enforce the order.
 var KnownCanonicalKinds = []string{
 	CanonicalKindPR,
 	CanonicalKindIssue,
@@ -91,8 +94,10 @@ const (
 	EdgeTypeReviewedBy = "reviewed_by"
 )
 
-// KnownCanonicalEdgeTypes is the alphabetized set yaad-github
-// declares in `canonical_edge_types_emitted` at `--init`.
+// KnownCanonicalEdgeTypes is the set yaad-github declares in
+// `canonical_edge_types_emitted` at `--init`. Order matches
+// ADR-0026 §1's `canonical_edge_types_emitted` listing; tests
+// in github_test.go enforce the order.
 var KnownCanonicalEdgeTypes = []string{
 	EdgeTypeIsA,
 	EdgeTypeInRepo,
