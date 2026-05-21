@@ -8,6 +8,7 @@ require (
 	github.com/fzerorubigd/bggo v0.1.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/cel-go v0.28.1
+	github.com/google/go-github/v68 v68.0.0
 	github.com/gosimple/slug v1.15.0
 	github.com/jhillyerd/enmime v1.3.0
 	github.com/mark3labs/mcp-go v0.54.0
@@ -25,6 +26,7 @@ require (
 	github.com/emersion/go-sasl v0.0.0-20200509203442-7bfe0ed36a21 // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
+	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gosimple/unidecode v1.0.1 // indirect

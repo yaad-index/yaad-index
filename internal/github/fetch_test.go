@@ -49,7 +49,7 @@ func TestFetchTarget_PR_HappyPath(t *testing.T) {
 	fs := newFakeServer(t)
 	fs.serve("/repos/acme/proj/pulls/42", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer ghp_test", r.Header.Get("Authorization"))
-		assert.Equal(t, "application/vnd.github+json", r.Header.Get("Accept"))
+		assert.Contains(t, r.Header.Get("Accept"), "application/vnd.github")
 		_, _ = w.Write([]byte(`{
 			"number": 42,
 			"state": "open",
