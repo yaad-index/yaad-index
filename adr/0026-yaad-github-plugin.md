@@ -171,9 +171,9 @@ So `github-work: ghes-org/repo#42` shorthand resolves through the work instance,
 
 ### 8. Auth + secrets
 
-- Token at `~/.config/yaad-index/github.env` (or per-instance variant, e.g. `~/.config/yaad-index/github-work.env`).
-- Env var name: `YAAD_GITHUB_TOKEN` — distinct from the `gh` CLI's `GITHUB_TOKEN` to avoid scope confusion.
-- Required scopes: `repo` (private repo read) + `read:org` (org membership visibility). Never logged.
+- **Env var name:** `YAAD_GITHUB_TOKEN` — distinct from the `gh` CLI's `GITHUB_TOKEN` to avoid scope confusion.
+- **Delivery path:** the value reaches the plugin subprocess via the operator's `plugins[].env:` block (per [ADR-0006](./0006-plugin-discovery-config-allowlist.md)) — that is the single canonical mechanism. The `env:` example in §7 above shows the literal placeholder for illustration; operators MUST NOT commit a real PAT inline. Recommended pattern is to either reference an out-of-tree env-file (e.g. via a shell-expansion / secrets-manager indirection the operator wires up themselves, or via a deployment-time substitution) or to use a per-instance variant such as `~/.config/yaad-index/github.env` that the daemon sources before spawning the plugin. The plugin itself reads only the env vars passed in; how those vars get into the subprocess env is operator-discretionary.
+- **Required scopes:** `repo` (private repo read) + `read:org` (org membership visibility). Never logged.
 
 ## Consequences
 
