@@ -126,11 +126,15 @@ PR and issue entities carry comment metadata in `structured.data`:
 
 Comments are not emitted as separate `github-comment` entities. The graph stays small; the cost is no "all comments by a given user" or "comments mentioning a specific ADR" queries. Threshold-based comment-promotion (>200 chars OR contains code-block OR first-from-new-author) is a v2 design discussion.
 
-### 6. Closed-item lifecycle — archive flag, not TTL
+### 6. Closed-item lifecycle — reuse ADR-0018 archive surface
 
-Closed PRs and issues remain in the graph indefinitely. A `data.archived: true` flag flips after 30 days of no state-change on a closed item. Default queries skip archived; agents can pass `include_archived: true` to surface them.
+Closed PRs and issues remain in the graph indefinitely. The plugin's bulk-fetch loop calls the existing `archive_entity` ([ADR-0018](./0018-archive-replaces-delete.md)) on items that are **closed AND have had no state-change for ≥30 days**. That moves the vault file to `_archive/<kind>/<slug>.md` and stamps `archived_at` on the DB row.
 
-The preservation cost is near-zero (the entities don't go away, just get a flag). The query-surface cost is contained (one filter clause in the default query path).
+Default `/v1/search`, `/v1/list-entities`, etc. already skip archived rows via `ArchivedExclude`; agents that want to surface them pass `include_archived=true` (or `archived_only=true`) per the existing ADR-0018 endpoint contract. No new flag, no parallel mechanism — the GitHub plugin participates in the same archive lifecycle every other canonical entity uses.
+
+**Re-opened items.** If a previously-archived PR/issue gets re-opened on GitHub (state-change after archive), the next bulk-fetch sweep detects the state-change and calls `restore_entity` (ADR-0018 inverse) to bring the entity back into the active set. The 30-day quiet-period clock then starts fresh from the new close (if it closes again).
+
+The preservation cost is the same archive footprint every other source already pays. The query-surface cost is zero — the default filter is already in place.
 
 ### 7. Multi-instance pattern: same binary, configurable base URL
 
@@ -221,7 +225,8 @@ These are deliberately deferred — the read-only-snapshot graph needs to prove 
 - **Single `github-item` kind** (rejected) — query muddying outweighs the doubled-config cost.
 - **Option B per-envelope `source_namespace`** (deferred, not rejected) — would let the plugin advertise `github-pr` or `github-issue` on a per-envelope basis without needing the canonical-kind discriminator inside `structured.kind` or `data.type`. Cleaner separation at the source layer. Blocked today because ADR-0021's wire spec is single-namespace-per-plugin via `--init`. If ADR-0021 grows per-envelope namespace, this ADR's §2 choice is worth revisiting.
 - **Auto-discover by default** (rejected for v1) — noisy from drive-by OSS comments. Deferred to v2 `auto_discover_orgs:` flag.
-- **TTL-delete closed items** (rejected) — preservation cost is zero; archive-flag gives the same query-surface cleanliness without losing history.
+- **TTL-delete closed items** (rejected) — preservation cost is zero; reusing the ADR-0018 archive surface gives the same query-surface cleanliness without losing history. Bonus: no new mechanism to maintain — the plugin participates in the existing entity lifecycle.
+- **Bespoke `data.archived` boolean** (rejected — earlier draft of this ADR proposed it) — would have introduced a parallel archive concept alongside ADR-0018's existing one. Reusing ADR-0018 means default `/v1/search` filters already work and the operator's `include_archived` / `archived_only` query knobs cover the GitHub surface for free.
 - **Separate plugin binary per GitHub instance** (rejected) — maintenance burden. Multi-instance via base URL env reuses the same pattern ADR-0006 already supports (multiple plugin instances, each with its own config + env).
 
 ## Migration / backward compatibility
