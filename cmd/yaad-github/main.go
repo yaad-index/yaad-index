@@ -193,13 +193,20 @@ func resolveOperatorLogin(ctx context.Context) (string, error) {
 	return github.ResolveUserLogin(ctx, client, baseURL, token)
 }
 
-// commandFetchTimeout caps the whole `--command fetch` run.
-// Generous enough to walk a few dozen repos with several
-// items each; tight enough that a stuck connection doesn't
-// hang the daemon's per-plugin timeout. Operators with
-// large backlogs override via the daemon-side
-// `fetch_timeout:` config knob (per the subprocess wrapper).
+// commandFetchTimeout caps the whole `--command fetch` run
+// via the outer context. Generous enough to walk a few dozen
+// repos with several items each. Operators with large
+// backlogs override via the daemon-side `fetch_timeout:`
+// config knob (per the subprocess wrapper).
 const commandFetchTimeout = 10 * time.Minute
+
+// commandFetchItemTimeout caps each individual HTTP round-trip
+// (search page, per-item GET) so a stuck connection fails
+// fast instead of swallowing the broader run budget. The
+// outer ctx still enforces the overall ceiling; this lives
+// on the shared `*http.Client.Timeout` so net/http enforces
+// it per request.
+const commandFetchItemTimeout = 30 * time.Second
 
 // summaryPacket is the ADR-0023 control packet emitted at
 // end-of-stream. Trailing `_summary` mirrors what yaad-gmail
@@ -265,15 +272,25 @@ func runCommandFetch(stdout, stderr io.Writer) error {
 	baseURL := os.Getenv(github.EnvBaseURL)
 	token := os.Getenv(github.EnvToken)
 
+	// One shared client across every search + per-item fetch
+	// this invocation. http.Client.Timeout enforces the
+	// per-request ceiling; the outer ctx enforces the run
+	// budget.
+	client, err := github.NewClient(
+		&http.Client{Timeout: commandFetchItemTimeout},
+		baseURL,
+		token,
+	)
+	if err != nil {
+		emitError(stdout, "client_init", err.Error())
+		return err
+	}
+
 	emitted := 0
 	errCount := 0
 
 	for _, repo := range repos {
-		targets, err := github.SearchInvolvedOpen(ctx, github.FetchOptions{
-			Client:  &http.Client{Timeout: commandFetchTimeout},
-			BaseURL: baseURL,
-			Token:   token,
-		}, repo, login)
+		targets, err := client.SearchInvolvedOpen(ctx, repo, login)
 		if err != nil {
 			errCount++
 			_, _ = fmt.Fprintf(stderr, "yaad-github: search %s: %v\n", repo.Slash(), err)
@@ -281,11 +298,7 @@ func runCommandFetch(stdout, stderr io.Writer) error {
 		}
 
 		for _, target := range targets {
-			item, err := github.FetchTarget(ctx, github.FetchOptions{
-				Client:  &http.Client{Timeout: commandFetchTimeout},
-				BaseURL: baseURL,
-				Token:   token,
-			}, target)
+			item, err := client.FetchTarget(ctx, target)
 			if err != nil {
 				errCount++
 				_, _ = fmt.Fprintf(stderr, "yaad-github: fetch %s/%s#%d: %v\n",
