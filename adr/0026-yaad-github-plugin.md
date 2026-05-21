@@ -126,15 +126,15 @@ PR and issue entities carry comment metadata in `structured.data`:
 
 Comments are not emitted as separate `github-comment` entities. The graph stays small; the cost is no "all comments by a given user" or "comments mentioning a specific ADR" queries. Threshold-based comment-promotion (>200 chars OR contains code-block OR first-from-new-author) is a v2 design discussion.
 
-### 6. Closed-item lifecycle — reuse ADR-0018 archive surface
+### 6. Closed-item lifecycle — reuse ADR-0018 archive surface, archive immediately on close
 
-Closed PRs and issues remain in the graph indefinitely. The plugin's bulk-fetch loop calls the existing `archive_entity` ([ADR-0018](./0018-archive-replaces-delete.md)) on items that are **closed AND have had no state-change for ≥30 days**. That moves the vault file to `_archive/<kind>/<slug>.md` and stamps `archived_at` on the DB row.
+Closed PRs and issues remain in the graph indefinitely but leave the active set the moment they close. The plugin's bulk-fetch loop calls `archive_entity` ([ADR-0018](./0018-archive-replaces-delete.md)) on any item whose GitHub state is `closed` (PRs: closed/merged; issues: closed) in the same fetch cycle that observed the state-change. That moves the vault file to `_archive/<kind>/<slug>.md` and stamps `archived_at` on the DB row. No quiet-period timer, no state-change tracking, no separate retention clock — closed-on-GitHub maps directly to archived-in-yaad-index.
 
-Default `/v1/search`, `/v1/list-entities`, etc. already skip archived rows via `ArchivedExclude`; agents that want to surface them pass `include_archived=true` (or `archived_only=true`) per the existing ADR-0018 endpoint contract. No new flag, no parallel mechanism — the GitHub plugin participates in the same archive lifecycle every other canonical entity uses.
+**Re-opened items.** If a previously-archived PR/issue gets re-opened on GitHub, the next bulk-fetch sweep detects state=`open` and calls `restore_entity` (ADR-0018 inverse) to bring the entity back into the active set.
 
-**Re-opened items.** If a previously-archived PR/issue gets re-opened on GitHub (state-change after archive), the next bulk-fetch sweep detects the state-change and calls `restore_entity` (ADR-0018 inverse) to bring the entity back into the active set. The 30-day quiet-period clock then starts fresh from the new close (if it closes again).
+Default `/v1/search`, `/v1/list-entities`, etc. already skip archived rows via `ArchivedExclude`; agents that want them back pass `include_archived=true` (or `archived_only=true`) per the existing ADR-0018 endpoint contract. No new flag, no parallel mechanism — the GitHub plugin participates in the same archive lifecycle every other canonical entity uses.
 
-The preservation cost is the same archive footprint every other source already pays. The query-surface cost is zero — the default filter is already in place.
+**Implication.** Agent-facing queries that include recently-closed items (e.g. "what did I merge last week") need `include_archived=true` explicitly — the default active-set view shows open items only. Accepted trade-off for the no-timer simplification.
 
 ### 7. Multi-instance pattern: same binary, configurable base URL
 
