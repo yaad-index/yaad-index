@@ -56,16 +56,24 @@ type provenanceEntryDoc struct {
 // 2) and the command-shape bulk path (Cut 3 — same shape,
 // just emitted N times).
 //
+// `instanceName` is the operator-chosen plugin name (per
+// ADR-0026 §7 multi-instance — e.g. `github`, `github-work`).
+// It threads into the shorthand notation so a GHES instance
+// emits `github-work:owner/repo#N` (not `github:...`), keeping
+// the entity_notations cache hit on a same-instance re-ingest.
+// Empty `instanceName` falls back to `PluginName` ("github") —
+// matches the URL-pattern fallback in BuildURLPatterns.
+//
 // `originatingInput` is the literal string the caller fed to
 // ParseTarget; it lands first in `notations[]` per ADR-0021's
 // self-roundtrip-first invariant so the daemon's
-// entity_notations cache hit on a re-ingest.
+// entity_notations cache hits on a re-ingest.
 //
 // `fetchedAt` is the RFC-3339 stamp the plugin records on
 // the single emitted provenance entry. The caller threads
 // `time.Now().Format(time.RFC3339)` (or a TZ-aware variant
 // per YAAD_TIMEZONE if the plugin's env-var honors it) in.
-func WriteEnvelope(w io.Writer, item *Item, originatingInput, fetchedAt string) error {
+func WriteEnvelope(w io.Writer, item *Item, instanceName, originatingInput, fetchedAt string) error {
 	if item == nil {
 		return fmt.Errorf("github: WriteEnvelope called with nil item")
 	}
@@ -73,7 +81,7 @@ func WriteEnvelope(w io.Writer, item *Item, originatingInput, fetchedAt string) 
 		OK:              true,
 		Structured:      buildStructured(item, fetchedAt),
 		RawContent:      item.Body,
-		Notations:       buildNotations(item, originatingInput),
+		Notations:       buildNotations(item, instanceName, originatingInput),
 		Aliases:         nil,
 		CacheTTLSeconds: cacheTTLPtr(DefaultCacheTTLSeconds),
 	}
@@ -224,10 +232,15 @@ func buildEdges(item *Item) map[string][]edgeTargetDoc {
 // buildNotations composes the `notations` list per ADR-0021's
 // self-roundtrip-first invariant: the originating input the
 // caller passed comes first so the daemon's entity_notations
-// cache hit on a same-input re-ingest. The remaining derived
+// cache hits on a same-input re-ingest. The remaining derived
 // forms (canonical URL + the canonical shorthand) follow,
 // deduped against the originating notation.
-func buildNotations(item *Item, originatingInput string) []string {
+//
+// The shorthand uses the operator's instance name (per ADR-
+// 0026 §7) so a GHES-instance re-ingest of the SAME shorthand
+// form rehits the cache. Empty `instanceName` falls back to
+// `PluginName`.
+func buildNotations(item *Item, instanceName, originatingInput string) []string {
 	canonicalURL := item.URL
 	if canonicalURL == "" {
 		// Fallback: synthesize from the target. The PR/issue
@@ -240,8 +253,12 @@ func buildNotations(item *Item, originatingInput string) []string {
 		canonicalURL = fmt.Sprintf("https://github.com/%s/%s/%s/%d",
 			item.Target.Owner, item.Target.Repo, path, item.Number)
 	}
+	name := instanceName
+	if name == "" {
+		name = PluginName
+	}
 	shorthand := fmt.Sprintf("%s:%s/%s#%d",
-		PluginName, item.Target.Owner, item.Target.Repo, item.Number)
+		name, item.Target.Owner, item.Target.Repo, item.Number)
 
 	notations := []string{}
 	seen := map[string]struct{}{}

@@ -50,6 +50,7 @@ func TestWriteEnvelope_PR_ShapeMatchesADR(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 	require.NoError(t, WriteEnvelope(&buf, sampleItem(ItemKindPR),
+		"",
 		"https://github.com/acme/proj/pull/42",
 		"2026-05-20T12:00:00Z"))
 
@@ -128,7 +129,7 @@ func TestWriteEnvelope_Issue_NoPRSpecificFields(t *testing.T) {
 	item.HeadBranch = ""
 
 	var buf bytes.Buffer
-	require.NoError(t, WriteEnvelope(&buf, item, "github:acme/proj#42", "2026-05-20T12:00:00Z"))
+	require.NoError(t, WriteEnvelope(&buf, item, "", "github:acme/proj#42", "2026-05-20T12:00:00Z"))
 	doc := decodeEnvelope(t, &buf)
 	require.NotNil(t, doc.Structured)
 
@@ -149,7 +150,7 @@ func TestWriteEnvelope_OriginatingNotation_FirstWhenShorthand(t *testing.T) {
 	t.Parallel()
 	item := sampleItem(ItemKindPR)
 	var buf bytes.Buffer
-	require.NoError(t, WriteEnvelope(&buf, item, "github:acme/proj#42", "t"))
+	require.NoError(t, WriteEnvelope(&buf, item, "", "github:acme/proj#42", "t"))
 	doc := decodeEnvelope(t, &buf)
 	require.Len(t, doc.Notations, 2)
 	assert.Equal(t, "github:acme/proj#42", doc.Notations[0], "shorthand originating input leads")
@@ -161,7 +162,7 @@ func TestWriteEnvelope_NoBody_NoRawContentField(t *testing.T) {
 	item := sampleItem(ItemKindIssue)
 	item.Body = ""
 	var buf bytes.Buffer
-	require.NoError(t, WriteEnvelope(&buf, item, "x", "t"))
+	require.NoError(t, WriteEnvelope(&buf, item, "", "x", "t"))
 
 	// Envelope JSON should omit `raw_content` when empty
 	// (omitempty tag on the wire shape).
@@ -173,7 +174,7 @@ func TestWriteEnvelope_NoBody_NoRawContentField(t *testing.T) {
 
 func TestWriteEnvelope_NilItem_Errors(t *testing.T) {
 	t.Parallel()
-	err := WriteEnvelope(&bytes.Buffer{}, nil, "x", "t")
+	err := WriteEnvelope(&bytes.Buffer{}, nil, "", "x", "t")
 	require.Error(t, err)
 }
 
@@ -183,11 +184,56 @@ func TestWriteEnvelope_NotationsDedupe_WhenOriginatingMatchesCanonical(t *testin
 	// the notations list shouldn't carry duplicates.
 	item := sampleItem(ItemKindPR)
 	var buf bytes.Buffer
-	require.NoError(t, WriteEnvelope(&buf, item, "https://github.com/acme/proj/pull/42", "t"))
+	require.NoError(t, WriteEnvelope(&buf, item, "", "https://github.com/acme/proj/pull/42", "t"))
 	doc := decodeEnvelope(t, &buf)
 	require.Len(t, doc.Notations, 2, "originating + shorthand only (canonical URL deduped)")
 	assert.Equal(t, "https://github.com/acme/proj/pull/42", doc.Notations[0])
 	assert.Equal(t, "github:acme/proj#42", doc.Notations[1])
+}
+
+func TestWriteEnvelope_InstanceName_ThreadsIntoShorthand(t *testing.T) {
+	t.Parallel()
+	// ADR-0026 §7 multi-instance: a GHES instance running
+	// under the operator-side name `github-work` should emit
+	// shorthand `github-work:owner/repo#N`, not the bare
+	// `github:owner/repo#N`. Otherwise a same-input re-ingest
+	// misses the entity_notations cache hit on the shorthand
+	// (URL hit still works fine, but defeats the cache
+	// pre-registration for shorthand-initiated calls).
+	item := sampleItem(ItemKindPR)
+	var buf bytes.Buffer
+	require.NoError(t, WriteEnvelope(&buf, item,
+		"github-work",                                        // instance name
+		"https://github.com/acme/proj/pull/42",               // originating URL
+		"2026-05-20T12:00:00Z"))
+	doc := decodeEnvelope(t, &buf)
+	require.Len(t, doc.Notations, 2)
+	assert.Equal(t, "https://github.com/acme/proj/pull/42", doc.Notations[0])
+	assert.Equal(t, "github-work:acme/proj#42", doc.Notations[1],
+		"shorthand must use instance name `github-work`, not bare `github`")
+}
+
+func TestWriteEnvelope_EmptyInstanceName_FallsBackToPluginName(t *testing.T) {
+	t.Parallel()
+	// Empty instance name (single-instance / test default)
+	// must produce the canonical `github:` shorthand —
+	// mirrors BuildURLPatterns's same fallback in github.go.
+	item := sampleItem(ItemKindPR)
+	var buf bytes.Buffer
+	require.NoError(t, WriteEnvelope(&buf, item, "", "x", "t"))
+	doc := decodeEnvelope(t, &buf)
+	require.GreaterOrEqual(t, len(doc.Notations), 2)
+	// Find the shorthand in the list (its position depends on
+	// the originating-input value; just confirm it's there
+	// with the expected prefix).
+	hasGithubShorthand := false
+	for _, n := range doc.Notations {
+		if strings.HasPrefix(n, "github:") {
+			hasGithubShorthand = true
+			break
+		}
+	}
+	assert.True(t, hasGithubShorthand, "empty instance name must fall back to `github:` shorthand")
 }
 
 func TestBuildData_SortsLabels(t *testing.T) {
