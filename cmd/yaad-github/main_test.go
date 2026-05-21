@@ -197,6 +197,11 @@ func TestRun_CommandFetch_HappyPath_StreamsEnvelopesAndSummary(t *testing.T) {
 		assert.Nil(t, env.Summary, "line %d should be an envelope, not _summary", i)
 		assert.True(t, env.OK)
 		assert.Equal(t, "source", env.Structured.Kind)
+		// Pin `data.state` — Cut 4's daemon-side inferential
+		// archive logic reads this field to detect open→closed
+		// transitions. Open-items-only this cut means every
+		// emitted envelope must carry "open" here.
+		assert.Equal(t, "open", env.Structured.Data["state"], "line %d", i)
 	}
 
 	// Trailing line must be the _summary packet.
