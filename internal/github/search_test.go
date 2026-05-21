@@ -106,8 +106,8 @@ func TestSearchInvolvedOpen_NonOKUpstream_WrapsHTTPError(t *testing.T) {
 func TestFetchInvolvedOpenAcrossRepos_HappyPath(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/search/issues":
+		switch r.URL.Path {
+		case "/search/issues":
 			q := r.URL.Query().Get("q")
 			require.Contains(t, q, "involves:test-operator")
 			switch {
@@ -118,7 +118,7 @@ func TestFetchInvolvedOpenAcrossRepos_HappyPath(t *testing.T) {
 			default:
 				http.NotFound(w, r)
 			}
-		case r.URL.Path == "/repos/acme/proj/issues/7":
+		case "/repos/acme/proj/issues/7":
 			_, _ = w.Write([]byte(`{"number": 7, "state": "open", "title": "Issue seven", "body": "b", "html_url": "https://github.com/acme/proj/issues/7", "user": {"login": "u"}}`))
 		default:
 			http.NotFound(w, r)
