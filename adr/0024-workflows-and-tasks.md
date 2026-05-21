@@ -89,6 +89,47 @@ Frontmatter holds metadata (name, version, status) only. Body's prose explains w
 
 The example deliberately uses **a single related entity** (one prior edition stored by ID), not a collection. Collection-shaped `context` bindings (`graph.get(...).editions` returning a list of IDs auto-resolved to entities) is the natural next pattern but the resolution semantics for ID-list → entity-list aren't settled in v1; defer to post-v1 alongside `graph.find`. v1 operators who need a multi-related-entity predicate model it with multiple named `context` entries (`prior`, `prior_prior`, etc.) — clunky but explicit.
 
+**Worked example — lifecycle mirror pair.** Archive a GitHub PR or issue when upstream reports it closed; restore it when upstream reopens. Two workflow files, one per direction, both subscribed to `entity.updated` with a `field_changed: data.state` filter and a `canonical_kind` filter narrowing to the github source kinds. Mirror pair; idempotent.
+
+````markdown
+---
+name: github-archive-on-close
+version: 1
+status: active
+---
+
+# Archive closed GitHub items
+
+Wraps ADR-0018 archive lifecycle around the github plugin's emitted
+`data.state` transitions. The plugin re-fetches its open + recently-
+closed set on each `!fetch` sweep; when an item that was previously
+`open` returns as `closed`, `entity.updated` fires with a
+`data.state` delta and this workflow archives.
+
+```yaml
+trigger:
+  type: entity_updated
+  match:
+    field_changed: data.state
+    canonical_kind: [github-pr, github-issue]
+
+condition: 'entity.data.state == "closed"'
+
+dedup:
+  key: 'workflow + entity.id'
+  policy: skip
+
+actions:
+  - archive_entity:
+      target: '{{ entity.id }}'
+      reason: 'github-state-closed'
+```
+````
+
+The restore direction is the mirror — same trigger + match shape, `condition: 'entity.data.state == "open"'`, action calls `restore_entity` with `reason: 'github-state-reopened'`. Each direction is a separate workflow file so the operator can disable one without the other; both are idempotent so re-firing on the same state value is a no-op.
+
+The `dedup` uses `skip` rather than `update` because `archive_entity` / `restore_entity` are idempotent at the engine layer and don't need a per-fire task surface — the audit trail lives in the entity's archive metadata, not in a recurring task. A future enhancement could collapse the two files into a single workflow with a CEL conditional choosing between actions, but that requires action-level conditional expressions (out of v1).
+
 ### Task
 
 A **task** is a workflow's instance — a first-class entity created when a workflow's output produces one.
@@ -121,7 +162,10 @@ The daemon emits internal events that workflows can subscribe to:
 
 - `entity.created` — new entity added by any plugin (fresh-ingest only; not re-fetch of an already-known entity).
 - `entity.edge_added` — new edge attached to an entity. Fires whenever an edge is added regardless of origin: fresh-ingest, cache-hit re-fetch surfacing a new connection, operator-side manual edge add, **and fill-gap operations that produce edges** (e.g., an `agent` strategy fills a `series_id?` gap with a value that resolves to an entity, creating a `belongs_to_series` edge; the edge fires `entity.edge_added` separately from the `fill.completed` event the same operation produces). Workflows subscribed to `edge_added` see all of these uniformly — the trigger semantics are "an edge exists now that didn't a moment ago," not "an ingest cycle ran." A node can be ingested without any edges and later acquire them via fill-gap; both cases reach the same `edge_added` subscribers.
+- `entity.updated` — fields on an existing entity changed via re-fetch. Fires when a plugin's ingest re-fetches a known entity and one or more fields inside `structured.data` differ from the previously-stored values. The event carries the per-field delta (`field`, `old`, `new`) so subscribers can match on specific field transitions. Does NOT fire on first ingest (that's `entity.created`); does NOT fire on edge-only changes (that's `entity.edge_added`); does NOT fire on gap-fills (that's `fill.completed`). Used by workflows that react to lifecycle transitions stored in entity data — e.g., a `github-pr`'s `state` flipping `"open"` → `"closed"`, or a boardgame's `owned` flag flipping `false` → `true`.
 - `fill.completed` — a gap-fill landed on an entity. Fires on every fill, including workflow-injected gap-fills evaluating during re-fetch. Carries a `source` tag identifying who initiated the fill (`agent`, `operator`, or `workflow:<name>` for workflow-injected fills). Note: when a fill produces an edge, both events fire — `fill.completed` for the gap closure and `entity.edge_added` for each emerged edge. Workflows can subscribe to whichever is the more natural match for the rule they're expressing.
+
+**`entity.updated` vs `fill.completed`.** A gap-fill modifies `structured.data` too, but it fires `fill.completed` exclusively — it does NOT additionally fire `entity.updated`. The two events are semantic peers: `fill.completed` covers gap-closure mutations (agent / operator / workflow filled a declared gap), `entity.updated` covers plugin-driven re-fetch mutations (the upstream system reports a different value than the index previously held). A workflow watching for a field change from any source subscribes to both events with matching field-level filters; a workflow watching specifically for upstream-reported transitions (the GitHub state-flip case) subscribes to `entity.updated` alone. This split keeps gap-fill provenance distinct from upstream-truth provenance, mirroring the [ADR-0008](./0008-vault-as-source-of-truth.md) source-of-truth boundary.
 
 This is the load-bearing piece. Without an internal event bus, workflows can only react to "new external thing came in via ingest" and the fill-gap integration described below collapses. With it, workflows become reactive to the index itself, not just external input — which is what differentiates a workflow from a glorified gmail rule.
 
@@ -161,18 +205,29 @@ A workflow's output is one of three v1 action primitives:
   - **Constrained to the workflow's declared gap vocabulary.** Each workflow declares ONE unified `addable_gaps` set in the YAML body (e.g. `addable_gaps: [is_interesting_to_me, owned_status]`) that covers BOTH paths — trigger-time injection AND action-stage `add_gap`. Calls outside that declared set are rejected at expression-evaluation time as a workflow-author error. Single source of truth keeps the workflow's gap-side-effect surface visible at file-read time rather than scattered across CEL expressions or split between two declarations.
   - **Re-fire semantics distinct from self-loop.** The existing internal-event-bus `source` tag breaks **direct self-loops** — workflow X's own fill (where X is also a filler) doesn't re-fire X. `add_gap` is different: workflow X adds the gap, but the **operator or agent** fills it later. The resulting `fill.completed` event carries `source: operator` or `source: agent`, NOT `workflow:X`. A workflow X that adds a gap AND subscribes to `fill.completed` for that gap WILL re-fire when the operator/agent answers — that's the intended round-trip ("workflow asks question; human answers; workflow decides on the answer"). The source-tag self-loop detection doesn't apply here. The engine-backstop re-evaluation counter (per-`(workflow, entity)` counter, fixed bound within a short window) still applies as a runaway-detection backstop.
 
-**Decision rule between `task_append`, `add_note`, and `add_gap`:**
+**Decision rule between `task_append`, `add_note`, `add_gap`, `archive_entity`, and `restore_entity`:**
 - If the information needs operator queuing (i.e., something to act on later) or accumulates across multiple workflow fires into a recurring surface → `task_append`.
 - If it's entity-local annotation (context observed against an entity, no required operator action) → `add_note`.
 - If the workflow needs a human-shaped answer to proceed (the predicate can't decide alone) → `add_gap`, with a sibling workflow subscribing to `fill.completed` for the decision step.
+- If a lifecycle transition observed on the entity (typically a `data.*` field change reported by re-fetch) means the entity should leave the active set → `archive_entity`. Inverse direction → `restore_entity`.
 
 A single workflow can use multiple — e.g., a PR-review workflow can `add_note` on the PR entity with the review-state delta AND `task_append` the operator's "review needed" line to the running task.
+
+**`archive_entity` + `restore_entity` action primitives.** Mirror-pair actions that wrap [ADR-0018](./0018-archive-replaces-delete.md)'s archive lifecycle and surface it as a workflow output. The pair is the load-bearing mechanism for "plugin emits truth, workflow owns lifecycle" — plugins emit a `structured.data` field describing upstream state (e.g., a GitHub PR's `state: "closed"`) and a workflow subscribed to `entity.updated` with a `field_changed: data.state` filter calls `archive_entity` when the new value indicates the entity should leave the active set, `restore_entity` when the reverse transition occurs.
+
+Both are **idempotent**: archiving an already-archived entity is a no-op (the engine resolves the target via the entity's canonical ID, checks current archive state, and skips if no change is needed); restoring an already-active entity is likewise a no-op. This matters because the same `entity.updated` event can re-fire if a downstream re-fetch surfaces the same field value on multiple sweeps — the workflow author shouldn't have to guard against that.
+
+**Target.** Both actions take a single `target:` field — a CEL-templated entity ID. The most common pattern is `target: '{{ entity.id }}'` (act on the triggering entity), but graph-walked targets are valid (`target: '{{ graph.get(edge.to).id }}'`). The engine resolves the template at evaluation time and calls the existing `archive_entity` / `restore_entity` daemon primitives (per ADR-0018 §"Archive lifecycle"). A target that doesn't resolve follows the missing-reference path (note on the resulting task, no err-task) — same handling as `graph.get` not-found.
+
+**Optional `reason:` field.** Both actions accept an optional `reason:` string for provenance — written into the archive/restore audit record so the operator can answer "why did this archive happen" by reading the entity's history. Convention: a stable token identifying the workflow + transition (e.g., `'github-state-closed'`, `'github-state-reopened'`), not a free-form description. Free-form lives in the worked example's documentation prose, not the audit field.
+
+**Self-loop interaction.** `archive_entity` and `restore_entity` mutate entity state but they do NOT fire `entity.updated` (the archive flag is metadata, not a `structured.data` field). The pair therefore cannot self-trigger a workflow that subscribes to `entity.updated` on `data.state`. A workflow that needs to chain archive → some-other-state-mutation uses workflow-to-workflow chaining (out of v1).
 
 **`plugin_dispatch` execution semantics.** The call is **synchronous from the workflow's point of view**: the workflow blocks on the plugin result up to a configurable timeout (v1 default: 30s). The plugin can do its work async internally (long-poll, queue, etc.), but the workflow does not see "async result later" — it sees the result inline or a timeout. The "async" framing in earlier drafts was misleading; replacing it. On timeout: the workflow's err-task pattern fires (one err task per workflow, error appended); the workflow continues firing on future events but the current evaluation aborts. On plugin error (typed failure surfaced through the unified plugin response envelope per ADR-0023): same path — err task, abort current evaluation.
 
 Out of v1 (deferred — listed below): edge-creation as a workflow action, silent-log shape, emit-notification, `graph.find` lookups, internal time-based trigger.
 
-**Why the smaller set:** the earlier draft listed four output types (create task / mutate entity / add edge / silent log). The v1-reconciled set drops `add edge` and `silent log` as separate primitives — `add edge` becomes a follow-up via `plugin_dispatch` (the plugin emits the edge during ingest) or a manual operator add; `silent log` collapses into `add_note` (record what the workflow saw, no task surface). `plugin_dispatch` is genuinely new — the earlier draft had no explicit way for a workflow to ask the index to go fetch something.
+**Why the smaller set:** the earlier draft listed four output types (create task / mutate entity / add edge / silent log). The v1-reconciled set drops `add edge` and `silent log` as separate primitives — `add edge` becomes a follow-up via `plugin_dispatch` (the plugin emits the edge during ingest) or a manual operator add; `silent log` collapses into `add_note` (record what the workflow saw, no task surface). `plugin_dispatch` is genuinely new — the earlier draft had no explicit way for a workflow to ask the index to go fetch something. `archive_entity` + `restore_entity` are also v1 — added in the 2026-05-21 amendment to back the workflow-driven lifecycle pattern (plugin emits truth, workflow owns archive state).
 
 **Concurrent writes.** Two workflows — or any two writers (workflow output, UGC mutation, note addition, edge addition, plugin emit, operator manual write) — may touch the same on-disk artifact at the same time. v1 protects via a daemon-internal **per-artifact write-lock manager** (`internal/writelocks` per yaad-index #23) with a **block-on-conflict** policy: an Acquire on an artifact already held by another writer returns a typed conflict error immediately, surfacing as a 409 envelope naming the active holder. No queuing, no merging, no last-writer-wins; the rejected caller retries.
 
@@ -393,6 +448,17 @@ Pre-reviewer flagged 9 specification gaps before the hard-gate read. All accepte
 - `context` stanza spec added — what it binds, when it evaluates, what `via` failure means (missing-reference path).
 - `edge.from_title` / `edge.to_title` added to the edge shape spec as display-readable convenience fields populated by the engine.
 - `graph.get` not-found behavior clarified — follows missing-reference path (note on task), not silent-false and not err-task.
+
+### 2026-05-21 — entity_updated + archive_entity / restore_entity
+
+Adds the workflow-engine shapes the github plugin's closed-item lifecycle (per ADR-0026 §6's 2026-05-21 amendment) consumes. Operator framing that drove the amendment: **"plugin emits truth, state lives in workflows + operator. plugin never participates in state management."** Archive lifecycle accordingly moves out of plugin code and becomes a workflow-engine concern.
+
+- **New bus event `entity.updated`.** Fires when a re-fetch surfaces a `structured.data` field delta on an already-known entity. Carries per-field `field`/`old`/`new`. Distinct from `entity.created` (first ingest), `entity.edge_added` (edge-only changes), and `fill.completed` (gap closures). The `entity.updated` vs `fill.completed` split preserves ADR-0008's source-of-truth boundary: gap-fills are author-tagged closures, `entity.updated` is upstream-reported truth.
+- **New `match.field_changed` shape.** Trigger-side filter naming which field's delta the workflow cares about (e.g., `data.state`). Combines with the existing `canonical_kind` match (already supported by `edge_created` triggers, extended here to `entity_updated`).
+- **New `archive_entity` + `restore_entity` actions.** Mirror pair wrapping ADR-0018's archive lifecycle. Both take a CEL-templated `target:` (usually `{{ entity.id }}`) and an optional `reason:` provenance string. Idempotent at the engine layer — re-firing on the same archive state is a no-op. Do NOT fire `entity.updated` themselves (archive flag is metadata, not `data.*`), so cannot self-trigger.
+- **Worked example** added for the GitHub archive-on-close / restore-on-open mirror pair as two workflow files. Demonstrates the `entity_updated` trigger + `field_changed: data.state` + `canonical_kind: [github-pr, github-issue]` match + `dedup.policy: skip` (idempotent actions need no per-fire task surface).
+
+Status remains PROPOSED pending operator hard-gate review of this revision.
 
 ### 2026-05-16 — third-round pre-review fold-in + add_gap
 
