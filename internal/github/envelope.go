@@ -64,6 +64,12 @@ type provenanceEntryDoc struct {
 // Empty `instanceName` falls back to `PluginName` ("github") —
 // matches the URL-pattern fallback in BuildURLPatterns.
 //
+// `baseURL` is the API base used to derive the user-facing
+// host for the canonical-URL fallback (per ADR-0026 §7). Only
+// load-bearing on the defensive path when `item.URL` is empty;
+// in the happy case the upstream populates `item.URL` directly
+// from `html_url`. Empty `baseURL` falls back to `github.com`.
+//
 // `originatingInput` is the literal string the caller fed to
 // ParseTarget; it lands first in `notations[]` per ADR-0021's
 // self-roundtrip-first invariant so the daemon's
@@ -73,7 +79,7 @@ type provenanceEntryDoc struct {
 // the single emitted provenance entry. The caller threads
 // `time.Now().Format(time.RFC3339)` (or a TZ-aware variant
 // per YAAD_TIMEZONE if the plugin's env-var honors it) in.
-func WriteEnvelope(w io.Writer, item *Item, instanceName, originatingInput, fetchedAt string) error {
+func WriteEnvelope(w io.Writer, item *Item, instanceName, baseURL, originatingInput, fetchedAt string) error {
 	if item == nil {
 		return fmt.Errorf("github: WriteEnvelope called with nil item")
 	}
@@ -81,7 +87,7 @@ func WriteEnvelope(w io.Writer, item *Item, instanceName, originatingInput, fetc
 		OK:              true,
 		Structured:      buildStructured(item, fetchedAt),
 		RawContent:      item.Body,
-		Notations:       buildNotations(item, instanceName, originatingInput),
+		Notations:       buildNotations(item, instanceName, baseURL, originatingInput),
 		Aliases:         nil,
 		CacheTTLSeconds: cacheTTLPtr(DefaultCacheTTLSeconds),
 	}
@@ -239,8 +245,11 @@ func buildEdges(item *Item) map[string][]edgeTargetDoc {
 // The shorthand uses the operator's instance name (per ADR-
 // 0026 §7) so a GHES-instance re-ingest of the SAME shorthand
 // form rehits the cache. Empty `instanceName` falls back to
-// `PluginName`.
-func buildNotations(item *Item, instanceName, originatingInput string) []string {
+// `PluginName`. The canonical-URL fallback uses the host from
+// `baseURL` (or `github.com` when empty); only fires when
+// item.URL is empty (defensive — the happy path uses the
+// upstream `html_url`).
+func buildNotations(item *Item, instanceName, baseURL, originatingInput string) []string {
 	canonicalURL := item.URL
 	if canonicalURL == "" {
 		// Fallback: synthesize from the target. The PR/issue
@@ -250,8 +259,12 @@ func buildNotations(item *Item, instanceName, originatingInput string) []string 
 		if item.Type == ItemKindIssue {
 			path = "issues"
 		}
-		canonicalURL = fmt.Sprintf("https://github.com/%s/%s/%s/%d",
-			item.Target.Owner, item.Target.Repo, path, item.Number)
+		host := hostFromBaseURL(baseURL)
+		if host == "" {
+			host = "github.com"
+		}
+		canonicalURL = fmt.Sprintf("https://%s/%s/%s/%s/%d",
+			host, item.Target.Owner, item.Target.Repo, path, item.Number)
 	}
 	name := instanceName
 	if name == "" {

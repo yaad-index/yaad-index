@@ -251,7 +251,8 @@ func runURLShapeFetch(stdin io.Reader, stdout io.Writer) error {
 
 	fetchedAt := time.Now().UTC().Format("2006-01-02T15:04:05Z")
 	instance := os.Getenv(EnvInstanceName)
-	if err := github.WriteEnvelope(stdout, item, instance, req.URL, fetchedAt); err != nil {
+	baseURL := os.Getenv(github.EnvBaseURL)
+	if err := github.WriteEnvelope(stdout, item, instance, baseURL, req.URL, fetchedAt); err != nil {
 		return fmt.Errorf("yaad-github: write envelope: %w", err)
 	}
 	return nil

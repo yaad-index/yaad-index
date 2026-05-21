@@ -51,6 +51,7 @@ func TestWriteEnvelope_PR_ShapeMatchesADR(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, WriteEnvelope(&buf, sampleItem(ItemKindPR),
 		"",
+		"",
 		"https://github.com/acme/proj/pull/42",
 		"2026-05-20T12:00:00Z"))
 
@@ -129,7 +130,7 @@ func TestWriteEnvelope_Issue_NoPRSpecificFields(t *testing.T) {
 	item.HeadBranch = ""
 
 	var buf bytes.Buffer
-	require.NoError(t, WriteEnvelope(&buf, item, "", "github:acme/proj#42", "2026-05-20T12:00:00Z"))
+	require.NoError(t, WriteEnvelope(&buf, item, "", "", "github:acme/proj#42", "2026-05-20T12:00:00Z"))
 	doc := decodeEnvelope(t, &buf)
 	require.NotNil(t, doc.Structured)
 
@@ -150,7 +151,7 @@ func TestWriteEnvelope_OriginatingNotation_FirstWhenShorthand(t *testing.T) {
 	t.Parallel()
 	item := sampleItem(ItemKindPR)
 	var buf bytes.Buffer
-	require.NoError(t, WriteEnvelope(&buf, item, "", "github:acme/proj#42", "t"))
+	require.NoError(t, WriteEnvelope(&buf, item, "", "", "github:acme/proj#42", "t"))
 	doc := decodeEnvelope(t, &buf)
 	require.Len(t, doc.Notations, 2)
 	assert.Equal(t, "github:acme/proj#42", doc.Notations[0], "shorthand originating input leads")
@@ -162,7 +163,7 @@ func TestWriteEnvelope_NoBody_NoRawContentField(t *testing.T) {
 	item := sampleItem(ItemKindIssue)
 	item.Body = ""
 	var buf bytes.Buffer
-	require.NoError(t, WriteEnvelope(&buf, item, "", "x", "t"))
+	require.NoError(t, WriteEnvelope(&buf, item, "", "", "x", "t"))
 
 	// Envelope JSON should omit `raw_content` when empty
 	// (omitempty tag on the wire shape).
@@ -174,7 +175,7 @@ func TestWriteEnvelope_NoBody_NoRawContentField(t *testing.T) {
 
 func TestWriteEnvelope_NilItem_Errors(t *testing.T) {
 	t.Parallel()
-	err := WriteEnvelope(&bytes.Buffer{}, nil, "", "x", "t")
+	err := WriteEnvelope(&bytes.Buffer{}, nil, "", "", "x", "t")
 	require.Error(t, err)
 }
 
@@ -184,7 +185,7 @@ func TestWriteEnvelope_NotationsDedupe_WhenOriginatingMatchesCanonical(t *testin
 	// the notations list shouldn't carry duplicates.
 	item := sampleItem(ItemKindPR)
 	var buf bytes.Buffer
-	require.NoError(t, WriteEnvelope(&buf, item, "", "https://github.com/acme/proj/pull/42", "t"))
+	require.NoError(t, WriteEnvelope(&buf, item, "", "", "https://github.com/acme/proj/pull/42", "t"))
 	doc := decodeEnvelope(t, &buf)
 	require.Len(t, doc.Notations, 2, "originating + shorthand only (canonical URL deduped)")
 	assert.Equal(t, "https://github.com/acme/proj/pull/42", doc.Notations[0])
@@ -204,6 +205,7 @@ func TestWriteEnvelope_InstanceName_ThreadsIntoShorthand(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, WriteEnvelope(&buf, item,
 		"github-work",                                        // instance name
+		"https://ghes.example.com/api/v3",                    // base URL
 		"https://github.com/acme/proj/pull/42",               // originating URL
 		"2026-05-20T12:00:00Z"))
 	doc := decodeEnvelope(t, &buf)
@@ -220,7 +222,7 @@ func TestWriteEnvelope_EmptyInstanceName_FallsBackToPluginName(t *testing.T) {
 	// mirrors BuildURLPatterns's same fallback in github.go.
 	item := sampleItem(ItemKindPR)
 	var buf bytes.Buffer
-	require.NoError(t, WriteEnvelope(&buf, item, "", "x", "t"))
+	require.NoError(t, WriteEnvelope(&buf, item, "", "", "x", "t"))
 	doc := decodeEnvelope(t, &buf)
 	require.GreaterOrEqual(t, len(doc.Notations), 2)
 	// Find the shorthand in the list (its position depends on
@@ -234,6 +236,61 @@ func TestWriteEnvelope_EmptyInstanceName_FallsBackToPluginName(t *testing.T) {
 		}
 	}
 	assert.True(t, hasGithubShorthand, "empty instance name must fall back to `github:` shorthand")
+}
+
+func TestWriteEnvelope_GHESBaseURL_SynthesizesGHESHostInCanonicalURLFallback(t *testing.T) {
+	t.Parallel()
+	// Defensive-fallback path: when item.URL is empty (upstream
+	// didn't populate html_url), buildNotations synthesizes the
+	// canonical URL from owner/repo/kind/num. Pre-fix the host
+	// hardcoded to `github.com`; for a GHES instance that's
+	// wrong (operator's GHES URLs live under `ghes.example.com`
+	// or similar). With the fix, the synthesizer uses the host
+	// from the configured base URL.
+	item := sampleItem(ItemKindPR)
+	item.URL = "" // force the defensive path
+	var buf bytes.Buffer
+	require.NoError(t, WriteEnvelope(&buf, item,
+		"github-work",
+		"https://ghes.example.com/api/v3",
+		"github-work:acme/proj#42",
+		"t"))
+	doc := decodeEnvelope(t, &buf)
+	// Expect the synthesized canonical URL to use the GHES
+	// host, not github.com.
+	hasGHES := false
+	hasGithubCom := false
+	for _, n := range doc.Notations {
+		if strings.Contains(n, "ghes.example.com") {
+			hasGHES = true
+		}
+		if strings.Contains(n, "github.com") {
+			hasGithubCom = true
+		}
+	}
+	assert.True(t, hasGHES, "GHES instance canonical-URL fallback must use the GHES host: %v", doc.Notations)
+	assert.False(t, hasGithubCom, "GHES instance must NOT synthesize public github.com URLs in the fallback: %v", doc.Notations)
+}
+
+func TestWriteEnvelope_EmptyBaseURL_FallbackUsesGithubCom(t *testing.T) {
+	t.Parallel()
+	// Empty base URL + empty item.URL → fallback to the public
+	// github.com host. Mirrors the public-default behavior at
+	// the resolver layer.
+	item := sampleItem(ItemKindIssue)
+	item.URL = ""
+	item.Type = ItemKindIssue
+	var buf bytes.Buffer
+	require.NoError(t, WriteEnvelope(&buf, item, "", "", "x", "t"))
+	doc := decodeEnvelope(t, &buf)
+	hasGithubCom := false
+	for _, n := range doc.Notations {
+		if strings.HasPrefix(n, "https://github.com/") && strings.Contains(n, "/issues/") {
+			hasGithubCom = true
+			break
+		}
+	}
+	assert.True(t, hasGithubCom, "empty base URL fallback must use github.com: %v", doc.Notations)
 }
 
 func TestBuildData_SortsLabels(t *testing.T) {
