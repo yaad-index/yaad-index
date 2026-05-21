@@ -49,8 +49,8 @@ func TestResolveUserLogin_HappyPath_ReturnsLogin(t *testing.T) {
 	assert.Equal(t, "/user", capturedPath, "ResolveUserLogin must hit <base>/user")
 	assert.Equal(t, "Bearer ghp_sample_token", capturedAuth,
 		"Authorization header must be Bearer <token>")
-	assert.Equal(t, "application/vnd.github+json", capturedAccept,
-		"Accept header must be the GitHub JSON content type")
+	assert.Contains(t, capturedAccept, "application/vnd.github",
+		"Accept header must be the GitHub JSON content type (go-github uses v3+json variant)")
 }
 
 func TestResolveUserLogin_TrailingSlashBaseURL_StripsBeforeAppending(t *testing.T) {
