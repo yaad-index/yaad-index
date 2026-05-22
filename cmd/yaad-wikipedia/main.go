@@ -38,18 +38,64 @@ import (
 	"github.com/yaad-index/yaad-index/internal/wikipedia"
 )
 
-// EnvUserAgent is the env var operators set to override the default
-// User-Agent header. yaad-index spawns this binary subprocess-per-
-// request and inherits its environment, so an env var is the natural
-// integration point — the index's config allowlist takes a path only,
-// not args (per ADR-0006).
-const EnvUserAgent = "YAAD_WIKIPEDIA_USER_AGENT"
+// EnvPluginConfig is the uniform env var the daemon delivers the
+// operator-supplied `config:` block under per ADR-0006 (2026-05-22
+// amendment / #192). yaad-wikipedia reads the JSON payload on
+// startup and unmarshals into pluginConfig below.
+const EnvPluginConfig = "YAAD_PLUGIN_CONFIG"
 
-// EnvLang is the env var operators set to override the Wikipedia
-// language code used when resolving the shorthand input form
-// (`wikipedia: <topic>`). Same env-passthrough rationale as
-// EnvUserAgent — yaad-index inherits the env into the subprocess.
-const EnvLang = "YAAD_WIKIPEDIA_LANG"
+// pluginConfig is the typed shape of the operator's `config:` block
+// per #192 + ADR-0006's structured-config channel. JSON tags match
+// the operator yaml key shape; the daemon-injected `_name` field
+// carries the entry's `plugins[N].name:` value.
+type pluginConfig struct {
+	// Lang is the Wikipedia language code used to resolve the
+	// shorthand input form (`wikipedia: <topic>`) into a canonical
+	// URL. Default "en". Full URL inputs are unaffected — the URL's
+	// host already names the language.
+	Lang string `json:"lang,omitempty"`
+
+	// UserAgent overrides the default User-Agent header sent on
+	// upstream Wikipedia requests. Default identifies yaad-wikipedia
+	// + a contact URL per Wikimedia's User-Agent policy.
+	UserAgent string `json:"user_agent,omitempty"`
+
+	// Name is the daemon-injected `_name` field carrying the entry's
+	// `plugins[N].name:` value. Read-only from the plugin's
+	// perspective; the daemon writes it.
+	Name string `json:"_name,omitempty"`
+}
+
+// loadPluginConfig parses the EnvPluginConfig env var into a
+// pluginConfig struct. Empty / unset env → zero-value struct,
+// callers fall through to their own defaults. JSON-parse failures
+// surface as a startup error.
+func loadPluginConfig() (pluginConfig, error) {
+	raw := os.Getenv(EnvPluginConfig)
+	if raw == "" {
+		return pluginConfig{}, nil
+	}
+	var c pluginConfig
+	if err := json.Unmarshal([]byte(raw), &c); err != nil {
+		return pluginConfig{}, fmt.Errorf("parse %s: %w", EnvPluginConfig, err)
+	}
+	return c, nil
+}
+
+// configSchemaJSON is the JSON Schema declaring the operator-side
+// shape this plugin accepts. Emitted in --init capabilities so the
+// daemon validates operator yaml against it at registry-load time
+// per ADR-0006 (2026-05-22 amendment).
+const configSchemaJSON = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "_name": {"type": "string"},
+    "lang": {"type": "string", "minLength": 2, "maxLength": 8},
+    "user_agent": {"type": "string", "minLength": 1}
+  }
+}`
 
 // EnvAPIHostOverride redirects every upstream Wikipedia API call
 // (action API, REST summary, Wikidata) to the named host. Unset /
@@ -75,21 +121,28 @@ func main() {
 // calling os.Exit so tests can drive runInit / runFetch directly with
 // a buffer pair. Exit codes: 0 success, 1 runtime error, 2 bad flags.
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	cfg, cfgErr := loadPluginConfig()
+	if cfgErr != nil {
+		_, _ = fmt.Fprintf(stderr, "yaad-wikipedia: %v\n", cfgErr)
+		return 1
+	}
+
 	fs := flag.NewFlagSet("yaad-wikipedia", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	initMode := fs.Bool("init", false,
 		"emit the capabilities document on stdout and exit (called by yaad-index at startup)")
 	versionMode := fs.Bool("version", false,
 		"print the plugin version and exit (called by yaad-index's cache-key probe)")
-	userAgent := fs.String("user-agent", os.Getenv(EnvUserAgent),
+	userAgent := fs.String("user-agent", cfg.UserAgent,
 		"override the User-Agent header sent on upstream Wikipedia requests. "+
-			"Also settable via the "+EnvUserAgent+" env var (the env var is the "+
-			"natural integration point under yaad-index, whose config takes a path only). "+
+			"Also settable via the `user_agent:` key under the operator yaml's "+
+			"`plugins[N].config:` block (per ADR-0006 / #192). "+
 			"Default identifies yaad-wikipedia + a contact URL per Wikimedia's User-Agent policy.")
-	lang := fs.String("lang", os.Getenv(EnvLang),
+	lang := fs.String("lang", cfg.Lang,
 		"Wikipedia language code used to resolve shorthand input (`wikipedia: <topic>`) into "+
-			"a canonical URL. Also settable via "+EnvLang+". Default \"en\". Full URL inputs "+
-			"are not affected — the URL's host already names the language.")
+			"a canonical URL. Also settable via the `lang:` key under the operator yaml's "+
+			"`plugins[N].config:` block. Default \"en\". Full URL inputs are not affected — "+
+			"the URL's host already names the language.")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -153,6 +206,11 @@ type capabilitiesDoc struct {
 	// builds that don't know the field decode cleanly (default 0
 	// → "no opinion" → falls through to global config).
 	CacheTTLSeconds int `json:"cache_ttl_seconds,omitempty"`
+	// ConfigSchema declares the JSON Schema the operator's
+	// `plugins[N].config:` block must satisfy per ADR-0006's
+	// 2026-05-22 amendment (#192). Embedded as raw JSON so the
+	// daemon hands it to the validator without re-marshalling.
+	ConfigSchema json.RawMessage `json:"config_schema,omitempty"`
 }
 
 type kindSpecJSON struct {
@@ -205,6 +263,7 @@ func runInit(stdout io.Writer) error {
 		// the plugin level; operators with tighter freshness needs
 		// override per-entry or globally.
 		CacheTTLSeconds: wikipedia.DefaultCacheTTLSeconds,
+		ConfigSchema:    json.RawMessage(configSchemaJSON),
 	}
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", " ")

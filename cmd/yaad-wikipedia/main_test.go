@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -93,6 +92,27 @@ func TestRunInit_EmitsCapabilities(t *testing.T) {
 	}
 	if len(got.EdgeKinds) != 0 {
 		t.Errorf("edge_kinds: want empty for v1, got %+v", got.EdgeKinds)
+	}
+
+	// #192: config_schema declares the operator-side `config:`
+	// shape (lang + user_agent). The schema must be present + parse
+	// as JSON; daemon-side validation walks the contents.
+	if len(got.ConfigSchema) == 0 {
+		t.Errorf("config_schema: want non-empty JSON Schema, got empty")
+	} else {
+		var schema map[string]any
+		if err := json.Unmarshal(got.ConfigSchema, &schema); err != nil {
+			t.Errorf("config_schema: did not parse as JSON: %v", err)
+		}
+		props, ok := schema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("config_schema: missing properties map")
+		}
+		for _, key := range []string{"lang", "user_agent"} {
+			if _, found := props[key]; !found {
+				t.Errorf("config_schema.properties missing %q", key)
+			}
+		}
 	}
 
 	// Per: top-level cache_ttl_seconds = 365 days
@@ -651,32 +671,34 @@ func TestRun_UserAgentFlagOverridesDefault(t *testing.T) {
 	}
 }
 
-// TestRun_UserAgentEnvOverridesDefault is the env-var counterpart to
-// the flag test. Verifies the YAAD_WIKIPEDIA_USER_AGENT env var seeds
-// the flag default — which is the integration path under yaad-index
-// (config takes a path only; env is what gets inherited).
-func TestRun_UserAgentEnvOverridesDefault(t *testing.T) {
+// TestRun_UserAgentConfigSeedsFlagDefault verifies the
+// `user_agent:` key under the operator yaml's `plugins[N].config:`
+// block (delivered via YAAD_PLUGIN_CONFIG per #192) seeds the
+// flag default — the integration path under yaad-index now that
+// the per-key env conversion is gone.
+func TestRun_UserAgentConfigSeedsFlagDefault(t *testing.T) {
 	// Cannot t.Parallel — t.Setenv mutates process env.
-	t.Setenv(EnvUserAgent, "from-env/2.0 (operator)")
+	t.Setenv(EnvPluginConfig, `{"user_agent": "from-config/2.0 (operator)"}`)
 
 	var initStdout, initStderr bytes.Buffer
 	code := run([]string{"--init"}, strings.NewReader(""), &initStdout, &initStderr)
 	if code != 0 {
-		t.Fatalf("run(--init with env): want exit 0, got %d (stderr=%s)",
+		t.Fatalf("run(--init with config): want exit 0, got %d (stderr=%s)",
 			code, initStderr.String())
 	}
-	// --init doesn't make an HTTP call — the env-var → flag-default
+	// --init doesn't make an HTTP call — the JSON → flag-default
 	// plumbing still has to work. We assert it indirectly by checking
 	// the flag system parses cleanly; the actual upstream-header path
 	// is covered by TestRun_UserAgentFlagOverridesDefault.
 }
 
-// TestRun_LangEnvSeedsFlagDefault verifies YAAD_WIKIPEDIA_LANG seeds
-// the --lang flag's default. Together with the wikipedia-package
-// shorthand tests that exercise WithLang, this proves the full
-// env → flag → WithLang → resolved-URL chain.
-func TestRun_LangEnvSeedsFlagDefault(t *testing.T) {
-	t.Setenv(EnvLang, "de")
+// TestRun_LangConfigSeedsFlagDefault verifies the `lang:` key under
+// the operator yaml's `plugins[N].config:` block seeds the --lang
+// flag's default. Together with the wikipedia-package shorthand
+// tests that exercise WithLang, this proves the full
+// config → flag → WithLang → resolved-URL chain.
+func TestRun_LangConfigSeedsFlagDefault(t *testing.T) {
+	t.Setenv(EnvPluginConfig, `{"lang": "de"}`)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -696,7 +718,7 @@ func TestRun_LangEnvSeedsFlagDefault(t *testing.T) {
 	plugin := wikipedia.New(
 		wikipedia.WithHTTPClient(srv.Client()),
 		wikipedia.WithAPIHostOverride(srv.URL),
-		wikipedia.WithLang(os.Getenv(EnvLang)),
+		wikipedia.WithLang("de"),
 	)
 	stdin := strings.NewReader(`{"operation":"ingest","url":"wikipedia: Iran"}`)
 	var stdout bytes.Buffer
