@@ -20,11 +20,20 @@ import (
 )
 
 // newOperatorOnlyFixture builds a vault-less handler with a fixture
-// plugin declaring `commands: ["fetch"]` so command-shape inputs
-// pass routing-time validation and reach the operator-only-claim
-// gate. Returns the handler + signer so tests can mint claims with
-// various Subject/Operator shapes.
+// plugin whose `fetch` command is declared as operator_only=true so
+// command-shape inputs pass routing-time validation and reach the
+// per-command operator-only gate per ADR-0022 §5.3 (2026-05-22
+// amendment for #107). Returns the handler + signer so tests can
+// mint claims with various Subject/Operator shapes.
 func newOperatorOnlyFixture(t *testing.T) (http.Handler, auth.Signer) {
+	return newCommandShapeFixture(t, true)
+}
+
+// newCommandShapeFixture is the parameterized fixture builder. When
+// operatorOnly=true the registered plugin's `fetch` command is
+// gated; when false the same command stays agent-callable (the
+// #107 default).
+func newCommandShapeFixture(t *testing.T, operatorOnly bool) (http.Handler, auth.Signer) {
 	t.Helper()
 	st, err := store.New(":memory:")
 	require.NoError(t, err)
@@ -48,7 +57,7 @@ func newOperatorOnlyFixture(t *testing.T) (http.Handler, auth.Signer) {
 			Name: "gmail",
 			SourceNamespace: "gmail",
 			EntityKinds: []plugins.KindSpec{{Name: "source"}},
-			Commands: []string{"fetch"},
+			Commands: []plugins.CommandSpec{{Name: "fetch", OperatorOnly: operatorOnly}},
 		},
 	})
 
@@ -87,9 +96,10 @@ func postIngestWithAuth(t *testing.T, h http.Handler, body, bearer string) *http
 }
 
 // TestOperatorOnly_PairClaimRejectsCommandShape pins the load-bearing
-// contract: a pair-claim token (Subject=agent, Operator=human,
-// distinct values) on a command-shape input returns 403
-// operator_only_required, no subprocess spawn.
+// contract on operator-only commands per ADR-0022 §5.3 (2026-05-22
+// amendment): a pair-claim token (Subject=agent, Operator=human,
+// distinct values) on a command-shape input whose CommandSpec
+// declares operator_only=true returns 403 operator_only_required.
 func TestOperatorOnly_PairClaimRejectsCommandShape(t *testing.T) {
 	t.Parallel()
 	h, signer := newOperatorOnlyFixture(t)
@@ -100,6 +110,43 @@ func TestOperatorOnly_PairClaimRejectsCommandShape(t *testing.T) {
 
 	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
 	assert.Contains(t, rec.Body.String(), "operator_only_required")
+}
+
+// TestPerCommandOperatorOnly_PairClaimAllowedOnDefault pins the
+// #107 widening: when a command's CommandSpec does NOT declare
+// operator_only (the default — agent-callable), a pair-claim token
+// can invoke it through the command-shape ingest path. The 403
+// gate from the pre-#107 blanket-rule is gone for default commands.
+func TestPerCommandOperatorOnly_PairClaimAllowedOnDefault(t *testing.T) {
+	t.Parallel()
+	h, signer := newCommandShapeFixture(t, false) // fetch.OperatorOnly=false
+	bearer := signClaim(t, signer, "bob", "alice") // pair-claim
+
+	rec := postIngestWithAuth(t, h,
+		`{"url":"gmail: !fetch","wait_seconds":0}`, bearer)
+
+	assert.NotEqual(t, http.StatusForbidden, rec.Code,
+		"pair-claim must be allowed on a non-operator-only command (body=%s)",
+		rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "operator_only_required",
+		"no operator_only_required error on default-shape commands")
+}
+
+// TestPerCommandOperatorOnly_OperatorTokenAllowedOnOperatorOnly pins
+// the operator-token superuser path on an operator-only command:
+// the gate is permissive for Subject==Operator regardless of the
+// CommandSpec flag.
+func TestPerCommandOperatorOnly_OperatorTokenAllowedOnOperatorOnly(t *testing.T) {
+	t.Parallel()
+	h, signer := newCommandShapeFixture(t, true) // fetch.OperatorOnly=true
+	bearer := signClaim(t, signer, "alice", "alice")
+
+	rec := postIngestWithAuth(t, h,
+		`{"url":"gmail: !fetch","wait_seconds":0}`, bearer)
+
+	assert.NotEqual(t, http.StatusForbidden, rec.Code,
+		"operator-only token must pass even on operator-only commands (body=%s)",
+		rec.Body.String())
 }
 
 // TestOperatorOnly_OperatorOnlyTokenPassesCommandShape pins the
@@ -181,7 +228,7 @@ func TestOperatorOnly_AnonymousModePassesCommandShape(t *testing.T) {
 		StreamFunc: func(ctx context.Context, _ string, onEnvelope plugins.EnvelopeFunc, _ plugins.ControlFunc) error {
 			return nil
 		},
-		CapabilitiesValue: plugins.Capabilities{Name: "gmail", SourceNamespace: "gmail", Commands: []string{"fetch"}},
+		CapabilitiesValue: plugins.Capabilities{Name: "gmail", SourceNamespace: "gmail", Commands: []plugins.CommandSpec{{Name: "fetch"}}},
 	})
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))

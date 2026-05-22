@@ -309,7 +309,7 @@ func Test_Ingest_CommandShapeDispatchesToNamedPlugin(t *testing.T) {
 			Name: "gmail",
 			SourceNamespace: "gmail",
 			EntityKinds: []plugins.KindSpec{{Name: "boardgame"}},
-			Commands: []string{"fetch"},
+			Commands: []plugins.CommandSpec{{Name: "fetch"}},
 		},
 		FetchValue: &plugins.FetchResult{
 			Entity: &store.Entity{
@@ -366,7 +366,7 @@ func Test_Ingest_CommandShape_UnknownCommandReturns400(t *testing.T) {
 			Name: "gmail",
 			SourceNamespace: "gmail",
 			EntityKinds: []plugins.KindSpec{{Name: "source"}},
-			Commands: []string{"fetch"},
+			Commands: []plugins.CommandSpec{{Name: "fetch"}},
 		},
 	})
 	h, _ := newAPIWithRegistry(t, registry)

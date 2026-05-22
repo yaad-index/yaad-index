@@ -77,14 +77,14 @@ func validateRouting(registry *plugins.Registry, input string) *routingValidatio
 		}
 		caps := plugin.Capabilities()
 		for _, cmd := range caps.Commands {
-			if cmd == inv.Command {
+			if cmd.Name == inv.Command {
 				return nil
 			}
 		}
 		return &routingValidationError{
 			Code: "invalid_input",
 			Status: 400,
-			Message: fmt.Sprintf("plugin %q has no command %q (declared commands: %v)", inv.Plugin, inv.Command, caps.Commands),
+			Message: fmt.Sprintf("plugin %q has no command %q (declared commands: %v)", inv.Plugin, inv.Command, commandNames(caps.Commands)),
 		}
 
 	case plugins.InvocationURL:
@@ -111,4 +111,17 @@ func validateRouting(registry *plugins.Registry, input string) *routingValidatio
 		// would have returned URL.
 		return nil
 	}
+}
+
+// commandNames projects a CommandSpec slice to its bare names for
+// human-readable error messages. The full long-form (including the
+// operator_only flag) is internal-to-the-daemon detail; error
+// surfacing keeps the same shape it had when Commands was a string
+// slice.
+func commandNames(specs []plugins.CommandSpec) []string {
+	out := make([]string, len(specs))
+	for i, s := range specs {
+		out[i] = s.Name
+	}
+	return out
 }

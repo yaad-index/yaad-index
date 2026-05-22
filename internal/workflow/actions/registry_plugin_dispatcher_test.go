@@ -17,7 +17,7 @@ import (
 // the rest panic to flag accidental dependencies.
 type fakePlugin struct {
 	name         string
-	commands     []string
+	commands     []plugins.CommandSpec
 	fetchInputs  []string
 	fetchErr     error
 	fetchDelay   time.Duration
@@ -84,7 +84,7 @@ func (r *fakePluginRegistry) LookupByName(name string) (plugins.Plugin, bool) {
 // `<plugin>: !<command>` shape per ADR-0022.
 func TestRegistryPluginDispatcher_HappyPath(t *testing.T) {
 	t.Parallel()
-	p := &fakePlugin{name: "yaad-bgg", commands: []string{"fetch"}}
+	p := &fakePlugin{name: "yaad-bgg", commands: []plugins.CommandSpec{{Name: "fetch"}}}
 	reg := newFakePluginRegistry(p)
 	d, err := NewRegistryPluginDispatcher(reg)
 	require.NoError(t, err)
@@ -117,7 +117,7 @@ func TestRegistryPluginDispatcher_UnknownPlugin(t *testing.T) {
 // the daemon rejects mismatched commands before spawn.
 func TestRegistryPluginDispatcher_UnknownCommand(t *testing.T) {
 	t.Parallel()
-	p := &fakePlugin{name: "yaad-gmail", commands: []string{"fetch"}}
+	p := &fakePlugin{name: "yaad-gmail", commands: []plugins.CommandSpec{{Name: "fetch"}}}
 	reg := newFakePluginRegistry(p)
 	d, err := NewRegistryPluginDispatcher(reg)
 	require.NoError(t, err)
@@ -154,7 +154,7 @@ func TestRegistryPluginDispatcher_FetchError(t *testing.T) {
 	t.Parallel()
 	p := &fakePlugin{
 		name:     "yaad-gmail",
-		commands: []string{"fetch"},
+		commands: []plugins.CommandSpec{{Name: "fetch"}},
 		fetchErr: errors.New("plugin subprocess crashed"),
 	}
 	reg := newFakePluginRegistry(p)
@@ -176,7 +176,7 @@ func TestRegistryPluginDispatcher_ContextTimeout(t *testing.T) {
 	t.Parallel()
 	p := &fakePlugin{
 		name:       "yaad-bgg",
-		commands:   []string{"fetch"},
+		commands:   []plugins.CommandSpec{{Name: "fetch"}},
 		fetchDelay: 500 * time.Millisecond,
 	}
 	reg := newFakePluginRegistry(p)
@@ -209,7 +209,7 @@ func TestRegistryPluginDispatcher_NilRegistry(t *testing.T) {
 // stdin — explicitly updates the contract.
 func TestRegistryPluginDispatcher_ArgsAreOpaque(t *testing.T) {
 	t.Parallel()
-	p := &fakePlugin{name: "yaad-bgg", commands: []string{"fetch"}}
+	p := &fakePlugin{name: "yaad-bgg", commands: []plugins.CommandSpec{{Name: "fetch"}}}
 	reg := newFakePluginRegistry(p)
 	d, err := NewRegistryPluginDispatcher(reg)
 	require.NoError(t, err)

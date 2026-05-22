@@ -4,6 +4,8 @@
 
 Proposed 2026-05-10. Response-shape clause (the "Response shape: multi-envelope for command-shape" subsection under Decision §1) superseded by ADR-0023 (NDJSON streaming, one envelope per line, applied uniformly to URL-shape and command-shape responses). Commands field, `!` invocation sigil, in-memory job system, routing-time validation, and CLI surface remain in force.
 
+Amended 2026-05-22: per-command `operator_only` flag on `CommandSpec` replaces the blanket-operator-only-on-command-shape rule. The original §5.3 wording is preserved below as the *CLI-side* contract (cron + manual operator invocations) and the *daemon-side* ingest gate is now per-command, defaulting to agent-callable. §1 was extended to document the long-form CommandSpec wire shape; §5.3 was rewritten to reflect the per-command rule.
+
 ## Depends on
 
 - [ADR-0005](./0005-plugin-lifecycle.md) — plugin invocation model (subprocess-per-request, JSON over stdio, `--init` capabilities). The command-protocol extends that contract with a parallel invocation shape.
@@ -13,7 +15,7 @@ Proposed 2026-05-10. Response-shape clause (the "Response shape: multi-envelope 
 
 Plugins today produce entity references from URL-shape inputs: a plugin advertises `url_patterns: [...]` in its `--init` capabilities document, the daemon walks the registered plugins in registration order on every ingest, and the first plugin whose pattern matches handles the request. The model fits sources where every artifact has a stable URL identity — Wikipedia articles, BGG boardgame pages — and breaks when the source has no URL form yaad-index can dispatch against.
 
-The 2026-05-10 design meeting on email-ingestion architecture surfaced this for yaad-gmail: Gmail messages don't have a URL the daemon can route on. The plugin's job is poll-driven (walk Gmail's IMAP-side un-ingested set, emit per-message envelopes back to the daemon) — there is no input shape an agent or external scheduler can express as `gmail:<url>`. The plugin needs an imperative invocation shape.
+yaad-gmail is the motivating case: Gmail messages don't have a URL the daemon can route on. The plugin's job is poll-driven (walk Gmail's IMAP-side un-ingested set, emit per-message envelopes back to the daemon) — there is no input shape an agent or external scheduler can express as `gmail:<url>`. The plugin needs an imperative invocation shape.
 
 Three design pressures decided the resulting protocol:
 
@@ -45,7 +47,7 @@ Plugins advertise the imperative commands they expose by extending the `--init` 
 }
 ```
 
-- **`commands` is a list of bare strings.** No leading `!`. The sigil is a property of the invocation syntax, not the advertised vocabulary. Empty / absent `commands` is valid and back-compatible — plugins that only do URL-shape ingest (yaad-wikipedia, yaad-bgg) advertise nothing here and the daemon's command-routing path never reaches them.
+- **`commands` is a list of bare strings *or* objects.** Per the 2026-05-22 amendment, each entry may be either a bare-string shorthand (`"fetch"`) or the long-form object (`{"name":"delete-all","operator_only":true}`). The bare-string shorthand decodes with `operator_only=false` — the default agent-callable shape. The long-form object is required when the per-command operator-only gate must be engaged (see §5.3 below). No leading `!` in either form — the sigil is a property of the invocation syntax, not the advertised vocabulary. Empty / absent `commands` is valid and back-compatible — plugins that only do URL-shape ingest (yaad-wikipedia, yaad-bgg) advertise nothing here and the daemon's command-routing path never reaches them.
 - **Names follow the same shape rules as `url_patterns` entries on the operator side**: the daemon parses + persists the list verbatim alongside `url_patterns` in its capability cache. No deduplication, no canonicalization beyond what the plugin emits.
 - **Plugins receive a command invocation via a subprocess flag** (per ADR-0005's existing subprocess-per-request shape). The wire format mirrors `--init` and `--version`: `<plugin-binary> --command <name>`. The plugin's `--command` handler runs the imperative work and writes a structured response to stdout.
 
@@ -168,15 +170,27 @@ Both subcommands talk to the running daemon over HTTP (same pattern as `reindex`
 
 Output: command-shape prints the returned job-id (caller can later inspect via the daemon's logs/metrics or the future `/v1/jobs/<id>` surface); fetch-shape prints the success envelope. Non-zero exit on dispatch failure (daemon not running → connection-refused, validation failure → 400 surfaced as exit 1).
 
-#### Authentication: operator-claim-only
+#### Authentication: per-command operator-only flag (2026-05-22 amendment)
 
-CLI invocations are operator actions. The CLI's authentication path uses a JWT carrying **operator claim only**, not agent claim. Distinct from the daemon's URL-shape ingest path which accepts agent-on-behalf-of-operator pair-claims (per ADR-0019 + the post-ADR-0021 widening): CLI = operator.
+The original `#### Authentication: operator-claim-only` decision read every command-shape dispatch as an operator action and rejected pair-claim tokens at the daemon's gate with a blanket `operator_only_required` error. That rule is too strict for agent flows: an agent invoking a benign `gmail: !fetch` — the motivating case for this amendment, since MCP-routed agent dispatch hit the blanket-reject — wants to dispatch the same imperative the operator's cron does, and the audit trail already distinguishes them via JWT.sub.
 
-- The daemon's dispatch endpoints (HTTP-routed and CLI-routed alike) require operator claim presence; tokens with agent-only claims (no operator) reject with 403.
-- The existing `reindex` CLI path is audited for the same constraint — the operator-only-claim invariant applies retroactively to ensure CLI never carries weaker auth than the dispatch surface.
-- CLI does not bypass the daemon. No direct DB writes, no direct vault writes from the CLI binary; every operation routes through the daemon's HTTP endpoint. The single-binary shape is convenience, not architecture — `yaad-index command` is functionally `curl -X POST $DAEMON/v1/dispatch` with the right token + body.
+The amendment moves the gate from "all command-shape" to "per-command, declared on the CommandSpec":
 
-The operator-only-claim constraint is documented in the CLI's auth-loader code path; tokens generated with agent claims fail at the daemon's gate and the CLI surfaces the rejection clearly.
+- Each `CommandSpec` carries an optional `operator_only: bool` field (default false → agent-callable).
+- The daemon's `/v1/ingest` command-shape gate looks up the dispatched command's spec on the named plugin and:
+  - Pair-claim tokens (Subject ≠ Operator, distinct subject + operator claims, per ADR-0019) → **accepted** when `operator_only=false`, **403 operator_only_required** when `operator_only=true`.
+  - Operator-only tokens (Subject == Operator) → **accepted** for every command regardless of the flag.
+  - Anonymous dev-mode claims (`auth.required=false`) → **accepted** for every command (matches the URL-shape gate's permissive shape so dev-mode behavior doesn't regress).
+- Routing-time validation (§4) still runs first; an unknown plugin or unknown command rejects at the routing layer before the auth gate evaluates the flag.
+- Provenance audit trail: JWT.sub continues to carry the invoking subject (`sub=<agent>` for pair-claims, `sub=<operator>` for operator-only). No provenance shape change.
+
+The CLI surface (§5's `yaad-index command` / `yaad-index fetch`) is unaffected by the per-command flag: the CLI mints operator-only tokens (or carries an operator-claim-bearing JWT) and POSTs to the same `/v1/ingest` endpoint as any other caller. The per-command flag only changes what *non-operator* tokens may invoke. Operator-only tokens retain full access to every command, so the CLI-as-operator-shell semantic is preserved.
+
+**Plugin-side migration.** Plugins predating this amendment emit `commands: ["fetch"]` (bare-string array) and decode with `operator_only=false` on every entry — agent-callable by default. Plugins that want to gate a destructive command emit the long-form object explicitly (`{"name":"delete-all","operator_only":true}`). No plugin in the current set declares an operator-only command; the default-callable shape unblocks the agent flows that motivated the amendment without ceremony.
+
+**Wire-shape back-compat.** The daemon's `Capabilities.Commands` decoder accepts both wire shapes (string or object) via a custom JSON UnmarshalJSON on `CommandSpec`. Plugin binaries that emit only bare strings (yaad-gmail, yaad-github at amendment time) need no rebuild — the daemon reads their existing capabilities document unchanged.
+
+**Operator-facing surface.** `GET /v1/plugins` now mirrors the CommandSpec shape: each command serializes as a bare string when `operator_only=false` (preserving the pre-#107 wire shape) and as the long-form object when `operator_only=true`. SKILL.md generators that walk `/v1/plugins` therefore see the per-command flag exactly when it's set.
 
 ## Out of scope (for this ADR)
 

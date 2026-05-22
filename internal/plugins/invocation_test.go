@@ -106,17 +106,60 @@ func TestCapabilities_CommandsRoundTrip(t *testing.T) {
 		EntityKinds: []KindSpec{{Name: "source"}},
 		EdgeKinds: []KindSpec{},
 		SourceNamespace: "gmail",
-		Commands: []string{"fetch"},
+		Commands: []CommandSpec{{Name: "fetch"}},
 	}
 	body, err := json.Marshal(in)
 	require.NoError(t, err)
 	require.Contains(t, string(body), `"commands":["fetch"]`,
-		"commands field must serialize on the wire when populated")
+		"commands field must serialize on the wire when populated; default-shape "+
+			"OperatorOnly=false emits the bare-string form for back-compat")
 
 	var out Capabilities
 	require.NoError(t, json.Unmarshal(body, &out))
-	require.Equal(t, []string{"fetch"}, out.Commands,
+	require.Equal(t, []CommandSpec{{Name: "fetch"}}, out.Commands,
 		"commands must round-trip through JSON unchanged")
+}
+
+// TestCapabilities_CommandsOperatorOnly_RoundTrip pins the long-form
+// wire shape for #107: a command with operator_only=true serializes
+// as the object form and decodes back with the flag preserved.
+func TestCapabilities_CommandsOperatorOnly_RoundTrip(t *testing.T) {
+	in := Capabilities{
+		Name: "gmail",
+		Commands: []CommandSpec{
+			{Name: "fetch"},
+			{Name: "delete-all", OperatorOnly: true},
+		},
+	}
+	body, err := json.Marshal(in)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"fetch"`,
+		"default-shape command stays as bare string")
+	require.Contains(t, string(body), `"name":"delete-all"`,
+		"operator-only command serializes as the object form")
+	require.Contains(t, string(body), `"operator_only":true`,
+		"operator_only flag must serialize on the wire when true")
+
+	var out Capabilities
+	require.NoError(t, json.Unmarshal(body, &out))
+	require.Equal(t, []CommandSpec{
+		{Name: "fetch"},
+		{Name: "delete-all", OperatorOnly: true},
+	}, out.Commands)
+}
+
+// TestCapabilities_CommandsStringShorthand pins decoding of a pre-#107
+// plugin emitting bare strings: the daemon must accept the legacy
+// shape unchanged + default OperatorOnly to false.
+func TestCapabilities_CommandsStringShorthand(t *testing.T) {
+	const wire = `{"name":"gmail","commands":["fetch","sync"]}`
+	var caps Capabilities
+	require.NoError(t, json.Unmarshal([]byte(wire), &caps))
+	require.Equal(t, []CommandSpec{
+		{Name: "fetch"},
+		{Name: "sync"},
+	}, caps.Commands,
+		"bare-string commands must decode with OperatorOnly=false (agent-callable)")
 }
 
 // TestCapabilities_CommandsBackCompat pins back-compat: a plugin

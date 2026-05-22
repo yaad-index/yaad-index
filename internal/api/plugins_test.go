@@ -60,7 +60,7 @@ func TestGetPlugins_FullCapabilitiesShape(t *testing.T) {
 			Version: "0.4.0",
 			URLPatterns: []string{},
 			SourceNamespace: "gmail",
-			Commands: []string{"fetch"},
+			Commands: []plugins.CommandSpec{{Name: "fetch"}},
 			EntityKinds: []plugins.KindSpec{
 				{Name: "source", Description: "gmail-source-kind"},
 			},
@@ -86,7 +86,7 @@ func TestGetPlugins_FullCapabilitiesShape(t *testing.T) {
 	assert.Equal(t, "gmail", got.SourceNamespace)
 	assert.Equal(t, []string{}, got.URLPatterns,
 		"poll-driven plugin must surface url_patterns as [] (not null)")
-	assert.Equal(t, []string{"fetch"}, got.Commands)
+	assert.Equal(t, []plugins.CommandSpec{{Name: "fetch"}}, got.Commands)
 	require.Len(t, got.EntityKinds, 1)
 	assert.Equal(t, "source", got.EntityKinds[0].Name)
 	assert.Equal(t, "gmail-source-kind", got.EntityKinds[0].Description)

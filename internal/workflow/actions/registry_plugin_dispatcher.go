@@ -91,8 +91,12 @@ func (d *RegistryPluginDispatcher) Dispatch(ctx context.Context, plugin, command
 	}
 	caps := p.Capabilities()
 	if !containsCommand(caps.Commands, command) {
+		advertised := make([]string, len(caps.Commands))
+		for i, c := range caps.Commands {
+			advertised[i] = c.Name
+		}
 		return fmt.Errorf("%w: plugin=%s command=%s (advertised: %v)",
-			ErrUnknownCommand, plugin, command, caps.Commands)
+			ErrUnknownCommand, plugin, command, advertised)
 	}
 	invocation := fmt.Sprintf("%s: !%s", plugin, command)
 	if _, err := p.Fetch(ctx, invocation); err != nil {
@@ -103,10 +107,11 @@ func (d *RegistryPluginDispatcher) Dispatch(ctx context.Context, plugin, command
 
 // containsCommand checks whether command is in cmds. Exact-
 // match per ADR-0022 §4 "Command-shape requests" — no
-// substring / prefix matches.
-func containsCommand(cmds []string, command string) bool {
+// substring / prefix matches. Walks the CommandSpec.Name field
+// per the 2026-05-22 amendment for #107.
+func containsCommand(cmds []plugins.CommandSpec, command string) bool {
 	for _, c := range cmds {
-		if c == command {
+		if c.Name == command {
 			return true
 		}
 	}
