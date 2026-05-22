@@ -65,6 +65,54 @@ plugins:
     config:
       account_email: ""    # required; operator sets via YAAD_GMAIL_ACCOUNT env
       app_password: ""     # required; operator sets via YAAD_GMAIL_APP_PASSWORD env
+  - name: github
+    path: /usr/local/lib/yaad-index/plugins/yaad-github
+    # The github plugin reads its credentials + repo list from
+    # environment variables (per ADR-0026 §7-§8). Required env
+    # vars at the daemon level — the plugin subprocess inherits
+    # them via pluginEnv:
+    #
+    #   YAAD_GITHUB_TOKEN   — Personal Access Token. Scopes:
+    #                         `repo` (private repo read) +
+    #                         `read:org` (org membership visibility).
+    #   YAAD_GITHUB_REPOS   — Comma-separated `owner/repo` list the
+    #                         bulk-fetch (`github: !fetch`) sweep
+    #                         walks. Whitespace per-entry trimmed.
+    #                         Empty / absent → startup fails fast.
+    #
+    # Optional env vars (defaults shown):
+    #
+    #   YAAD_GITHUB_RECENT_DAYS=7
+    #         N-day rolling window for the closed-item sweep
+    #         (`is:closed ... updated:>=<now-N-days>` query).
+    #         Positive integers only.
+    #   YAAD_GITHUB_BASE_URL=https://api.github.com
+    #         Override for GHES (e.g. https://ghes.example.com/api/v3).
+    #   YAAD_GITHUB_INSTANCE_NAME=<this entry's `name:`>
+    #         Multi-instance discriminator — interpolates into the
+    #         shorthand URL pattern + envelope notations so two
+    #         instances (e.g. `github-personal` + `github-work`)
+    #         don't collide on `github: <owner>/<repo>#<num>` dispatch.
+    #
+    # Two invocation surfaces (per ADR-0026 §1):
+    #   - URL/shorthand single-item ingest dispatched by the URL
+    #     patterns the plugin advertises at --init.
+    #   - `github: !fetch` bulk command — operator-only-claim, walks
+    #     every YAAD_GITHUB_REPOS entry, emits one envelope per
+    #     matched PR / issue (open + closed-within-the-N-day window).
+    #
+    # Operator must opt into the github-pr / github-issue /
+    # repository / github-user kinds in `canonical_kinds:` and the
+    # in_repo / authored_by / involves / assigned_to / reviewed_by
+    # edges in `canonical_edge_types:` for the canonical layer to
+    # materialize. See docs/plugins/yaad-github.md for the full
+    # operator-facing shape.
+    #
+    # Same forward-looking note as the bgg / gmail config blocks:
+    # the config sub-block is documentation; current daemon reads env.
+    config:
+      token: ""    # required; operator sets via YAAD_GITHUB_TOKEN env
+      repos: ""    # required; operator sets via YAAD_GITHUB_REPOS env
 
 # Markdown vault root (per ADR-0008). Absolute path that exists and
 # is a directory at server start. The container expects /data/vault
