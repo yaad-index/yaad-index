@@ -87,6 +87,15 @@ func handleEntityContext(logger *slog.Logger, st store.Store, vaultReader *vault
 		// as "no filter" — the rare "filter to nothing" semantic isn't
 		// useful here. parseEdgeTypesFilter only returns non-empty strings.
 
+		// `notes_kind` per #186 Cut 3: scopes the Notes arrays carried
+		// on the root + every neighbor entity. Same closed-set rule as
+		// /v1/entities/{id}.
+		notesKind, err := parseNotesKindFilter(r.URL.Query().Get("notes_kind"))
+		if err != nil {
+			writeFieldError(w, "notes_kind", err.Error())
+			return
+		}
+
 		root, neighbors, truncated, err := st.GetContextNeighbors(r.Context(), id, depth, edgeTypes, maxResults)
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found",
@@ -102,7 +111,7 @@ func handleEntityContext(logger *slog.Logger, st store.Store, vaultReader *vault
 		}
 
 		out := contextResponse{
-			Root: vaultMergedEntity(r.Context(), logger, root, vaultReader),
+			Root: filterNotesByKind(vaultMergedEntity(r.Context(), logger, root, vaultReader), notesKind),
 			Neighbors: make([]contextNeighbor, len(neighbors)),
 			Truncated: truncated,
 		}
@@ -114,7 +123,7 @@ func handleEntityContext(logger *slog.Logger, st store.Store, vaultReader *vault
 					From: n.Edge.From,
 					To: n.Edge.To,
 				},
-				Entity: vaultMergedEntity(r.Context(), logger, &neighbor, vaultReader),
+				Entity: filterNotesByKind(vaultMergedEntity(r.Context(), logger, &neighbor, vaultReader), notesKind),
 				Depth: n.Depth,
 			}
 		}

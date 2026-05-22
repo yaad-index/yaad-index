@@ -31,13 +31,23 @@ func registerGetEntity(s *server.MCPServer, b *bridge) {
 			mcp.Required(),
 			mcp.Description("Entity id, e.g. `wikipedia:tehran` or `person:alex-example`."),
 		),
+		mcp.WithString("notes_kind",
+			mcp.Description("Optional filter for the returned `notes` "+
+				"array. `note` returns operator-style notes only; "+
+				"`annotation` returns agent-feedback annotations only. "+
+				"Omit / empty returns all notes."),
+		),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id := req.GetString("id", "")
 		if id == "" {
 			return mcp.NewToolResultError("`id` is required"), nil
 		}
-		return b.callTool(ctx, "GET", "/v1/entities/"+url.PathEscape(id), nil)
+		path := "/v1/entities/" + url.PathEscape(id)
+		if notesKind := req.GetString("notes_kind", ""); notesKind != "" {
+			path += "?notes_kind=" + url.QueryEscape(notesKind)
+		}
+		return b.callTool(ctx, "GET", path, nil)
 	})
 }
 
@@ -83,13 +93,23 @@ func registerGetEntityWithContext(s *server.MCPServer, b *bridge) {
 			mcp.Required(),
 			mcp.Description("Entity id whose context should be expanded."),
 		),
+		mcp.WithString("notes_kind",
+			mcp.Description("Optional filter for the `notes` array on "+
+				"the root entity and every neighbor. `note` returns "+
+				"operator-style notes only; `annotation` returns "+
+				"agent-feedback annotations only. Omit / empty returns all."),
+		),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id := req.GetString("id", "")
 		if id == "" {
 			return mcp.NewToolResultError("`id` is required"), nil
 		}
-		return b.callTool(ctx, "GET", "/v1/entities/"+url.PathEscape(id)+"/context", nil)
+		path := "/v1/entities/" + url.PathEscape(id) + "/context"
+		if notesKind := req.GetString("notes_kind", ""); notesKind != "" {
+			path += "?notes_kind=" + url.QueryEscape(notesKind)
+		}
+		return b.callTool(ctx, "GET", path, nil)
 	})
 }
 
