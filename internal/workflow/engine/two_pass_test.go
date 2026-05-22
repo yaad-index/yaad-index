@@ -55,6 +55,16 @@ func (r *twoPassRunner) Run(_ context.Context, wf *parser.Workflow, _ actions.De
 	}}
 }
 
+// kindToList wraps a scalar kind into the canonical_kind list
+// shape; empty string yields nil so the filter is "no kind
+// narrowing" rather than "match the empty-string kind".
+func kindToList(kind string) []string {
+	if kind == "" {
+		return nil
+	}
+	return []string{kind}
+}
+
 // wfEntityCreated builds an entity_created-triggered
 // workflow. Empty kind matches every entity_created event;
 // non-empty kind filters to that kind. claimAll wires a
@@ -69,7 +79,7 @@ func wfEntityCreated(name, kind string, catchAll bool) *parser.Workflow {
 		AllowedPlugins: []string{"yaad-gmail"},
 		Trigger: parser.Trigger{
 			Type:  parser.TriggerTypeEntityCreated,
-			Match: parser.TriggerMatch{Kind: kind},
+			Match: parser.TriggerMatch{Kinds: kindToList(kind)},
 		},
 		Subject: "entity.id",
 		Actions: []parser.Action{{
@@ -148,7 +158,7 @@ func TestTwoPass_Pass1_NoClaimFallsThroughToPass2(t *testing.T) {
 			AllowedPlugins: []string{"p"}, Trigger: parser.Trigger{Type: parser.TriggerTypeEntityCreated},
 			Subject: "entity.id", Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}}},
 		{Name: "catch-gmail", Filename: "99-catch-gmail.md", Version: 1, Status: parser.StatusActive,
-			AllowedPlugins: []string{"p"}, Trigger: parser.Trigger{Type: parser.TriggerTypeEntityCreated, Match: parser.TriggerMatch{Kind: "gmail"}},
+			AllowedPlugins: []string{"p"}, Trigger: parser.Trigger{Type: parser.TriggerTypeEntityCreated, Match: parser.TriggerMatch{Kinds: []string{"gmail"}}},
 			Subject: "entity.id", CatchAll: true,
 			Actions: []parser.Action{{ClaimEntity: &parser.ClaimEntityAction{}}}},
 	}

@@ -286,7 +286,7 @@ func TestEngine_EntityCreated_KindFilter(t *testing.T) {
 		AllowedPlugins: []string{"yaad-gmail"},
 		Trigger: parser.Trigger{
 			Type:  parser.TriggerTypeEntityCreated,
-			Match: parser.TriggerMatch{Kind: "boardgame"},
+			Match: parser.TriggerMatch{Kinds: []string{"boardgame"}},
 		},
 		Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
@@ -353,6 +353,56 @@ func TestEngine_FillCompleted_GapAndSourceFilter(t *testing.T) {
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
 	assert.Equal(t, "source:x", decs[0].EntityID)
+}
+
+// TestEngine_EntityUpdated_FieldChangedFilter: an
+// entity_updated trigger only fires on matching field
+// names — events for sibling fields don't reach the
+// workflow. Mirrors the FillCompleted gap-filter pattern.
+func TestEngine_EntityUpdated_FieldChangedFilter(t *testing.T) {
+	t.Parallel()
+	eng, bus := newEngineWithBus(t, map[string]map[string]any{
+		"github:acme_proj_pr_42": {"state": "closed", "number": int64(42)},
+	})
+	wf := &parser.Workflow{
+		Name:           "github-archive-on-close",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger: parser.Trigger{
+			Type: parser.TriggerTypeEntityUpdated,
+			Match: parser.TriggerMatch{
+				FieldChanged: "data.state",
+				Kinds:        []string{"github-pr"},
+			},
+		},
+		Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	// Wrong field → no fire.
+	bus.Publish(context.Background(), eventbus.EntityUpdatedEvent{
+		EntityID: "github:acme_proj_pr_42", Kind: "github-pr",
+		Field: "data.comment_count", Old: 1, New: 2,
+		SourceTag: eventbus.SourceAgent, At: time.Now(),
+	})
+	eng.WaitForIdle()
+	// Right field but wrong kind → no fire.
+	bus.Publish(context.Background(), eventbus.EntityUpdatedEvent{
+		EntityID: "github:acme_proj_issue_9", Kind: "github-issue",
+		Field: "data.state", Old: "open", New: "closed",
+		SourceTag: eventbus.SourceAgent, At: time.Now(),
+	})
+	eng.WaitForIdle()
+	// Right field + right kind → fires.
+	bus.Publish(context.Background(), eventbus.EntityUpdatedEvent{
+		EntityID: "github:acme_proj_pr_42", Kind: "github-pr",
+		Field: "data.state", Old: "open", New: "closed",
+		SourceTag: eventbus.SourceAgent, At: time.Now(),
+	})
+	eng.WaitForIdle()
+
+	decs := eng.Decisions()
+	require.Len(t, decs, 1)
+	assert.Equal(t, "github:acme_proj_pr_42", decs[0].EntityID)
 }
 
 // TestEngine_ContextBindings_FedIntoCondition: a workflow

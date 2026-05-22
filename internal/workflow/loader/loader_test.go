@@ -751,7 +751,7 @@ func TestLoader_CatchAllUniquenessPerKind(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	catchAllSrc := func(name string) string {
-		return fmt.Sprintf("---\nname: %s\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: entity_created\n  match:\n    kind: gmail\ncatch_all: true\nactions:\n  - claim_entity: {}\n```\n", name)
+		return fmt.Sprintf("---\nname: %s\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: entity_created\n  match:\n    canonical_kind: gmail\ncatch_all: true\nactions:\n  - claim_entity: {}\n```\n", name)
 	}
 	writeWorkflow(t, dir, "01-first-catch", catchAllSrc("first-catch"))
 	writeWorkflow(t, dir, "02-second-catch", catchAllSrc("second-catch"))
@@ -777,7 +777,7 @@ func TestLoader_CatchAllUniqueness_DifferentKindsCoexist(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	catchAllSrcKind := func(name, kind string) string {
-		return fmt.Sprintf("---\nname: %s\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: entity_created\n  match:\n    kind: %s\ncatch_all: true\nactions:\n  - claim_entity: {}\n```\n", name, kind)
+		return fmt.Sprintf("---\nname: %s\n---\n\n```yaml\nallowed_plugins:\n  - yaad-gmail\ntrigger:\n  type: entity_created\n  match:\n    canonical_kind: %s\ncatch_all: true\nactions:\n  - claim_entity: {}\n```\n", name, kind)
 	}
 	writeWorkflow(t, dir, "01-catch-gmail", catchAllSrcKind("catch-gmail", "gmail"))
 	writeWorkflow(t, dir, "02-catch-email", catchAllSrcKind("catch-email", "email"))

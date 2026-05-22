@@ -543,7 +543,10 @@ func catchAllKindKey(wf *parser.Workflow) string {
 	case parser.TriggerTypeEdgeCreated:
 		return wf.Trigger.Match.TargetKind
 	case parser.TriggerTypeEntityCreated:
-		return wf.Trigger.Match.Kind
+		if len(wf.Trigger.Match.Kinds) == 0 {
+			return ""
+		}
+		return wf.Trigger.Match.Kinds[0]
 	default:
 		// FillCompleted catch-alls have no kind field; every
 		// fill catch-all is the wildcard slot for its

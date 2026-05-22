@@ -304,12 +304,12 @@ func TestValidate_EdgeCreatedRejectsKindFilter(t *testing.T) {
 		Type: TriggerTypeEdgeCreated,
 		Match: TriggerMatch{
 			EdgeType: "is_about",
-			Kind:     "boardgame",
+			Kinds:    []string{"boardgame"},
 		},
 	}
 	err := Validate(wf)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "kind=")
+	assert.Contains(t, err.Error(), "canonical_kind=")
 	assert.Contains(t, err.Error(), "not valid for this trigger.type")
 }
 
@@ -321,6 +321,156 @@ func TestValidate_FillCompletedAcceptsGap(t *testing.T) {
 		Type:  TriggerTypeFillCompleted,
 		Match: TriggerMatch{Gap: "is_interesting_to_me", Source: "operator"},
 	}
+	require.NoError(t, Validate(wf))
+}
+
+// TestValidate_EntityUpdatedRequiresFieldChanged: the
+// entity_updated trigger added in ADR-0024's 2026-05-21
+// amendment requires match.field_changed naming the dotted
+// data path the workflow filters on.
+func TestValidate_EntityUpdatedRequiresFieldChanged(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Trigger = Trigger{Type: TriggerTypeEntityUpdated}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "field_changed is required")
+}
+
+// TestValidate_EntityUpdatedAcceptsKindFilter: kind narrows
+// the trigger to a specific canonical entity kind (e.g.
+// github-pr). field_changed alone is sufficient; kind is
+// optional but must NOT be rejected when present.
+func TestValidate_EntityUpdatedAcceptsKindFilter(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		kinds []string
+	}{
+		{"single-kind", []string{"github-pr"}},
+		{"multi-kind", []string{"github-pr", "github-issue"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wf := minimalWorkflow()
+			wf.Trigger = Trigger{
+				Type: TriggerTypeEntityUpdated,
+				Match: TriggerMatch{
+					FieldChanged: "data.state",
+					Kinds:        tc.kinds,
+				},
+			}
+			require.NoError(t, Validate(wf))
+		})
+	}
+}
+
+// TestParse_CanonicalKind_RoundTripsBothShapes: the
+// `canonical_kind:` YAML key accepts both a single scalar
+// (auto-wrapped to a one-element list) and an explicit list
+// per the ADR-0024 + ADR-0026 §6 worked examples.
+func TestParse_CanonicalKind_RoundTripsBothShapes(t *testing.T) {
+	t.Parallel()
+	const single = "---\nname: gh-archive-single\n---\n\n" +
+		"```yaml\n" +
+		"allowed_plugins: [yaad-gmail]\n" +
+		"trigger:\n" +
+		"  type: entity_updated\n" +
+		"  match:\n" +
+		"    field_changed: data.state\n" +
+		"    canonical_kind: github-pr\n" +
+		"actions:\n" +
+		"  - archive_entity: {}\n" +
+		"```\n"
+	const list = "---\nname: gh-archive-list\n---\n\n" +
+		"```yaml\n" +
+		"allowed_plugins: [yaad-gmail]\n" +
+		"trigger:\n" +
+		"  type: entity_updated\n" +
+		"  match:\n" +
+		"    field_changed: data.state\n" +
+		"    canonical_kind: [github-pr, github-issue]\n" +
+		"actions:\n" +
+		"  - archive_entity: {}\n" +
+		"```\n"
+
+	wfSingle, err := Parse([]byte(single))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"github-pr"}, wfSingle.Trigger.Match.Kinds,
+		"scalar `canonical_kind: github-pr` round-trips to a single-element list")
+
+	wfList, err := Parse([]byte(list))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"github-pr", "github-issue"}, wfList.Trigger.Match.Kinds,
+		"list `canonical_kind: [a, b]` round-trips verbatim")
+}
+
+// TestValidate_EntityUpdatedRejectsForeignFields: edge_type,
+// target_kind, gap, source are all foreign to entity_updated.
+func TestValidate_EntityUpdatedRejectsForeignFields(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		mutate  func(*TriggerMatch)
+		errFrag string
+	}{
+		{"edge_type", func(m *TriggerMatch) { m.EdgeType = "x" }, "edge_type="},
+		{"target_kind", func(m *TriggerMatch) { m.TargetKind = "x" }, "target_kind="},
+		{"gap", func(m *TriggerMatch) { m.Gap = "x" }, "gap="},
+		{"source", func(m *TriggerMatch) { m.Source = "x" }, "source="},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wf := minimalWorkflow()
+			wf.Trigger = Trigger{
+				Type:  TriggerTypeEntityUpdated,
+				Match: TriggerMatch{FieldChanged: "data.state"},
+			}
+			tc.mutate(&wf.Trigger.Match)
+			err := Validate(wf)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.errFrag)
+		})
+	}
+}
+
+// TestValidate_FieldChangedRejectedOnOtherTriggers: the
+// field_changed match field is exclusive to entity_updated.
+func TestValidate_FieldChangedRejectedOnOtherTriggers(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		TriggerTypeEdgeCreated,
+		TriggerTypeEntityCreated,
+		TriggerTypeFillCompleted,
+		TriggerTypeManual,
+	}
+	for _, ttype := range cases {
+		t.Run(ttype, func(t *testing.T) {
+			wf := minimalWorkflow()
+			wf.Trigger = Trigger{
+				Type:  ttype,
+				Match: TriggerMatch{FieldChanged: "data.state"},
+			}
+			// edge_created also needs edge_type, otherwise it
+			// errors before field_changed is checked.
+			if ttype == TriggerTypeEdgeCreated {
+				wf.Trigger.Match.EdgeType = "is_about"
+			}
+			err := Validate(wf)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "field_changed=")
+		})
+	}
+}
+
+// TestValidate_RestoreEntity_Permissive: restore_entity is
+// the mirror of archive_entity — both Entity and Reason are
+// optional CEL strings, so `- restore_entity: {}` is a valid
+// shape (defaults to acting on the triggering entity).
+func TestValidate_RestoreEntity_Permissive(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Actions = []Action{{RestoreEntity: &RestoreEntityAction{}}}
 	require.NoError(t, Validate(wf))
 }
 

@@ -424,6 +424,7 @@ func (e *Engine) Start() {
 			e.bus.Subscribe(eventbus.TopicEntityEdgeAdded, e.enqueueEvent),
 			e.bus.Subscribe(eventbus.TopicEntityCreated, e.enqueueEvent),
 			e.bus.Subscribe(eventbus.TopicFillCompleted, e.enqueueEvent),
+			e.bus.Subscribe(eventbus.TopicEntityUpdated, e.enqueueEvent),
 		}
 		e.workerWG.Add(1)
 		go e.workerLoop()
@@ -658,7 +659,8 @@ func (e *Engine) registerLocked(wf *parser.Workflow) error {
 	case parser.TriggerTypeEdgeCreated,
 		parser.TriggerTypeEntityCreated,
 		parser.TriggerTypeFillCompleted,
-		parser.TriggerTypeManual:
+		parser.TriggerTypeManual,
+		parser.TriggerTypeEntityUpdated:
 		// Recognized trigger types — registration proceeds.
 	default:
 		return fmt.Errorf("unsupported trigger.type %q", wf.Trigger.Type)
@@ -795,7 +797,7 @@ func (e *Engine) matchesEvent(qe queuedEvent, reg *registeredWorkflow) bool {
 		if reg.workflow.Trigger.Type != parser.TriggerTypeEntityCreated {
 			return false
 		}
-		if m.Kind != "" && ev.Kind != m.Kind {
+		if !kindMatchesFilter(ev.Kind, m.Kinds) {
 			return false
 		}
 		return true
@@ -807,6 +809,21 @@ func (e *Engine) matchesEvent(qe queuedEvent, reg *registeredWorkflow) bool {
 			return false
 		}
 		if m.Source != "" && string(ev.SourceTag) != m.Source {
+			return false
+		}
+		return true
+	case eventbus.EntityUpdatedEvent:
+		if reg.workflow.Trigger.Type != parser.TriggerTypeEntityUpdated {
+			return false
+		}
+		// FieldChanged is required at validate time; an empty
+		// FieldChanged match here means the workflow author
+		// got past validation somehow (or the workflow shape
+		// was rebuilt by reflection) — defensively reject.
+		if m.FieldChanged == "" || ev.Field != m.FieldChanged {
+			return false
+		}
+		if !kindMatchesFilter(ev.Kind, m.Kinds) {
 			return false
 		}
 		return true
@@ -841,6 +858,8 @@ func (e *Engine) runWorkflowAgainstEvent(qe queuedEvent, reg *registeredWorkflow
 	case eventbus.EntityCreatedEvent:
 		return e.evaluateAndRecord(qe.ctx, reg, ev.ID, nil, ev.Chain)
 	case eventbus.FillCompletedEvent:
+		return e.evaluateAndRecord(qe.ctx, reg, ev.EntityID, nil, ev.Chain)
+	case eventbus.EntityUpdatedEvent:
 		return e.evaluateAndRecord(qe.ctx, reg, ev.EntityID, nil, ev.Chain)
 	default:
 		return false
@@ -934,10 +953,21 @@ func catchAllRegistryKey(wf *parser.Workflow) string {
 	case parser.TriggerTypeEdgeCreated:
 		return wf.Trigger.Match.TargetKind
 	case parser.TriggerTypeEntityCreated:
-		return wf.Trigger.Match.Kind
+		return firstKind(wf.Trigger.Match.Kinds)
 	default:
 		return ""
 	}
+}
+
+// firstKind returns the first canonical_kind entry, or "" when
+// the filter is empty. Catch-all registry keys remain
+// single-value at the engine layer; a catch-all workflow
+// listing multiple kinds occupies its first kind's slot.
+func firstKind(kinds []string) string {
+	if len(kinds) == 0 {
+		return ""
+	}
+	return kinds[0]
 }
 
 // isCatchAllWildcard reports whether the catch_all
@@ -951,7 +981,7 @@ func isCatchAllWildcard(reg *registeredWorkflow) bool {
 	case parser.TriggerTypeEdgeCreated:
 		return m.TargetKind == ""
 	case parser.TriggerTypeEntityCreated:
-		return m.Kind == ""
+		return len(m.Kinds) == 0
 	case parser.TriggerTypeFillCompleted:
 		// fill events have no kind in the event payload;
 		// every fill catch-all is the wildcard slot for
@@ -1887,6 +1917,22 @@ func (r *resolverGraphLookup) Get(ctx context.Context, id string) (map[string]an
 		return nil, decision.ErrEntityNotFound
 	}
 	return r.resolver.Resolve(ctx, id)
+}
+
+// kindMatchesFilter returns true when eventKind passes the
+// workflow's `canonical_kind` filter. Empty filter list = no
+// kind narrowing (every kind passes). Non-empty list = the
+// event's kind must be a member.
+func kindMatchesFilter(eventKind string, filter []string) bool {
+	if len(filter) == 0 {
+		return true
+	}
+	for _, k := range filter {
+		if k == eventKind {
+			return true
+		}
+	}
+	return false
 }
 
 // kindOf reads the "kind" field from a resolved entity map.

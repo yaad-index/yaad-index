@@ -28,6 +28,8 @@ type fakeEntityStore struct {
 	upsertErr error
 	// archives counts ArchiveEntity calls per id (per #150).
 	archives map[string]int
+	// restores counts RestoreEntity calls per id (per #196).
+	restores map[string]int
 }
 
 func newFakeEntityStore(seed map[string]*store.Entity) *fakeEntityStore {
@@ -76,10 +78,31 @@ func (f *fakeEntityStore) ArchiveEntity(_ context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeEntityStore) RestoreEntity(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	e, ok := f.entities[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	if f.restores == nil {
+		f.restores = map[string]int{}
+	}
+	f.restores[id]++
+	e.ArchivedAt = nil
+	return nil
+}
+
 func (f *fakeEntityStore) archiveCount(id string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.archives[id]
+}
+
+func (f *fakeEntityStore) restoreCount(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.restores[id]
 }
 
 func (f *fakeEntityStore) upsertSnapshot() []*store.Entity {
@@ -132,6 +155,8 @@ type fakeVaultWriter struct {
 	writeErr    error
 	archives    []archiveVaultCall
 	archiveErr  error
+	restores    []archiveVaultCall
+	restoreErr  error
 }
 
 type vaultWrite struct {
@@ -184,6 +209,26 @@ func (f *fakeVaultWriter) ArchiveWithCommit(_ context.Context, kind, id, message
 		kind: kind, id: id, message: message, author: author,
 	})
 	return nil
+}
+
+func (f *fakeVaultWriter) RestoreWithCommit(_ context.Context, kind, id, message, author string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.restoreErr != nil {
+		return f.restoreErr
+	}
+	f.restores = append(f.restores, archiveVaultCall{
+		kind: kind, id: id, message: message, author: author,
+	})
+	return nil
+}
+
+func (f *fakeVaultWriter) restoreSnapshot() []archiveVaultCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]archiveVaultCall, len(f.restores))
+	copy(out, f.restores)
+	return out
 }
 
 func (f *fakeVaultWriter) archiveSnapshot() []archiveVaultCall {
@@ -1044,4 +1089,86 @@ func TestVaultPropertyWriter_NonStringTypesPassThrough(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "string", m["nested"],
 		"nested map values aren't recursed — pass through verbatim")
+}
+
+// TestVaultRestoreWriter_HappyPath: restore_entity flows
+// through vault move (archive→active) → store toggle behind
+// the per-entity write-lock. Mirror of the archive happy-path.
+func TestVaultRestoreWriter_HappyPath(t *testing.T) {
+	t.Parallel()
+	const id = "gmail:msg-r"
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	archived := now.Add(-1 * time.Hour)
+	b, es, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			id: {ID: id, Kind: "gmail", Data: map[string]any{"id": id}, ArchivedAt: &archived},
+		},
+		map[string]*vault.Entity{
+			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+		},
+		now,
+	)
+	w := NewVaultRestoreWriter(b)
+	err := w.RestoreEntity(context.Background(),
+		"github-restore-on-open", id, "github-state-reopened")
+	require.NoError(t, err)
+
+	vaults := vw.restoreSnapshot()
+	require.Len(t, vaults, 1)
+	assert.Equal(t, "gmail", vaults[0].kind)
+	assert.Equal(t, id, vaults[0].id)
+	assert.Equal(t, "restore: gmail:msg-r (github-state-reopened)", vaults[0].message)
+	assert.Equal(t, "workflow:github-restore-on-open", vaults[0].author)
+	assert.Equal(t, 1, es.restoreCount(id))
+}
+
+// TestVaultRestoreWriter_ReasonOptional: empty reason → bare
+// commit message without parenthesized suffix (mirror of the
+// archive shape).
+func TestVaultRestoreWriter_ReasonOptional(t *testing.T) {
+	t.Parallel()
+	const id = "gmail:msg-r-no-reason"
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	b, _, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			id: {ID: id, Kind: "gmail"},
+		},
+		map[string]*vault.Entity{
+			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+		},
+		now,
+	)
+	w := NewVaultRestoreWriter(b)
+	require.NoError(t, w.RestoreEntity(context.Background(), "wf", id, ""))
+
+	vaults := vw.restoreSnapshot()
+	require.Len(t, vaults, 1)
+	assert.Equal(t, "restore: gmail:msg-r-no-reason", vaults[0].message)
+}
+
+// TestVaultRestoreWriter_NotFound_SoftSkip: missing row →
+// nil (success); no vault move, no DB toggle.
+func TestVaultRestoreWriter_NotFound_SoftSkip(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	b, es, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{},
+		map[string]*vault.Entity{},
+		now,
+	)
+	w := NewVaultRestoreWriter(b)
+	err := w.RestoreEntity(context.Background(), "wf", "gmail:missing-r", "")
+	require.NoError(t, err)
+	assert.Empty(t, vw.restoreSnapshot())
+	assert.Equal(t, 0, es.restoreCount("gmail:missing-r"))
+}
+
+// TestVaultRestoreWriter_BackendNotWired: nil backend surfaces
+// a clear config error.
+func TestVaultRestoreWriter_BackendNotWired(t *testing.T) {
+	t.Parallel()
+	w := &VaultRestoreWriter{}
+	err := w.RestoreEntity(context.Background(), "wf", "gmail:x", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "backend not wired")
 }

@@ -242,6 +242,11 @@ type Options struct {
 	// StubArchiveWriter rejects with ErrActionNotImplemented.
 	ArchiveWriter ArchiveWriter
 
+	// RestoreWriter backs restore_entity (#196). Mirror of
+	// ArchiveWriter — production wires VaultRestoreWriter,
+	// nil → action surfaces a "no writer wired" failure result.
+	RestoreWriter RestoreWriter
+
 	// Bus is the eventbus the set_property runner publishes
 	// fill.completed events to (one per landed field). Nil →
 	// emission silently skipped (test/dev default — other
@@ -290,6 +295,7 @@ func New(opts Options) Runner {
 		propertyWriter:   opts.PropertyWriter,
 		edgeWriter:       opts.EdgeWriter,
 		archiveWriter:    opts.ArchiveWriter,
+		restoreWriter:    opts.RestoreWriter,
 		errTaskWriter:    errTaskWriter,
 		bus:              opts.Bus,
 		logger:           logger,
@@ -307,6 +313,7 @@ type dispatcher struct {
 	propertyWriter   PropertyWriter
 	edgeWriter       EdgeWriter
 	archiveWriter    ArchiveWriter
+	restoreWriter    RestoreWriter
 	errTaskWriter    ErrTaskWriter
 	bus              eventbus.Bus
 	logger           *slog.Logger
@@ -386,6 +393,8 @@ func (d *dispatcher) runOne(ctx context.Context, idx int, wf *parser.Workflow, a
 		return d.runAddCanonicalEdge(ctx, idx, wf, a.AddCanonicalEdge, dec, act)
 	case a.ArchiveEntity != nil:
 		return d.runArchiveEntity(ctx, idx, wf, a.ArchiveEntity, dec, act)
+	case a.RestoreEntity != nil:
+		return d.runRestoreEntity(ctx, idx, wf, a.RestoreEntity, dec, act)
 	case a.ClaimEntity != nil:
 		return d.runClaimEntity(idx)
 	default:

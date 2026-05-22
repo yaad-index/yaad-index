@@ -143,11 +143,40 @@ type triggerShape struct {
 }
 
 type triggerMatchShape struct {
-	EdgeType   string `yaml:"edge_type"`
-	TargetKind string `yaml:"target_kind"`
-	Kind       string `yaml:"kind"`
-	Gap        string `yaml:"gap"`
-	Source     string `yaml:"source"`
+	EdgeType     string     `yaml:"edge_type"`
+	TargetKind   string     `yaml:"target_kind"`
+	Kinds        kindFilter `yaml:"canonical_kind"`
+	Gap          string     `yaml:"gap"`
+	Source       string     `yaml:"source"`
+	FieldChanged string     `yaml:"field_changed"`
+}
+
+// kindFilter accepts both scalar (`canonical_kind: github-pr`)
+// and sequence (`canonical_kind: [github-pr, github-issue]`)
+// YAML shapes, normalising to []string. Both forms appear in
+// the ADR-0024 + ADR-0026 §6 worked examples; operators reach
+// for whichever feels more natural for the workflow's scope.
+type kindFilter []string
+
+func (k *kindFilter) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var s string
+		if err := value.Decode(&s); err != nil {
+			return err
+		}
+		*k = []string{s}
+		return nil
+	case yaml.SequenceNode:
+		var s []string
+		if err := value.Decode(&s); err != nil {
+			return err
+		}
+		*k = s
+		return nil
+	default:
+		return fmt.Errorf("canonical_kind: want scalar or sequence, got node kind %v", value.Kind)
+	}
 }
 
 type ctxShape struct {
@@ -172,12 +201,18 @@ type actionShape struct {
 	SetProperty      *setPropertyShape      `yaml:"set_property"`
 	AddCanonicalEdge *addCanonicalEdgeShape `yaml:"add_canonical_edge"`
 	ArchiveEntity    *archiveEntityShape    `yaml:"archive_entity"`
+	RestoreEntity    *restoreEntityShape    `yaml:"restore_entity"`
 	ClaimEntity      *claimEntityShape      `yaml:"claim_entity"`
 }
 
 type claimEntityShape struct{}
 
 type archiveEntityShape struct {
+	Entity string `yaml:"entity"`
+	Reason string `yaml:"reason"`
+}
+
+type restoreEntityShape struct {
 	Entity string `yaml:"entity"`
 	Reason string `yaml:"reason"`
 }
@@ -294,14 +329,24 @@ func decode(frontmatter, yamlBody []byte) (*Workflow, error) {
 }
 
 func triggerFromShape(t triggerShape) Trigger {
+	var kinds []string
+	if len(t.Match.Kinds) > 0 {
+		kinds = make([]string, 0, len(t.Match.Kinds))
+		for _, k := range t.Match.Kinds {
+			if trimmed := strings.TrimSpace(k); trimmed != "" {
+				kinds = append(kinds, trimmed)
+			}
+		}
+	}
 	return Trigger{
 		Type: strings.TrimSpace(t.Type),
 		Match: TriggerMatch{
-			EdgeType:   strings.TrimSpace(t.Match.EdgeType),
-			TargetKind: strings.TrimSpace(t.Match.TargetKind),
-			Kind:       strings.TrimSpace(t.Match.Kind),
-			Gap:        strings.TrimSpace(t.Match.Gap),
-			Source:     strings.TrimSpace(t.Match.Source),
+			EdgeType:     strings.TrimSpace(t.Match.EdgeType),
+			TargetKind:   strings.TrimSpace(t.Match.TargetKind),
+			Kinds:        kinds,
+			Gap:          strings.TrimSpace(t.Match.Gap),
+			Source:       strings.TrimSpace(t.Match.Source),
+			FieldChanged: strings.TrimSpace(t.Match.FieldChanged),
 		},
 	}
 }
@@ -364,6 +409,7 @@ func actionsFromShape(entries []actionShape) []Action {
 			SetProperty:      setPropertyFromShape(e.SetProperty),
 			AddCanonicalEdge: addCanonicalEdgeFromShape(e.AddCanonicalEdge),
 			ArchiveEntity:    archiveEntityFromShape(e.ArchiveEntity),
+			RestoreEntity:    restoreEntityFromShape(e.RestoreEntity),
 			ClaimEntity:      claimEntityFromShape(e.ClaimEntity),
 		}
 	}
@@ -486,6 +532,16 @@ func archiveEntityFromShape(s *archiveEntityShape) *ArchiveEntityAction {
 		return nil
 	}
 	return &ArchiveEntityAction{
+		Entity: strings.TrimSpace(s.Entity),
+		Reason: strings.TrimSpace(s.Reason),
+	}
+}
+
+func restoreEntityFromShape(s *restoreEntityShape) *RestoreEntityAction {
+	if s == nil {
+		return nil
+	}
+	return &RestoreEntityAction{
 		Entity: strings.TrimSpace(s.Entity),
 		Reason: strings.TrimSpace(s.Reason),
 	}

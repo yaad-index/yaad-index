@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -212,19 +213,95 @@ type ingestTracker struct {
 	bus eventbus.Bus
 }
 
-// entityIsNew reports whether the given id has no row in the
-// store yet, so the caller can decide whether to emit
-// entity.created post-upsert. Per ADR-0024's cache-hit re-fetch
-// semantics, entity.created fires only on the first-time-seen
-// path — re-fetch of a known entity does NOT re-publish.
+// preUpsertSnapshot fetches the entity's pre-upsert state so the
+// caller can emit entity.created (new path) or entity.updated
+// (re-fetch path with data delta) after the upsert lands. Returns
+// (existing, isNew, ok):
 //
-// Probe failures (anything other than ErrNotFound) return false:
-// without proof of new-ness, the emit-as-create path is suppressed
-// and the caller relies on the existing TopicEntityEdgeAdded
-// emissions for change detection. The probe is best-effort.
-func (t *ingestTracker) entityIsNew(ctx context.Context, id string) bool {
-	_, err := t.store.GetEntity(ctx, id)
-	return errors.Is(err, store.ErrNotFound)
+//   - ok=false on a non-ErrNotFound probe failure → caller
+//     suppresses event emission for this entity (no proof of
+//     state; falling back to TopicEntityEdgeAdded for change
+//     detection mirrors the entityIsNew best-effort shape).
+//   - ok=true + isNew=true: probe returned ErrNotFound → fresh
+//     ingest. existing is nil.
+//   - ok=true + isNew=false: probe returned the row → re-fetch.
+//     existing carries the pre-upsert Data the caller diffs
+//     against the incoming Entity.Data to derive per-field
+//     entity.updated events per ADR-0024's 2026-05-21 amendment.
+func (t *ingestTracker) preUpsertSnapshot(ctx context.Context, id string) (*store.Entity, bool, bool) {
+	got, err := t.store.GetEntity(ctx, id)
+	if err == nil {
+		return got, false, true
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, true, true
+	}
+	return nil, false, false
+}
+
+// queueEntityUpdated computes the per-field delta between
+// oldData and newData (top-level keys of `structured.data`)
+// and queues one EntityUpdatedEvent per changed field per
+// ADR-0024's 2026-05-21 amendment. Mirrors queueEntityEdgeAdded's
+// nil-pending fallback so callers outside any locked scope
+// publish synchronously; locked callers queue for post-release
+// Drain.
+//
+// Detection rule: a field with reflect.DeepEqual(oldVal, newVal)
+// unchanged is skipped; an added field (absent in old, present
+// in new) emits with Old=nil; a dropped field (present in old,
+// absent in new) emits with New=nil. Keys are iterated in sorted
+// order so emission is deterministic for tests + logs.
+//
+// Deep / nested map deltas surface as a change on the top-level
+// key (Old + New carry the whole nested map). Workflows needing
+// deep matching navigate the value in CEL.
+func (t *ingestTracker) queueEntityUpdated(ctx context.Context, pending *eventbus.PendingEvents, id, kind string, oldData, newData map[string]any) {
+	if t.bus == nil {
+		return
+	}
+	keys := make([]string, 0, len(oldData)+len(newData))
+	seen := make(map[string]struct{}, len(oldData)+len(newData))
+	for k := range oldData {
+		if _, ok := seen[k]; !ok {
+			keys = append(keys, k)
+			seen[k] = struct{}{}
+		}
+	}
+	for k := range newData {
+		if _, ok := seen[k]; !ok {
+			keys = append(keys, k)
+			seen[k] = struct{}{}
+		}
+	}
+	sort.Strings(keys)
+	now := time.Now().UTC()
+	chain := eventbus.WorkflowChainFromContext(ctx)
+	for _, k := range keys {
+		oldVal, oldHad := oldData[k]
+		newVal, newHad := newData[k]
+		if !oldHad && !newHad {
+			continue
+		}
+		if oldHad && newHad && reflect.DeepEqual(oldVal, newVal) {
+			continue
+		}
+		evt := eventbus.EntityUpdatedEvent{
+			EntityID:  id,
+			Kind:      kind,
+			Field:     "data." + k,
+			Old:       oldVal,
+			New:       newVal,
+			SourceTag: eventbus.SourceAgent,
+			At:        now,
+			Chain:     chain,
+		}
+		if pending != nil {
+			pending.Add(evt)
+			continue
+		}
+		t.bus.Publish(ctx, evt)
+	}
 }
 
 // publishEntityCreated emits entity.created with SourceAgent
@@ -474,16 +551,28 @@ func (t *ingestTracker) runSimulation(rec *ingestRecord, att ingestAttempt) {
 		// Cache-hit-aware emit: probe before upsert so we know
 		// whether this fixture run is producing a fresh entity.
 		// ADR-0024 Phase 2 — entity.created fires only on the
-		// first-time-seen path.
-		fixtureWasNew := t.bus != nil && t.entityIsNew(ctx, att.entity.ID)
+		// first-time-seen path. ADR-0024 2026-05-21 amendment —
+		// re-fetch with `structured.data` deltas also emits one
+		// entity.updated per changed field.
+		var fixturePrior *store.Entity
+		fixtureWasNew := false
+		fixtureProbeOK := false
+		if t.bus != nil {
+			fixturePrior, fixtureWasNew, fixtureProbeOK = t.preUpsertSnapshot(ctx, att.entity.ID)
+		}
 		if err := t.store.UpsertEntity(ctx, att.entity); err != nil {
 			t.logger.Error("ingest simulator: UpsertEntity failed",
 				"err", err, "id", att.entity.ID)
 			t.markFailed(rec, "internal_error", "failed to persist entity")
 			return
 		}
-		if fixtureWasNew {
-			t.publishEntityCreated(ctx, att.entity.ID, att.entity.Kind)
+		if fixtureProbeOK {
+			if fixtureWasNew {
+				t.publishEntityCreated(ctx, att.entity.ID, att.entity.Kind)
+			} else if fixturePrior != nil {
+				t.queueEntityUpdated(ctx, nil, att.entity.ID, att.entity.Kind,
+					fixturePrior.Data, att.entity.Data)
+			}
 		}
 		if err := t.store.AppendProvenance(ctx, att.entity.ID,
 			[]store.ProvenanceEntry{att.provenance},
@@ -838,15 +927,27 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 	// Cache-hit-aware emit: probe before upsert so a re-fetch
 	// of a known entity doesn't re-publish entity.created. ADR-0024
 	// Phase 2 — re-fetch surfaces as entity.edge_added on any new
-	// edge, never as entity.created.
-	pluginWasNew := t.bus != nil && t.entityIsNew(ctx, result.Entity.ID)
+	// edge, never as entity.created. ADR-0024 2026-05-21 amendment —
+	// re-fetch with a per-field `structured.data` delta also
+	// publishes one entity.updated event per changed field.
+	var pluginPrior *store.Entity
+	pluginWasNew := false
+	probeOK := false
+	if t.bus != nil {
+		pluginPrior, pluginWasNew, probeOK = t.preUpsertSnapshot(ctx, result.Entity.ID)
+	}
 	if err := t.store.UpsertEntity(ctx, result.Entity); err != nil {
 		t.logger.Error("ingest simulator: UpsertEntity (plugin path) failed",
 			"err", err, "id", result.Entity.ID)
 		return fmt.Errorf("failed to persist entity: %w", err)
 	}
-	if pluginWasNew {
-		t.queueEntityCreated(ctx, &pending, result.Entity.ID, result.Entity.Kind)
+	if probeOK {
+		if pluginWasNew {
+			t.queueEntityCreated(ctx, &pending, result.Entity.ID, result.Entity.Kind)
+		} else if pluginPrior != nil {
+			t.queueEntityUpdated(ctx, &pending, result.Entity.ID, result.Entity.Kind,
+				pluginPrior.Data, result.Entity.Data)
+		}
 	}
 	if err := t.store.AppendProvenance(ctx, result.Entity.ID, provenance); err != nil {
 		t.logger.Error("ingest simulator: AppendProvenance (plugin path) failed",

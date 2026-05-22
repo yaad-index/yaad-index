@@ -134,25 +134,32 @@ func validateTrigger(t Trigger) error {
 		if t.Match.EdgeType == "" {
 			return fmt.Errorf("workflow: trigger.match.edge_type is required for trigger.type=%s", t.Type)
 		}
-		if err := rejectTriggerFields(t.Match, "Kind", "Gap", "Source"); err != nil {
+		if err := rejectTriggerFields(t.Match, "Kinds", "Gap", "Source", "FieldChanged"); err != nil {
 			return fmt.Errorf("workflow: %s: %w", t.Type, err)
 		}
 	case TriggerTypeEntityCreated:
-		if err := rejectTriggerFields(t.Match, "EdgeType", "TargetKind", "Gap", "Source"); err != nil {
+		if err := rejectTriggerFields(t.Match, "EdgeType", "TargetKind", "Gap", "Source", "FieldChanged"); err != nil {
 			return fmt.Errorf("workflow: %s: %w", t.Type, err)
 		}
 	case TriggerTypeFillCompleted:
-		if err := rejectTriggerFields(t.Match, "EdgeType", "TargetKind", "Kind"); err != nil {
+		if err := rejectTriggerFields(t.Match, "EdgeType", "TargetKind", "Kinds", "FieldChanged"); err != nil {
 			return fmt.Errorf("workflow: %s: %w", t.Type, err)
 		}
 	case TriggerTypeManual:
-		if err := rejectTriggerFields(t.Match, "EdgeType", "TargetKind", "Kind", "Gap", "Source"); err != nil {
+		if err := rejectTriggerFields(t.Match, "EdgeType", "TargetKind", "Kinds", "Gap", "Source", "FieldChanged"); err != nil {
+			return fmt.Errorf("workflow: %s: %w", t.Type, err)
+		}
+	case TriggerTypeEntityUpdated:
+		if t.Match.FieldChanged == "" {
+			return fmt.Errorf("workflow: trigger.match.field_changed is required for trigger.type=%s", t.Type)
+		}
+		if err := rejectTriggerFields(t.Match, "EdgeType", "TargetKind", "Gap", "Source"); err != nil {
 			return fmt.Errorf("workflow: %s: %w", t.Type, err)
 		}
 	case "":
 		return fmt.Errorf("workflow: trigger.type is required")
 	default:
-		return fmt.Errorf("workflow: trigger.type %q is not one of {edge_created, entity_created, fill_completed, manual}", t.Type)
+		return fmt.Errorf("workflow: trigger.type %q is not one of {edge_created, entity_created, fill_completed, manual, entity_updated}", t.Type)
 	}
 	return nil
 }
@@ -169,12 +176,18 @@ func rejectTriggerFields(m TriggerMatch, fields ...string) error {
 			val = m.EdgeType
 		case "TargetKind":
 			val = m.TargetKind
-		case "Kind":
-			val = m.Kind
+		case "Kinds":
+			if len(m.Kinds) > 0 {
+				return fmt.Errorf("trigger.match.canonical_kind=%v is not valid for this trigger.type",
+					m.Kinds)
+			}
+			continue
 		case "Gap":
 			val = m.Gap
 		case "Source":
 			val = m.Source
+		case "FieldChanged":
+			val = m.FieldChanged
 		}
 		if val != "" {
 			return fmt.Errorf("trigger.match.%s=%q is not valid for this trigger.type",
@@ -190,12 +203,14 @@ func toYAMLKey(goField string) string {
 		return "edge_type"
 	case "TargetKind":
 		return "target_kind"
-	case "Kind":
-		return "kind"
+	case "Kinds":
+		return "canonical_kind"
 	case "Gap":
 		return "gap"
 	case "Source":
 		return "source"
+	case "FieldChanged":
+		return "field_changed"
 	}
 	return goField
 }
@@ -260,11 +275,14 @@ func validateActions(wf *Workflow) error {
 		if a.ArchiveEntity != nil {
 			set++
 		}
+		if a.RestoreEntity != nil {
+			set++
+		}
 		if a.ClaimEntity != nil {
 			set++
 		}
 		if set == 0 {
-			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_note / plugin_dispatch / add_gap / set_property / add_canonical_edge / archive_entity / claim_entity)", i)
+			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_note / plugin_dispatch / add_gap / set_property / add_canonical_edge / archive_entity / restore_entity / claim_entity)", i)
 		}
 		if set > 1 {
 			return fmt.Errorf("workflow: actions[%d] sets %d primitives (expected exactly one)", i, set)
@@ -298,6 +316,10 @@ func validateActions(wf *Workflow) error {
 			if err := validateArchiveEntity(a.ArchiveEntity); err != nil {
 				return fmt.Errorf("workflow: actions[%d].archive_entity: %w", i, err)
 			}
+		case a.RestoreEntity != nil:
+			if err := validateRestoreEntity(a.RestoreEntity); err != nil {
+				return fmt.Errorf("workflow: actions[%d].restore_entity: %w", i, err)
+			}
 		case a.ClaimEntity != nil:
 			// claim_entity is a bare flag — no fields to validate
 			// per #169 v1. The engine reads the action presence
@@ -315,6 +337,15 @@ func validateActions(wf *Workflow) error {
 // because workflow authors writing `- archive_entity: {}` to
 // archive the triggering entity is a legitimate shape.
 func validateArchiveEntity(_ *ArchiveEntityAction) error {
+	return nil
+}
+
+// validateRestoreEntity is the load-time check for the
+// `restore_entity` action — the mirror of archive_entity per
+// ADR-0024's 2026-05-21 amendment. Same permissive surface:
+// both Entity and Reason are optional (Entity defaults to
+// `entity.id` at runner time; Reason is audit metadata).
+func validateRestoreEntity(_ *RestoreEntityAction) error {
 	return nil
 }
 
