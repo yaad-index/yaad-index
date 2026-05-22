@@ -86,9 +86,9 @@ PRs and issues are emitted as two separate canonical kinds, not one parameterize
 
 Entity IDs: `github:<owner>_<repo>_pr_<num>` and `github:<owner>_<repo>_issue_<num>` (daemon-derived via `slug.Slug(name)`). The PR-vs-issue distinction lives in the slug.
 
-### 3. Repo configuration — explicit list in plugin config
+### 3. Repo configuration — structured `config:` block
 
-Operator declares the repo set explicitly:
+Operator declares the repo set in the structured `config:` block per ADR-0006's 2026-05-22 amendment (#192). Arbitrary YAML structure is accepted; the daemon JSON-marshals the block + delivers it via `YAAD_PLUGIN_CONFIG`:
 
 ```yaml
 plugins:
@@ -99,7 +99,15 @@ plugins:
         - acme-org/project-a
         - acme-org/project-b
         - someuser/dotfiles
+      recent_days: 7                        # optional; default 7
+      base_url: https://api.github.com      # optional; default github.com
 ```
+
+The plugin advertises its required shape via `config_schema` in `--init` capabilities (JSON Schema). The daemon validates the operator yaml against the schema at registry-load time + fails fast on mismatch — operators see the violation in the startup log, not at first ingest.
+
+**Daemon-injected `_name`.** The daemon writes the entry's `plugins[N].name:` value into the JSON config under the `_name` key per ADR-0006's daemon-injected-fields convention. The plugin reads it to drive multi-instance dispatch routing (URL pattern + shorthand sigil per §7) without operator-side duplication.
+
+**Secrets stay in env-passthrough.** `YAAD_GITHUB_TOKEN` (the PAT) is a secret and never lands in the `config:` block; operators set it at the daemon-process env layer (docker `-e`, systemd `EnvironmentFile`, …) so the value doesn't end up in the ops/SCM-committed config yaml.
 
 No auto-discovery in v1. A future `auto_discover_orgs: [acme-org, someuser]` flag could discover-within-org boundaries without polluting from random OSS comments, but that's v2+.
 
@@ -110,11 +118,11 @@ Empty or absent `repos:` is a config error at daemon startup (per ADR-0006's str
 For each configured repo, the plugin's bulk-fetch path runs **two queries** in sequence:
 
 1. `is:open involves:<operator-login> repo:<owner>/<name>` — every currently-open PR or issue the operator is involved in.
-2. `is:closed involves:<operator-login> repo:<owner>/<name> updated:>=<N-days-ago>` — every closed PR or issue the operator is involved in that has had upstream activity within an N-day rolling window. `N` comes from the `YAAD_GITHUB_RECENT_DAYS` env var (default `7`).
+2. `is:closed involves:<operator-login> repo:<owner>/<name> updated:>=<N-days-ago>` — every closed PR or issue the operator is involved in that has had upstream activity within an N-day rolling window. `N` comes from the `recent_days:` key in the structured `config:` block (default `7`).
 
 `involves:` covers author + assignee + mentioned + commenter + reviewer. Matches a typical coordinator+reviewer involvement pattern; explicit narrower scopes are deferred to a future config knob if the surface gets too noisy.
 
-The closed-recent-window is the **stateless replacement** for the per-plugin last-sync cursor an earlier draft of this ADR proposed. GitHub's Search API supports `updated:>=` natively, so the plugin needs no state file and the daemon needs no `--last-sync` arg — the rolling window covers the realistic recently-closed set. Closed items >N days with no subsequent upstream activity won't surface; that's the intended cold-set (an old closure with no churn is genuinely settled). Operators with a narrow `YAAD_GITHUB_RECENT_DAYS` should know this boundary; default `7` covers typical review cycles.
+The closed-recent-window is the **stateless replacement** for the per-plugin last-sync cursor an earlier draft of this ADR proposed. GitHub's Search API supports `updated:>=` natively, so the plugin needs no state file and the daemon needs no `--last-sync` arg — the rolling window covers the realistic recently-closed set. Closed items >N days with no subsequent upstream activity won't surface; that's the intended cold-set (an old closure with no churn is genuinely settled). Operators with a narrow `recent_days:` should know this boundary; default `7` covers typical review cycles.
 
 The `<operator-login>` token is derived from the authenticated PAT's user (one `GET /user` call on first startup, cached in plugin state).
 
@@ -223,36 +231,34 @@ Default `/v1/search`, `/v1/list-entities`, etc. already skip archived rows via `
 
 ### 7. Multi-instance pattern: same binary, configurable base URL
 
-The plugin reads its API base URL from `YAAD_GITHUB_BASE_URL` (env), defaulting to `https://api.github.com`. Operators can register two plugin instances pointing the same binary at different GitHub deployments:
+The plugin reads its API base URL from the structured `config:` block's `base_url:` key, defaulting to `https://api.github.com`. Operators register two plugin instances pointing the same binary at different GitHub deployments:
 
 ```yaml
 plugins:
   - name: github-personal
     path: /home/operator/.local/bin/yaad-github
-    env:
-      YAAD_GITHUB_BASE_URL: https://api.github.com
-      YAAD_GITHUB_TOKEN: <personal PAT>
     config:
+      base_url: https://api.github.com
       repos: [acme-org/project-a, someuser/dotfiles]
   - name: github-work
     path: /home/operator/.local/bin/yaad-github
-    env:
-      YAAD_GITHUB_BASE_URL: https://ghes.example.com/api/v3
-      YAAD_GITHUB_TOKEN: <work PAT>
     config:
+      base_url: https://ghes.example.com/api/v3
       repos: [team/service-a, team/service-b]
 ```
 
-The instances are independent: separate tokens, separate URL bases, separate repo lists. Each instance handles inputs matching its `name:` prefix in the URL/command — `github-personal: !fetch` vs `github-work: !fetch`.
+The PAT (`YAAD_GITHUB_TOKEN`) stays in env-passthrough — operators set it at the daemon-process env layer per §8 below, so the ops/SCM-committed yaml never carries the secret.
 
-The plugin's URL-pattern matching needs a small adjustment: instead of hardcoding `github.com` in the patterns, the plugin's `--init` interpolates `YAAD_GITHUB_BASE_URL`'s host portion:
+The instances are independent: separate tokens (one per daemon-process env scoping; operators typically run a daemon-per-deployment), separate URL bases, separate repo lists. Each instance handles inputs matching its `name:` prefix in the URL/command — `github-personal: !fetch` vs `github-work: !fetch`.
+
+The plugin's URL-pattern matching uses the daemon-injected `_name` field + the structured `base_url:` to interpolate the patterns at `--init`:
 
 ```python
-host = urlparse(os.environ["YAAD_GITHUB_BASE_URL"]).hostname  # github.com OR ghes.example.com
+host = urlparse(config["base_url"]).hostname  # github.com OR ghes.example.com
 url_patterns = [
     f"^https?://{re.escape(host)}/[^/]+/[^/]+/pull/\\d+",
     f"^https?://{re.escape(host)}/[^/]+/[^/]+/issues/\\d+",
-    f"(?i)^{name}:\\s*[^/]+/[^/]+#\\d+",  # shorthand uses the instance name, not "github"
+    f"(?i)^{config['_name']}:\\s*[^/]+/[^/]+#\\d+",  # shorthand uses _name, not "github"
 ]
 ```
 
@@ -261,7 +267,7 @@ So `github-work: ghes-org/repo#42` shorthand resolves through the work instance,
 ### 8. Auth + secrets
 
 - **Env var name:** `YAAD_GITHUB_TOKEN` — distinct from the `gh` CLI's `GITHUB_TOKEN` to avoid scope confusion.
-- **Delivery path:** the value reaches the plugin subprocess via the operator's `plugins[].env:` block (per [ADR-0006](./0006-plugin-discovery-config-allowlist.md)) — that is the single canonical mechanism. The `env:` example in §7 above shows the literal placeholder for illustration; operators MUST NOT commit a real PAT inline. Recommended pattern is to either reference an out-of-tree env-file (e.g. via a shell-expansion / secrets-manager indirection the operator wires up themselves, or via a deployment-time substitution) or to use a per-instance variant such as `~/.config/yaad-index/github.env` that the daemon sources before spawning the plugin. The plugin itself reads only the env vars passed in; how those vars get into the subprocess env is operator-discretionary.
+- **Delivery path:** the value reaches the plugin subprocess via the daemon's process environment (env-passthrough channel per ADR-0006's 2026-05-22 amendment / #192). Operators set it via docker `-e`, systemd `EnvironmentFile`, or any other secrets-manager mechanism that lands the value in the daemon's env. The daemon passes its env to subprocesses by default; the plugin reads `os.Getenv("YAAD_GITHUB_TOKEN")` directly. Operators MUST NOT put the PAT in the `config:` block (which lands in the operator yaml, typically committed to ops/SCM).
 - **Required scopes:** `repo` (private repo read) + `read:org` (org membership visibility). Never logged.
 
 ## Consequences
@@ -332,3 +338,13 @@ Section 6's closed-item lifecycle was rewritten to defer archive policy to opera
 - **Alternatives considered** grows to enumerate the rejected plugin-direct-call and daemon-side-inferential approaches with the coupling rationale.
 
 The earlier draft's "plugin's bulk-fetch loop calls `archive_entity`" wording is removed wholesale.
+
+### 2026-05-22 — structured `config:` block + JSON Schema (#192 migration)
+
+Per ADR-0006's 2026-05-22 amendment, yaad-github's operator-side config moves from per-key env vars to a structured `config:` block delivered via `YAAD_PLUGIN_CONFIG`. Plugin reads + json.Unmarshals on startup; daemon validates the block against a JSON Schema the plugin advertises in `--init` capabilities.
+
+- **§3 worked example** now shows `repos:` as a YAML list directly in the `config:` block (was: comma-separated `YAAD_GITHUB_REPOS` env var; the pre-#192 daemon's scalar-only config couldn't model list shapes). Also documents `recent_days:` + `base_url:` under the same block.
+- **§4** updated: `recent_days:` key replaces the `YAAD_GITHUB_RECENT_DAYS` env var as the N-day-rolling-window knob.
+- **§7 multi-instance pattern** updated: `base_url:` moves from `env:` block to `config:`. The daemon-injected `_name` field replaces the previous `YAAD_GITHUB_INSTANCE_NAME` env var — operators no longer write the name twice; the daemon derives it from the entry's `name:` value automatically.
+- **§8 auth + secrets** updated: `YAAD_GITHUB_TOKEN` stays in env-passthrough (secret); explicit framing of the two channels (config vs env-passthrough).
+- **Internal helpers**: `ParseRepoList(string)` → `ValidateRepoList([]string)`; `ParseRecentDays(string) → int, error` → `ResolveRecentDays(int) → int` (the JSON Schema validates the integer shape upstream so the parse path doesn't need to handle strings).

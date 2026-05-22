@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseRepoList_HappyPath(t *testing.T) {
+func TestValidateRepoList_HappyPath(t *testing.T) {
 	t.Parallel()
-	got, err := ParseRepoList("acme/proj, beta/widget , gamma/store")
+	got, err := ValidateRepoList([]string{"acme/proj", " beta/widget ", "gamma/store"})
 	require.NoError(t, err)
 	assert.Equal(t, []RepoRef{
 		{Owner: "acme", Repo: "proj"},
@@ -19,17 +19,17 @@ func TestParseRepoList_HappyPath(t *testing.T) {
 	}, got)
 }
 
-func TestParseRepoList_EmptyReturnsErrNoRepos(t *testing.T) {
+func TestValidateRepoList_EmptyReturnsErrNoRepos(t *testing.T) {
 	t.Parallel()
-	for _, raw := range []string{"", "   ", "\t\n"} {
-		_, err := ParseRepoList(raw)
-		assert.ErrorIs(t, err, ErrNoRepos, "raw=%q", raw)
+	for _, raw := range [][]string{nil, {}, {""}, {"   "}} {
+		_, err := ValidateRepoList(raw)
+		assert.ErrorIs(t, err, ErrNoRepos, "raw=%v", raw)
 	}
 }
 
-func TestParseRepoList_TrailingCommaSkipped(t *testing.T) {
+func TestValidateRepoList_WhitespaceEntriesSkipped(t *testing.T) {
 	t.Parallel()
-	got, err := ParseRepoList("acme/proj,,beta/widget,")
+	got, err := ValidateRepoList([]string{"acme/proj", "", "  ", "beta/widget"})
 	require.NoError(t, err)
 	assert.Equal(t, []RepoRef{
 		{Owner: "acme", Repo: "proj"},
@@ -37,27 +37,21 @@ func TestParseRepoList_TrailingCommaSkipped(t *testing.T) {
 	}, got)
 }
 
-func TestParseRepoList_AllWhitespaceEntriesReturnsErrNoRepos(t *testing.T) {
+func TestValidateRepoList_MalformedEntries(t *testing.T) {
 	t.Parallel()
-	_, err := ParseRepoList(",,, ,")
-	assert.ErrorIs(t, err, ErrNoRepos)
-}
-
-func TestParseRepoList_MalformedEntries(t *testing.T) {
-	t.Parallel()
-	cases := []string{
-		"no-slash",
-		"/missing-owner",
-		"missing-repo/",
-		"too/many/slashes",
-		"acme/proj,bad-entry",
+	cases := [][]string{
+		{"no-slash"},
+		{"/missing-owner"},
+		{"missing-repo/"},
+		{"too/many/slashes"},
+		{"acme/proj", "bad-entry"},
 	}
 	for _, raw := range cases {
-		_, err := ParseRepoList(raw)
-		require.Error(t, err, "raw=%q", raw)
+		_, err := ValidateRepoList(raw)
+		require.Error(t, err, "raw=%v", raw)
 		var malformed *ErrMalformedRepo
-		require.True(t, errors.As(err, &malformed), "raw=%q err=%v", raw, err)
-		assert.NotEmpty(t, malformed.Entry, "raw=%q", raw)
+		require.True(t, errors.As(err, &malformed), "raw=%v err=%v", raw, err)
+		assert.NotEmpty(t, malformed.Entry, "raw=%v", raw)
 	}
 }
 

@@ -130,35 +130,24 @@ var DeclaredCommands = []string{CommandFetch}
 // `https://ghes.example.com/api/v3`) per ADR-0026 §7.
 const DefaultBaseURL = "https://api.github.com"
 
-// Env-var integration points operators set via the daemon's
-// `plugins[].env:` config block per ADR-0006 + ADR-0026 §7-§8.
-const (
-	EnvToken   = "YAAD_GITHUB_TOKEN"
-	EnvBaseURL = "YAAD_GITHUB_BASE_URL"
+// EnvToken is the env-passthrough channel for the GitHub Personal
+// Access Token (secret per ADR-0006's 2026-05-22 amendment / #192).
+// Operators set this at the daemon-process env layer (docker -e,
+// systemd EnvironmentFile, etc.) — NOT in the operator yaml's
+// `config:` block. Required scopes: `repo` + `read:org`.
+const EnvToken = "YAAD_GITHUB_TOKEN"
 
-	// EnvRecentDays is the N-day rolling window the bulk-fetch
-	// path uses to scope the closed-item sweep per ADR-0026 §4
-	// + §6 (2026-05-21 amendment). Operators tune via the
-	// daemon's `plugins[].env:` block; the plugin parses the
-	// value as a positive integer (>=1) at startup.
-	//
-	// **Window boundary.** The closed search runs
-	// `is:closed updated:>=<now - N days>`, which surfaces every
-	// closed item with upstream activity in the window. Closed
-	// items whose state has been quiet for >N days do NOT
-	// surface — that's the intended cold-set per the workflow-
-	// owns-state design (a long-quiet closure is genuinely
-	// settled and shouldn't churn through the ingest path on
-	// every sweep). Operators with a narrow window should know
-	// this trade-off; default 7 covers typical review cycles.
-	EnvRecentDays = "YAAD_GITHUB_RECENT_DAYS"
-)
-
-// DefaultRecentDays is the fallback value for EnvRecentDays when
-// the operator hasn't set it. 7 covers typical review cycles
-// (the window matches roughly one workweek of upstream churn);
-// operators with longer review-loop horizons override via the
-// env var.
+// DefaultRecentDays is the fallback when the operator's structured
+// `config:` block doesn't set `recent_days`. 7 covers typical
+// review cycles (the window matches roughly one workweek of
+// upstream churn); operators with longer review-loop horizons
+// override via the `recent_days:` key.
+//
+// **Window boundary.** The closed search runs
+// `is:closed updated:>=<now - N days>`, surfacing every closed
+// item with upstream activity in the window. Closed items quiet
+// for >N days do NOT surface — that's the intended cold-set per
+// the workflow-owns-state design.
 const DefaultRecentDays = 7
 
 // ResolveBaseURL returns the effective API base URL. Operator
