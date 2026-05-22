@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
 	gogithub "github.com/google/go-github/v68/github"
@@ -119,56 +118,11 @@ func targetFromSearchHit(repo RepoRef, issue *gogithub.Issue) Target {
 	}
 }
 
-// BulkFetchOptions bundles the bulk-pass inputs. Same shape
-// as FetchOptions but carries the operator login + repo set
-// so the caller doesn't have to re-derive them per item.
-type BulkFetchOptions struct {
-	Client        *http.Client
-	BaseURL       string
-	Token         string
-	OperatorLogin string
-	Repos         []RepoRef
-}
-
-// FetchInvolvedOpenAcrossRepos walks every configured repo
-// and returns the full normalized Item for each open PR +
-// issue the operator is involved in. Combines per-repo
-// search with per-item FetchTarget so the caller emits one
-// envelope per Item directly.
-//
-// The caller (cmd/yaad-github/main.go's runCommandFetch)
-// drives emission so each item lands on stdout as soon as
-// its fetch completes — preserves the ADR-0023 streaming-
-// NDJSON contract (envelope-per-line, no batch accumulation).
-// This helper returns a slice instead because it's the
-// composition shape Cut-3 tests need; the binary calls the
-// component pieces directly for streaming.
-func FetchInvolvedOpenAcrossRepos(ctx context.Context, opts BulkFetchOptions) ([]*Item, error) {
-	client, err := newClient(opts.Client, opts.BaseURL, opts.Token)
-	if err != nil {
-		return nil, err
-	}
-	var items []*Item
-	for _, repo := range opts.Repos {
-		targets, err := searchInvolved(ctx, client, repo, opts.OperatorLogin)
-		if err != nil {
-			return items, fmt.Errorf("github: search %s: %w", repo.Slash(), err)
-		}
-		for _, t := range targets {
-			item, err := fetchItemViaClient(ctx, client, t)
-			if err != nil {
-				return items, fmt.Errorf("github: fetch %s/%s#%d: %w", t.Owner, t.Repo, t.Number, err)
-			}
-			items = append(items, item)
-		}
-	}
-	return items, nil
-}
-
-// fetchItemViaClient is the client-bound shim FetchTarget
-// delegates to in the bulk-fetch path; reuses the same
-// client across the per-repo search loop so we don't
-// reconstruct per item.
+// fetchItemViaClient is the client-bound dispatch from a
+// Target into the kind-specific fetcher (PR or issue). The
+// `Client.FetchTarget` method delegates here so the per-item
+// fetch path stays decoupled from go-github client
+// construction.
 func fetchItemViaClient(ctx context.Context, client *gogithub.Client, t Target) (*Item, error) {
 	switch t.Kind {
 	case ItemKindPR:
