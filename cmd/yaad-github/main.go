@@ -348,9 +348,11 @@ func runCommandFetch(stdout, stderr io.Writer) error {
 
 // dedupTargets unions the open + closed-recent result sets and
 // drops duplicates. The same (owner, repo, kind, number) appears
-// at most once even when an item flipped state between the two
-// queries — the second query's hit wins (later query, more
-// recent state observation).
+// at most once. `Target` carries no state field, and the
+// per-item `FetchTarget` call fetches the current upstream state
+// regardless of which search surfaced the target — so the
+// dedup is purely about avoiding double-fetch, not about
+// choosing a "winning" representation.
 func dedupTargets(open, closed []github.Target) []github.Target {
 	out := make([]github.Target, 0, len(open)+len(closed))
 	seen := make(map[github.Target]struct{}, len(open)+len(closed))
