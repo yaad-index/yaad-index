@@ -42,6 +42,16 @@ type noteEntry struct {
 	Text string `json:"text"`
 	Author string `json:"author,omitempty"`
 	Operator string `json:"operator,omitempty"`
+	// Field is the optional per-field scope per #186 (e.g.
+	// `birth_date`). Empty → entity-level note (legacy behavior).
+	Field string `json:"field,omitempty"`
+	// Kind discriminates everyday notes from agent-feedback
+	// annotations per #186. Empty / `note` → operator-level
+	// commentary; `annotation` → agent observation that wants
+	// operator attention. Omitempty so legacy notes (no kind
+	// stamped at write time) decode as zero-value without the
+	// JSON field appearing in the response.
+	Kind string `json:"kind,omitempty"`
 }
 
 // commentsResponse is the 201 envelope: the just-appended note plus
