@@ -112,7 +112,13 @@ plugins:
     path: /opt/yaad/yaad-wikipedia
   - name: yaad-bgg
     path: /opt/yaad/yaad-bgg
+  - name: yaad-gmail
+    path: /opt/yaad/yaad-gmail
+  - name: yaad-github
+    path: /opt/yaad/yaad-github
 ```
+
+The four entries above are the bundled plugins this monorepo ships (also baked into the container image at `/usr/local/lib/yaad-index/plugins/<name>`). Per-plugin env-var requirements + sample config blocks live in [`config.yaml.example`](../config.yaml.example) and the per-plugin docs at [`docs/plugins/`](plugins/).
 
 Each entry: `{name, path}`.
 
