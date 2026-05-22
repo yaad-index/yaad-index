@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.7.0...yaad-index-v0.8.0) (2026-05-22)
+
+
+### Features
+
+* **api,mcp:** Streamable HTTP MCP route + bridge + get_entity sample tool ([#101](https://github.com/yaad-index/yaad-index/issues/101) Cut 1) ([#172](https://github.com/yaad-index/yaad-index/issues/172)) ([8440ff4](https://github.com/yaad-index/yaad-index/commit/8440ff4f86fe5240c24000064a0ef009c1874948))
+* **config:** structured per-plugin config + JSON Schema validation ([#192](https://github.com/yaad-index/yaad-index/issues/192) foundation) ([#205](https://github.com/yaad-index/yaad-index/issues/205)) ([b0418cb](https://github.com/yaad-index/yaad-index/commit/b0418cbe7e9f631aaf28bbef93b431a039d4e962))
+* **mcp:** port remaining 32 daemon tools via the Cut 1 bridge ([#101](https://github.com/yaad-index/yaad-index/issues/101) Cut 2) ([#174](https://github.com/yaad-index/yaad-index/issues/174)) ([d5e8b29](https://github.com/yaad-index/yaad-index/commit/d5e8b299e8c36146d82b1f51cdf8b0ecdc85e2bc))
+* **workflow,engine:** sequential FIFO queue + two-pass eval + explicit-claim + catch-all ([#169](https://github.com/yaad-index/yaad-index/issues/169)) ([#170](https://github.com/yaad-index/yaad-index/issues/170)) ([69c27a6](https://github.com/yaad-index/yaad-index/commit/69c27a635239343165f5076b8d6df4dab9639a45))
+* **workflow:** entity.updated + field_changed + restore_entity ([#196](https://github.com/yaad-index/yaad-index/issues/196) PR-C) ([#199](https://github.com/yaad-index/yaad-index/issues/199)) ([fdf1029](https://github.com/yaad-index/yaad-index/commit/fdf10293d896ab0131604c9857b35b2bba5bd743))
+* **yaad-github:** bulk fetch via Search API ([#187](https://github.com/yaad-index/yaad-index/issues/187) Cut 3) ([#193](https://github.com/yaad-index/yaad-index/issues/193)) ([a7e72fe](https://github.com/yaad-index/yaad-index/commit/a7e72feaa30580ef1bf7738ef0924ecfa3ebcdab))
+* **yaad-github:** closed-recent sweep + YAAD_GITHUB_RECENT_DAYS ([#187](https://github.com/yaad-index/yaad-index/issues/187) Cut 4 / [#196](https://github.com/yaad-index/yaad-index/issues/196) PR-D) ([#200](https://github.com/yaad-index/yaad-index/issues/200)) ([2c415ca](https://github.com/yaad-index/yaad-index/commit/2c415cafbdcc9bd52dc5e61a852f3bd73b515b3d))
+* **yaad-github:** migrate to YAAD_PLUGIN_CONFIG + config_schema ([#192](https://github.com/yaad-index/yaad-index/issues/192)) ([#209](https://github.com/yaad-index/yaad-index/issues/209)) ([28fcb76](https://github.com/yaad-index/yaad-index/commit/28fcb7613d805ccae88f2846ee7924cc74c578df))
+* **yaad-github:** scaffold + --version + --init + auth wiring ([#187](https://github.com/yaad-index/yaad-index/issues/187) Cut 1) ([#188](https://github.com/yaad-index/yaad-index/issues/188)) ([94bf0a7](https://github.com/yaad-index/yaad-index/commit/94bf0a7ce332ebd745a75752395ff710763f5715))
+* **yaad-github:** URL-shape single-item PR/issue fetch ([#187](https://github.com/yaad-index/yaad-index/issues/187) Cut 2) ([#189](https://github.com/yaad-index/yaad-index/issues/189)) ([c0238c8](https://github.com/yaad-index/yaad-index/commit/c0238c8f6f87fbbdbcc2190bf32032fa53f06e33))
+
 ## [0.7.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.6.0...yaad-index-v0.7.0) (2026-05-18)
 
 
