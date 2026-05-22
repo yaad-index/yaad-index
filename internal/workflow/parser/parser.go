@@ -238,6 +238,8 @@ type taskAppendShape struct {
 type addNoteShape struct {
 	Target  string `yaml:"target"`
 	Content string `yaml:"content"`
+	Field   string `yaml:"field"`
+	Kind    string `yaml:"kind"`
 }
 
 type pluginDispatchShape struct {
@@ -434,6 +436,8 @@ func addNoteFromShape(s *addNoteShape) *AddNoteAction {
 	return &AddNoteAction{
 		Target:  strings.TrimSpace(s.Target),
 		Content: s.Content,
+		Field:   strings.TrimSpace(s.Field),
+		Kind:    strings.TrimSpace(s.Kind),
 	}
 }
 

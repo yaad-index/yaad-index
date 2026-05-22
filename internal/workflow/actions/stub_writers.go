@@ -29,7 +29,7 @@ import (
 // stub stays on as the zero-config default.
 type StubNoteWriter struct{}
 
-func (StubNoteWriter) AppendNote(_ context.Context, workflow, entityID, body string) error {
+func (StubNoteWriter) AppendNote(_ context.Context, workflow, entityID, body, _field, _kind string) error {
 	return fmt.Errorf("%w: vault-backed add_note not wired; attempted workflow=%s entity=%s body_len=%d",
 		ErrActionNotImplemented, workflow, entityID, len(body))
 }

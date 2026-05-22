@@ -28,6 +28,21 @@ import (
 type commentsRequest struct {
 	Text string `json:"text"`
 	Author string `json:"author,omitempty"`
+	// Field is the optional per-field scope per #186 (e.g.
+	// `birth_date`). Empty / omitted → entity-level note
+	// (legacy behavior). Validated only by length cap; the
+	// canonical-kind gap registry doesn't gate this — operators
+	// + agents may attach to any field they care about,
+	// including ones not yet declared as gaps.
+	Field string `json:"field,omitempty"`
+	// Kind discriminates everyday notes from agent-feedback
+	// annotations per #186. Accepted values: empty / `note` /
+	// `annotation`. Empty + `note` are equivalent on write
+	// (both round-trip to omitted-on-the-wire on read since
+	// the default is `note`); any other value returns 400
+	// invalid_argument so a typo doesn't silently produce an
+	// un-filterable note.
+	Kind string `json:"kind,omitempty"`
 }
 
 // noteEntry is the wire shape for a single note on the response.
@@ -120,6 +135,21 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 			return
 		}
 		author := strings.TrimSpace(req.Author)
+		field := strings.TrimSpace(req.Field)
+		kind := strings.TrimSpace(req.Kind)
+		// Empty kind is the legacy shape — preserved as empty so
+		// round-trip stays identical to pre-#186 vault files.
+		// Explicit "note" + "annotation" are accepted; any other
+		// value rejects to keep the kind filter set canonical.
+		switch kind {
+		case "", vault.NoteKindNote, vault.NoteKindAnnotation:
+			// accepted
+		default:
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				fmt.Sprintf("kind=%q is not recognised (want %q or %q)",
+					kind, vault.NoteKindNote, vault.NoteKindAnnotation))
+			return
+		}
 
 		// Per yaad-index a prior PR: enforce author == JWT subject.
 		// Empty author → fill from claim (client-convenience). Non-
@@ -222,10 +252,12 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 		// cycle.
 		now := clock.Now().Truncate(time.Second)
 		newNote := vault.Note{
-			Date: now,
-			Text: text,
-			Author: author,
+			Date:     now,
+			Text:     text,
+			Author:   author,
 			Operator: operator,
+			Field:    field,
+			Kind:     kind,
 		}
 		ve.Notes = append(ve.Notes, newNote)
 
@@ -276,10 +308,12 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 		if err := json.NewEncoder(w).Encode(commentsResponse{
 			OK: true,
 			Note: noteEntry{
-				Date: newNote.Date.Format(time.RFC3339),
-				Text: newNote.Text,
-				Author: newNote.Author,
+				Date:     newNote.Date.Format(time.RFC3339),
+				Text:     newNote.Text,
+				Author:   newNote.Author,
 				Operator: newNote.Operator,
+				Field:    newNote.Field,
+				Kind:     newNote.Kind,
 			},
 			Entity: toAPIEntity(fresh),
 		}); err != nil {

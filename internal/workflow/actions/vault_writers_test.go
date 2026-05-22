@@ -273,7 +273,7 @@ func TestVaultNoteWriter_HappyPath(t *testing.T) {
 		now,
 	)
 	w := NewVaultNoteWriter(b)
-	err := w.AppendNote(context.Background(), "bgg-news", "pr:1", "found a related entity")
+	err := w.AppendNote(context.Background(), "bgg-news", "pr:1", "found a related entity", "", "")
 	require.NoError(t, err)
 
 	writes := vw.snapshot()
@@ -299,7 +299,7 @@ func TestVaultNoteWriter_EntityNotFound(t *testing.T) {
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	b, _, _, _ := newVaultWriterBackend(t, nil, nil, now)
 	w := NewVaultNoteWriter(b)
-	err := w.AppendNote(context.Background(), "wf", "pr:absent", "hi")
+	err := w.AppendNote(context.Background(), "wf", "pr:absent", "hi", "", "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEntityNotFound)
 }
@@ -318,7 +318,7 @@ func TestVaultNoteWriter_VaultFileMissing(t *testing.T) {
 		now,
 	)
 	w := NewVaultNoteWriter(b)
-	err := w.AppendNote(context.Background(), "wf", "pr:thin", "hi")
+	err := w.AppendNote(context.Background(), "wf", "pr:thin", "hi", "", "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEntityNotFound)
 	assert.Contains(t, err.Error(), "vault file missing")
@@ -351,7 +351,7 @@ func TestVaultNoteWriter_WriteLockConflict(t *testing.T) {
 	defer release()
 
 	w := NewVaultNoteWriter(b)
-	err = w.AppendNote(context.Background(), "wf", "pr:1", "hi")
+	err = w.AppendNote(context.Background(), "wf", "pr:1", "hi", "", "")
 	require.Error(t, err)
 	assert.True(t, writelocks.IsConflict(unwrapToConflict(err)),
 		"writelocks.IsConflict on the unwrapped writer error")
@@ -384,7 +384,7 @@ func TestVaultNoteWriter_WriteLockWaitsForReleaser(t *testing.T) {
 	}()
 
 	w := NewVaultNoteWriter(b)
-	err = w.AppendNote(context.Background(), "wf", "pr:1", "post-ingest note")
+	err = w.AppendNote(context.Background(), "wf", "pr:1", "post-ingest note", "", "")
 	require.NoError(t, err, "writer should wait for the ingest hold to release, not error")
 
 	writes := vw.snapshot()
@@ -409,7 +409,7 @@ func TestVaultNoteWriter_UpsertErrorDegradesGracefully(t *testing.T) {
 	)
 	es.upsertErr = errors.New("db down")
 	w := NewVaultNoteWriter(b)
-	err := w.AppendNote(context.Background(), "wf", "pr:1", "hi")
+	err := w.AppendNote(context.Background(), "wf", "pr:1", "hi", "", "")
 	assert.NoError(t, err, "vault write succeeded; DB-mirror failure doesn't fail the call")
 	require.Len(t, vw.snapshot(), 1, "vault write still landed")
 }
@@ -895,7 +895,7 @@ func TestVaultNoteWriter_WrapsEntityShapedBody(t *testing.T) {
 	withKindsRegistry(b)
 	w := NewVaultNoteWriter(b)
 	require.NoError(t, w.AppendNote(context.Background(),
-		"link-watcher", "pr:1", "gmail:msg-abc"))
+		"link-watcher", "pr:1", "gmail:msg-abc", "", ""))
 
 	writes := vw.snapshot()
 	require.Len(t, writes, 1)
@@ -926,7 +926,7 @@ func TestVaultNoteWriter_PassesThroughProseBody(t *testing.T) {
 	}
 	for _, body := range cases {
 		require.NoError(t, w.AppendNote(context.Background(),
-			"wf", "pr:1", body))
+			"wf", "pr:1", body, "", ""))
 	}
 
 	writes := vw.snapshot()
@@ -959,7 +959,7 @@ func TestVaultNoteWriter_NoRegistryNoWrap(t *testing.T) {
 	// b.Kinds intentionally unset.
 	w := NewVaultNoteWriter(b)
 	require.NoError(t, w.AppendNote(context.Background(),
-		"wf", "pr:1", "gmail:msg-1"))
+		"wf", "pr:1", "gmail:msg-1", "", ""))
 
 	writes := vw.snapshot()
 	require.Len(t, writes, 1)

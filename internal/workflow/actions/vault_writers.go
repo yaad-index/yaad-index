@@ -174,7 +174,7 @@ func NewVaultNoteWriter(b *VaultWriterBackend) *VaultNoteWriter {
 // vault.Note with Author=`workflow:<workflow>`, writes
 // back with a commit author of `workflow:<workflow>`, mirrors
 // the notes-text update into the store via UpsertEntity.
-func (w *VaultNoteWriter) AppendNote(ctx context.Context, workflow, entityID, body string) error {
+func (w *VaultNoteWriter) AppendNote(ctx context.Context, workflow, entityID, body, field, kind string) error {
 	if w.backend == nil {
 		return fmt.Errorf("VaultNoteWriter: backend not wired")
 	}
@@ -220,6 +220,8 @@ func (w *VaultNoteWriter) AppendNote(ctx context.Context, workflow, entityID, bo
 		Date:   now,
 		Text:   body,
 		Author: workflowAuthor(workflow),
+		Field:  field,
+		Kind:   kind,
 	})
 
 	commitMsg := fmt.Sprintf("workflow note on %s by %s", ve.ID, workflowAuthor(workflow))
