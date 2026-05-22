@@ -123,7 +123,7 @@ The plugin emits truth (`structured.data.state`) and the operator configures wor
 
 ### 1. Archive on state-change to `closed`
 
-```markdown
+````markdown
 ---
 name: github-archive-on-state-change
 version: 1
@@ -152,8 +152,8 @@ actions:
   - archive_entity:
       target: '{{ entity.id }}'
       reason: 'github-state-closed'
-\```
 ```
+````
 
 ### 2. Restore on state-change to `open`
 
@@ -161,7 +161,7 @@ Mirror of (1): same trigger + match shape, `condition: 'entity.data.state == "op
 
 ### 3. Archive on initial-closed-ingest
 
-```markdown
+````markdown
 ---
 name: github-archive-on-initial-closed
 version: 1
@@ -193,10 +193,10 @@ actions:
   - archive_entity:
       target: '{{ entity.id }}'
       reason: 'github-state-closed-initial'
-\```
 ```
+````
 
-Default `/v1/search`, `/v1/list-entities`, etc. already skip archived rows; agents that want them back pass `include_archived=true` per the existing [ADR-0018](../../adr/0018-archive-replaces-delete.md) endpoint contract. Queries like "what did I merge last week" need the flag explicitly — the default active-set view shows open items only.
+Default `/v1/search`, `/v1/list-entities`, etc. already skip archived rows; agents that want them back pass `include_archived=true` per the existing [ADR-0018](../../adr/0018-archive-replaces-delete.md) endpoint contract. Queries like "what did I merge last week" need the flag explicitly — the default active-set view shows non-archived items only (a recent closure that hasn't been archived yet would still surface; archival is the workflow's job).
 
 ## Multi-instance deployments
 
