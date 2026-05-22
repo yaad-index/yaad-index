@@ -124,7 +124,29 @@ type capabilitiesDoc struct {
 	// Slug(name)>` for every emission with `structured.kind:
 	// "source"`.
 	SourceNamespace string `json:"source_namespace,omitempty"`
+	// ConfigSchema declares the JSON Schema the operator's
+	// `plugins[N].config:` block must satisfy per ADR-0006's
+	// 2026-05-22 amendment (#192). yaad-bgg has no operator-side
+	// config surface today — the API key (the only secret it
+	// needs) stays in env-passthrough — so the schema rejects
+	// any operator-supplied properties beyond the daemon-injected
+	// `_name`.
+	ConfigSchema json.RawMessage `json:"config_schema,omitempty"`
 }
+
+// configSchemaJSON declares the operator-side `config:` shape for
+// yaad-bgg per ADR-0006's 2026-05-22 amendment. The plugin reads
+// its only secret (BGG_API_KEY) from the daemon-process env, so
+// the operator yaml has no structured-config surface beyond the
+// reserved daemon-injected `_name` field.
+const configSchemaJSON = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "_name": {"type": "string"}
+  }
+}`
 
 // canonicalKindExtras mirrors the wire shape yaad-index's
 // plugins.CanonicalKindExtras decodes per yaad-index (typed
@@ -171,7 +193,8 @@ func runInit(stdout io.Writer) error {
 				DefaultTTLDays: bgg.DefaultTTLDays,
 			},
 		},
-		EdgeKinds: []kindSpecJSON{},
+		EdgeKinds:    []kindSpecJSON{},
+		ConfigSchema: json.RawMessage(configSchemaJSON),
 		CanonicalKindsEmitted: []string{bgg.CanonicalKind, "person", "company"},
 		// Edge types yaad-bgg emits in the source-shape edges
 		// block (per ADR-0021 + this PR's plugin-emitted edge
