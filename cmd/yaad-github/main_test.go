@@ -140,13 +140,24 @@ func TestRun_CommandFetch_HappyPath_StreamsEnvelopesAndSummary(t *testing.T) {
 				http.Error(w, "bad query: "+q, http.StatusBadRequest)
 				return
 			}
-			_, _ = w.Write([]byte(`{
-				"total_count": 2,
-				"items": [
-					{"number": 7, "pull_request": {"url": "https://api.example.test/repos/acme/proj/pulls/7"}, "state": "open", "title": "PR seven"},
-					{"number": 9, "state": "open", "title": "Issue nine"}
-				]
-			}`))
+			switch {
+			case strings.Contains(q, "is:open"):
+				_, _ = w.Write([]byte(`{
+					"total_count": 2,
+					"items": [
+						{"number": 7, "pull_request": {"url": "https://api.example.test/repos/acme/proj/pulls/7"}, "state": "open", "title": "PR seven"},
+						{"number": 9, "state": "open", "title": "Issue nine"}
+					]
+				}`))
+			case strings.Contains(q, "is:closed"):
+				// Empty closed-recent set keeps this test
+				// focused on the open path; the closed-search
+				// wiring is exercised in
+				// TestRun_CommandFetch_ClosedRecent_*.
+				_, _ = w.Write([]byte(`{"items": []}`))
+			default:
+				http.Error(w, "unrecognised search query: "+q, http.StatusBadRequest)
+			}
 		case "/repos/acme/proj/pulls/7":
 			_, _ = w.Write([]byte(`{
 				"number": 7,
@@ -218,6 +229,139 @@ func TestRun_CommandFetch_HappyPath_StreamsEnvelopesAndSummary(t *testing.T) {
 	assert.Equal(t, 2, summary.Summary.Emitted)
 	assert.Equal(t, 0, summary.Summary.Errors)
 	assert.GreaterOrEqual(t, summary.Summary.DurationMillis, int64(0))
+}
+
+// TestRun_CommandFetch_InvalidRecentDays_EmitsErrorEnvelope:
+// a non-positive YAAD_GITHUB_RECENT_DAYS surfaces as a single
+// `_error` packet + exit non-zero before any GitHub call.
+func TestRun_CommandFetch_InvalidRecentDays_EmitsErrorEnvelope(t *testing.T) {
+	t.Setenv(github.EnvRepos, "acme/proj")
+	t.Setenv(github.EnvToken, "ghp_stub")
+	t.Setenv(github.EnvRecentDays, "not-a-number")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--command", "fetch"}, nil, &stdout, &stderr)
+	assert.Equal(t, 1, code)
+
+	var pkt struct {
+		Error        string `json:"_error"`
+		ErrorMessage string `json:"_error_message"`
+	}
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &pkt))
+	assert.Equal(t, "config_invalid", pkt.Error)
+	assert.Contains(t, pkt.ErrorMessage, "YAAD_GITHUB_RECENT_DAYS")
+}
+
+// TestRun_CommandFetch_ClosedRecent_EmittedAlongsideOpen: the
+// closed-recent sweep emits one envelope per matched item in
+// addition to the open sweep's items per ADR-0026 §6 (2026-05-21
+// amendment). The closed envelope carries `data.state == "closed"`.
+func TestRun_CommandFetch_ClosedRecent_EmittedAlongsideOpen(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/user":
+			_, _ = w.Write([]byte(`{"login":"test-operator"}`))
+		case "/search/issues":
+			q := r.URL.Query().Get("q")
+			switch {
+			case strings.Contains(q, "is:open"):
+				_, _ = w.Write([]byte(`{"items": [{"number": 7, "state": "open", "title": "Open seven"}]}`))
+			case strings.Contains(q, "is:closed"):
+				assert.Contains(t, q, "updated:>=",
+					"closed-recent search must include the updated:>= filter")
+				_, _ = w.Write([]byte(`{"items": [{"number": 9, "state": "closed", "title": "Closed nine"}]}`))
+			default:
+				http.Error(w, "unknown query: "+q, http.StatusBadRequest)
+			}
+		case "/repos/acme/proj/issues/7":
+			_, _ = w.Write([]byte(`{"number": 7, "state": "open", "title": "Open seven", "body": "b", "html_url": "https://github.com/acme/proj/issues/7", "user": {"login": "u"}}`))
+		case "/repos/acme/proj/issues/9":
+			_, _ = w.Write([]byte(`{"number": 9, "state": "closed", "title": "Closed nine", "body": "b", "html_url": "https://github.com/acme/proj/issues/9", "user": {"login": "u"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	t.Setenv(github.EnvBaseURL, srv.URL)
+	t.Setenv(github.EnvToken, "ghp_stub")
+	t.Setenv(github.EnvRepos, "acme/proj")
+	t.Setenv(github.EnvRecentDays, "7")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--command", "fetch"}, nil, &stdout, &stderr)
+	require.Equal(t, 0, code, "stderr=%s", stderr.String())
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	require.Len(t, lines, 3, "one open envelope + one closed envelope + one _summary: %q", stdout.String())
+
+	states := []string{}
+	for i := 0; i < 2; i++ {
+		var env struct {
+			Structured struct {
+				Data map[string]any `json:"data"`
+			} `json:"structured"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(lines[i]), &env))
+		states = append(states, env.Structured.Data["state"].(string))
+	}
+	assert.ElementsMatch(t, []string{"open", "closed"}, states,
+		"both open and closed states surface in the same sweep")
+
+	var summary struct {
+		Summary struct {
+			Emitted int `json:"emitted"`
+		} `json:"_summary"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(lines[2]), &summary))
+	assert.Equal(t, 2, summary.Summary.Emitted)
+}
+
+// TestRun_CommandFetch_OpenAndClosedDedup: an item appearing in
+// both the open and the closed-recent results (transition mid-
+// sweep) emits only once.
+func TestRun_CommandFetch_OpenAndClosedDedup(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/user":
+			_, _ = w.Write([]byte(`{"login":"test-operator"}`))
+		case "/search/issues":
+			q := r.URL.Query().Get("q")
+			switch {
+			case strings.Contains(q, "is:open"):
+				_, _ = w.Write([]byte(`{"items": [{"number": 7, "state": "open", "title": "Mid-flight seven"}]}`))
+			case strings.Contains(q, "is:closed"):
+				_, _ = w.Write([]byte(`{"items": [{"number": 7, "state": "closed", "title": "Mid-flight seven"}]}`))
+			default:
+				http.Error(w, "unknown query: "+q, http.StatusBadRequest)
+			}
+		case "/repos/acme/proj/issues/7":
+			_, _ = w.Write([]byte(`{"number": 7, "state": "closed", "title": "Mid-flight seven", "body": "b", "html_url": "https://github.com/acme/proj/issues/7", "user": {"login": "u"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	t.Setenv(github.EnvBaseURL, srv.URL)
+	t.Setenv(github.EnvToken, "ghp_stub")
+	t.Setenv(github.EnvRepos, "acme/proj")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--command", "fetch"}, nil, &stdout, &stderr)
+	require.Equal(t, 0, code, "stderr=%s", stderr.String())
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	require.Len(t, lines, 2, "deduped → one envelope + one _summary: %q", stdout.String())
+
+	var summary struct {
+		Summary struct {
+			Emitted int `json:"emitted"`
+		} `json:"_summary"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(lines[1]), &summary))
+	assert.Equal(t, 1, summary.Summary.Emitted,
+		"item present in both search responses dedups to one emit")
 }
 
 func TestRun_CommandUnknown_ReturnsTwo(t *testing.T) {

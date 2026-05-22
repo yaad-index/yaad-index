@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	gogithub "github.com/google/go-github/v68/github"
 )
@@ -50,7 +51,32 @@ func SearchInvolvedOpen(ctx context.Context, opts FetchOptions, repo RepoRef, lo
 // without re-constructing per call. Exported callers use
 // SearchInvolvedOpen which owns client construction.
 func searchInvolved(ctx context.Context, client *gogithub.Client, repo RepoRef, login string) ([]Target, error) {
-	query := fmt.Sprintf("is:open involves:%s repo:%s", login, repo.Slash())
+	return searchInvolvedQuery(ctx, client, repo,
+		fmt.Sprintf("is:open involves:%s repo:%s", login, repo.Slash()))
+}
+
+// searchInvolvedClosedRecent is the closed-window companion to
+// searchInvolved per ADR-0026 §6 (2026-05-21 amendment): every
+// closed PR + issue the operator is involved in with upstream
+// activity in the last `days`-day window. The `updated:>=<date>`
+// filter is GitHub Search's native rolling-window operator —
+// stateless on the plugin side, no last-sync cursor needed.
+//
+// `now` is the reference instant the window is anchored against;
+// the caller passes its own clock for testability. `days` is
+// validated by the caller (ParseRecentDays); a non-positive
+// value would produce an oddly-shaped query string but is not
+// re-validated here.
+func searchInvolvedClosedRecent(ctx context.Context, client *gogithub.Client, repo RepoRef, login string, now time.Time, days int) ([]Target, error) {
+	return searchInvolvedQuery(ctx, client, repo,
+		fmt.Sprintf("is:closed involves:%s repo:%s updated:>=%s",
+			login, repo.Slash(), FormatRecentSince(now, days)))
+}
+
+// searchInvolvedQuery runs the paginated Search.Issues call for
+// any pre-built query string. Shared by the open + closed-recent
+// search paths.
+func searchInvolvedQuery(ctx context.Context, client *gogithub.Client, repo RepoRef, query string) ([]Target, error) {
 	opts := &gogithub.SearchOptions{
 		ListOptions: gogithub.ListOptions{PerPage: 100},
 	}
