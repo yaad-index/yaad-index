@@ -69,15 +69,28 @@ const (
 	// Phase 4+; the Source vocabulary is laid down here so the
 	// shape is stable).
 	TopicFillCompleted Topic = "fill.completed"
+
+	// TopicEntityUpdated fires when a plugin's re-fetch surfaces
+	// a per-field delta inside `structured.data` on an
+	// already-known entity. One event per changed field per the
+	// ADR-0024 2026-05-21 amendment — mirrors TopicEntityEdgeAdded
+	// per-edge granularity so subscribers fan out via per-field
+	// matching instead of navigating a delta list in CEL.
+	//
+	// Distinct from TopicEntityCreated (first ingest only),
+	// TopicEntityEdgeAdded (edge-only changes), and
+	// TopicFillCompleted (gap-fill closures — preserves the
+	// gap-author-tagged vs upstream-truth boundary per ADR-0008).
+	TopicEntityUpdated Topic = "entity.updated"
 )
 
 // AllTopics lists the closed topic set so callers (validators,
-// tests, future enumerators) don't hard-code three string
-// literals.
+// tests, future enumerators) don't hard-code the literals.
 var AllTopics = []Topic{
 	TopicEntityCreated,
 	TopicEntityEdgeAdded,
 	TopicFillCompleted,
+	TopicEntityUpdated,
 }
 
 // Source tags WHO initiated the mutation that produced this
@@ -286,6 +299,78 @@ func (e FillCompletedEvent) Topic() Topic           { return TopicFillCompleted 
 func (e FillCompletedEvent) Source() Source         { return e.SourceTag }
 func (e FillCompletedEvent) OccurredAt() time.Time  { return e.At }
 func (e FillCompletedEvent) WorkflowChain() []string { return e.Chain }
+
+// EntityUpdatedEvent is published when an ingest re-fetch
+// surfaces a per-field delta on `structured.data` for an
+// already-known entity. **One event per changed field** —
+// a re-fetch that flips both `data.state` and
+// `data.comment_count` emits two EntityUpdatedEvents in
+// declaration order, not one event with a delta slice.
+// Mirrors EntityEdgeAddedEvent's per-edge granularity so
+// subscribers fan out via simple per-Field matching.
+//
+// Does NOT fire on first ingest (that's EntityCreatedEvent)
+// or on gap-fill closures (that's FillCompletedEvent). The
+// split keeps gap-author-tagged provenance distinct from
+// upstream-truth provenance per ADR-0008.
+type EntityUpdatedEvent struct {
+	// EntityID is the canonical id of the entity whose data
+	// changed. Subscribers commonly filter on Kind below;
+	// the engine's entity-kind probe path goes through the
+	// entity resolver same as EntityCreatedEvent.
+	EntityID string
+
+	// Kind is the entity's canonical kind (e.g. `github-pr`,
+	// `boardgame`). Carried inline so the engine's match
+	// path doesn't need a separate resolve round-trip — the
+	// publisher already has the kind in hand on the re-fetch
+	// upsert path.
+	Kind string
+
+	// Field is the dotted path of the changed field inside
+	// `structured.data` (e.g. `data.state`,
+	// `data.comment_count`). Subscribers' `field_changed`
+	// match filter pins this to the field the workflow cares
+	// about.
+	//
+	// v1 carries direct map-key changes only — deep / nested
+	// map deltas surface as a change on the top-level key
+	// (the old vs new are the whole nested map). Workflows
+	// needing deep matching navigate the value in CEL.
+	Field string
+
+	// Old is the previous value of Field; nil when the field
+	// was absent before the re-fetch. Carried as any so
+	// subscribers can downcast as needed; the publisher
+	// stores the raw decoded value, no coercion.
+	Old any
+
+	// New is the post-re-fetch value of Field; nil when the
+	// field was dropped (re-fetch surfaced no value for a
+	// previously-set key). Carried as any same as Old.
+	New any
+
+	// SourceTag is the Source attribution — same vocabulary
+	// as EntityCreatedEvent. The ingest path stamps
+	// SourceAgent for the common case.
+	SourceTag Source
+
+	// At is the wall-clock time the re-fetch upsert was
+	// committed.
+	At time.Time
+
+	// Chain is the workflow-name list per #147 cycle
+	// detection. Producers reading WorkflowChainFromContext
+	// on publish set this; the engine reads it before firing
+	// a workflow and skips when the workflow's own name
+	// appears.
+	Chain []string
+}
+
+func (e EntityUpdatedEvent) Topic() Topic            { return TopicEntityUpdated }
+func (e EntityUpdatedEvent) Source() Source          { return e.SourceTag }
+func (e EntityUpdatedEvent) OccurredAt() time.Time   { return e.At }
+func (e EntityUpdatedEvent) WorkflowChain() []string { return e.Chain }
 
 // Handler is the per-subscription callback the bus invokes on
 // every matching published event. Handlers MUST return quickly

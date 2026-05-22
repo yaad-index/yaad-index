@@ -143,11 +143,12 @@ type triggerShape struct {
 }
 
 type triggerMatchShape struct {
-	EdgeType   string `yaml:"edge_type"`
-	TargetKind string `yaml:"target_kind"`
-	Kind       string `yaml:"kind"`
-	Gap        string `yaml:"gap"`
-	Source     string `yaml:"source"`
+	EdgeType     string `yaml:"edge_type"`
+	TargetKind   string `yaml:"target_kind"`
+	Kind         string `yaml:"kind"`
+	Gap          string `yaml:"gap"`
+	Source       string `yaml:"source"`
+	FieldChanged string `yaml:"field_changed"`
 }
 
 type ctxShape struct {
@@ -172,12 +173,18 @@ type actionShape struct {
 	SetProperty      *setPropertyShape      `yaml:"set_property"`
 	AddCanonicalEdge *addCanonicalEdgeShape `yaml:"add_canonical_edge"`
 	ArchiveEntity    *archiveEntityShape    `yaml:"archive_entity"`
+	RestoreEntity    *restoreEntityShape    `yaml:"restore_entity"`
 	ClaimEntity      *claimEntityShape      `yaml:"claim_entity"`
 }
 
 type claimEntityShape struct{}
 
 type archiveEntityShape struct {
+	Entity string `yaml:"entity"`
+	Reason string `yaml:"reason"`
+}
+
+type restoreEntityShape struct {
 	Entity string `yaml:"entity"`
 	Reason string `yaml:"reason"`
 }
@@ -297,11 +304,12 @@ func triggerFromShape(t triggerShape) Trigger {
 	return Trigger{
 		Type: strings.TrimSpace(t.Type),
 		Match: TriggerMatch{
-			EdgeType:   strings.TrimSpace(t.Match.EdgeType),
-			TargetKind: strings.TrimSpace(t.Match.TargetKind),
-			Kind:       strings.TrimSpace(t.Match.Kind),
-			Gap:        strings.TrimSpace(t.Match.Gap),
-			Source:     strings.TrimSpace(t.Match.Source),
+			EdgeType:     strings.TrimSpace(t.Match.EdgeType),
+			TargetKind:   strings.TrimSpace(t.Match.TargetKind),
+			Kind:         strings.TrimSpace(t.Match.Kind),
+			Gap:          strings.TrimSpace(t.Match.Gap),
+			Source:       strings.TrimSpace(t.Match.Source),
+			FieldChanged: strings.TrimSpace(t.Match.FieldChanged),
 		},
 	}
 }
@@ -364,6 +372,7 @@ func actionsFromShape(entries []actionShape) []Action {
 			SetProperty:      setPropertyFromShape(e.SetProperty),
 			AddCanonicalEdge: addCanonicalEdgeFromShape(e.AddCanonicalEdge),
 			ArchiveEntity:    archiveEntityFromShape(e.ArchiveEntity),
+			RestoreEntity:    restoreEntityFromShape(e.RestoreEntity),
 			ClaimEntity:      claimEntityFromShape(e.ClaimEntity),
 		}
 	}
@@ -486,6 +495,16 @@ func archiveEntityFromShape(s *archiveEntityShape) *ArchiveEntityAction {
 		return nil
 	}
 	return &ArchiveEntityAction{
+		Entity: strings.TrimSpace(s.Entity),
+		Reason: strings.TrimSpace(s.Reason),
+	}
+}
+
+func restoreEntityFromShape(s *restoreEntityShape) *RestoreEntityAction {
+	if s == nil {
+		return nil
+	}
+	return &RestoreEntityAction{
 		Entity: strings.TrimSpace(s.Entity),
 		Reason: strings.TrimSpace(s.Reason),
 	}

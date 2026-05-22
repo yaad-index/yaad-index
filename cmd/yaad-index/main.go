@@ -489,6 +489,7 @@ func (s *ServeCmd) Run() error {
 				mergedRegistry, bus, logger,
 			),
 			ArchiveWriter:    actions.NewVaultArchiveWriter(wfWriterBackend),
+			RestoreWriter:    actions.NewVaultRestoreWriter(wfWriterBackend),
 			PluginDispatcher: wfPluginDispatcher,
 			Bus:              bus,
 			// Phase 5.B err-task pattern — systemic failures

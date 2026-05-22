@@ -196,6 +196,14 @@ type TriggerMatch struct {
 	// internal/eventbus.Source: "agent", "operator",
 	// "workflow:<name>". Empty = no source filter.
 	Source string
+
+	// FieldChanged is the dotted-path filter for
+	// TriggerTypeEntityUpdated naming which field's delta the
+	// workflow cares about (e.g. `data.state`). Required for
+	// entity_updated; rejected for other types. v1 matches by
+	// exact-string equality against the published event's
+	// Field — no globbing, no prefix matching.
+	FieldChanged string
 }
 
 // ContextBinding is one entry in the `context` list — a named
@@ -243,6 +251,7 @@ type Action struct {
 	SetProperty       *SetPropertyAction
 	AddCanonicalEdge  *AddCanonicalEdgeAction
 	ArchiveEntity     *ArchiveEntityAction
+	RestoreEntity     *RestoreEntityAction
 	ClaimEntity       *ClaimEntityAction
 }
 
@@ -474,6 +483,24 @@ type ArchiveEntityAction struct {
 	Reason string
 }
 
+// RestoreEntityAction is the `restore_entity` primitive — the
+// mirror of `archive_entity` per ADR-0024's 2026-05-21
+// amendment. Flips an entity back out of ADR-0018's archived
+// state from inside the workflow action vocabulary. Same shape
+// as ArchiveEntityAction (Entity defaults to `entity.id`, Reason
+// is audit-only); same idempotence + soft-skip contract
+// (restoring an already-active entity is a no-op; not-found
+// is a soft skip).
+type RestoreEntityAction struct {
+	// Entity is the CEL expression that resolves to the target
+	// entity id. Defaults to `entity.id` when omitted.
+	Entity string
+
+	// Reason is the optional CEL audit string folded into the
+	// restore commit message.
+	Reason string
+}
+
 // Trigger type constants — the v1 closed set per ADR-0024
 // §"Trigger types (v1)". Internal time-based is deferred
 // post-v1; external host cron + manual covers the immediate
@@ -483,6 +510,12 @@ const (
 	TriggerTypeEntityCreated  = "entity_created"
 	TriggerTypeFillCompleted  = "fill_completed"
 	TriggerTypeManual         = "manual"
+	// TriggerTypeEntityUpdated is the trigger type per ADR-0024's
+	// 2026-05-21 amendment: workflows subscribe to per-field data
+	// deltas surfaced by ingest re-fetch. Pairs with the
+	// `field_changed` Match field — required, names the dotted
+	// data path the workflow cares about.
+	TriggerTypeEntityUpdated  = "entity_updated"
 )
 
 // Dedup policy constants — the v1 closed set per ADR-0024

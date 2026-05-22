@@ -71,6 +71,11 @@ type EntityStore interface {
 	GetEntity(ctx context.Context, id string) (*store.Entity, error)
 	UpsertEntity(ctx context.Context, e *store.Entity) error
 	ArchiveEntity(ctx context.Context, id string) error
+	// RestoreEntity is the #196 restore_entity surface — the
+	// inverse of ArchiveEntity. ErrNotFound here is the same
+	// soft-skip signal (entity may have been removed between
+	// trigger and fire) and the runner forwards success.
+	RestoreEntity(ctx context.Context, id string) error
 }
 
 // VaultEntityReader is the narrow subset of *vault.Reader.
@@ -85,6 +90,10 @@ type VaultEntityReader interface {
 type VaultEntityWriter interface {
 	WriteWithCommit(ctx context.Context, e *vault.Entity, message, author string) error
 	ArchiveWithCommit(ctx context.Context, kind, id, message, author string) error
+	// RestoreWithCommit is the #196 restore_entity surface
+	// (move _archive → active). The production *vault.Writer
+	// idempotently treats already-at-destination as a no-op.
+	RestoreWithCommit(ctx context.Context, kind, id, message, author string) error
 }
 
 // VaultWriterBackend bundles the dependencies the vault-backed
@@ -512,6 +521,99 @@ func (w *VaultArchiveWriter) ArchiveEntity(ctx context.Context, workflow, entity
 		}
 		// Vault move already succeeded; reindex will reconcile.
 		return fmt.Errorf("store.ArchiveEntity %s (vault already moved): %w", entityID, err)
+	}
+	return nil
+}
+
+// VaultRestoreWriter is the production-default RestoreWriter
+// per #196 — the mirror of VaultArchiveWriter. Combines
+// `vault.Writer.RestoreWithCommit` (move _archive → active)
+// with `store.Store.RestoreEntity` (DB toggle clears
+// archived_at) behind a per-entity write-lock acquired via
+// AcquireWithTimeout — same shape as VaultArchiveWriter.
+//
+// Idempotence: store.RestoreEntity is a no-op on rows whose
+// archived_at is already NULL; vault.RestoreWithCommit
+// short-circuits when source-in-archive is missing AND
+// destination-in-active is present. Re-firing on an already-
+// active entity is a clean no-op.
+//
+// Soft-skip semantics: when the store's GetEntity reports
+// ErrNotFound for the resolved id, the writer logs at debug
+// and returns nil (success). The entity may have been removed
+// by another path between the trigger event and this action;
+// failing the chain over that adds noise without giving the
+// operator anything actionable.
+type VaultRestoreWriter struct {
+	backend *VaultWriterBackend
+}
+
+// NewVaultRestoreWriter mirrors NewVaultArchiveWriter. Backend
+// must be non-nil with Store + VaultWriter + WriteLocks set;
+// missing fields panic at first call.
+func NewVaultRestoreWriter(b *VaultWriterBackend) *VaultRestoreWriter {
+	return &VaultRestoreWriter{backend: b}
+}
+
+// RestoreEntity implements RestoreWriter. Reads the entity to
+// learn its kind for the vault move, acquires the per-entity
+// write-lock via AcquireWithTimeout, runs the vault move, then
+// flips the DB row's archived_at to NULL. Vault-first per
+// ADR-0008 vault-as-source-of-truth — a vault failure aborts
+// before the DB toggle; a DB failure after the vault move logs
+// loudly (reindex reconciles future state from the vault side).
+//
+// `reason` is folded into the commit message so the audit trail
+// names the workflow's stated reason inline with the restore
+// event.
+func (w *VaultRestoreWriter) RestoreEntity(ctx context.Context, workflow, entityID, reason string) error {
+	if w.backend == nil {
+		return fmt.Errorf("VaultRestoreWriter: backend not wired")
+	}
+	holder := workflowHolder(workflow, "restore_entity")
+	release, err := w.backend.WriteLocks.AcquireWithTimeout(ctx, entityID, holder, w.backend.lockTimeout())
+	if err != nil {
+		return fmt.Errorf("acquire write-lock on %s: %w", entityID, err)
+	}
+	defer release()
+
+	got, err := w.backend.Store.GetEntity(ctx, entityID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			w.backend.logger().DebugContext(ctx,
+				"workflow restore_entity: entity not found in store; soft-skipping",
+				"workflow", workflow, "entity_id", entityID)
+			return nil
+		}
+		return fmt.Errorf("store.GetEntity %s: %w", entityID, err)
+	}
+
+	commitMsg := fmt.Sprintf("restore: %s", entityID)
+	if reason != "" {
+		commitMsg = fmt.Sprintf("restore: %s (%s)", entityID, reason)
+	}
+	author := workflowAuthor(workflow)
+
+	// Vault move first. Already-active (source missing AND
+	// destination present) returns nil from the vault layer
+	// without a commit — the writer treats that as success +
+	// proceeds to ensure the DB toggle is also cleared.
+	if err := w.backend.VaultWriter.RestoreWithCommit(ctx, got.Kind, entityID, commitMsg, author); err != nil {
+		return fmt.Errorf("vault restore %s: %w", entityID, err)
+	}
+
+	// DB toggle. Already-active rows (archived_at NULL) are a
+	// no-op at the store layer. ErrNotFound here means the row
+	// was dropped between GetEntity and RestoreEntity (rare race).
+	if err := w.backend.Store.RestoreEntity(ctx, entityID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			w.backend.logger().DebugContext(ctx,
+				"workflow restore_entity: store row vanished between GetEntity and RestoreEntity; vault already moved",
+				"workflow", workflow, "entity_id", entityID)
+			return nil
+		}
+		// Vault move already succeeded; reindex will reconcile.
+		return fmt.Errorf("store.RestoreEntity %s (vault already moved): %w", entityID, err)
 	}
 	return nil
 }

@@ -424,6 +424,7 @@ func (e *Engine) Start() {
 			e.bus.Subscribe(eventbus.TopicEntityEdgeAdded, e.enqueueEvent),
 			e.bus.Subscribe(eventbus.TopicEntityCreated, e.enqueueEvent),
 			e.bus.Subscribe(eventbus.TopicFillCompleted, e.enqueueEvent),
+			e.bus.Subscribe(eventbus.TopicEntityUpdated, e.enqueueEvent),
 		}
 		e.workerWG.Add(1)
 		go e.workerLoop()
@@ -658,7 +659,8 @@ func (e *Engine) registerLocked(wf *parser.Workflow) error {
 	case parser.TriggerTypeEdgeCreated,
 		parser.TriggerTypeEntityCreated,
 		parser.TriggerTypeFillCompleted,
-		parser.TriggerTypeManual:
+		parser.TriggerTypeManual,
+		parser.TriggerTypeEntityUpdated:
 		// Recognized trigger types — registration proceeds.
 	default:
 		return fmt.Errorf("unsupported trigger.type %q", wf.Trigger.Type)
@@ -810,6 +812,21 @@ func (e *Engine) matchesEvent(qe queuedEvent, reg *registeredWorkflow) bool {
 			return false
 		}
 		return true
+	case eventbus.EntityUpdatedEvent:
+		if reg.workflow.Trigger.Type != parser.TriggerTypeEntityUpdated {
+			return false
+		}
+		// FieldChanged is required at validate time; an empty
+		// FieldChanged match here means the workflow author
+		// got past validation somehow (or the workflow shape
+		// was rebuilt by reflection) — defensively reject.
+		if m.FieldChanged == "" || ev.Field != m.FieldChanged {
+			return false
+		}
+		if m.Kind != "" && ev.Kind != m.Kind {
+			return false
+		}
+		return true
 	default:
 		return false
 	}
@@ -841,6 +858,8 @@ func (e *Engine) runWorkflowAgainstEvent(qe queuedEvent, reg *registeredWorkflow
 	case eventbus.EntityCreatedEvent:
 		return e.evaluateAndRecord(qe.ctx, reg, ev.ID, nil, ev.Chain)
 	case eventbus.FillCompletedEvent:
+		return e.evaluateAndRecord(qe.ctx, reg, ev.EntityID, nil, ev.Chain)
+	case eventbus.EntityUpdatedEvent:
 		return e.evaluateAndRecord(qe.ctx, reg, ev.EntityID, nil, ev.Chain)
 	default:
 		return false

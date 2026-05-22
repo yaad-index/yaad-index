@@ -324,6 +324,105 @@ func TestValidate_FillCompletedAcceptsGap(t *testing.T) {
 	require.NoError(t, Validate(wf))
 }
 
+// TestValidate_EntityUpdatedRequiresFieldChanged: the
+// entity_updated trigger added in ADR-0024's 2026-05-21
+// amendment requires match.field_changed naming the dotted
+// data path the workflow filters on.
+func TestValidate_EntityUpdatedRequiresFieldChanged(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Trigger = Trigger{Type: TriggerTypeEntityUpdated}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "field_changed is required")
+}
+
+// TestValidate_EntityUpdatedAcceptsKindFilter: kind narrows
+// the trigger to a specific canonical entity kind (e.g.
+// github-pr). field_changed alone is sufficient; kind is
+// optional but must NOT be rejected when present.
+func TestValidate_EntityUpdatedAcceptsKindFilter(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Trigger = Trigger{
+		Type: TriggerTypeEntityUpdated,
+		Match: TriggerMatch{
+			FieldChanged: "data.state",
+			Kind:         "github-pr",
+		},
+	}
+	require.NoError(t, Validate(wf))
+}
+
+// TestValidate_EntityUpdatedRejectsForeignFields: edge_type,
+// target_kind, gap, source are all foreign to entity_updated.
+func TestValidate_EntityUpdatedRejectsForeignFields(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		mutate  func(*TriggerMatch)
+		errFrag string
+	}{
+		{"edge_type", func(m *TriggerMatch) { m.EdgeType = "x" }, "edge_type="},
+		{"target_kind", func(m *TriggerMatch) { m.TargetKind = "x" }, "target_kind="},
+		{"gap", func(m *TriggerMatch) { m.Gap = "x" }, "gap="},
+		{"source", func(m *TriggerMatch) { m.Source = "x" }, "source="},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wf := minimalWorkflow()
+			wf.Trigger = Trigger{
+				Type:  TriggerTypeEntityUpdated,
+				Match: TriggerMatch{FieldChanged: "data.state"},
+			}
+			tc.mutate(&wf.Trigger.Match)
+			err := Validate(wf)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.errFrag)
+		})
+	}
+}
+
+// TestValidate_FieldChangedRejectedOnOtherTriggers: the
+// field_changed match field is exclusive to entity_updated.
+func TestValidate_FieldChangedRejectedOnOtherTriggers(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		TriggerTypeEdgeCreated,
+		TriggerTypeEntityCreated,
+		TriggerTypeFillCompleted,
+		TriggerTypeManual,
+	}
+	for _, ttype := range cases {
+		t.Run(ttype, func(t *testing.T) {
+			wf := minimalWorkflow()
+			wf.Trigger = Trigger{
+				Type:  ttype,
+				Match: TriggerMatch{FieldChanged: "data.state"},
+			}
+			// edge_created also needs edge_type, otherwise it
+			// errors before field_changed is checked.
+			if ttype == TriggerTypeEdgeCreated {
+				wf.Trigger.Match.EdgeType = "is_about"
+			}
+			err := Validate(wf)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "field_changed=")
+		})
+	}
+}
+
+// TestValidate_RestoreEntity_Permissive: restore_entity is
+// the mirror of archive_entity — both Entity and Reason are
+// optional CEL strings, so `- restore_entity: {}` is a valid
+// shape (defaults to acting on the triggering entity).
+func TestValidate_RestoreEntity_Permissive(t *testing.T) {
+	t.Parallel()
+	wf := minimalWorkflow()
+	wf.Actions = []Action{{RestoreEntity: &RestoreEntityAction{}}}
+	require.NoError(t, Validate(wf))
+}
+
 // TestValidate_ManualRejectsAnyMatch: manual trigger has no
 // event match shape.
 func TestValidate_ManualRejectsAnyMatch(t *testing.T) {

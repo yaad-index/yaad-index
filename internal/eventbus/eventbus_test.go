@@ -361,14 +361,78 @@ func TestBus_NoGoroutineLeak(t *testing.T) {
 }
 
 // TestAllTopics_Closed_Set pins that AllTopics carries exactly
-// the three Topic constants and nothing else. Future ADR
+// the four Topic constants and nothing else. Future ADR
 // amendments adding a topic must update both AllTopics and this
 // test as a paired change.
 func TestAllTopics_Closed_Set(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t,
-		[]Topic{TopicEntityCreated, TopicEntityEdgeAdded, TopicFillCompleted},
+		[]Topic{TopicEntityCreated, TopicEntityEdgeAdded, TopicFillCompleted, TopicEntityUpdated},
 		AllTopics)
+}
+
+// TestEntityUpdatedEvent_Interface pins the per-field event
+// shape added in ADR-0024's 2026-05-21 amendment: Topic
+// returns the constant, Source/OccurredAt/WorkflowChain pass
+// through, and the per-field payload (EntityID/Kind/Field/Old/
+// New) round-trips.
+func TestEntityUpdatedEvent_Interface(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	chain := []string{"github-archive-on-close"}
+	evt := EntityUpdatedEvent{
+		EntityID:  "github:acme_proj_pr_42",
+		Kind:      "github-pr",
+		Field:     "data.state",
+		Old:       "open",
+		New:       "closed",
+		SourceTag: SourceAgent,
+		At:        at,
+		Chain:     chain,
+	}
+	assert.Equal(t, TopicEntityUpdated, evt.Topic())
+	assert.Equal(t, SourceAgent, evt.Source())
+	assert.Equal(t, at, evt.OccurredAt())
+	assert.Equal(t, chain, evt.WorkflowChain())
+	assert.Equal(t, "github:acme_proj_pr_42", evt.EntityID)
+	assert.Equal(t, "github-pr", evt.Kind)
+	assert.Equal(t, "data.state", evt.Field)
+	assert.Equal(t, "open", evt.Old)
+	assert.Equal(t, "closed", evt.New)
+}
+
+// TestEntityUpdatedEvent_PublishSubscribe wires the new topic
+// through the in-memory bus end-to-end: a subscriber on
+// TopicEntityUpdated receives the published event, and
+// subscribers on other topics do NOT.
+func TestEntityUpdatedEvent_PublishSubscribe(t *testing.T) {
+	t.Parallel()
+	bus := NewMemoryBus()
+	var got []EntityUpdatedEvent
+	var mu sync.Mutex
+	bus.Subscribe(TopicEntityUpdated, func(_ context.Context, e Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, e.(EntityUpdatedEvent))
+	})
+
+	// Subscriber on a sibling topic must NOT receive.
+	var siblingHits int32
+	bus.Subscribe(TopicEntityCreated, func(_ context.Context, _ Event) {
+		atomic.AddInt32(&siblingHits, 1)
+	})
+
+	bus.Publish(context.Background(), EntityUpdatedEvent{
+		EntityID: "boardgame:test-game", Kind: "boardgame", Field: "data.owned",
+		Old: false, New: true, SourceTag: SourceAgent, At: time.Now().UTC(),
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, got, 1)
+	assert.Equal(t, "boardgame:test-game", got[0].EntityID)
+	assert.Equal(t, int32(0), atomic.LoadInt32(&siblingHits),
+		"entity.updated must not deliver to entity.created subscribers")
 }
 
 func TestWorkflowChain_RoundtripsThroughContext(t *testing.T) {
