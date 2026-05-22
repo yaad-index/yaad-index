@@ -26,12 +26,20 @@ type commentCall struct {
 	workflow string
 	entityID string
 	body     string
+	field    string
+	kind     string
 }
 
-func (f *fakeNoteWriter) AppendNote(_ context.Context, workflow, entityID, body string) error {
+func (f *fakeNoteWriter) AppendNote(_ context.Context, workflow, entityID, body, field, kind string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, commentCall{workflow: workflow, entityID: entityID, body: body})
+	f.calls = append(f.calls, commentCall{
+		workflow: workflow,
+		entityID: entityID,
+		body:     body,
+		field:    field,
+		kind:     kind,
+	})
 	return f.writeErr
 }
 
@@ -130,7 +138,7 @@ func TestAddNote_WriterError(t *testing.T) {
 // length surfaced for operator debugging.
 func TestStubNoteWriter_ReturnsNotImplemented(t *testing.T) {
 	t.Parallel()
-	err := StubNoteWriter{}.AppendNote(context.Background(), "wf", "pr:1", "review")
+	err := StubNoteWriter{}.AppendNote(context.Background(), "wf", "pr:1", "review", "", "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrActionNotImplemented)
 	assert.Contains(t, err.Error(), "wf")

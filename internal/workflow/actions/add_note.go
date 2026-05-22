@@ -36,7 +36,15 @@ type NoteWriter interface {
 	// keeping operator-readable attribution consistent with
 	// the bus-event source-tag (`workflow:<name>` is the
 	// same vocabulary fill.completed events use).
-	AppendNote(ctx context.Context, workflow, entityID, body string) error
+	//
+	// field + kind are the #186 agent-feedback annotations:
+	// field scopes the note to a specific entity field
+	// (e.g. `birth_date`); kind discriminates `note`
+	// (default, operator-level commentary) from
+	// `annotation` (agent observation surfaced for operator
+	// attention via the read-side kind filter). Both empty
+	// preserves the legacy add_note shape.
+	AppendNote(ctx context.Context, workflow, entityID, body, field, kind string) error
 }
 
 // runAddNote executes one add_note action by
@@ -78,7 +86,7 @@ func (d *dispatcher) runAddNote(ctx context.Context, idx int, _ *parser.Workflow
 		}
 	}
 
-	if err := d.commentWriter.AppendNote(ctx, dec.Workflow, target, content); err != nil {
+	if err := d.commentWriter.AppendNote(ctx, dec.Workflow, target, content, a.Field, a.Kind); err != nil {
 		return ActionResult{
 			ActionIdx: idx,
 			Type:      "add_note",

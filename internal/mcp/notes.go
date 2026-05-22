@@ -21,7 +21,11 @@ func registerAddNote(s *server.MCPServer, b *bridge) {
 				"(UTC), the JWT subject as author, and the operator from "+
 				"the pair-claim. Empty author is server-filled; an explicit "+
 				"author MUST equal the JWT subject or the call returns the "+
-				"upstream 403 `author_mismatch` envelope verbatim.",
+				"upstream 403 `author_mismatch` envelope verbatim. "+
+				"Optional `field` scopes the note to a specific entity "+
+				"field (e.g. `birth_date`); `kind=annotation` flags the "+
+				"note as agent feedback (use the read-side `kind` filter "+
+				"to scope subsequent reads to annotations only).",
 		),
 		mcp.WithString("entity_id",
 			mcp.Required(),
@@ -33,6 +37,12 @@ func registerAddNote(s *server.MCPServer, b *bridge) {
 		),
 		mcp.WithString("author",
 			mcp.Description("Optional. If set, MUST equal the JWT subject. Omit to let the server fill."),
+		),
+		mcp.WithString("field",
+			mcp.Description("Optional per-field scope (e.g. `birth_date`). Empty → entity-level note (default)."),
+		),
+		mcp.WithString("kind",
+			mcp.Description("Optional. `note` (default, operator-level commentary) or `annotation` (agent observation surfaced for operator attention)."),
 		),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -47,6 +57,12 @@ func registerAddNote(s *server.MCPServer, b *bridge) {
 		args := map[string]any{"text": text}
 		if author := req.GetString("author", ""); author != "" {
 			args["author"] = author
+		}
+		if field := req.GetString("field", ""); field != "" {
+			args["field"] = field
+		}
+		if kind := req.GetString("kind", ""); kind != "" {
+			args["kind"] = kind
 		}
 		body, err := json.Marshal(args)
 		if err != nil {

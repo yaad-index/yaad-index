@@ -367,6 +367,13 @@ func validateAddNote(a *AddNoteAction) error {
 	if strings.TrimSpace(a.Content) == "" {
 		return fmt.Errorf("content is required")
 	}
+	switch a.Kind {
+	case "", NoteKindNote, NoteKindAnnotation:
+		// accepted
+	default:
+		return fmt.Errorf("kind %q is not recognised (want %q or %q)",
+			a.Kind, NoteKindNote, NoteKindAnnotation)
+	}
 	return nil
 }
 

@@ -295,6 +295,19 @@ type AddNoteAction struct {
 	// Content is the CEL template the engine evaluates to
 	// produce the note body. Required non-empty.
 	Content string
+
+	// Field is the optional per-field scope per #186 (e.g.
+	// `birth_date`). Static string — not a CEL template;
+	// workflow authors typically scope to a known field
+	// rather than computing it. Empty → entity-level note.
+	Field string
+
+	// Kind discriminates everyday notes from agent-feedback
+	// annotations per #186. Empty / `note` → operator-level
+	// commentary (default); `annotation` → agent observation
+	// surfaced for operator attention via the read-side kind
+	// filter.
+	Kind string
 }
 
 // PluginDispatchAction is the `plugin_dispatch` primitive — fires
@@ -543,4 +556,13 @@ const (
 	StatusActive = "active"
 	StatusPaused = "paused"
 	StatusDraft  = "draft"
+)
+
+// NoteKind constants — the v1 closed set per #186 for the
+// add_note action's `kind:` field. Mirror vault.NoteKind* by
+// value; kept local to the parser package so the parser
+// stays free of an internal/vault dependency.
+const (
+	NoteKindNote       = "note"
+	NoteKindAnnotation = "annotation"
 )

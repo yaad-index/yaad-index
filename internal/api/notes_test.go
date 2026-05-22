@@ -376,3 +376,71 @@ func TestComments_ReindexRoundTripsHandEdit(t *testing.T) {
 	assert.Contains(t, gotTexts, "hand-edited via reindex path")
 	_ = got // GetEntity used as a smoke check that the row still resolves
 }
+
+// TestComments_AcceptsFieldAndKind pins the #186 Cut 2 write
+// surface: POST /v1/entities/{id}/notes accepts optional
+// `field` + `kind` and persists them through to the vault note +
+// the response envelope.
+func TestComments_AcceptsFieldAndKind(t *testing.T) {
+	t.Parallel()
+	h, _, root := newNotesFixture(t)
+
+	rec := postComments(t, h, commentsTestEntityID, map[string]any{
+		"text":   "Birth-date looks off; bio says 1955-04 but article says 1955-05.",
+		"author": "alice",
+		"field":  "birth_date",
+		"kind":   vault.NoteKindAnnotation,
+	})
+	require.Equal(t, http.StatusCreated, rec.Code, "body=%s", rec.Body.String())
+
+	var got commentsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	assert.Equal(t, "birth_date", got.Note.Field)
+	assert.Equal(t, vault.NoteKindAnnotation, got.Note.Kind)
+
+	v := readVaultByID(t, root, "boardgame", commentsTestEntityID)
+	require.Len(t, v.Notes, 1)
+	assert.Equal(t, "birth_date", v.Notes[0].Field)
+	assert.Equal(t, vault.NoteKindAnnotation, v.Notes[0].Kind)
+}
+
+// TestComments_DefaultsFieldAndKindEmpty pins that omitting the
+// new fields preserves the legacy shape — the persisted note has
+// empty Field + Kind, and the response omits them.
+func TestComments_DefaultsFieldAndKindEmpty(t *testing.T) {
+	t.Parallel()
+	h, _, root := newNotesFixture(t)
+
+	rec := postComments(t, h, commentsTestEntityID, map[string]any{
+		"text":   "Legacy-shape note.",
+		"author": "alice",
+	})
+	require.Equal(t, http.StatusCreated, rec.Code, "body=%s", rec.Body.String())
+
+	var got commentsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	assert.Empty(t, got.Note.Field)
+	assert.Empty(t, got.Note.Kind)
+
+	v := readVaultByID(t, root, "boardgame", commentsTestEntityID)
+	require.Len(t, v.Notes, 1)
+	assert.Empty(t, v.Notes[0].Field)
+	assert.Empty(t, v.Notes[0].Kind)
+}
+
+// TestComments_RejectsUnknownKind pins the closed-set rule:
+// any kind value not in {empty, "note", "annotation"} returns
+// 400 invalid_argument before the vault is touched.
+func TestComments_RejectsUnknownKind(t *testing.T) {
+	t.Parallel()
+	h, _, _ := newNotesFixture(t)
+
+	rec := postComments(t, h, commentsTestEntityID, map[string]any{
+		"text":   "x",
+		"author": "alice",
+		"kind":   "warning",
+	})
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "invalid_argument")
+	assert.Contains(t, rec.Body.String(), "warning")
+}
