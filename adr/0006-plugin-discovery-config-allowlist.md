@@ -80,6 +80,8 @@ plugins:
 
 Operator keys starting with `_` are rejected at config load (a defensive guard against shadowing daemon-injected fields). Future iterations may add additional daemon-injected fields under the same `_`-prefix convention (e.g. `_version`, `_position`) without per-field design decisions.
 
+**Affordance — instance-keyed validation profiles.** Because daemon-injected fields land in the same JSON payload the validator runs against, `_name` is visible to JSON Schema's conditional constructs (`if` / `then` / `anyOf` / `oneOf`). A plugin can therefore declare N validation profiles in a single schema and key them on instance identity — e.g. "if `_name == "github-work"`, then `base_url` is required". This is an emergent property of the design (we inject `_name` to remove operator-side duplication; the validator naturally sees it), not a planned feature; documenting it here so operators discover the affordance from the spec rather than from grep.
+
 **Secrets stay in env-passthrough.** The `config:` block lands in operator yaml (typically committed to ops/SCM); secrets like API tokens should NOT live there. Operators expose secrets via the daemon's process environment (docker `-e`, systemd `EnvironmentFile`, etc.); the daemon passes its env to subprocesses by default, so the plugin reads `os.Getenv("YAAD_GITHUB_TOKEN")` directly. The two channels are explicit: `config:` for structured non-secret values; daemon-env for secrets.
 
 ### Re-discovery
