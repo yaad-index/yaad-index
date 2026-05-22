@@ -126,12 +126,15 @@ PR and issue entities carry comment metadata in `structured.data`:
 "data": {
   "number": 181,
   "type": "pr",
+  "state": "open",
   "comment_count": 5,
   "comment_count_unread_since_last_sync": 2,
   "last_comment_at": "2026-05-20T16:43:32Z",
   ...
 }
 ```
+
+The `state` field is the lifecycle anchor §6's archive workflows read. Value is `"open"` or `"closed"` — PRs that merged surface as `"closed"` with a separate `merged: true` flag in the same block; issues use `"open"` / `"closed"` only.
 
 Comments are not emitted as separate `github-comment` entities. The graph stays small; the cost is no "all comments by a given user" or "comments mentioning a specific ADR" queries. Threshold-based comment-promotion (>200 chars OR contains code-block OR first-from-new-author) is a v2 design discussion.
 
