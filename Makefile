@@ -90,6 +90,7 @@ build-plugins:
 	go build -ldflags "$(LDFLAGS)" -o plugins/yaad-wikipedia ./cmd/yaad-wikipedia
 	go build -ldflags "$(LDFLAGS)" -o plugins/yaad-bgg       ./cmd/yaad-bgg
 	go build -ldflags "$(LDFLAGS)" -o plugins/yaad-gmail     ./cmd/yaad-gmail
+	go build -ldflags "$(LDFLAGS)" -o plugins/yaad-github    ./cmd/yaad-github
 
 tidy-check:
 	go mod tidy -diff

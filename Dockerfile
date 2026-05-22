@@ -9,6 +9,7 @@
 #   /usr/local/lib/yaad-index/plugins/yaad-wikipedia   — bundled plugin
 #   /usr/local/lib/yaad-index/plugins/yaad-bgg         — bundled plugin
 #   /usr/local/lib/yaad-index/plugins/yaad-gmail       — bundled plugin
+#   /usr/local/lib/yaad-index/plugins/yaad-github      — bundled plugin
 #   /etc/yaad-index/config.yaml.example                — starter config
 #   /usr/local/bin/docker-entrypoint.sh                — fail-fast wrapper
 #
@@ -28,7 +29,8 @@ ENV LDFLAGS="-X 'github.com/yaad-index/yaad-index/internal/buildinfo.Version=${V
 RUN CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o /out/yaad-index      ./cmd/yaad-index \
  && CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o /out/yaad-wikipedia  ./cmd/yaad-wikipedia \
  && CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o /out/yaad-bgg        ./cmd/yaad-bgg \
- && CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o /out/yaad-gmail      ./cmd/yaad-gmail
+ && CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o /out/yaad-gmail      ./cmd/yaad-gmail \
+ && CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o /out/yaad-github     ./cmd/yaad-github
 
 # --- runtime ----------------------------------------------------------
 # YAAD_UID / YAAD_GID default to 1000:1000 — matches the conventional
@@ -51,6 +53,7 @@ COPY --from=build /out/yaad-index       /usr/local/bin/yaad-index
 COPY --from=build /out/yaad-wikipedia   /usr/local/lib/yaad-index/plugins/yaad-wikipedia
 COPY --from=build /out/yaad-bgg         /usr/local/lib/yaad-index/plugins/yaad-bgg
 COPY --from=build /out/yaad-gmail       /usr/local/lib/yaad-index/plugins/yaad-gmail
+COPY --from=build /out/yaad-github      /usr/local/lib/yaad-index/plugins/yaad-github
 COPY config.yaml.example                /etc/yaad-index/config.yaml.example
 COPY docker-entrypoint.sh               /usr/local/bin/docker-entrypoint.sh
 
@@ -58,6 +61,7 @@ RUN chmod +x /usr/local/bin/yaad-index \
              /usr/local/lib/yaad-index/plugins/yaad-wikipedia \
              /usr/local/lib/yaad-index/plugins/yaad-bgg \
              /usr/local/lib/yaad-index/plugins/yaad-gmail \
+             /usr/local/lib/yaad-index/plugins/yaad-github \
              /usr/local/bin/docker-entrypoint.sh
 
 USER yaad
