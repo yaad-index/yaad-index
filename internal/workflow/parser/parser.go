@@ -143,12 +143,40 @@ type triggerShape struct {
 }
 
 type triggerMatchShape struct {
-	EdgeType     string `yaml:"edge_type"`
-	TargetKind   string `yaml:"target_kind"`
-	Kind         string `yaml:"kind"`
-	Gap          string `yaml:"gap"`
-	Source       string `yaml:"source"`
-	FieldChanged string `yaml:"field_changed"`
+	EdgeType     string     `yaml:"edge_type"`
+	TargetKind   string     `yaml:"target_kind"`
+	Kinds        kindFilter `yaml:"canonical_kind"`
+	Gap          string     `yaml:"gap"`
+	Source       string     `yaml:"source"`
+	FieldChanged string     `yaml:"field_changed"`
+}
+
+// kindFilter accepts both scalar (`canonical_kind: github-pr`)
+// and sequence (`canonical_kind: [github-pr, github-issue]`)
+// YAML shapes, normalising to []string. Both forms appear in
+// the ADR-0024 + ADR-0026 §6 worked examples; operators reach
+// for whichever feels more natural for the workflow's scope.
+type kindFilter []string
+
+func (k *kindFilter) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var s string
+		if err := value.Decode(&s); err != nil {
+			return err
+		}
+		*k = []string{s}
+		return nil
+	case yaml.SequenceNode:
+		var s []string
+		if err := value.Decode(&s); err != nil {
+			return err
+		}
+		*k = s
+		return nil
+	default:
+		return fmt.Errorf("canonical_kind: want scalar or sequence, got node kind %v", value.Kind)
+	}
 }
 
 type ctxShape struct {
@@ -301,12 +329,21 @@ func decode(frontmatter, yamlBody []byte) (*Workflow, error) {
 }
 
 func triggerFromShape(t triggerShape) Trigger {
+	var kinds []string
+	if len(t.Match.Kinds) > 0 {
+		kinds = make([]string, 0, len(t.Match.Kinds))
+		for _, k := range t.Match.Kinds {
+			if trimmed := strings.TrimSpace(k); trimmed != "" {
+				kinds = append(kinds, trimmed)
+			}
+		}
+	}
 	return Trigger{
 		Type: strings.TrimSpace(t.Type),
 		Match: TriggerMatch{
 			EdgeType:     strings.TrimSpace(t.Match.EdgeType),
 			TargetKind:   strings.TrimSpace(t.Match.TargetKind),
-			Kind:         strings.TrimSpace(t.Match.Kind),
+			Kinds:        kinds,
 			Gap:          strings.TrimSpace(t.Match.Gap),
 			Source:       strings.TrimSpace(t.Match.Source),
 			FieldChanged: strings.TrimSpace(t.Match.FieldChanged),

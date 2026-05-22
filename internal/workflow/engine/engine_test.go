@@ -286,7 +286,7 @@ func TestEngine_EntityCreated_KindFilter(t *testing.T) {
 		AllowedPlugins: []string{"yaad-gmail"},
 		Trigger: parser.Trigger{
 			Type:  parser.TriggerTypeEntityCreated,
-			Match: parser.TriggerMatch{Kind: "boardgame"},
+			Match: parser.TriggerMatch{Kinds: []string{"boardgame"}},
 		},
 		Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
 	}
@@ -371,7 +371,7 @@ func TestEngine_EntityUpdated_FieldChangedFilter(t *testing.T) {
 			Type: parser.TriggerTypeEntityUpdated,
 			Match: parser.TriggerMatch{
 				FieldChanged: "data.state",
-				Kind:         "github-pr",
+				Kinds:        []string{"github-pr"},
 			},
 		},
 		Actions: []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},

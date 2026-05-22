@@ -181,10 +181,14 @@ type TriggerMatch struct {
 	// filter (all edges of EdgeType match).
 	TargetKind string
 
-	// Kind is the entity-kind filter for
-	// TriggerTypeEntityCreated. Empty = no kind filter (all new
-	// entities match).
-	Kind string
+	// Kinds is the canonical-kind filter for TriggerTypeEntityCreated
+	// + TriggerTypeEntityUpdated. Empty list = no kind filter;
+	// non-empty = the event's entity kind must appear in the
+	// list. YAML key is `canonical_kind`; the operator may
+	// specify a single value (`canonical_kind: github-pr`) or a
+	// list (`canonical_kind: [github-pr, github-issue]`); both
+	// shapes round-trip into the same []string.
+	Kinds []string
 
 	// Gap is the gap-name filter for TriggerTypeFillCompleted.
 	// Empty = no gap filter (any fill on any gap matches).

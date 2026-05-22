@@ -91,7 +91,8 @@ ADRs: [ADR-0024](../adr/0024-workflows-and-tasks.md) §"Workflow".
 | Trigger              | Fires on                                                                                       | `entity` binding                | `edge` binding                       |
 |----------------------|------------------------------------------------------------------------------------------------|---------------------------------|--------------------------------------|
 | `edge_created`       | Bus `entity.edge_added` matching `trigger.match.{edge_type, target_kind}` (optional filters)   | The triggering edge's `from`    | The full edge `{type, from, to, from_title, to_title, timestamp}` |
-| `entity_created`     | Bus `entity.created` matching `trigger.match.{kind}` (optional)                                | The newly-created entity        | nil (no triggering edge)             |
+| `entity_created`     | Bus `entity.created` matching `trigger.match.{canonical_kind}` (optional)                      | The newly-created entity        | nil (no triggering edge)             |
+| `entity_updated`     | Bus `entity.updated` matching `trigger.match.{field_changed, canonical_kind}` (`field_changed` required) | The entity whose field changed | nil                                  |
 | `fill_completed`     | Bus `fill.completed` matching `trigger.match.{gap, source}` (both optional)                    | The entity whose gap landed     | nil                                  |
 | `manual`             | `workflow.trigger(name, input)` MCP / HTTP / CLI invocation                                    | The id resolved from `input`    | nil                                  |
 
@@ -99,10 +100,13 @@ Match filter shape examples:
 
 ```yaml
 trigger: { type: edge_created, match: { edge_type: is_about, target_kind: boardgame } }
-trigger: { type: entity_created, match: { kind: email } }
+trigger: { type: entity_created, match: { canonical_kind: email } }
+trigger: { type: entity_updated, match: { field_changed: data.state, canonical_kind: [github-pr, github-issue] } }
 trigger: { type: fill_completed, match: { gap: is_interesting_to_me, source: operator } }
 trigger: { type: manual }
 ```
+
+`canonical_kind:` accepts either a single scalar (`canonical_kind: email`) or a list (`canonical_kind: [github-pr, github-issue]`); both shapes normalise to the same internal filter list.
 
 Missing match keys widen the trigger — `trigger: { type: edge_created, match: {} }` fires on every edge add. `match` is optional except where the workflow's intent specifically narrows.
 

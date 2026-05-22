@@ -134,7 +134,7 @@ func validateTrigger(t Trigger) error {
 		if t.Match.EdgeType == "" {
 			return fmt.Errorf("workflow: trigger.match.edge_type is required for trigger.type=%s", t.Type)
 		}
-		if err := rejectTriggerFields(t.Match, "Kind", "Gap", "Source", "FieldChanged"); err != nil {
+		if err := rejectTriggerFields(t.Match, "Kinds", "Gap", "Source", "FieldChanged"); err != nil {
 			return fmt.Errorf("workflow: %s: %w", t.Type, err)
 		}
 	case TriggerTypeEntityCreated:
@@ -142,11 +142,11 @@ func validateTrigger(t Trigger) error {
 			return fmt.Errorf("workflow: %s: %w", t.Type, err)
 		}
 	case TriggerTypeFillCompleted:
-		if err := rejectTriggerFields(t.Match, "EdgeType", "TargetKind", "Kind", "FieldChanged"); err != nil {
+		if err := rejectTriggerFields(t.Match, "EdgeType", "TargetKind", "Kinds", "FieldChanged"); err != nil {
 			return fmt.Errorf("workflow: %s: %w", t.Type, err)
 		}
 	case TriggerTypeManual:
-		if err := rejectTriggerFields(t.Match, "EdgeType", "TargetKind", "Kind", "Gap", "Source", "FieldChanged"); err != nil {
+		if err := rejectTriggerFields(t.Match, "EdgeType", "TargetKind", "Kinds", "Gap", "Source", "FieldChanged"); err != nil {
 			return fmt.Errorf("workflow: %s: %w", t.Type, err)
 		}
 	case TriggerTypeEntityUpdated:
@@ -176,8 +176,12 @@ func rejectTriggerFields(m TriggerMatch, fields ...string) error {
 			val = m.EdgeType
 		case "TargetKind":
 			val = m.TargetKind
-		case "Kind":
-			val = m.Kind
+		case "Kinds":
+			if len(m.Kinds) > 0 {
+				return fmt.Errorf("trigger.match.canonical_kind=%v is not valid for this trigger.type",
+					m.Kinds)
+			}
+			continue
 		case "Gap":
 			val = m.Gap
 		case "Source":
@@ -199,8 +203,8 @@ func toYAMLKey(goField string) string {
 		return "edge_type"
 	case "TargetKind":
 		return "target_kind"
-	case "Kind":
-		return "kind"
+	case "Kinds":
+		return "canonical_kind"
 	case "Gap":
 		return "gap"
 	case "Source":

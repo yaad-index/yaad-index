@@ -304,12 +304,12 @@ func TestValidate_EdgeCreatedRejectsKindFilter(t *testing.T) {
 		Type: TriggerTypeEdgeCreated,
 		Match: TriggerMatch{
 			EdgeType: "is_about",
-			Kind:     "boardgame",
+			Kinds:    []string{"boardgame"},
 		},
 	}
 	err := Validate(wf)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "kind=")
+	assert.Contains(t, err.Error(), "canonical_kind=")
 	assert.Contains(t, err.Error(), "not valid for this trigger.type")
 }
 
@@ -343,15 +343,66 @@ func TestValidate_EntityUpdatedRequiresFieldChanged(t *testing.T) {
 // optional but must NOT be rejected when present.
 func TestValidate_EntityUpdatedAcceptsKindFilter(t *testing.T) {
 	t.Parallel()
-	wf := minimalWorkflow()
-	wf.Trigger = Trigger{
-		Type: TriggerTypeEntityUpdated,
-		Match: TriggerMatch{
-			FieldChanged: "data.state",
-			Kind:         "github-pr",
-		},
+	cases := []struct {
+		name  string
+		kinds []string
+	}{
+		{"single-kind", []string{"github-pr"}},
+		{"multi-kind", []string{"github-pr", "github-issue"}},
 	}
-	require.NoError(t, Validate(wf))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wf := minimalWorkflow()
+			wf.Trigger = Trigger{
+				Type: TriggerTypeEntityUpdated,
+				Match: TriggerMatch{
+					FieldChanged: "data.state",
+					Kinds:        tc.kinds,
+				},
+			}
+			require.NoError(t, Validate(wf))
+		})
+	}
+}
+
+// TestParse_CanonicalKind_RoundTripsBothShapes: the
+// `canonical_kind:` YAML key accepts both a single scalar
+// (auto-wrapped to a one-element list) and an explicit list
+// per the ADR-0024 + ADR-0026 §6 worked examples.
+func TestParse_CanonicalKind_RoundTripsBothShapes(t *testing.T) {
+	t.Parallel()
+	const single = "---\nname: gh-archive-single\n---\n\n" +
+		"```yaml\n" +
+		"allowed_plugins: [yaad-gmail]\n" +
+		"trigger:\n" +
+		"  type: entity_updated\n" +
+		"  match:\n" +
+		"    field_changed: data.state\n" +
+		"    canonical_kind: github-pr\n" +
+		"actions:\n" +
+		"  - archive_entity: {}\n" +
+		"```\n"
+	const list = "---\nname: gh-archive-list\n---\n\n" +
+		"```yaml\n" +
+		"allowed_plugins: [yaad-gmail]\n" +
+		"trigger:\n" +
+		"  type: entity_updated\n" +
+		"  match:\n" +
+		"    field_changed: data.state\n" +
+		"    canonical_kind: [github-pr, github-issue]\n" +
+		"actions:\n" +
+		"  - archive_entity: {}\n" +
+		"```\n"
+
+	wfSingle, err := Parse([]byte(single))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"github-pr"}, wfSingle.Trigger.Match.Kinds,
+		"scalar `canonical_kind: github-pr` round-trips to a single-element list")
+
+	wfList, err := Parse([]byte(list))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"github-pr", "github-issue"}, wfList.Trigger.Match.Kinds,
+		"list `canonical_kind: [a, b]` round-trips verbatim")
 }
 
 // TestValidate_EntityUpdatedRejectsForeignFields: edge_type,
