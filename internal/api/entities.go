@@ -151,6 +151,17 @@ func handleEntity(logger *slog.Logger, st store.Store, vaultReader *vault.Reader
 		if expandEdges && len(out.Edges) > 0 {
 			stampEdgeArchivedFlags(r.Context(), logger, st, out.Edges)
 		}
+		// `notes_kind` per #186 Cut 3: agent-feedback callers may
+		// scope the returned `notes` array to a single Note.Kind so
+		// they can fetch only `annotation` entries without paging
+		// through everyday note traffic. Empty / absent → no filter
+		// (legacy shape). Invalid value → 400 invalid_argument.
+		notesKind, err := parseNotesKindFilter(r.URL.Query().Get("notes_kind"))
+		if err != nil {
+			writeFieldError(w, "notes_kind", err.Error())
+			return
+		}
+
 		if vaultReader != nil {
 			ve, err := vaultReader.ReadByID(got.Kind, got.ID)
 			if err != nil {
@@ -161,6 +172,7 @@ func handleEntity(logger *slog.Logger, st store.Store, vaultReader *vault.Reader
 				out = mergeVaultEntity(out, ve)
 			}
 		}
+		out = filterNotesByKind(out, notesKind)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -168,6 +180,47 @@ func handleEntity(logger *slog.Logger, st store.Store, vaultReader *vault.Reader
 			logger.ErrorContext(r.Context(), "encode /v1/entities response", "err", err, "id", id)
 		}
 	}
+}
+
+// parseNotesKindFilter validates the optional `?notes_kind=` query
+// param per #186 Cut 3. Accepts empty (no filter), `note`, or
+// `annotation`. Any other value returns an error suitable for
+// surfacing through writeFieldError.
+func parseNotesKindFilter(raw string) (string, error) {
+	switch raw {
+	case "", vault.NoteKindNote, vault.NoteKindAnnotation:
+		return raw, nil
+	default:
+		return "", fmt.Errorf("must be one of: %s, %s",
+			vault.NoteKindNote, vault.NoteKindAnnotation)
+	}
+}
+
+// filterNotesByKind drops entries from out.Notes whose Kind does not
+// match the requested filter. Empty filter is a no-op (legacy shape).
+// A note with empty Kind is treated as `note` so legacy vault entries
+// (written before #186) keep matching the `notes_kind=note` filter
+// even though they don't carry the bracket-tag.
+func filterNotesByKind(out entity, want string) entity {
+	if want == "" || len(out.Notes) == 0 {
+		return out
+	}
+	kept := make([]noteEntry, 0, len(out.Notes))
+	for _, n := range out.Notes {
+		k := n.Kind
+		if k == "" {
+			k = vault.NoteKindNote
+		}
+		if k == want {
+			kept = append(kept, n)
+		}
+	}
+	if len(kept) == 0 {
+		out.Notes = nil
+	} else {
+		out.Notes = kept
+	}
+	return out
 }
 
 // parseWithEdges splits a comma-separated `with_edges` value, trims
