@@ -19,10 +19,13 @@ Drop the binary somewhere the daemon can read + execute it. The container image 
 plugins:
   - name: github
     path: /home/operator/.local/bin/yaad-github
-    env:
-      YAAD_GITHUB_TOKEN: <personal access token>
-      YAAD_GITHUB_REPOS: "acme-org/project-a,acme-org/project-b,someuser/dotfiles"
-      YAAD_GITHUB_RECENT_DAYS: "7"           # optional; default 7
+    config:
+      repos:
+        - acme-org/project-a
+        - acme-org/project-b
+        - someuser/dotfiles
+      recent_days: 7                              # optional; default 7
+      base_url: https://api.github.com            # optional; default github.com
 
 canonical_kinds:
   github-pr:
@@ -44,19 +47,29 @@ canonical_edge_types:
 
 The `name` field is what surfaces in provenance entries + the URL / command sigils (`github:owner/repo#42`, `github: !fetch`); the `path` MUST be absolute (per [ADR-0006](../../adr/0006-plugin-discovery-config-allowlist.md) — no `$PATH` search, no `~/` expansion). After editing the config, restart the daemon — startup calls `yaad-github --version` then falls through to `--init` on cache-miss.
 
+The structured `config:` block lands in operator yaml and reaches the plugin as a single JSON env var (`YAAD_PLUGIN_CONFIG`) per ADR-0006's 2026-05-22 amendment. The daemon validates the block against the plugin's declared JSON Schema at registry-load time — a malformed `config:` fails fast in the startup log, not at first ingest.
+
 **Both `github-pr` and `github-issue` must be enabled in `canonical_kinds:`.** Forgetting one means PRs OR issues silently won't surface in the canonical layer. The `/v1/cv-status` endpoint surfaces this drift; run it after first sync to verify.
 
-## Auth + secrets
+## Operator configuration
+
+### Structured `config:` block
+
+| Key | Required | Purpose |
+|---|---|---|
+| `repos` | yes | List of `owner/repo` targets the bulk sweep walks. Validated at registry-load time against the plugin's JSON Schema; empty or malformed entries fail fast. |
+| `recent_days` | no | N-day rolling window for the closed-item sweep. Default `7`. Positive integers only (JSON Schema enforces `minimum: 1`). |
+| `base_url` | no | API base URL. Default `https://api.github.com`; override for GHES (e.g. `https://ghes.example.com/api/v3`). See [§ multi-instance](#multi-instance-deployments). |
+
+The daemon also injects a reserved `_name` field carrying the operator yaml's `plugins[N].name:` value; the plugin uses it as the multi-instance discriminator (URL pattern + shorthand sigil interpolation). Operators MUST NOT supply `_name` themselves — the schema rejects any operator-supplied `_`-prefixed key per ADR-0006's daemon-injected-fields convention.
+
+### Secrets (env-passthrough)
 
 | Env var | Required | Purpose |
 |---|---|---|
 | `YAAD_GITHUB_TOKEN` | yes | GitHub Personal Access Token. Scopes: `repo` (private repo read) + `read:org` (org membership visibility). |
-| `YAAD_GITHUB_REPOS` | yes | Comma-separated `owner/repo` list — every repo the bulk sweep walks. Whitespace around entries trimmed. Empty or absent → startup fails fast. |
-| `YAAD_GITHUB_RECENT_DAYS` | no | N-day rolling window for the closed-item sweep. Default `7`. Positive integers only (`1`, `30`, `365` etc.); zero / negative / non-integer values fail fast. |
-| `YAAD_GITHUB_BASE_URL` | no | API base URL. Default `https://api.github.com`; override for GHES (e.g. `https://ghes.example.com/api/v3`). See [§7 multi-instance](#multi-instance-deployments). |
-| `YAAD_GITHUB_INSTANCE_NAME` | no | The plugin's operator-side `name:` config — interpolates into the shorthand URL pattern + envelope notations for multi-instance setups. |
 
-The token reaches the plugin subprocess via the operator's `plugins[].env:` block (per [ADR-0006](../../adr/0006-plugin-discovery-config-allowlist.md)). Operators MUST NOT commit a real PAT inline — reference an out-of-tree env-file via the operator's secrets-manager wiring, or use a per-instance env file the daemon sources before spawning the plugin.
+The token reaches the plugin subprocess via the daemon's process environment — operators set it via docker `-e`, systemd `EnvironmentFile`, or any other secrets-manager mechanism that lands the value in the daemon's env. The daemon passes its env to subprocesses by default. **Operators MUST NOT put the PAT in the `config:` block** (which lands in the ops/SCM-committed operator yaml).
 
 ## Invocation
 
@@ -74,7 +87,7 @@ Agent-side: `POST /v1/ingest` with the URL or shorthand as the `url` field. Stan
 
 ### `github: !fetch` (bulk command)
 
-Operator-only-claim per [ADR-0022](../../adr/0022-plugin-command-protocol.md). Walks every repo in `YAAD_GITHUB_REPOS` and emits one envelope per matched item:
+Operator-only-claim per [ADR-0022](../../adr/0022-plugin-command-protocol.md). Walks every repo in `config.repos` and emits one envelope per matched item:
 
 ```sh
 yaad-index command github fetch
@@ -83,11 +96,11 @@ yaad-index command github fetch
 Or via `POST /v1/ingest` with `url: "github: !fetch"`. Two per-repo searches run:
 
 1. `is:open involves:<operator-login> repo:<owner>/<name>` — every currently-open PR / issue the operator is involved in.
-2. `is:closed involves:<operator-login> repo:<owner>/<name> updated:>=<N-days-ago>` — every closed PR / issue with upstream activity in the `YAAD_GITHUB_RECENT_DAYS` window.
+2. `is:closed involves:<operator-login> repo:<owner>/<name> updated:>=<N-days-ago>` — every closed PR / issue with upstream activity in the `config.recent_days` window.
 
 `involves:` covers author + assignee + mentioned + commenter + reviewer. The `<operator-login>` token is derived from the authenticated PAT's user (one `GET /user` call per invocation, cached for the process lifetime).
 
-**Closure-window boundary.** Closed items older than `YAAD_GITHUB_RECENT_DAYS` with no subsequent upstream activity won't surface in the closed sweep — that's the intended cold-set per the workflow-owns-state design. A long-quiet closure is genuinely settled. Operators with a narrow window should know this trade-off; the default 7 days covers typical review cycles.
+**Closure-window boundary.** Closed items older than `config.recent_days` with no subsequent upstream activity won't surface in the closed sweep — that's the intended cold-set per the workflow-owns-state design. A long-quiet closure is genuinely settled. Operators with a narrow window should know this trade-off; the default 7 days covers typical review cycles.
 
 The bulk path streams one envelope per item via NDJSON per [ADR-0023](../../adr/0023-unified-plugin-response-protocol.md) and terminates with a `_summary` control packet.
 
@@ -200,25 +213,25 @@ Default `/v1/search`, `/v1/list-entities`, etc. already skip archived rows; agen
 
 ## Multi-instance deployments
 
-Operators running multiple GitHub instances side-by-side (personal `github.com` + a GHES install, say) reuse the same binary with per-instance env vars:
+Operators running multiple GitHub instances side-by-side (personal `github.com` + a GHES install, say) reuse the same binary with per-instance `config:` blocks:
 
 ```yaml
 plugins:
   - name: github-personal
     path: /home/operator/.local/bin/yaad-github
-    env:
-      YAAD_GITHUB_INSTANCE_NAME: github-personal
-      YAAD_GITHUB_BASE_URL: https://api.github.com
-      YAAD_GITHUB_TOKEN: <personal PAT>
-      YAAD_GITHUB_REPOS: "acme-org/project-a,someuser/dotfiles"
+    config:
+      base_url: https://api.github.com
+      repos: [acme-org/project-a, someuser/dotfiles]
   - name: github-work
     path: /home/operator/.local/bin/yaad-github
-    env:
-      YAAD_GITHUB_INSTANCE_NAME: github-work
-      YAAD_GITHUB_BASE_URL: https://ghes.example.com/api/v3
-      YAAD_GITHUB_TOKEN: <work PAT>
-      YAAD_GITHUB_REPOS: "team/service-a,team/service-b"
+    config:
+      base_url: https://ghes.example.com/api/v3
+      repos: [team/service-a, team/service-b]
 ```
+
+`YAAD_GITHUB_TOKEN` stays in env-passthrough (per-instance secret), set at the daemon-process env layer.
+
+The daemon injects each entry's `name:` value as `_name` into the plugin's JSON config — the plugin uses it as the multi-instance discriminator for the URL pattern + shorthand sigil. Operators write the name once (`plugins[N].name:`); the daemon mirrors it automatically.
 
 Instance separation is plugin-config-layer; the daemon's data layer is shared. Each instance handles inputs matching its `name:` prefix in the URL / command — `github-personal: !fetch` vs `github-work: !fetch`, shorthand `github-work: ghes-org/repo#42`, etc.
 

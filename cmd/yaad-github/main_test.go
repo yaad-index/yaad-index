@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -48,13 +49,14 @@ func TestRun_InitMode_EmitsCapabilitiesJSON(t *testing.T) {
 	assert.Equal(t, []string{"fetch"}, doc.Commands)
 }
 
-func TestRun_InitMode_RespectsInstanceNameEnv(t *testing.T) {
+func TestRun_InitMode_RespectsInstanceNameFromConfig(t *testing.T) {
 	// ADR-0026 §7: an operator running two instances of the
-	// same binary distinguishes them via the YAML's `name:`
-	// entry; the binary mirrors that into the shorthand
-	// pattern via EnvInstanceName.
-	t.Setenv(EnvInstanceName, "github-work")
-	t.Setenv(github.EnvBaseURL, "https://ghes.example.com/api/v3")
+	// same binary distinguishes them via the operator yaml's
+	// `name:` entry; the daemon injects that as `_name` into
+	// the JSON config delivered via YAAD_PLUGIN_CONFIG. The
+	// binary mirrors `_name` into the shorthand URL pattern
+	// + envelope notations for multi-instance dispatch.
+	t.Setenv(EnvPluginConfig, `{"_name": "github-work", "base_url": "https://ghes.example.com/api/v3"}`)
 
 	var stdout bytes.Buffer
 	code := run([]string{"--init"}, nil, &stdout, &bytes.Buffer{})
@@ -80,11 +82,11 @@ func TestRun_BadFlag_ReturnsTwo(t *testing.T) {
 }
 
 func TestRun_CommandFetch_MissingRepos_EmitsErrorEnvelope(t *testing.T) {
-	// Empty YAAD_GITHUB_REPOS must surface as a single
-	// `_error` control packet on stdout + exit non-zero, so
-	// the daemon-side NDJSON consumer logs the cause + the
-	// run terminates cleanly without an inflight GitHub call.
-	t.Setenv(github.EnvRepos, "")
+	// Empty `config.repos` must surface as a single `_error`
+	// control packet on stdout + exit non-zero, so the daemon-
+	// side NDJSON consumer logs the cause + the run terminates
+	// cleanly without an inflight GitHub call.
+	t.Setenv(EnvPluginConfig, `{}`)
 	t.Setenv(github.EnvToken, "ghp_stub")
 
 	var stdout, stderr bytes.Buffer
@@ -98,17 +100,16 @@ func TestRun_CommandFetch_MissingRepos_EmitsErrorEnvelope(t *testing.T) {
 	require.NoError(t, json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &pkt),
 		"stdout should be a single JSON line: %q", stdout.String())
 	assert.Equal(t, "config_missing", pkt.Error)
-	assert.Contains(t, pkt.ErrorMessage, "YAAD_GITHUB_REPOS")
-	assert.Contains(t, stderr.String(), "YAAD_GITHUB_REPOS")
+	assert.Contains(t, pkt.ErrorMessage, "config.repos")
+	assert.Contains(t, stderr.String(), "config.repos")
 }
 
 func TestRun_CommandFetch_MissingToken_EmitsAuthErrorEnvelope(t *testing.T) {
 	// Token unset surfaces as `auth_failed` after the repo
 	// list parses; the operator-login resolution path is the
 	// first network-touching step and fails closed.
-	t.Setenv(github.EnvRepos, "acme/proj")
+	t.Setenv(EnvPluginConfig, `{"repos": ["acme/proj"]}`)
 	t.Setenv(github.EnvToken, "")
-	t.Setenv(github.EnvBaseURL, "")
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"--command", "fetch"}, nil, &stdout, &stderr)
@@ -182,9 +183,8 @@ func TestRun_CommandFetch_HappyPath_StreamsEnvelopesAndSummary(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv(github.EnvBaseURL, srv.URL)
+	t.Setenv(EnvPluginConfig, fmt.Sprintf(`{"repos": ["acme/proj"], "base_url": %q}`, srv.URL))
 	t.Setenv(github.EnvToken, "ghp_stub")
-	t.Setenv(github.EnvRepos, "acme/proj")
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"--command", "fetch"}, nil, &stdout, &stderr)
@@ -231,13 +231,15 @@ func TestRun_CommandFetch_HappyPath_StreamsEnvelopesAndSummary(t *testing.T) {
 	assert.GreaterOrEqual(t, summary.Summary.DurationMillis, int64(0))
 }
 
-// TestRun_CommandFetch_InvalidRecentDays_EmitsErrorEnvelope:
-// a non-positive YAAD_GITHUB_RECENT_DAYS surfaces as a single
-// `_error` packet + exit non-zero before any GitHub call.
-func TestRun_CommandFetch_InvalidRecentDays_EmitsErrorEnvelope(t *testing.T) {
-	t.Setenv(github.EnvRepos, "acme/proj")
+// TestRun_CommandFetch_MalformedConfig_EmitsErrorEnvelope:
+// a syntactically invalid YAAD_PLUGIN_CONFIG payload surfaces
+// as a single `_error` packet + exit non-zero before any
+// GitHub call. JSON Schema validation upstream (daemon-side)
+// catches type-mismatched but well-formed payloads; this test
+// exercises the plugin's own json.Unmarshal failure path.
+func TestRun_CommandFetch_MalformedConfig_EmitsErrorEnvelope(t *testing.T) {
+	t.Setenv(EnvPluginConfig, `{this is not valid JSON`)
 	t.Setenv(github.EnvToken, "ghp_stub")
-	t.Setenv(github.EnvRecentDays, "not-a-number")
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"--command", "fetch"}, nil, &stdout, &stderr)
@@ -249,7 +251,7 @@ func TestRun_CommandFetch_InvalidRecentDays_EmitsErrorEnvelope(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &pkt))
 	assert.Equal(t, "config_invalid", pkt.Error)
-	assert.Contains(t, pkt.ErrorMessage, "YAAD_GITHUB_RECENT_DAYS")
+	assert.Contains(t, pkt.ErrorMessage, "YAAD_PLUGIN_CONFIG")
 }
 
 // TestRun_CommandFetch_ClosedRecent_EmittedAlongsideOpen: the
@@ -283,10 +285,8 @@ func TestRun_CommandFetch_ClosedRecent_EmittedAlongsideOpen(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv(github.EnvBaseURL, srv.URL)
+	t.Setenv(EnvPluginConfig, fmt.Sprintf(`{"repos": ["acme/proj"], "base_url": %q, "recent_days": 7}`, srv.URL))
 	t.Setenv(github.EnvToken, "ghp_stub")
-	t.Setenv(github.EnvRepos, "acme/proj")
-	t.Setenv(github.EnvRecentDays, "7")
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"--command", "fetch"}, nil, &stdout, &stderr)
@@ -343,9 +343,8 @@ func TestRun_CommandFetch_OpenAndClosedDedup(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv(github.EnvBaseURL, srv.URL)
+	t.Setenv(EnvPluginConfig, fmt.Sprintf(`{"repos": ["acme/proj"], "base_url": %q}`, srv.URL))
 	t.Setenv(github.EnvToken, "ghp_stub")
-	t.Setenv(github.EnvRepos, "acme/proj")
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"--command", "fetch"}, nil, &stdout, &stderr)
@@ -374,14 +373,13 @@ func TestRun_CommandUnknown_ReturnsTwo(t *testing.T) {
 }
 
 func TestResolveOperatorLogin_NoToken_ReturnsErrTokenMissing(t *testing.T) {
-	// Auth-wiring sanity for Cut 1: the helper Cut 2 + Cut 3
-	// will call must fail closed when the operator hasn't wired
-	// YAAD_GITHUB_TOKEN. Exercised via the public env-var path
-	// so the test mirrors how the binary's main() reaches the
-	// helper at fetch time.
+	// The auth helper must fail closed when the operator hasn't
+	// wired YAAD_GITHUB_TOKEN. Token stays in env-passthrough
+	// per ADR-0006's 2026-05-22 amendment; base URL comes from
+	// the structured config but is irrelevant here since the
+	// token check fires first.
 	t.Setenv(github.EnvToken, "")
-	t.Setenv(github.EnvBaseURL, "")
-	_, err := resolveOperatorLogin(t.Context())
+	_, err := resolveOperatorLogin(t.Context(), "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, github.ErrTokenMissing,
 		"resolveOperatorLogin must surface ErrTokenMissing so main() fails fast at fetch invocation")
@@ -417,7 +415,7 @@ func TestRun_URLShapeStdin_FetchesAndEmitsEnvelope(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv(github.EnvBaseURL, srv.URL)
+	t.Setenv(EnvPluginConfig, fmt.Sprintf(`{"base_url": %q}`, srv.URL))
 	t.Setenv(github.EnvToken, "ghp_stub")
 
 	var stdout, stderr bytes.Buffer

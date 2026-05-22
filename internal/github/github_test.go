@@ -170,8 +170,9 @@ func TestEnvVarNames_MatchADR0026(t *testing.T) {
 	t.Parallel()
 	// ADR-0026 §8 explicitly distinguishes from the `gh` CLI's
 	// `GITHUB_TOKEN`; pin the names so a future rename surfaces.
+	// Token is the only env-passthrough channel post-#192; base
+	// URL + repos + recent_days now travel via YAAD_PLUGIN_CONFIG.
 	assert.Equal(t, "YAAD_GITHUB_TOKEN", EnvToken)
-	assert.Equal(t, "YAAD_GITHUB_BASE_URL", EnvBaseURL)
 	assert.NotEqual(t, "GITHUB_TOKEN", EnvToken,
 		"YAAD_GITHUB_TOKEN must stay distinct from the gh CLI's GITHUB_TOKEN per ADR-0026 §8")
 }

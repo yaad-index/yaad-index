@@ -6,27 +6,13 @@ import (
 	"strings"
 )
 
-// EnvRepos is the env var the operator sets to declare the
-// list of `owner/repo` targets the bulk-fetch path iterates
-// over. Comma-separated `owner/repo` entries; whitespace
-// around each entry is trimmed. Empty entries (e.g. a
-// trailing comma) are silently skipped.
-//
-// Per ADR-0026 §3 the operator's intent is a `repos:` list
-// inside the config block; the daemon-side `PluginEntry`
-// contract (`internal/config/config.go`) currently only
-// accepts SCALAR config values + translates to env vars, so
-// the plugin reads this comma-separated env shape instead of
-// a structured list. The ADR-text example needs a refresh
-// to match this reality (tracked as a follow-up).
-const EnvRepos = "YAAD_GITHUB_REPOS"
-
 // ErrNoRepos surfaces when the operator hasn't wired any
-// repos. ADR-0006's strict-validation pattern says missing
-// required operator config fails fast at startup; the
-// command-shape fetch handler converts this to a clear
-// stderr message + exit non-zero before any GitHub call.
-var ErrNoRepos = errors.New("github: YAAD_GITHUB_REPOS env var is empty or unset")
+// repos in the structured `config:` block. ADR-0006's strict-
+// validation pattern says missing required operator config
+// fails fast at startup; the command-shape fetch handler
+// converts this to an `_error` envelope + non-zero exit
+// before any GitHub call.
+var ErrNoRepos = errors.New("github: config.repos is empty or unset")
 
 // ErrMalformedRepo surfaces when an entry doesn't match the
 // `owner/repo` shape. Wraps the offending entry in the error
@@ -53,25 +39,23 @@ func (r RepoRef) Slash() string {
 	return r.Owner + "/" + r.Repo
 }
 
-// ParseRepoList splits + validates the comma-separated env
-// value into a slice of RepoRef entries. Returns ErrNoRepos
-// when the input is empty (after trim). Returns a
-// *ErrMalformedRepo for any entry that doesn't match
-// `owner/repo`.
+// ValidateRepoList walks the operator-supplied list of
+// `owner/repo` strings (from the structured `config:` block
+// per ADR-0026 §3) and produces validated RepoRef entries.
+// Empty list or all-whitespace entries → ErrNoRepos.
+// Returns a *ErrMalformedRepo for any entry that doesn't
+// match `owner/repo`.
 //
 // Duplicate entries are NOT deduped — operator gets what
 // they wrote (the bulk-fetch loop's per-repo iteration is
-// per-entry, not per-unique-pair). A future enhancement
-// could dedup; for v1 the price of duplicate API calls is
-// operator-visible + low-stakes.
-func ParseRepoList(raw string) ([]RepoRef, error) {
-	if strings.TrimSpace(raw) == "" {
+// per-entry, not per-unique-pair).
+func ValidateRepoList(entries []string) ([]RepoRef, error) {
+	if len(entries) == 0 {
 		return nil, ErrNoRepos
 	}
-	parts := strings.Split(raw, ",")
-	out := make([]RepoRef, 0, len(parts))
-	for _, part := range parts {
-		entry := strings.TrimSpace(part)
+	out := make([]RepoRef, 0, len(entries))
+	for _, raw := range entries {
+		entry := strings.TrimSpace(raw)
 		if entry == "" {
 			continue
 		}
@@ -82,7 +66,6 @@ func ParseRepoList(raw string) ([]RepoRef, error) {
 		out = append(out, RepoRef{Owner: owner, Repo: repo})
 	}
 	if len(out) == 0 {
-		// All entries were whitespace-only (trailing commas).
 		return nil, ErrNoRepos
 	}
 	return out, nil

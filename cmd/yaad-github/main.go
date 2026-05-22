@@ -46,15 +46,76 @@ import (
 	"github.com/yaad-index/yaad-index/internal/github"
 )
 
-// instanceName resolves the operator-side plugin name from env.
-// Operators set this to the plugin's `name:` config entry per
-// ADR-0026 §7 (e.g. `github-personal`, `github-work`) so the
-// shorthand-URL pattern + the command-shape sigil match the
-// operator's invocation surface.
-//
-// Defaults to github.PluginName ("github") when unset — keeps
-// single-instance setups + tests working without ceremony.
-const EnvInstanceName = "YAAD_GITHUB_INSTANCE_NAME"
+// EnvPluginConfig is the uniform env var the daemon delivers
+// the operator-supplied `config:` block under per ADR-0006's
+// 2026-05-22 amendment (#192). yaad-github reads the JSON
+// payload on startup + unmarshals into pluginConfig below.
+const EnvPluginConfig = "YAAD_PLUGIN_CONFIG"
+
+// pluginConfig is the typed shape of the operator's `config:`
+// block. JSON tags match the operator yaml key shape; the
+// daemon-injected `_name` field carries the entry's
+// `plugins[N].name:` value (used as the instance identifier
+// for multi-instance dispatch routing per ADR-0026 §7).
+type pluginConfig struct {
+	// Repos is the list of `owner/repo` targets the bulk-fetch
+	// path iterates over per ADR-0026 §3. Empty / unset → the
+	// `--command fetch` path emits a `_error` config envelope
+	// and exits non-zero.
+	Repos []string `json:"repos,omitempty"`
+
+	// RecentDays is the N-day rolling window the closed-item
+	// sweep uses per ADR-0026 §4. Zero / unset → falls through
+	// to DefaultRecentDays (7).
+	RecentDays int `json:"recent_days,omitempty"`
+
+	// BaseURL overrides the default GitHub API host. Empty /
+	// unset → DefaultBaseURL (https://api.github.com). Set for
+	// GHES (e.g. https://ghes.example.com/api/v3).
+	BaseURL string `json:"base_url,omitempty"`
+
+	// Name is the daemon-injected `_name` field carrying the
+	// entry's `plugins[N].name:` value. Read-only from the
+	// plugin's perspective; the daemon writes it. Used as the
+	// instance discriminator for the URL-pattern + shorthand-
+	// sigil interpolation in --init.
+	Name string `json:"_name,omitempty"`
+}
+
+// loadPluginConfig parses EnvPluginConfig into a pluginConfig
+// struct. Empty / unset env → zero-value struct (callers fall
+// through to their own defaults). JSON-parse failures surface
+// as a startup error.
+func loadPluginConfig() (pluginConfig, error) {
+	raw := os.Getenv(EnvPluginConfig)
+	if raw == "" {
+		return pluginConfig{}, nil
+	}
+	var c pluginConfig
+	if err := json.Unmarshal([]byte(raw), &c); err != nil {
+		return pluginConfig{}, fmt.Errorf("parse %s: %w", EnvPluginConfig, err)
+	}
+	return c, nil
+}
+
+// configSchemaJSON declares the operator-side `config:` shape
+// per ADR-0006 (2026-05-22 amendment / #192) + ADR-0026 §3.
+const configSchemaJSON = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["repos"],
+  "properties": {
+    "_name": {"type": "string"},
+    "repos": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"}
+    },
+    "recent_days": {"type": "integer", "minimum": 1},
+    "base_url": {"type": "string", "format": "uri"}
+  }
+}`
 
 // authTimeout caps the wall-clock budget for the startup
 // `GET /user` call that resolves the operator login. Kept short:
@@ -132,17 +193,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // daemon-side struct so a future schema change shows up here as
 // a compile-time mismatch via the structural-equivalence tests.
 type capabilitiesDoc struct {
-	Name                      string         `json:"name"`
-	Version                   string         `json:"version"`
-	URLPatterns               []string       `json:"url_patterns"`
-	EntityKinds               []kindSpecJSON `json:"entity_kinds"`
-	EdgeKinds                 []kindSpecJSON `json:"edge_kinds"`
-	CanonicalKindsEmitted     []string       `json:"canonical_kinds_emitted,omitempty"`
-	CanonicalEdgeTypesEmitted []string       `json:"canonical_edge_types_emitted,omitempty"`
-	SupportsSearch            bool           `json:"supports_search,omitempty"`
-	SourceNamespace           string         `json:"source_namespace,omitempty"`
-	CacheTTLSeconds           int            `json:"cache_ttl_seconds,omitempty"`
-	Commands                  []string       `json:"commands,omitempty"`
+	Name                      string          `json:"name"`
+	Version                   string          `json:"version"`
+	URLPatterns               []string        `json:"url_patterns"`
+	EntityKinds               []kindSpecJSON  `json:"entity_kinds"`
+	EdgeKinds                 []kindSpecJSON  `json:"edge_kinds"`
+	CanonicalKindsEmitted     []string        `json:"canonical_kinds_emitted,omitempty"`
+	CanonicalEdgeTypesEmitted []string        `json:"canonical_edge_types_emitted,omitempty"`
+	SupportsSearch            bool            `json:"supports_search,omitempty"`
+	SourceNamespace           string          `json:"source_namespace,omitempty"`
+	CacheTTLSeconds           int             `json:"cache_ttl_seconds,omitempty"`
+	Commands                  []string        `json:"commands,omitempty"`
+	ConfigSchema              json.RawMessage `json:"config_schema,omitempty"`
 }
 
 type kindSpecJSON struct {
@@ -151,17 +213,20 @@ type kindSpecJSON struct {
 }
 
 // runInit emits the capabilities document per ADR-0026 §1. URL
-// patterns interpolate from EnvInstanceName + EnvBaseURL so
-// multi-instance setups get correctly-scoped dispatch routing
-// per ADR-0026 §7.
+// patterns interpolate from the daemon-injected `_name` field +
+// the operator's `base_url:` config (both delivered via
+// YAAD_PLUGIN_CONFIG) so multi-instance setups get correctly-
+// scoped dispatch routing per ADR-0026 §7.
 func runInit(stdout io.Writer) error {
-	instance := os.Getenv(EnvInstanceName)
-	baseURL := os.Getenv(github.EnvBaseURL)
+	cfg, err := loadPluginConfig()
+	if err != nil {
+		return err
+	}
 
 	doc := capabilitiesDoc{
 		Name:                      github.PluginName,
 		Version:                   github.PluginVersion,
-		URLPatterns:               github.BuildURLPatterns(instance, baseURL),
+		URLPatterns:               github.BuildURLPatterns(cfg.Name, cfg.BaseURL),
 		EntityKinds:               []kindSpecJSON{{Name: github.UniversalSourceKind}},
 		EdgeKinds:                 []kindSpecJSON{},
 		CanonicalKindsEmitted:     github.KnownCanonicalKinds,
@@ -170,6 +235,7 @@ func runInit(stdout io.Writer) error {
 		SourceNamespace:           github.SourceNamespace,
 		CacheTTLSeconds:           github.DefaultCacheTTLSeconds,
 		Commands:                  github.DeclaredCommands,
+		ConfigSchema:              json.RawMessage(configSchemaJSON),
 	}
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
@@ -178,17 +244,14 @@ func runInit(stdout io.Writer) error {
 
 // resolveOperatorLogin is the startup-side helper Cut 3
 // (`--command fetch`) calls to derive the `<operator-login>`
-// token it splices into the GitHub search query
-// (`is:open involves:<login>` per ADR-0026 §4). Defined here
-// so the auth-resolve path stays in one place; the bulk
-// fetch path calls this once per invocation (login is
-// stable for the process lifetime).
+// token it splices into the GitHub search query. Token stays
+// in env-passthrough (secret); base URL comes from the
+// structured config.
 //
 // Returns ErrTokenMissing when the operator hasn't wired the
 // PAT.
-func resolveOperatorLogin(ctx context.Context) (string, error) {
+func resolveOperatorLogin(ctx context.Context, baseURL string) (string, error) {
 	token := os.Getenv(github.EnvToken)
-	baseURL := os.Getenv(github.EnvBaseURL)
 	client := &http.Client{Timeout: authTimeout}
 	return github.ResolveUserLogin(ctx, client, baseURL, token)
 }
@@ -255,29 +318,31 @@ type errorPacket struct {
 func runCommandFetch(stdout, stderr io.Writer) error {
 	startedAt := time.Now()
 
-	repos, err := github.ParseRepoList(os.Getenv(github.EnvRepos))
-	if err != nil {
-		emitError(stdout, "config_missing", err.Error())
-		return err
-	}
-
-	recentDays, err := github.ParseRecentDays(os.Getenv(github.EnvRecentDays))
+	cfg, err := loadPluginConfig()
 	if err != nil {
 		emitError(stdout, "config_invalid", err.Error())
 		return err
 	}
 
+	repos, err := github.ValidateRepoList(cfg.Repos)
+	if err != nil {
+		emitError(stdout, "config_missing", err.Error())
+		return err
+	}
+
+	recentDays := github.ResolveRecentDays(cfg.RecentDays)
+
 	ctx, cancel := context.WithTimeout(context.Background(), commandFetchTimeout)
 	defer cancel()
 
-	login, err := resolveOperatorLogin(ctx)
+	login, err := resolveOperatorLogin(ctx, cfg.BaseURL)
 	if err != nil {
 		emitError(stdout, "auth_failed", err.Error())
 		return err
 	}
 
-	instance := os.Getenv(EnvInstanceName)
-	baseURL := os.Getenv(github.EnvBaseURL)
+	instance := cfg.Name
+	baseURL := cfg.BaseURL
 	token := os.Getenv(github.EnvToken)
 
 	// One shared client across every search + per-item fetch
@@ -421,6 +486,11 @@ type fetchRequest struct {
 // the plugin works for one-off public-repo dispatches
 // without forcing a PAT.
 func runURLShapeFetch(stdin io.Reader, stdout io.Writer) error {
+	cfg, err := loadPluginConfig()
+	if err != nil {
+		return fmt.Errorf("yaad-github: %w", err)
+	}
+
 	var req fetchRequest
 	dec := json.NewDecoder(stdin)
 	if err := dec.Decode(&req); err != nil {
@@ -443,7 +513,7 @@ func runURLShapeFetch(stdin io.Reader, stdout io.Writer) error {
 
 	opts := github.FetchOptions{
 		Client:  &http.Client{Timeout: fetchTimeout},
-		BaseURL: os.Getenv(github.EnvBaseURL),
+		BaseURL: cfg.BaseURL,
 		Token:   os.Getenv(github.EnvToken),
 	}
 	item, err := github.FetchTarget(ctx, opts, *target)
@@ -452,9 +522,7 @@ func runURLShapeFetch(stdin io.Reader, stdout io.Writer) error {
 	}
 
 	fetchedAt := time.Now().UTC().Format("2006-01-02T15:04:05Z")
-	instance := os.Getenv(EnvInstanceName)
-	baseURL := os.Getenv(github.EnvBaseURL)
-	if err := github.WriteEnvelope(stdout, item, instance, baseURL, req.URL, fetchedAt); err != nil {
+	if err := github.WriteEnvelope(stdout, item, cfg.Name, cfg.BaseURL, req.URL, fetchedAt); err != nil {
 		return fmt.Errorf("yaad-github: write envelope: %w", err)
 	}
 	return nil

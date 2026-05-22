@@ -63,8 +63,9 @@ func searchInvolved(ctx context.Context, client *gogithub.Client, repo RepoRef, 
 //
 // `now` is the reference instant the window is anchored against;
 // the caller passes its own clock for testability. `days` is
-// validated by the caller (ParseRecentDays); a non-positive
-// value would produce an oddly-shaped query string but is not
+// validated upstream via JSON Schema (`minimum: 1`) + the
+// ResolveRecentDays default-on-zero helper; a non-positive value
+// would produce an oddly-shaped query string but is not
 // re-validated here.
 func searchInvolvedClosedRecent(ctx context.Context, client *gogithub.Client, repo RepoRef, login string, now time.Time, days int) ([]Target, error) {
 	return searchInvolvedQuery(ctx, client, repo,
