@@ -246,16 +246,24 @@ type errorPacket struct {
 // validation happens daemon-side per ADR-0005 before
 // dispatch; this binary trusts the invocation as authorized.
 //
-// Closed-since-last-sync sweep + archive-lifecycle wiring
-// are deferred to Cut 4 (the two design questions on
-// last-sync-state-location + plugin-vs-daemon archive
-// ownership are still open).
+// Closed-recent sweep per ADR-0026 §6 (2026-05-21 amendment)
+// runs alongside the open search using a stateless N-day rolling
+// window via GitHub Search's native `updated:>=` operator;
+// `YAAD_GITHUB_RECENT_DAYS` (default 7) tunes the window.
+// Archive lifecycle itself lives in operator-authored workflows
+// per ADR-0024's `entity_updated` + `archive_entity` pair.
 func runCommandFetch(stdout, stderr io.Writer) error {
 	startedAt := time.Now()
 
 	repos, err := github.ParseRepoList(os.Getenv(github.EnvRepos))
 	if err != nil {
 		emitError(stdout, "config_missing", err.Error())
+		return err
+	}
+
+	recentDays, err := github.ParseRecentDays(os.Getenv(github.EnvRecentDays))
+	if err != nil {
+		emitError(stdout, "config_invalid", err.Error())
 		return err
 	}
 
@@ -288,14 +296,28 @@ func runCommandFetch(stdout, stderr io.Writer) error {
 
 	emitted := 0
 	errCount := 0
+	closedWindowAnchor := time.Now()
 
 	for _, repo := range repos {
-		targets, err := client.SearchInvolvedOpen(ctx, repo, login)
+		openTargets, err := client.SearchInvolvedOpen(ctx, repo, login)
 		if err != nil {
 			errCount++
-			_, _ = fmt.Fprintf(stderr, "yaad-github: search %s: %v\n", repo.Slash(), err)
-			continue
+			_, _ = fmt.Fprintf(stderr, "yaad-github: search %s [open]: %v\n", repo.Slash(), err)
+			// fall through to the closed search — one failed
+			// query on a repo doesn't suppress the other.
 		}
+
+		closedTargets, err := client.SearchInvolvedClosedRecent(ctx, repo, login, closedWindowAnchor, recentDays)
+		if err != nil {
+			errCount++
+			_, _ = fmt.Fprintf(stderr, "yaad-github: search %s [closed-recent]: %v\n", repo.Slash(), err)
+		}
+
+		// Union the two result sets, dedup by (owner, repo,
+		// kind, number) — the closed sweep may surface items
+		// that flipped state mid-sweep, double-counting on the
+		// open side.
+		targets := dedupTargets(openTargets, closedTargets)
 
 		for _, target := range targets {
 			item, err := client.FetchTarget(ctx, target)
@@ -322,6 +344,33 @@ func runCommandFetch(stdout, stderr io.Writer) error {
 		Errors:         errCount,
 		DurationMillis: time.Since(startedAt).Milliseconds(),
 	})
+}
+
+// dedupTargets unions the open + closed-recent result sets and
+// drops duplicates. The same (owner, repo, kind, number) appears
+// at most once. `Target` carries no state field, and the
+// per-item `FetchTarget` call fetches the current upstream state
+// regardless of which search surfaced the target — so the
+// dedup is purely about avoiding double-fetch, not about
+// choosing a "winning" representation.
+func dedupTargets(open, closed []github.Target) []github.Target {
+	out := make([]github.Target, 0, len(open)+len(closed))
+	seen := make(map[github.Target]struct{}, len(open)+len(closed))
+	for _, t := range open {
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	for _, t := range closed {
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out
 }
 
 // emitError writes a single `_error` control packet to

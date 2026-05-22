@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -101,6 +102,52 @@ func TestSearchInvolvedOpen_NonOKUpstream_WrapsHTTPError(t *testing.T) {
 	var httpErr *HTTPError
 	require.ErrorAs(t, err, &httpErr)
 	assert.Equal(t, http.StatusUnauthorized, httpErr.Status)
+}
+
+// TestSearchInvolvedClosedRecent_HappyPath: the closed-window
+// query splices `is:closed`, `involves:<login>`, `repo:<owner>/<repo>`,
+// and the `updated:>=<date>` filter computed from (now, days)
+// per ADR-0026 §6 (2026-05-21 amendment).
+func TestSearchInvolvedClosedRecent_HappyPath(t *testing.T) {
+	t.Parallel()
+	var sawQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/search/issues", r.URL.Path)
+		sawQuery = r.URL.Query().Get("q")
+		_, _ = w.Write([]byte(`{
+			"total_count": 1,
+			"items": [{"number": 11, "state": "closed", "title": "Closed-recent eleven"}]
+		}`))
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(srv.Client(), srv.URL, "ghp_stub")
+	require.NoError(t, err)
+
+	now := time.Date(2026, 5, 22, 18, 0, 0, 0, time.UTC)
+	got, err := client.SearchInvolvedClosedRecent(context.Background(),
+		RepoRef{Owner: "acme", Repo: "proj"}, "test-operator", now, 7)
+	require.NoError(t, err)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, Target{Owner: "acme", Repo: "proj", Kind: ItemKindIssue, Number: 11}, got[0])
+	assert.Contains(t, sawQuery, "is:closed")
+	assert.Contains(t, sawQuery, "involves:test-operator")
+	assert.Contains(t, sawQuery, "repo:acme/proj")
+	assert.Contains(t, sawQuery, "updated:>=2026-05-15",
+		"7-day window from 2026-05-22 anchor surfaces items updated since 2026-05-15")
+}
+
+// TestSearchInvolvedClosedRecent_EmptyLogin_Rejected: same
+// rejection shape as the open search.
+func TestSearchInvolvedClosedRecent_EmptyLogin_Rejected(t *testing.T) {
+	t.Parallel()
+	client, err := NewClient(&http.Client{}, "", "ghp_stub")
+	require.NoError(t, err)
+	_, err = client.SearchInvolvedClosedRecent(context.Background(),
+		RepoRef{Owner: "acme", Repo: "proj"}, "", time.Now(), 7)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty operator login")
 }
 
 func TestFetchInvolvedOpenAcrossRepos_HappyPath(t *testing.T) {

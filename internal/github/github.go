@@ -135,7 +135,31 @@ const DefaultBaseURL = "https://api.github.com"
 const (
 	EnvToken   = "YAAD_GITHUB_TOKEN"
 	EnvBaseURL = "YAAD_GITHUB_BASE_URL"
+
+	// EnvRecentDays is the N-day rolling window the bulk-fetch
+	// path uses to scope the closed-item sweep per ADR-0026 §4
+	// + §6 (2026-05-21 amendment). Operators tune via the
+	// daemon's `plugins[].env:` block; the plugin parses the
+	// value as a positive integer (>=1) at startup.
+	//
+	// **Window boundary.** The closed search runs
+	// `is:closed updated:>=<now - N days>`, which surfaces every
+	// closed item with upstream activity in the window. Closed
+	// items whose state has been quiet for >N days do NOT
+	// surface — that's the intended cold-set per the workflow-
+	// owns-state design (a long-quiet closure is genuinely
+	// settled and shouldn't churn through the ingest path on
+	// every sweep). Operators with a narrow window should know
+	// this trade-off; default 7 covers typical review cycles.
+	EnvRecentDays = "YAAD_GITHUB_RECENT_DAYS"
 )
+
+// DefaultRecentDays is the fallback value for EnvRecentDays when
+// the operator hasn't set it. 7 covers typical review cycles
+// (the window matches roughly one workweek of upstream churn);
+// operators with longer review-loop horizons override via the
+// env var.
+const DefaultRecentDays = 7
 
 // ResolveBaseURL returns the effective API base URL. Operator
 // override via EnvBaseURL takes precedence; falls back to

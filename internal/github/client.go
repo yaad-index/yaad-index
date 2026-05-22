@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	gogithub "github.com/google/go-github/v68/github"
 )
@@ -45,6 +46,19 @@ func (c *Client) SearchInvolvedOpen(ctx context.Context, repo RepoRef, login str
 		return nil, errors.New("github: Client.SearchInvolvedOpen: empty operator login (resolve via ResolveUserLogin first)")
 	}
 	return searchInvolved(ctx, c.inner, repo, login)
+}
+
+// SearchInvolvedClosedRecent runs the closed-window companion to
+// SearchInvolvedOpen per ADR-0026 §6 (2026-05-21 amendment) —
+// every closed PR + issue the operator is involved in whose
+// upstream `updated` timestamp falls within the last `days`-day
+// window. `now` is the reference instant the window is anchored
+// against; callers pass their own clock for testability.
+func (c *Client) SearchInvolvedClosedRecent(ctx context.Context, repo RepoRef, login string, now time.Time, days int) ([]Target, error) {
+	if login == "" {
+		return nil, errors.New("github: Client.SearchInvolvedClosedRecent: empty operator login (resolve via ResolveUserLogin first)")
+	}
+	return searchInvolvedClosedRecent(ctx, c.inner, repo, login, now, days)
 }
 
 // FetchTarget mirrors the free function but reuses the
