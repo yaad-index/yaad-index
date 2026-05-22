@@ -391,26 +391,20 @@ type VaultEntry struct {
 
 // PluginEntry is one entry in Config.Plugins.
 //
-// Config is the per-plugin operator-supplied scalar-config map per
-// yaad-index #7. Daemon walks each entry at subprocess spawn time
-// and converts (key, value) into env vars the plugin reads via
-// os.Getenv. Keys must be lowercase-snake-case ASCII (matches the
-// yaml convention); values must be scalar (string / bool / int /
-// float). Nested maps + lists are rejected at Load time — the v1
-// scope is flat scalars; nested config defers to the
-// <PLUGIN>_CONFIG_JSON shape if/when a plugin needs it.
+// Config is the per-plugin operator-supplied structured config
+// per ADR-0006 (2026-05-22 amendment / #192). Daemon walks each
+// entry at subprocess spawn time, JSON-marshals the whole block,
+// and delivers it as a single `YAAD_PLUGIN_CONFIG` env var the
+// plugin reads + `json.Unmarshal`s into its own struct on
+// startup. Arbitrary YAML structure is allowed (scalars, lists,
+// nested maps); the plugin owns its schema + advertises it via
+// `--init`'s `config_schema` field so the daemon validates the
+// operator input at registry-load time.
 //
-// Conversion to env var name follows the
-// <PLUGIN_NAME_UPPER>_<KEY_UPPER> convention with prefix-strip when
-// the key already starts with the plugin name. Examples for plugin
-// `bgg`:
-//
-//   - `bgg_api_key: "abc"`     → `BGG_API_KEY=abc`     (prefix stripped)
-//   - `api_key: "abc"`         → `BGG_API_KEY=abc`     (clean prefix)
-//   - `timeout_seconds: 30`    → `BGG_TIMEOUT_SECONDS=30`
-//
-// The two `*_api_key` forms produce the same env var so the
-// operator can pick whichever reads cleanest in their yaml.
+// Operator keys MUST NOT start with `_` — that prefix is
+// reserved for daemon-injected fields (e.g. `_name`, which
+// carries the entry's `name:` value through to the subprocess
+// for multi-instance plugins).
 type PluginEntry struct {
 	Name string `yaml:"name"`
 	Path string `yaml:"path"`

@@ -1,132 +1,95 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
-	"regexp"
-	"sort"
-	"strings"
 )
 
-// pluginConfigKey is the shape rule for keys under a plugin's
-// `config:` sub-block per yaad-index #7. Lowercase ASCII + digits +
-// underscore; must start with a letter. Matches the yaml-key
-// convention used elsewhere in the config (kindOrFieldName has the
-// same shape but for canonical-kind names).
-var pluginConfigKey = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+// PluginConfigEnvName is the env-var name daemon-side code uses to
+// deliver the JSON-marshalled `config:` block to subprocess
+// plugins per ADR-0006 (2026-05-22 amendment / #192). Every
+// plugin reads the same name; per-subprocess env isolation
+// keeps the value scoped to its target.
+const PluginConfigEnvName = "YAAD_PLUGIN_CONFIG"
 
-// validatePluginConfig enforces the v1 scope of the per-plugin
-// `config:` sub-block (yaad-index #7):
+// DaemonInjectedNameKey is the reserved key the daemon writes
+// into every plugin's JSON config payload, carrying the operator
+// yaml's `plugins[N].name:` value. Plugins read it to know their
+// instance identity (e.g. multi-instance yaad-github reads
+// `_name` to decide between `github-personal` / `github-work`
+// scoped URL patterns + envelope notations).
 //
-//   - Keys match pluginConfigKey shape (lowercase snake_case).
-//   - Values are scalar — string, bool, int (Go's yaml decoder
-//     surfaces YAML ints as `int`), float64, or nil. Nested maps
-//     and lists are rejected; the v1 scope is flat key→scalar
-//     conversion to env vars.
-//   - Duplicate-after-prefix-collapse keys (e.g. operator writes
-//     both `bgg_api_key` and `api_key` on the bgg plugin) are
-//     rejected with a clear message naming both source keys —
-//     otherwise the env-var conversion would silently lose one.
+// The `_`-prefix marks it as a daemon-injected field per
+// ADR-0006's "Daemon-injected fields" convention — operators
+// cannot supply `_`-prefixed keys themselves; the daemon rejects
+// any operator-supplied key starting with `_` at Load time.
+const DaemonInjectedNameKey = "_name"
+
+// validatePluginConfig enforces the v2 shape of the per-plugin
+// `config:` sub-block per ADR-0006 (2026-05-22 amendment / #192):
+//
+//   - Arbitrary YAML structure is allowed (scalars, lists, nested
+//     maps). The plugin owns its schema; the daemon validates
+//     operator input against the plugin's declared JSON Schema
+//     at registry-load time, not here.
+//   - Operator keys MUST NOT start with `_` — that prefix is
+//     reserved for daemon-injected fields (e.g. `_name`).
+//
+// The pre-#192 scalar-only constraint + per-key prefix-strip
+// env-var conversion is REMOVED — plugins now read the whole
+// config as a single JSON document from PluginConfigEnvName per
+// ADR-0006's amendment.
 //
 // Returns nil for an empty / nil config map (the omitempty path).
 func validatePluginConfig(pluginName string, cfg map[string]any) error {
 	if len(cfg) == 0 {
 		return nil
 	}
-	collapsed := make(map[string]string, len(cfg))
-	for k, v := range cfg {
-		if !pluginConfigKey.MatchString(k) {
-			return fmt.Errorf("plugin %q: config key %q must be lowercase snake_case ASCII (regex %s)",
-				pluginName, k, pluginConfigKey.String())
+	for k := range cfg {
+		if len(k) > 0 && k[0] == '_' {
+			return fmt.Errorf("plugin %q: config key %q starts with `_` (reserved for daemon-injected fields per ADR-0006); rename it",
+				pluginName, k)
 		}
-		switch v.(type) {
-		case string, bool, int, int64, float64, nil:
-			// scalar — accepted
-		default:
-			return fmt.Errorf("plugin %q: config key %q has non-scalar value (got %T); v1 supports string/bool/int/float only — nested config defers to <PLUGIN>_CONFIG_JSON",
-				pluginName, k, v)
-		}
-		envName := PluginConfigEnvName(pluginName, k)
-		if prev, dup := collapsed[envName]; dup {
-			return fmt.Errorf("plugin %q: config keys %q and %q both produce env var %s — drop one (or rename) so the env var has a single source",
-				pluginName, prev, k, envName)
-		}
-		collapsed[envName] = k
 	}
 	return nil
 }
 
-// PluginConfigEnvName returns the env var name a given (plugin, key)
-// pair maps to under the yaad-index #7 convention:
+// MarshalPluginConfig returns the JSON document the daemon
+// delivers via PluginConfigEnvName for a given plugin. The
+// daemon-injected `_name` field is set to pluginName so plugins
+// can read their instance identity without needing a parallel
+// env var or operator-supplied duplicate.
 //
-//	<PLUGIN_NAME_UPPER>_<KEY_UPPER>
+// Empty / nil operator config still produces a non-empty JSON
+// document carrying `{"_name": "..."}` — plugins that declare
+// no schema can ignore the payload, but the `_name` field is
+// always present.
 //
-// With a prefix-strip pass: when the key already starts with the
-// plugin-name + `_`, the redundant prefix is dropped before
-// upper-casing. So `bgg.config.bgg_api_key` → `BGG_API_KEY` (not
-// the awkward `BGG_BGG_API_KEY`). Operators get a clean env-var
-// name regardless of whether they namespace their config keys.
-//
-// Returns "" for an empty plugin or key — the caller treats that
-// as a config-shape bug surfaced separately by validatePluginConfig.
-func PluginConfigEnvName(pluginName, key string) string {
-	if pluginName == "" || key == "" {
-		return ""
+// Caller is responsible for calling validatePluginConfig at
+// Load time; this function trusts the input shape (modulo the
+// `_`-prefix reservation, which Load enforces).
+func MarshalPluginConfig(pluginName string, cfg map[string]any) ([]byte, error) {
+	out := make(map[string]any, len(cfg)+1)
+	for k, v := range cfg {
+		out[k] = v
 	}
-	pn := strings.ToLower(pluginName)
-	k := key
-	if pn != "" && strings.HasPrefix(k, pn+"_") {
-		k = k[len(pn)+1:]
-	}
-	if k == "" {
-		// Operator wrote literally `bgg_` as a key — fall back to
-		// the un-stripped form so the env-var conversion stays
-		// well-defined.
-		k = key
-	}
-	return strings.ToUpper(pn) + "_" + strings.ToUpper(k)
+	out[DaemonInjectedNameKey] = pluginName
+	return json.Marshal(out)
 }
 
-// PluginConfigEnvVars converts a per-plugin scalar config map to a
-// sorted slice of `KEY=VALUE` env-var strings ready for
-// `exec.Cmd.Env`. Sorted by env-var name for deterministic spawn
-// ordering (helps tests + log greps).
+// PluginConfigEnv returns the single `KEY=VALUE` env-var string
+// ready for `exec.Cmd.Env` — the JSON-marshalled `config:`
+// block delivered via PluginConfigEnvName. The daemon-side
+// caller threads this through subprocess.WithConfigEnv.
 //
-// Scalar conversion:
-//   - string → as-is
-//   - int / int64 / float64 → fmt.Sprint
-//   - bool → "true" / "false"
-//   - nil → empty string (the env var is set but valueless; matches
-//     `KEY=` shell semantics for "set but empty")
-//
-// Caller is responsible for calling validatePluginConfig at Load
-// time; this function trusts the map shape.
-func PluginConfigEnvVars(pluginName string, cfg map[string]any) []string {
-	if len(cfg) == 0 {
-		return nil
+// Returns an error only when the operator config can't be
+// JSON-encoded (e.g. nested types that don't marshal cleanly);
+// happy path returns a single-element slice the caller appends
+// to the subprocess env.
+func PluginConfigEnv(pluginName string, cfg map[string]any) ([]string, error) {
+	payload, err := MarshalPluginConfig(pluginName, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("marshal plugin %q config: %w", pluginName, err)
 	}
-	out := make([]string, 0, len(cfg))
-	for k, v := range cfg {
-		envName := PluginConfigEnvName(pluginName, k)
-		if envName == "" {
-			continue
-		}
-		var val string
-		switch t := v.(type) {
-		case string:
-			val = t
-		case bool:
-			if t {
-				val = "true"
-			} else {
-				val = "false"
-			}
-		case nil:
-			val = ""
-		default:
-			val = fmt.Sprint(t)
-		}
-		out = append(out, envName+"="+val)
-	}
-	sort.Strings(out)
-	return out
+	return []string{PluginConfigEnvName + "=" + string(payload)}, nil
 }

@@ -874,12 +874,18 @@ func reprobePlugins(ctx context.Context, logger *slog.Logger, st store.Store, co
 		// Force a fresh --init via subprocess.New. The constructor
 		// reads --init, parses, and returns the constructed
 		// plugin; we capture caps for the fresh upsert below.
-		// Per-plugin config env (#7) threaded through so reprobe
-		// matches the boot path.
+		// Per-plugin JSON config env (#192) threaded through so
+		// reprobe matches the boot path.
+		configEnv, cfgErr := config.PluginConfigEnv(entry.Name, entry.Config)
+		if cfgErr != nil {
+			_, _ = fmt.Fprintf(out, "%s: ERROR marshal config: %v\n", entry.Name, cfgErr)
+			failures = append(failures, entry.Name)
+			continue
+		}
 		p, err := subprocess.New(entry.Name, entry.Path,
 			appendFetchTimeoutOpt(entry,
 				subprocess.WithLogger(logger),
-				subprocess.WithConfigEnv(config.PluginConfigEnvVars(entry.Name, entry.Config)))...)
+				subprocess.WithConfigEnv(configEnv))...)
 		if err != nil {
 			_, _ = fmt.Fprintf(out, "%s: ERROR --init failed: %v\n", entry.Name, err)
 			failures = append(failures, entry.Name)
@@ -1178,10 +1184,15 @@ func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, en
 	outcome := cacheMissFirstStart // overwritten below as paths discriminate
 
 	// Build per-plugin env-var slice from operator yaml `config:`
-	// sub-block per yaad-index #7. Passed to both --init and
-	// cache-hit construction paths so plugins reading config at
-	// --init time see the same env regardless of cache state.
-	configEnv := config.PluginConfigEnvVars(name, entry.Config)
+	// sub-block per #192. The block JSON-marshals into a single
+	// YAAD_PLUGIN_CONFIG env var the subprocess reads on startup;
+	// passed to both --init and cache-hit construction paths so
+	// plugins reading config at --init time see the same env
+	// regardless of cache state.
+	configEnv, configEnvErr := config.PluginConfigEnv(name, entry.Config)
+	if configEnvErr != nil {
+		return nil, cacheFailure, fmt.Errorf("plugin %q: marshal config: %w", name, configEnvErr)
+	}
 
 	probedVersion, probeErr := subprocess.RunVersion(ctx, path, 2*time.Second)
 	if probeErr == nil && probedVersion != "" {
@@ -1216,6 +1227,8 @@ func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, en
 				logger.Error("cached caps malformed, ignoring cache",
 					"err", uErr, "name", name)
 				outcome = cacheFailure
+			} else if vErr := config.ValidatePluginConfigAgainstSchema(name, entry.Config, caps.ConfigSchema); vErr != nil {
+				return nil, cacheHit, fmt.Errorf("plugin %q: %w", name, vErr)
 			} else {
 				p, ctorErr := subprocess.NewWithCapabilities(name, path, caps,
 				appendFetchTimeoutOpt(entry,
@@ -1254,6 +1267,14 @@ func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, en
 		return nil, outcome, err
 	}
 	caps := p.Capabilities()
+	// Per #192: validate the operator's config:` block against the
+	// plugin's declared JSON Schema. Empty schema → skip (plugin
+	// hasn't declared one yet). Validation failures fail-fast at
+	// registry-load time so the operator sees the mismatch in the
+	// daemon startup log, not at first ingest.
+	if vErr := config.ValidatePluginConfigAgainstSchema(name, entry.Config, caps.ConfigSchema); vErr != nil {
+		return nil, outcome, fmt.Errorf("plugin %q: %w", name, vErr)
+	}
 	if caps.Version != "" {
 		capsJSON, mErr := json.Marshal(caps)
 		if mErr != nil {
