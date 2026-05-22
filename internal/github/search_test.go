@@ -150,7 +150,12 @@ func TestSearchInvolvedClosedRecent_EmptyLogin_Rejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "empty operator login")
 }
 
-func TestFetchInvolvedOpenAcrossRepos_HappyPath(t *testing.T) {
+// TestClient_BulkPathAcrossRepos: composing
+// Client.SearchInvolvedOpen + Client.FetchTarget across N
+// repos reuses one client for all M+N calls and surfaces
+// items from every repo with hits. This is the integration
+// shape the cmd/yaad-github bulk path uses.
+func TestClient_BulkPathAcrossRepos(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -173,17 +178,23 @@ func TestFetchInvolvedOpenAcrossRepos_HappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	items, err := FetchInvolvedOpenAcrossRepos(context.Background(), BulkFetchOptions{
-		Client:        srv.Client(),
-		BaseURL:       srv.URL,
-		Token:         "ghp_stub",
-		OperatorLogin: "test-operator",
-		Repos: []RepoRef{
-			{Owner: "acme", Repo: "proj"},
-			{Owner: "beta", Repo: "widget"},
-		},
-	})
+	client, err := NewClient(srv.Client(), srv.URL, "ghp_stub")
 	require.NoError(t, err)
+
+	var items []*Item
+	for _, repo := range []RepoRef{
+		{Owner: "acme", Repo: "proj"},
+		{Owner: "beta", Repo: "widget"},
+	} {
+		targets, err := client.SearchInvolvedOpen(context.Background(), repo, "test-operator")
+		require.NoError(t, err)
+		for _, t2 := range targets {
+			item, err := client.FetchTarget(context.Background(), t2)
+			require.NoError(t, err)
+			items = append(items, item)
+		}
+	}
+
 	require.Len(t, items, 1)
 	assert.Equal(t, 7, items[0].Number)
 	assert.Equal(t, "Issue seven", items[0].Title)
