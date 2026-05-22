@@ -369,3 +369,132 @@ func TestUnmarshal_CommentsHeadingRowAuthorOptional(t *testing.T) {
 	assert.Equal(t, time.Date(2026, 5, 3, 0, 0, 0, 0, time.UTC),
 		got.Notes[0].Date.UTC())
 }
+
+// TestMarshal_NotesFieldAndKindRoundTrip pins the #186
+// agent-feedback fields: Field + Kind round-trip through the
+// heading-row `[kind=X field=Y]` metadata suffix.
+func TestMarshal_NotesFieldAndKindRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	original := &Entity{
+		ID:     "wikipedia:foo",
+		Kind:   "wikipedia-article",
+		Plugin: "wikipedia",
+		Notes: []Note{
+			{
+				Date:   mustParseTime(t, "2026-05-22T00:00:00Z"),
+				Text:   "Legacy-shape entity-level note.",
+				Author: "alice",
+			},
+			{
+				Date:   mustParseTime(t, "2026-05-22T00:00:00Z"),
+				Text:   "Entity-level annotation flag.",
+				Author: "agent-bob",
+				Kind:   NoteKindAnnotation,
+			},
+			{
+				Date:   mustParseTime(t, "2026-05-22T00:00:00Z"),
+				Text:   "Per-field note (kind=note default).",
+				Author: "alice",
+				Field:  "birth_date",
+			},
+			{
+				Date:   mustParseTime(t, "2026-05-22T00:00:00Z"),
+				Text:   "Per-field annotation.",
+				Author: "agent-bob",
+				Field:  "birth_date",
+				Kind:   NoteKindAnnotation,
+			},
+		},
+	}
+	b, err := Marshal(original, nil)
+	require.NoError(t, err)
+
+	got, err := Unmarshal(b)
+	require.NoError(t, err)
+	require.Len(t, got.Notes, 4)
+
+	// Index 0: legacy shape — no Field, no Kind, no metadata bracket.
+	assert.Empty(t, got.Notes[0].Field)
+	assert.Empty(t, got.Notes[0].Kind, "kind empty round-trips as empty (the default `note` is implicit)")
+
+	// Index 1: kind=annotation only.
+	assert.Empty(t, got.Notes[1].Field)
+	assert.Equal(t, NoteKindAnnotation, got.Notes[1].Kind)
+
+	// Index 2: field set, kind default (the implicit "note").
+	assert.Equal(t, "birth_date", got.Notes[2].Field)
+	assert.Empty(t, got.Notes[2].Kind, "default kind=note doesn't surface in the metadata")
+
+	// Index 3: both set.
+	assert.Equal(t, "birth_date", got.Notes[3].Field)
+	assert.Equal(t, NoteKindAnnotation, got.Notes[3].Kind)
+}
+
+// TestUnmarshal_NotesLegacyShapeNoMetadata pins backwards-
+// compatibility: vault files written before #186 (no
+// `[kind=X field=Y]` suffix) parse cleanly with empty
+// Field + Kind.
+func TestUnmarshal_NotesLegacyShapeNoMetadata(t *testing.T) {
+	t.Parallel()
+
+	raw := strings.Join([]string{
+		"---",
+		"id: wikipedia:foo",
+		"kind: wikipedia-article",
+		"plugin: wikipedia",
+		"note_count: 1",
+		"---",
+		"",
+		NotesStartMarker,
+		"## Notes",
+		"",
+		"| Notes |",
+		"|----------|",
+		"| 2026-05-03 — alice @ alice |",
+		"| Legacy note with no field/kind metadata. |",
+		NotesEndMarker,
+	}, "\n")
+
+	got, err := Unmarshal([]byte(raw))
+	require.NoError(t, err)
+	require.Len(t, got.Notes, 1)
+	assert.Equal(t, "alice", got.Notes[0].Author)
+	assert.Equal(t, "alice", got.Notes[0].Operator)
+	assert.Empty(t, got.Notes[0].Field)
+	assert.Empty(t, got.Notes[0].Kind)
+	assert.Equal(t, "Legacy note with no field/kind metadata.", got.Notes[0].Text)
+}
+
+// TestUnmarshal_NotesUnknownMetadataKeyIgnored pins forward-
+// compatibility: an unknown `key=value` token inside the
+// metadata bracket is silently ignored. Future #186 follow-ups
+// may add new tag keys; older parsers must not reject them.
+func TestUnmarshal_NotesUnknownMetadataKeyIgnored(t *testing.T) {
+	t.Parallel()
+
+	raw := strings.Join([]string{
+		"---",
+		"id: wikipedia:foo",
+		"kind: wikipedia-article",
+		"plugin: wikipedia",
+		"note_count: 1",
+		"---",
+		"",
+		NotesStartMarker,
+		"## Notes",
+		"",
+		"| Notes |",
+		"|----------|",
+		"| 2026-05-22 — alice [field=birth_date kind=annotation future_tag=v2] |",
+		"| Forward-compat note. |",
+		NotesEndMarker,
+	}, "\n")
+
+	got, err := Unmarshal([]byte(raw))
+	require.NoError(t, err)
+	require.Len(t, got.Notes, 1)
+	assert.Equal(t, "alice", got.Notes[0].Author)
+	assert.Equal(t, "birth_date", got.Notes[0].Field)
+	assert.Equal(t, NoteKindAnnotation, got.Notes[0].Kind)
+}

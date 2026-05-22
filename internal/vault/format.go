@@ -318,15 +318,69 @@ var noteTableSeparator = regexp.MustCompile(`^\|\s*-+\s*\|\s*$`)
 
 // noteHeadingRow extracts `<date>`, `<date> — <author>`, or
 // `<date> — <author> @ <operator>` from a note-table heading row's
-// cell content. Date is a single non-whitespace token (RFC3339 or
-// YYYY-MM-DD; both are dash-only safe). Operator is optional and
-// trailing — pre-yaad-index vault files end at the author and
-// the parser must round-trip those without inventing an operator.
+// cell content, optionally followed by a `[kind=X field=Y]`
+// metadata suffix per #186. Date is a single non-whitespace token
+// (RFC3339 or YYYY-MM-DD; both are dash-only safe). Operator is
+// optional and trailing — pre-yaad-index vault files end at the
+// author and the parser must round-trip those without inventing
+// an operator. Metadata bracket is optional; pre-#186 vault files
+// without it round-trip with empty Field + Kind.
 //
 // Group 1: date. Group 2: author (may be empty when only date present;
-// `[^@]+?` so the `@ <operator>` separator does not leak into the
-// author capture). Group 3: operator (empty when not present).
-var noteHeadingRow = regexp.MustCompile(`^(\S+)(?:\s+(?:—|-)\s+([^@]+?)(?:\s+@\s+(.+))?)?$`)
+// `[^@\[]+?` so the `@ <operator>` and ` [meta]` separators do not
+// leak into the author capture). Group 3: operator (empty when not
+// present; `[^[]+?` so the metadata suffix doesn't leak in). Group 4:
+// the metadata-bracket contents (without the brackets).
+var noteHeadingRow = regexp.MustCompile(`^(\S+)(?:\s+(?:—|-)\s+([^@\[]+?)(?:\s+@\s+([^\[]+?))?)?(?:\s+\[([^\]]*)\])?$`)
+
+// noteMetadataPair parses one `key=value` token inside the
+// `[kind=X field=Y]` metadata suffix. Both key and value are
+// non-whitespace runs; spaces separate pairs.
+var noteMetadataPair = regexp.MustCompile(`^(\S+?)=(\S*)$`)
+
+// renderNoteMetadata renders the `[kind=X field=Y]` heading-row
+// suffix per #186. Empty result (no brackets emitted) when both
+// fields are at their default values (kind="" or "note" + field
+// empty), preserving the legacy heading-row shape so pre-#186
+// vault files round-trip unchanged.
+//
+// Field is emitted before kind when both are set so the read-back
+// pair-order is stable. Kind="note" is treated as the implicit
+// default — emitting it explicitly would surface noise in every
+// existing-shape note.
+func renderNoteMetadata(n Note) string {
+	var parts []string
+	if n.Field != "" {
+		parts = append(parts, "field="+n.Field)
+	}
+	if n.Kind != "" && n.Kind != NoteKindNote {
+		parts = append(parts, "kind="+n.Kind)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(parts, " ") + "]"
+}
+
+// parseNoteMetadata splits a `key=value key=value` metadata-suffix
+// string into a `(field, kind)` pair. Unknown keys are silently
+// ignored — the format is forward-compatible with future tag
+// additions; the parser doesn't reject what it doesn't recognise.
+func parseNoteMetadata(raw string) (field, kind string) {
+	for _, token := range strings.Fields(raw) {
+		m := noteMetadataPair.FindStringSubmatch(token)
+		if m == nil {
+			continue
+		}
+		switch m[1] {
+		case "field":
+			field = m[2]
+		case "kind":
+			kind = m[2]
+		}
+	}
+	return field, kind
+}
 
 // splitBody walks the body bytes and extracts (clean_content, edges,
 // notes). Lines before the first `## Edges` or `## Notes` heading
@@ -373,6 +427,8 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 		curDate time.Time
 		curAuthor string
 		curOperator string
+		curField string
+		curKind string
 	)
 
 	// flushOrphanedHeading recovers from the edge case where the
@@ -393,14 +449,18 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 			return
 		}
 		notesB = append(notesB, Note{
-			Date: curDate,
-			Author: curAuthor,
+			Date:     curDate,
+			Author:   curAuthor,
 			Operator: curOperator,
-			Text: "",
+			Field:    curField,
+			Kind:     curKind,
+			Text:     "",
 		})
 		curDate = time.Time{}
 		curAuthor = ""
 		curOperator = ""
+		curField = ""
+		curKind = ""
 		noteExpectHeading = true
 	}
 
@@ -537,6 +597,7 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 					curDate = parseCommentDate(hm[1])
 					curAuthor = strings.TrimSpace(hm[2])
 					curOperator = strings.TrimSpace(hm[3])
+					curField, curKind = parseNoteMetadata(hm[4])
 				} else {
 					// Malformed heading row — keep the cell as the
 					// date string so a hand-edit doesn't silently swallow
@@ -544,20 +605,26 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 					curDate = parseCommentDate(cell)
 					curAuthor = ""
 					curOperator = ""
+					curField = ""
+					curKind = ""
 				}
 				noteExpectHeading = false
 				continue
 			}
 			// Body row — pair with the buffered heading.
 			notesB = append(notesB, Note{
-				Date: curDate,
-				Author: curAuthor,
+				Date:     curDate,
+				Author:   curAuthor,
 				Operator: curOperator,
-				Text: cell,
+				Field:    curField,
+				Kind:     curKind,
+				Text:     cell,
 			})
 			curDate = time.Time{}
 			curAuthor = ""
 			curOperator = ""
+			curField = ""
+			curKind = ""
 			noteExpectHeading = true
 		case "dataview":
 			if fields := parseDataviewLine(line); len(fields) > 0 {
@@ -678,6 +745,14 @@ func writeNotesSection(w *bytes.Buffer, notes []Note) {
 				w.WriteString(" @ ")
 				w.WriteString(c.Operator)
 			}
+		}
+		// Optional trailing metadata per #186: `[kind=X field=Y]`.
+		// Both fields omitted (default kind=note + empty field) →
+		// no brackets, preserving the legacy heading-row shape so
+		// pre-#186 vault files round-trip unchanged.
+		if meta := renderNoteMetadata(c); meta != "" {
+			w.WriteString(" ")
+			w.WriteString(meta)
 		}
 		w.WriteString(" |\n")
 		// Body row: encoded text in a single cell.

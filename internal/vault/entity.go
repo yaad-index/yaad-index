@@ -257,7 +257,31 @@ type Note struct {
 	Text string `yaml:"text"`
 	Author string `yaml:"author,omitempty"`
 	Operator string `yaml:"operator,omitempty"`
+
+	// Field is the optional per-field scope of the note per #186.
+	// Empty (default) → entity-level note (current behavior,
+	// unchanged). Set to the gap / property name (e.g.
+	// `birth_date`) when the note is scoped to a specific field
+	// rather than the entity as a whole.
+	Field string `yaml:"field,omitempty"`
+
+	// Kind discriminates everyday notes from agent-feedback
+	// annotations per #186. NoteKindNote (default, empty on the
+	// wire for legacy notes) is operator-level commentary;
+	// NoteKindAnnotation is an agent observation that wants
+	// operator attention, surfaced via the `kind=annotation` filter
+	// on read paths so agent-feedback doesn't drown in everyday
+	// note traffic.
+	Kind string `yaml:"kind,omitempty"`
 }
+
+// NoteKind enumerates the recognised values for Note.Kind per #186.
+// Stored as a bare string on the wire so legacy notes (no `kind:`
+// frontmatter) round-trip cleanly through yaml's omitempty.
+const (
+	NoteKindNote       = "note"
+	NoteKindAnnotation = "annotation"
+)
 
 // DataviewParagraph is one canonical-type fill event recorded on a
 // target canonical entity per yaad-index #119. Each paragraph
