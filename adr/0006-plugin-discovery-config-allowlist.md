@@ -54,6 +54,34 @@ At startup, for every entry in `plugins`:
 
 A failed `--init` (non-zero exit, malformed JSON, timeout) → fail-fast on that plugin. v1: the server doesn't start. (A more lenient "skip plugins that fail --init, log + serve the rest" behaviour can land later under explicit operator opt-in; defaulting to fail-fast forces operators to notice broken configs.)
 
+### Per-plugin config delivery
+
+Per the 2026-05-22 amendment (#192), each plugin entry MAY carry a structured `config:` sub-block:
+
+```yaml
+plugins:
+  - name: github
+    path: /usr/local/lib/yaad-index/plugins/yaad-github
+    config:
+      repos: [acme/proj, beta/widget]
+      recent_days: 7
+      base_url: https://api.github.com
+```
+
+**Arbitrary YAML structure.** The block accepts scalars, lists, nested maps — whatever the plugin's schema declares. The plugin owns its config shape; the daemon doesn't impose a flat-scalar restriction.
+
+**Single JSON env var.** At subprocess spawn time the daemon JSON-marshals the entire `config:` block and delivers it as a single env var named `YAAD_PLUGIN_CONFIG`. Plugins read it on startup with one `os.Getenv` + `json.Unmarshal` into their own struct. The uniform env-var name is intentional — every plugin reads the same name; per-subprocess env isolation keeps the value scoped to its target.
+
+**Plugin declares its schema.** Each plugin's `--init` capabilities document MAY include a `config_schema` field carrying a JSON Schema document (the plugin embeds it verbatim). At registry-load time the daemon validates the operator's `config:` block against the schema and fails fast on mismatch — operators see the violation in the startup log, not at first ingest. Plugins without a declared schema get their config passed through unvalidated (skip-validate, still-marshal).
+
+**Daemon-injected fields.** The daemon writes reserved `_`-prefixed keys into the JSON payload before delivery. v1 injects exactly one:
+
+- `_name` — the entry's `name:` value, so multi-instance plugins (e.g. `github-personal` / `github-work`) read their instance identity without operator-side duplication.
+
+Operator keys starting with `_` are rejected at config load (a defensive guard against shadowing daemon-injected fields). Future iterations may add additional daemon-injected fields under the same `_`-prefix convention (e.g. `_version`, `_position`) without per-field design decisions.
+
+**Secrets stay in env-passthrough.** The `config:` block lands in operator yaml (typically committed to ops/SCM); secrets like API tokens should NOT live there. Operators expose secrets via the daemon's process environment (docker `-e`, systemd `EnvironmentFile`, etc.); the daemon passes its env to subprocesses by default, so the plugin reads `os.Getenv("YAAD_GITHUB_TOKEN")` directly. The two channels are explicit: `config:` for structured non-secret values; daemon-env for secrets.
+
 ### Re-discovery
 
 Same as ADR-0005: registry built once at startup, refreshable via `POST /v1/plugins/refresh` (admin endpoint owned by a future plugin-management ADR). Adding a plugin is now: edit config + refresh. **Not:** drop a binary somewhere and hope.
@@ -177,3 +205,17 @@ ADR-0005's other decisions (invocation, request protocol, cache, conflict resolu
 4. Drop the in-tree `internal/plugins/wikipedia/` from any branch; Wikipedia ships as a standalone repo (`yaad-wikipedia`) that builds to a `yaad-wikipedia` binary implementing the protocol from ADR-0005's request section.
 5. Annotate ADR-0005's Discovery section with a "**Superseded by ADR-0006**" line so a reader of ADR-0005 alone doesn't follow stale guidance.
 6. README + INSTALL.md updates: how to write a config, how to register a plugin, the security rationale for full-path-only.
+
+## Revisions
+
+### 2026-05-22 — structured `config:` block + JSON-Schema validation (#192)
+
+The original ADR's `config:` sub-block was an undeclared open question — the implementation that landed via #7 supported only flat scalar values converted to per-key env vars (`<PLUGIN_UPPER>_<KEY_UPPER>`). yaad-github's `repos: [list]` requirement surfaced that the scalar shape was too narrow.
+
+Changes in this amendment (added as the "Per-plugin config delivery" section above):
+
+- **Arbitrary YAML structure** in the `config:` block — scalars, lists, nested maps all accepted. Plugin owns its schema.
+- **Single uniform env var.** Daemon JSON-marshals the whole block and delivers via `YAAD_PLUGIN_CONFIG`. Plugin reads with one `os.Getenv` + `json.Unmarshal`.
+- **JSON Schema validation.** Plugin's `--init` capabilities grow a `config_schema` field (JSON Schema draft 2020-12). Daemon validates the operator's `config:` against the schema at registry-load time + fails fast on mismatch. Plugins without a declared schema skip validation.
+- **Daemon-injected fields.** Reserved `_`-prefix convention; v1 injects `_name`. Operator keys starting with `_` rejected at Load.
+- **Scalar → per-key env var conversion REMOVED.** The original #7 convention (`<PLUGIN_UPPER>_<KEY_UPPER>` per scalar key) goes away. Existing plugins (yaad-bgg, yaad-gmail, yaad-wikipedia, yaad-github) migrate to read JSON config + declare their schema in subsequent per-plugin PRs. Operators in the migration window can keep secrets at the daemon-process env layer (env-passthrough remains the only secrets channel).

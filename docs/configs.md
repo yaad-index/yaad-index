@@ -135,6 +135,34 @@ Each entry: `{name, path}`.
 
 A rejected `plugins:` block fails the entire config; the daemon refuses to start.
 
+### 3.1 Per-plugin `config:` sub-block (ADR-0006 §"Per-plugin config delivery")
+
+Each plugin entry MAY carry a structured `config:` sub-block. Arbitrary YAML structure is accepted (scalars, lists, nested maps); the plugin owns its schema:
+
+```yaml
+plugins:
+  - name: github
+    path: /opt/yaad/yaad-github
+    config:
+      repos: [acme/proj, beta/widget]
+      recent_days: 7
+      base_url: https://api.github.com
+```
+
+**How the plugin reads it.** At subprocess spawn the daemon JSON-marshals the whole block and delivers it as a single env var named `YAAD_PLUGIN_CONFIG`. Every plugin reads the same name; per-subprocess env isolation keeps the value scoped to its target. The plugin does one `os.Getenv("YAAD_PLUGIN_CONFIG")` + `json.Unmarshal` into its own struct on startup.
+
+**Schema declaration + validation.** Each plugin's `--init` capabilities document MAY include a `config_schema` field (JSON Schema draft 2020-12). The daemon validates the operator's `config:` block against the schema at registry-load time and fails fast on mismatch — operators see the violation in the startup log, not at first ingest. Plugins without a declared schema get their config passed through unvalidated.
+
+**Daemon-injected fields.** The daemon writes reserved `_`-prefixed keys into the JSON payload before delivery:
+
+- `_name` — the entry's `name:` value, so multi-instance plugins (e.g. `github-personal` / `github-work`) read their instance identity without operator-side duplication.
+
+Operator keys starting with `_` are rejected at Load (a defensive guard against shadowing daemon-injected fields). The `_`-prefix is reserved for daemon-injected fields generally; future iterations may inject additional fields under the same convention without per-field design decisions.
+
+**Secrets stay in the daemon's process env**, not the `config:` block. The yaml file typically lands in ops/SCM; tokens / passwords / etc. live at the daemon-process layer (docker `-e`, systemd `EnvironmentFile`, …). The daemon passes its env to subprocesses by default, so the plugin reads `os.Getenv("YAAD_GITHUB_TOKEN")` directly.
+
+The two channels are explicit: `config:` for structured non-secret values that benefit from yaml-shaped expression (lists, maps); daemon-process env for secrets.
+
 ## 4. `vault:` — the source-of-truth root (ADR-0008)
 
 ```yaml

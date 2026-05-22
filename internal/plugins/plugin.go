@@ -258,6 +258,20 @@ type Capabilities struct {
 	// nil, preserving back-compat — the daemon's command-routing
 	// path simply never resolves to them.
 	Commands []string `json:"commands,omitempty"`
+
+	// ConfigSchema declares the JSON Schema the operator's
+	// `plugins[N].config:` block must satisfy, per ADR-0006's
+	// 2026-05-22 amendment (#192). Embedded verbatim as the
+	// plugin emitted it; the daemon hands the raw bytes to the
+	// JSON-Schema validator (santhosh-tekuri/jsonschema/v6) at
+	// registry-load time.
+	//
+	// Empty / absent → daemon skips schema validation but still
+	// JSON-marshals the operator's `config:` block + delivers it
+	// via YAAD_PLUGIN_CONFIG. Plugins predating #192 simply don't
+	// declare this field and continue to receive the same config
+	// payload they did before.
+	ConfigSchema json.RawMessage `json:"config_schema,omitempty"`
 }
 
 // CanonicalKindExtras is the plugin-side declaration block per
