@@ -9,9 +9,11 @@ Proposed 2026-05-21.
 - [ADR-0005](./0005-plugin-lifecycle.md) — plugin invocation model.
 - [ADR-0006](./0006-plugin-discovery-config-allowlist.md) — config-allowlist + URL-pattern routing.
 - [ADR-0008](./0008-vault-as-source-of-truth.md) — operator's `canonical_kinds:` + `canonical_edge_types:` config gates emission.
+- [ADR-0018](./0018-archive-replaces-delete.md) — archive lifecycle the workflow-mediated closed-item path wraps.
 - [ADR-0021](./0021-daemon-owns-slug.md) — `kind: "source"` + daemon-derived `<source_namespace>:<slug.Slug(name)>` ID + `edges` block map-keyed-by-type.
 - [ADR-0022](./0022-plugin-command-protocol.md) — `commands: [...]` + `<plugin>: !<command>` invocation sigil.
 - [ADR-0023](./0023-unified-plugin-response-protocol.md) — NDJSON streaming response wire (one envelope per line).
+- [ADR-0024](./0024-workflows-and-tasks.md) — workflow engine + `entity.updated` / `entity.created` triggers + `archive_entity` / `restore_entity` actions the closed-item lifecycle uses.
 
 ## Context
 
@@ -105,7 +107,14 @@ Empty or absent `repos:` is a config error at daemon startup (per ADR-0006's str
 
 ### 4. `involves:` scope = full GitHub broad meaning
 
-For each configured repo, the plugin's bulk-fetch query is GitHub's `is:open involves:<operator-login> repo:<owner>/<name>` plus a closed-since-last-sync sweep. `involves:` covers author + assignee + mentioned + commenter + reviewer. Matches a typical coordinator+reviewer involvement pattern; explicit narrower scopes are deferred to a future config knob if the surface gets too noisy.
+For each configured repo, the plugin's bulk-fetch path runs **two queries** in sequence:
+
+1. `is:open involves:<operator-login> repo:<owner>/<name>` — every currently-open PR or issue the operator is involved in.
+2. `is:closed involves:<operator-login> repo:<owner>/<name> updated:>=<N-days-ago>` — every closed PR or issue the operator is involved in that has had upstream activity within an N-day rolling window. `N` comes from the `YAAD_GITHUB_RECENT_DAYS` env var (default `7`).
+
+`involves:` covers author + assignee + mentioned + commenter + reviewer. Matches a typical coordinator+reviewer involvement pattern; explicit narrower scopes are deferred to a future config knob if the surface gets too noisy.
+
+The closed-recent-window is the **stateless replacement** for the per-plugin last-sync cursor an earlier draft of this ADR proposed. GitHub's Search API supports `updated:>=` natively, so the plugin needs no state file and the daemon needs no `--last-sync` arg — the rolling window covers the realistic recently-closed set. Closed items >N days with no subsequent upstream activity won't surface; that's the intended cold-set (an old closure with no churn is genuinely settled). Operators with a narrow `YAAD_GITHUB_RECENT_DAYS` should know this boundary; default `7` covers typical review cycles.
 
 The `<operator-login>` token is derived from the authenticated PAT's user (one `GET /user` call on first startup, cached in plugin state).
 
@@ -126,15 +135,88 @@ PR and issue entities carry comment metadata in `structured.data`:
 
 Comments are not emitted as separate `github-comment` entities. The graph stays small; the cost is no "all comments by a given user" or "comments mentioning a specific ADR" queries. Threshold-based comment-promotion (>200 chars OR contains code-block OR first-from-new-author) is a v2 design discussion.
 
-### 6. Closed-item lifecycle — reuse ADR-0018 archive surface, archive immediately on close
+### 6. Closed-item lifecycle — workflow-driven via ADR-0024 archive actions
 
-Closed PRs and issues remain in the graph indefinitely but leave the active set the moment they close. The plugin's bulk-fetch loop calls `archive_entity` ([ADR-0018](./0018-archive-replaces-delete.md)) on any item whose GitHub state is `closed` (PRs: closed/merged; issues: closed) in the same fetch cycle that observed the state-change. That moves the vault file to `_archive/<kind>/<slug>.md` and stamps `archived_at` on the DB row. No quiet-period timer, no state-change tracking, no separate retention clock — closed-on-GitHub maps directly to archived-in-yaad-index.
+Closed PRs and issues remain in the graph indefinitely but leave the active set the moment they close. **The plugin does not participate in archive state management** — it emits truth (`structured.data.state == "closed"` on closed items) and the operator configures workflows that consume the state field and wrap [ADR-0018](./0018-archive-replaces-delete.md)'s archive lifecycle via ADR-0024's `archive_entity` / `restore_entity` actions.
 
-**Re-opened items.** If a previously-archived PR/issue gets re-opened on GitHub, the next bulk-fetch sweep detects state=`open` and calls `restore_entity` (ADR-0018 inverse) to bring the entity back into the active set.
+This split matches the broader operator principle for yaad-index plugins: plugins emit upstream truth, state lives in workflows + operator. An earlier draft of this ADR had the plugin call `archive_entity` directly from its bulk-fetch loop; that design coupled the plugin to a lifecycle policy and forced the daemon to grow plugin-side state. The workflow-driven approach decouples both: the plugin re-emits the involved set on each sweep, the workflow reacts to the field-level transitions surfaced by ADR-0024's `entity.updated` bus event.
 
-Default `/v1/search`, `/v1/list-entities`, etc. already skip archived rows via `ArchivedExclude`; agents that want them back pass `include_archived=true` (or `archived_only=true`) per the existing ADR-0018 endpoint contract. No new flag, no parallel mechanism — the GitHub plugin participates in the same archive lifecycle every other canonical entity uses.
+**Two-workflow operator pattern (recommended v1 shape).** The operator configures two workflows — one for the steady-state `open` → `closed` transition observed via re-fetch, and one for the initial-closed-ingest case where a PR/issue is first seen by the plugin's closed-recent sweep with no prior `open` state in the index. Mirror pair + initial-state sibling.
 
-**Implication.** Agent-facing queries that include recently-closed items (e.g. "what did I merge last week") need `include_archived=true` explicitly — the default active-set view shows open items only. Accepted trade-off for the no-timer simplification.
+````markdown
+---
+name: github-archive-on-state-change
+version: 1
+status: active
+---
+
+# Archive github items when upstream reports them closed
+
+Fires when the github plugin's re-fetch surfaces a state change. The
+`entity.updated` event carries the per-field delta; `field_changed:
+data.state` filters to the field this workflow cares about.
+
+```yaml
+trigger:
+  type: entity_updated
+  match:
+    field_changed: data.state
+    canonical_kind: [github-pr, github-issue]
+
+condition: 'entity.data.state == "closed"'
+
+dedup:
+  key: 'workflow + entity.id'
+  policy: skip
+
+actions:
+  - archive_entity:
+      target: '{{ entity.id }}'
+      reason: 'github-state-closed'
+```
+````
+
+The restore-on-reopen direction is the mirror: same trigger + match, `condition: 'entity.data.state == "open"'`, action calls `restore_entity` with `reason: 'github-state-reopened'`. Each direction is a separate workflow file; both are idempotent at ADR-0024's engine layer so re-firing is a no-op.
+
+The initial-closed-ingest case needs a third workflow on `entity.created` — because a PR/issue first surfacing through the closed-recent-window sweep emits `entity.created` (no prior value to delta against), `entity.updated` never fires for it:
+
+````markdown
+---
+name: github-archive-on-initial-closed
+version: 1
+status: active
+---
+
+# Archive github items first-ingested as closed
+
+Closed-window sweep (§4) surfaces items the index never saw as open.
+These fire `entity.created` with `data.state == "closed"`; the
+state-change workflow above doesn't catch them.
+
+```yaml
+trigger:
+  type: entity_created
+  match:
+    canonical_kind: [github-pr, github-issue]
+
+condition: 'entity.data.state == "closed"'
+
+dedup:
+  key: 'workflow + entity.id'
+  policy: skip
+
+actions:
+  - archive_entity:
+      target: '{{ entity.id }}'
+      reason: 'github-state-closed-initial'
+```
+````
+
+Three workflows total — two transition-handlers + one initial-state-handler. Collapsing into fewer files requires action-level conditional expressions (out of v1 per ADR-0024). The operator can install all three from a single template at config time.
+
+Default `/v1/search`, `/v1/list-entities`, etc. already skip archived rows via `ArchivedExclude`; agents that want them back pass `include_archived=true` (or `archived_only=true`) per the existing ADR-0018 endpoint contract. No new flag, no parallel mechanism — the GitHub plugin participates in the same archive lifecycle every other canonical entity uses, just via workflow indirection rather than direct plugin call.
+
+**Implication.** Agent-facing queries that include recently-closed items (e.g. "what did I merge last week") need `include_archived=true` explicitly — the default active-set view shows open items only. Accepted trade-off; the closed-recent-window in §4 keeps the workflow's archive evaluation deterministic even for stale closures.
 
 ### 7. Multi-instance pattern: same binary, configurable base URL
 
@@ -227,8 +309,23 @@ These are deliberately deferred — the read-only-snapshot graph needs to prove 
 - **Auto-discover by default** (rejected for v1) — noisy from drive-by OSS comments. Deferred to v2 `auto_discover_orgs:` flag.
 - **TTL-delete closed items** (rejected) — preservation cost is zero; reusing the ADR-0018 archive surface gives the same query-surface cleanliness without losing history. Bonus: no new mechanism to maintain — the plugin participates in the existing entity lifecycle.
 - **Bespoke `data.archived` boolean** (rejected — earlier draft of this ADR proposed it) — would have introduced a parallel archive concept alongside ADR-0018's existing one. Reusing ADR-0018 means default `/v1/search` filters already work and the operator's `include_archived` / `archived_only` query knobs cover the GitHub surface for free.
+- **Plugin calls `archive_entity` directly** (rejected — earlier draft of this ADR proposed it) — coupled the plugin to a lifecycle policy and forced the daemon to grow plugin-side state (last-sync cursor for closed-item detection). The workflow-mediated approach (§6 above) decouples both: plugin emits truth (`data.state`), operator-authored workflows wrap the archive action via ADR-0024's primitives, and the closed-recent-window (§4) replaces the last-sync cursor with a stateless rolling window via GitHub Search's native `updated:>=` operator.
+- **Daemon-side inferential archive on `data.state` transitions** (rejected) — would have baked the github-specific lifecycle rule into the daemon's ingest path. Same coupling problem as the plugin-direct-call alternative, just relocated. The workflow-engine path keeps the daemon generic and pushes the rule into operator-authored config.
 - **Separate plugin binary per GitHub instance** (rejected) — maintenance burden. Multi-instance via base URL env reuses the same pattern ADR-0006 already supports (multiple plugin instances, each with its own config + env).
 
 ## Migration / backward compatibility
 
 Greenfield. No prior github plugin to migrate from. The `repository` canonical kind doesn't currently exist in the system; this ADR introduces it. The 5 new edge types (`in_repo`, `authored_by`, `involves`, `assigned_to`, `reviewed_by`) are also new — operators must enable them in `canonical_edge_types:` config.
+
+## Revisions
+
+### 2026-05-22 — workflow-mediated closed-item lifecycle + N-day rolling window
+
+Section 6's closed-item lifecycle was rewritten to defer archive policy to operator-authored workflows (per ADR-0024's new `entity.updated` / `archive_entity` / `restore_entity` shapes added in the 2026-05-21 amendment). Driving framing: **"plugin emits truth, state lives in workflows + operator. Plugin never participates in state management."**
+
+- **§4 closed-item sweep:** the cursor-based "closed-since-last-sync" mechanism is replaced by a stateless **N-day rolling window** via GitHub Search's native `updated:>=` operator. New env knob `YAAD_GITHUB_RECENT_DAYS` (default `7`) sets the window. No plugin state file, no daemon `--last-sync` arg. The boundary trade-off (closures >N days with no upstream churn won't surface) is documented in §4.
+- **§6 archive lifecycle:** plugin no longer calls `archive_entity` directly. Operators configure workflows that subscribe to `entity.updated` with `field_changed: data.state` (mirror pair: archive on `closed`, restore on `open`) and to `entity.created` for the initial-closed-ingest case. Three workflow files total for the v1 pattern; ADR-0024 has the engine spec.
+- **Depends-on list** grows to include ADR-0018 (archive lifecycle) and ADR-0024 (workflow engine).
+- **Alternatives considered** grows to enumerate the rejected plugin-direct-call and daemon-side-inferential approaches with the coupling rationale.
+
+The earlier draft's "plugin's bulk-fetch loop calls `archive_entity`" wording is removed wholesale.
