@@ -49,24 +49,82 @@ import (
 	"github.com/yaad-index/yaad-index/pkg/plugin/attach"
 )
 
-// Env-var integration points for operator config (per ADR-0006:
-// yaad-index inherits env into the subprocess; the config
-// allowlist takes a path only, not args). Mirrors yaad-wikipedia's
-// env-passthrough pattern.
+// Env-var integration points for operator config. Secrets stay
+// in env-passthrough per ADR-0006's 2026-05-22 amendment (#192) —
+// account + app password live at the daemon's process-env layer,
+// not in the operator yaml. Non-secret config (labels, IMAP
+// host/port, log level) moves to the structured `config:` block
+// delivered via EnvPluginConfig.
 const (
 	EnvAccountEmail = "YAAD_GMAIL_ACCOUNT"
-	EnvAppPassword = "YAAD_GMAIL_APP_PASSWORD"
-	EnvIngestedLabel = "YAAD_GMAIL_INGESTED_LABEL"
-	EnvSkipLabel = "YAAD_GMAIL_SKIP_LABEL"
-	EnvPollingInterval = "YAAD_GMAIL_POLLING_INTERVAL"
-	EnvIMAPHost = "YAAD_GMAIL_IMAP_HOST"
-	EnvIMAPPort = "YAAD_GMAIL_IMAP_PORT"
-	// EnvLogLevel tunes the slog handler's minimum level. Accepts
+	EnvAppPassword  = "YAAD_GMAIL_APP_PASSWORD"
+	EnvPluginConfig = "YAAD_PLUGIN_CONFIG"
+)
+
+// pluginConfig is the typed shape of the operator's `config:`
+// block per ADR-0006 (2026-05-22 amendment / #192). JSON tags
+// match the operator yaml key shape; the daemon-injected `_name`
+// field carries the entry's `plugins[N].name:` value.
+type pluginConfig struct {
+	// IngestedLabel is the Gmail label written via X-GM-LABELS
+	// after a successful per-message ingest. Default "yaad-ingested".
+	// Empty string disables the label write (re-fetch behavior).
+	IngestedLabel string `json:"ingested_label,omitempty"`
+
+	// SkipLabel is the Gmail label that, when present on a message,
+	// blocks ingest. Default "yaad-skip". Empty string disables.
+	SkipLabel string `json:"skip_label,omitempty"`
+
+	// IMAPHost overrides the default Gmail IMAP host
+	// (`imap.gmail.com`). Tests + ops scenarios pointing at a
+	// local proxy set this.
+	IMAPHost string `json:"imap_host,omitempty"`
+
+	// IMAPPort overrides the default Gmail IMAP port (993).
+	IMAPPort int `json:"imap_port,omitempty"`
+
+	// LogLevel tunes the slog handler's minimum level. Accepts
 	// debug / info / warn / error (case-insensitive). Defaults to
 	// info; unknown values fall back to info rather than fail-loud
 	// (operator misconfiguration shouldn't block a fetch cycle).
-	EnvLogLevel = "YAAD_GMAIL_LOG_LEVEL"
-)
+	LogLevel string `json:"log_level,omitempty"`
+
+	// Name is the daemon-injected `_name` field carrying the
+	// entry's `plugins[N].name:` value. Read-only from the
+	// plugin's perspective; the daemon writes it.
+	Name string `json:"_name,omitempty"`
+}
+
+// loadPluginConfig parses the EnvPluginConfig env var into a
+// pluginConfig struct. Empty / unset env → zero-value struct,
+// callers fall through to their own defaults.
+func loadPluginConfig() (pluginConfig, error) {
+	raw := os.Getenv(EnvPluginConfig)
+	if raw == "" {
+		return pluginConfig{}, nil
+	}
+	var c pluginConfig
+	if err := json.Unmarshal([]byte(raw), &c); err != nil {
+		return pluginConfig{}, fmt.Errorf("parse %s: %w", EnvPluginConfig, err)
+	}
+	return c, nil
+}
+
+// configSchemaJSON declares the operator-side `config:` shape
+// for yaad-gmail per ADR-0006's 2026-05-22 amendment.
+const configSchemaJSON = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "_name": {"type": "string"},
+    "ingested_label": {"type": "string"},
+    "skip_label": {"type": "string"},
+    "imap_host": {"type": "string"},
+    "imap_port": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "log_level": {"type": "string", "enum": ["debug", "info", "warn", "warning", "error"]}
+  }
+}`
 
 // requestTimeout caps the wall-clock budget for one ingest
 // invocation (one poll cycle, including IMAP connect / search /
@@ -153,6 +211,10 @@ type capabilitiesDoc struct {
 	// (`gmail: !fetch`). yaad-gmail's only command today is `fetch`,
 	// which runs one IMAP poll cycle.
 	Commands []string `json:"commands,omitempty"`
+	// ConfigSchema declares the JSON Schema the operator's
+	// `plugins[N].config:` block must satisfy per ADR-0006's
+	// 2026-05-22 amendment (#192).
+	ConfigSchema json.RawMessage `json:"config_schema,omitempty"`
 }
 
 type kindSpecJSON struct {
@@ -184,6 +246,7 @@ func runInit(stdout io.Writer) error {
 		CanonicalEdgeTypesEmitted: gmail.KnownCanonicalEdgeTypes,
 		SourceNamespace: gmail.SourceNamespace,
 		Commands: gmail.DeclaredCommands,
+		ConfigSchema: json.RawMessage(configSchemaJSON),
 	}
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", " ")
@@ -292,17 +355,23 @@ type errorFields struct {
 func runCommandFetch(ctx context.Context, stdout, stderr io.Writer) error {
 	start := time.Now()
 
-	cfg, err := loadIMAPConfig()
+	pcfg, err := loadPluginConfig()
 	if err != nil {
 		writeErrorPacket(stdout, "config_invalid", err.Error())
 		return err
 	}
 
-	ingestedLabel := envOrDefault(EnvIngestedLabel, gmail.DefaultIngestedLabel)
-	skipLabel := envOrDefault(EnvSkipLabel, gmail.DefaultSkipLabel)
+	cfg, err := loadIMAPConfig(pcfg)
+	if err != nil {
+		writeErrorPacket(stdout, "config_invalid", err.Error())
+		return err
+	}
+
+	ingestedLabel := stringOrDefault(pcfg.IngestedLabel, gmail.DefaultIngestedLabel)
+	skipLabel := stringOrDefault(pcfg.SkipLabel, gmail.DefaultSkipLabel)
 
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{
-		Level: parseLogLevel(envOrDefault(EnvLogLevel, "info")),
+		Level: parseLogLevel(pcfg.LogLevel),
 	}))
 
 	client, err := gmail.Dial(ctx, cfg)
@@ -497,21 +566,16 @@ func edgesToBlock(in []gmail.Edge) map[string][]edgeTargetJSON {
 	return out
 }
 
-// loadIMAPConfig reads the operator-config env vars and produces an
-// IMAPConfig. account_email + app_password are required; host +
-// port default to imap.gmail.com:993 unless overridden.
-func loadIMAPConfig() (gmail.IMAPConfig, error) {
+// loadIMAPConfig combines the env-passthrough secrets (account
+// email + app password) with the operator's structured config
+// (host + port from EnvPluginConfig) into the IMAPConfig the
+// gmail.Dial path expects.
+func loadIMAPConfig(p pluginConfig) (gmail.IMAPConfig, error) {
 	cfg := gmail.IMAPConfig{
 		AccountEmail: os.Getenv(EnvAccountEmail),
-		AppPassword: os.Getenv(EnvAppPassword),
-		Host: os.Getenv(EnvIMAPHost),
-	}
-	if portStr := os.Getenv(EnvIMAPPort); portStr != "" {
-		var port int
-		if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
-			return cfg, fmt.Errorf("gmail: invalid %s=%q: %w", EnvIMAPPort, portStr, err)
-		}
-		cfg.Port = port
+		AppPassword:  os.Getenv(EnvAppPassword),
+		Host:         p.IMAPHost,
+		Port:         p.IMAPPort,
 	}
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
@@ -519,11 +583,14 @@ func loadIMAPConfig() (gmail.IMAPConfig, error) {
 	return cfg, nil
 }
 
-func envOrDefault(env, def string) string {
-	if v, ok := os.LookupEnv(env); ok {
-		return v
+// stringOrDefault returns v when non-empty, otherwise def. Used
+// for the operator-config strings that need a sensible default
+// when the operator hasn't overridden.
+func stringOrDefault(v, def string) string {
+	if v == "" {
+		return def
 	}
-	return def
+	return v
 }
 
 // parseLogLevel maps an operator-supplied log-level string to the
