@@ -131,13 +131,9 @@ Without `ext.Strings()`, `.join(separator)` returns a compile-time error. The ot
 
 ## Worked examples (now runnable)
 
-### Daily-digest workflow
+Each lives in `vault/workflows/<name>.md` per the ADR-0024 workflow-file shape (frontmatter `name:` + body holding the single fenced ```yaml``` block); only the body YAML is shown below.
 
-```yaml
-# vault/workflows/daily-digest.md
----
-name: daily-digest
----
+### Daily-digest workflow (`vault/workflows/daily-digest.md`)
 
 ```yaml
 trigger:
@@ -148,17 +144,10 @@ actions:
       content: '{{ graph.in_neighbors(today(), "due_on").items.map(n, "- [[" + n.id + "]] (due)").join("\n") }}{{ graph.in_neighbors(today(), "occurred_on").items.map(n, "\n- [[" + n.id + "]] (occurred)").join("") }}'
       if_already_present: replace
 ```
-```
 
 Triggered via `yaad-index workflow trigger daily-digest`. The workflow targets `today()` (in the daemon's TZ), walks each canonical edge type relevant to "today's anchors," concatenates lines into a task-section body.
 
-### Ingested-on workflow
-
-```yaml
-# vault/workflows/ingested-on.md
----
-name: ingested-on
----
+### Ingested-on workflow (`vault/workflows/ingested-on.md`)
 
 ```yaml
 trigger:
@@ -171,17 +160,10 @@ actions:
         kind: 'day'
         name: 'today()'
 ```
-```
 
 Fires on every new entity. `add_canonical_edge`'s `target.name` field accepts the CEL expression `today()` which evaluates to `day:YYYY-MM-DD`; the action runner's kind-prefix strip (§1 above) removes the leading `day:` before slugifying so `target.id` resolves to the operator-expected `day:2026-11-11` shape. The runner also ensures the target day entity exists (per PR-226's ensure-target work in ADR-0025 cut 2).
 
-### Approaching-deadline workflow
-
-```yaml
-# vault/workflows/approaching-deadline.md
----
-name: approaching-deadline
----
+### Approaching-deadline workflow (`vault/workflows/approaching-deadline.md`)
 
 ```yaml
 trigger:
@@ -192,7 +174,6 @@ actions:
   - task_append:
       section: deadlines
       content: '{{ edge.from }} due in {{ days_between(today(), edge.to) }} days'
-```
 ```
 
 Fires when any `due_on` edge is created. The action computes the relative day-count and appends to the operator's deadline-tracking task.
