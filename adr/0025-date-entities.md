@@ -110,14 +110,6 @@ A day entity is mostly an anchor — its value comes from its inbound edges. The
 
 Days carrying meaningful journal content are marked with `is_journal: true` in the day entity's frontmatter. Tools (workflows, queries, future UI) that want "show me my journal entries" filter on `is_journal: true`; tools that want "show me every day with any inbound edge" don't filter.
 
-**Migration of pre-existing daily-note conventions.** Operators with `daily/YYYY-MM-DD.md` files in their vault (a common Obsidian / Logseq pattern) can map them to day entities:
-
-- Move the file to `day/YYYY-MM-DD.md` (vault path matches canonical ID slug).
-- Add frontmatter: `kind: day` + `id: day:YYYY-MM-DD` + `is_journal: true`.
-- Body content survives unchanged.
-
-The migration is **operator-driven**; the daemon does NOT auto-migrate existing `daily/` directories. Rationale: not every operator's `daily/` content is journal-shaped, and the operator should pick which days are journal entries vs which are abandoned scratchpads. A one-shot operator migration script (out of v1.x scope) may make this easier.
-
 ### Default-enabled
 
 Date entities are part of the daemon's core kind set. Operators don't enable them via plugin config — they're always available. This is unusual (most entity kinds come from plugins) and intentional: dates are universal, not domain-specific.
@@ -127,8 +119,7 @@ Date entities are part of the daemon's core kind set. Operators don't enable the
 - **Time-of-day entities** (hour, minute). Out of v1.x; revisit if a use case surfaces. Most operator workflows are day-level.
 - **Date arithmetic in CEL** (e.g., `day:2026-11-11 - day:2026-11-04 == 7`). Out unless workflows demand it.
 - **Localized week-numbering schemes** (US vs ISO). Use ISO week (`<YYYY>-W<WW>`); operator-config knob for the schedule-of-week is post-v1.x.
-- **Auto-tagging existing entities** with `ingested_on` edges at migration time. Per the workflow-driven decision above, `ingested_on` is never daemon-emitted in v1.x; backfill is a separate one-shot operator script if wanted.
-- **Auto-migration of `daily/YYYY-MM-DD.md` legacy files** to day entities. Operator-driven per the Date-entity-content section.
+- **Auto-stamping `ingested_on` edges on new ingests.** Per the workflow-driven decision above, `ingested_on` is never daemon-emitted in v1.x; operators wire the workflow if they want it.
 
 ## Workflow integration (downstream of ADR-0024)
 
@@ -153,13 +144,7 @@ No ADR-0024 changes required to support date entities — they're just another e
 **Negative:**
 - New entity kind increases the surface of the kind catalog (one `day` kind in v1.x; week/month/year add to it later).
 - Auto-creation adds an ingest-time / fill-time / workflow-action-time side effect that needs to be idempotent and cheap.
-- Operators with pre-existing daily-note conventions need an operator-driven migration path.
 - Daemon shape-scan walks every frontmatter on every write; cost is bounded (frontmatter is small) but non-zero.
-
-**Migration:**
-- v1.x reference-creation is forward-only across all write paths. Backfill of existing entities is a separate one-shot if wanted.
-- Existing `daily/YYYY-MM-DD.md` files don't auto-convert; operator moves them to `day/YYYY-MM-DD.md` + frontmatter per the Date-entity-content section.
-- **Plain-date-string fields.** Existing entities with frontmatter like `deadline: 2026-11-11` (raw string, not `day:2026-11-11` canonical reference) won't auto-convert — the daemon shape-scan looks for the `day:` prefix, not bare date strings. A migration script could rewrite them; out of scope here. Workflows / queries that want to reach day entities from plain-string fields will need either the migration or a forward-compat shim that accepts both forms.
 
 ## References
 
