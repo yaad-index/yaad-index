@@ -57,6 +57,10 @@ agent (claude / cli / curl)
 
 Full design lives in [`adr/`](adr/). For the API surface itself, see [ADR-0002](./adr/0002-api-surface.md). For implementation-detail locks, see [ADR-0003](./adr/0003-cli-library-kong.md) (CLI library) and [ADR-0004](./adr/0004-logging-library-slog.md) (logging library).
 
+## Getting started
+
+New to yaad-index? [`docs/getting-started.md`](docs/getting-started.md) walks from `git clone` to a first ingest + first agent connection. About an hour end-to-end. The reference docs below assume the daemon is already running.
+
 ## Quick start (when v1 ships)
 
 ```bash
