@@ -196,3 +196,35 @@ func TestCapabilities_CommandsOmitemptyWhenAbsent(t *testing.T) {
 	require.NotContains(t, string(body), "commands",
 		"omitempty must drop the field when Commands is nil — preserves back-compat shape")
 }
+
+// TestCapabilities_DateFieldsRoundTrip pins the ADR-0025 cut 2
+// (#221) wire shape: the `date_fields` block round-trips through
+// JSON unchanged.
+func TestCapabilities_DateFieldsRoundTrip(t *testing.T) {
+	in := Capabilities{
+		Name: "calendar",
+		DateFields: map[string]string{
+			"start": "occurred_on",
+			"due":   "due_on",
+		},
+	}
+	body, err := json.Marshal(in)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"date_fields"`,
+		"date_fields field must serialize when populated")
+
+	var out Capabilities
+	require.NoError(t, json.Unmarshal(body, &out))
+	require.Equal(t, in.DateFields, out.DateFields)
+}
+
+// TestCapabilities_DateFieldsOmitemptyWhenAbsent pins that plugins
+// predating #221 (no date_fields declaration) emit no field on
+// the wire — preserves back-compat for every existing plugin.
+func TestCapabilities_DateFieldsOmitemptyWhenAbsent(t *testing.T) {
+	caps := Capabilities{Name: "wikipedia"}
+	body, err := json.Marshal(caps)
+	require.NoError(t, err)
+	require.NotContains(t, string(body), "date_fields",
+		"omitempty must drop the field when DateFields is nil")
+}

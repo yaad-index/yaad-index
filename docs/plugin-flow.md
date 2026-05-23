@@ -154,7 +154,11 @@ One `ProvenanceEntry` stamped by the plugin: `{source, fetched_at, ok}`. If a pl
   "supports_search": true,
   "commands": [],
   "source_namespace": "wikipedia",
-  "cache_ttl_seconds": 604800
+  "cache_ttl_seconds": 604800,
+  "date_fields": {
+    "due_date": "due_on",
+    "occurred_at": "occurred_on"
+  }
 }
 ```
 
@@ -168,6 +172,7 @@ One `ProvenanceEntry` stamped by the plugin: `{source, fetched_at, ok}`. If a pl
 - **`commands[]`** — command-shape invocation names per ADR-0022 (e.g. `yaad-gmail` declares `["fetch"]`, invoked via `gmail: !fetch`).
 - **`source_namespace`** — the `<source_namespace>` prefix on emitted entity ids (`<source_namespace>:<slug>`).
 - **`cache_ttl_seconds`** — plugin-level TTL override. See §4.
+- **`date_fields`** — per-ADR-0025 cut 2: map of frontmatter field name → canonical edge type. When the daemon's shape-scan finds a `day:YYYY-MM-DD` value in a declared field, the declared edge type (e.g. `due_on`, `occurred_on`, `is_about_day`, a plugin-custom name) is emitted INSTEAD OF the baseline `references_day`. Fields NOT in `date_fields` still flow through the shape-scan and get the baseline edge — plugin authors only opt in for fields where richer typing matters. Empty / absent → every `day:`-shaped frontmatter value gets the baseline. See [`docs/date-entities.md`](./date-entities.md) for the full vocabulary + the no-double-edge rule.
 
 The per-fetch subprocess timeout is operator-side config (not plugin-declared) — see the `fetch_timeout` field on the operator's `plugins:` config entry in [`docs/configs.md`](./configs.md). Default `subprocess.DefaultFetchTimeout` (60s) applies when the operator hasn't set it.
 
