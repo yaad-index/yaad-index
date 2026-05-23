@@ -22,14 +22,18 @@ It's also an experiment: this project is being built *with* an AI (Yaad, which t
 
 ## Status
 
-Pre-alpha rewrite. An earlier prototype lived under a file-first design; this repo starts over from an **AI-first, remote-API** premise. See [ADR-0001](./adr/0001-fresh-rewrite-ai-first-remote-api.md) for the rewrite rationale.
+Pre-release. Daemon + 4 bundled plugins (Wikipedia, BoardGameGeek, Gmail, GitHub) + MCP surface + workflow engine + agent-feedback notes are all live on `main`. Latest tagged cut is **v0.8.0**. Interfaces still in flux per the design-in-flux warning above.
 
-## What it does (planned)
+An earlier prototype lived under a file-first design; this repo starts over from an **AI-first, remote-API** premise. See [ADR-0001](./adr/0001-fresh-rewrite-ai-first-remote-api.md) for the rewrite rationale.
 
-1. **Ingest.** A collector fetches a source — a board-game page, a blog post, an email — and parses it into entities and edges. Structured sources are parsed deterministically; unstructured sources are queued for AI extraction.
-2. **Index.** Entities land in a per-vault SQLite store with stable canonical IDs. Markdown vaults remain authoritative for human-edited content; the index is the agent-facing view.
-3. **Serve.** Everything reachable via HTTP. Local agents and remote agents call the same endpoints. No file-based fallback.
-4. **Query.** Hits the local index — never the original sources. Cache-first by design.
+## What it does
+
+1. **Ingest.** Plugins fetch sources (Wikipedia article, BoardGameGeek page, Gmail message, GitHub PR / issue) and emit them as entities + edges. Plugins are subprocesses spawned per-request (per [ADR-0005](./adr/0005-plugin-lifecycle.md)); URL-shape inputs route through `/v1/ingest`, command-shape `<plugin>: !<command>` inputs run bulk passes per [ADR-0022](./adr/0022-plugin-command-protocol.md).
+2. **Index.** Entities land in a per-vault SQLite store with stable canonical IDs ([ADR-0017](./adr/0017-canonical-id-clean-slug.md), [ADR-0021](./adr/0021-daemon-owns-slug.md)). Markdown vaults remain authoritative for human-edited content ([ADR-0008](./adr/0008-vault-as-source-of-truth.md)); the index is the agent-facing view.
+3. **Serve.** Everything reachable via HTTP at `/v1/...` and via MCP at `/mcp` (Streamable HTTP). Local agents and remote agents call the same endpoints.
+4. **Fill the gaps.** Canonical entity kinds declare what they don't know yet (`gaps:`); agents read `raw_content`, derive values, and POST them back via `/v1/entities/{id}/fill` ([ADR-0013](./adr/0013-canonical-kind-owns-gap-contract.md), [ADR-0019](./adr/0019-operator-fill.md)). The corpus closes its own gaps over time.
+5. **React.** Workflows ([ADR-0024](./adr/0024-workflows-and-tasks.md)) subscribe to entity events (`entity.created`, `entity.edge_added`, `entity.updated`, `fill.completed`) and fire actions: append notes, add gaps, dispatch plugins, file tasks. Reactive layer for "when X happens, do Y."
+6. **Annotate.** Agents can flag emitted entities as wrong, stale, or worth attention via the notes surface ([issue #186](https://github.com/yaad-index/yaad-index/issues/186), shipped 2026-05-22). Notes carry an optional `kind=annotation` flag so agent-feedback can be filtered cleanly from regular operator notes.
 
 ## What it isn't
 
@@ -40,44 +44,82 @@ Pre-alpha rewrite. An earlier prototype lived under a file-first design; this re
 
 ## Architecture sketch
 
-```
-agent (claude / cli / curl)
- │
- │ HTTP /v1/...
- ▼
-┌──────────────────┐ ┌────────────────────┐
-│ yaad-index │◀───────▶│ AI extractor │ (unstructured ingest)
-│ server │ │ (per-deployment) │
-└──────────────────┘ └────────────────────┘
- │
- ├─ collectors (per source: bgg, web, gmail, …)
- ├─ entity store (SQLite, per-vault)
- └─ markdown vault (authoritative for human edits)
+```mermaid
+flowchart TD
+    Agent["agent (claude / cli / curl)"]
+    Agent -->|"HTTP /v1/... (REST) + /mcp (Streamable HTTP MCP)"| Daemon
+
+    subgraph Daemon["yaad-index daemon"]
+        direction LR
+        Ingest["ingest /<br/>search /<br/>entities"]
+        Fill["fill / gaps"]
+        Workflow["workflow<br/>engine"]
+        Notes["notes /<br/>canonical"]
+    end
+
+    Daemon -->|"subprocess-per-request"| Plugins
+    Daemon <--> Store
+    Vault --> Store
+    Daemon --> Vault
+
+    subgraph Plugins["bundled plugins"]
+        direction TB
+        Wiki["yaad-wikipedia"]
+        BGG["yaad-bgg"]
+        Gmail["yaad-gmail"]
+        GitHub["yaad-github"]
+    end
+
+    Store[("entity store<br/>per-vault SQLite")]
+    Vault[("markdown vault<br/>source of truth")]
 ```
 
-Full design lives in [`adr/`](adr/). For the API surface itself, see [ADR-0002](./adr/0002-api-surface.md). For implementation-detail locks, see [ADR-0003](./adr/0003-cli-library-kong.md) (CLI library) and [ADR-0004](./adr/0004-logging-library-slog.md) (logging library).
+Full design lives in [`adr/`](adr/). Recently-shipped: [ADR-0024](./adr/0024-workflows-and-tasks.md) (workflow engine), [ADR-0025](./adr/0025-date-entities.md) (day entities — foundation in-flight), [ADR-0026](./adr/0026-yaad-github-plugin.md) (yaad-github plugin). For the API surface itself, see [ADR-0002](./adr/0002-api-surface.md).
 
 ## Getting started
 
 New to yaad-index? [`docs/getting-started.md`](docs/getting-started.md) walks from `git clone` to a first ingest + first agent connection. About an hour end-to-end. The reference docs below assume the daemon is already running.
 
-## Quick start (when v1 ships)
+## Quick start
 
 ```bash
-# Install (once released)
-go install github.com/yaad-index/yaad-index/cmd/yaad-index@latest
+# Build from source
+git clone git@github.com:yaad-index/yaad-index.git
+cd yaad-index
+make build
 
-# Run the server
-yaad-index serve
+# Mint an operator token + start the daemon
+./yaad-index keygen --keys-dir ./keys
+./yaad-index issue-token --operator $USER --operator-only --keys-dir ./keys > op.jwt
+./yaad-index serve --keys-dir ./keys --bind localhost:7433
 
-# From an agent or curl, ingest a source
+# From an agent or curl, ingest a source (URL shape)
 curl -X POST http://localhost:7433/v1/ingest \
+ -H "Authorization: Bearer $(cat op.jwt)" \
  -H 'Content-Type: application/json' \
  -d '{"url": "https://boardgamegeek.com/boardgame/224517/brass-birmingham"}'
 
 # Fetch the resulting entity
-curl http://localhost:7433/v1/entities/boardgame:brass-birmingham
+curl -H "Authorization: Bearer $(cat op.jwt)" \
+ http://localhost:7433/v1/entities/boardgame:brass-birmingham
 ```
+
+See [`docs/getting-started.md`](docs/getting-started.md) for the full walkthrough (clone → build → token → serve → first ingest → first workflow → MCP agent connection).
+
+## Bundled plugins
+
+Four plugins ship in-tree under `cmd/`:
+
+| Plugin | Source | Shape | Docs |
+|---|---|---|---|
+| [`yaad-wikipedia`](cmd/yaad-wikipedia/) | Wikipedia articles | URL-shape | — |
+| [`yaad-bgg`](cmd/yaad-bgg/) | BoardGameGeek games | URL-shape | — |
+| [`yaad-gmail`](cmd/yaad-gmail/) | Gmail messages | Command-shape (`gmail: !fetch`) | [`docs/plugins/yaad-gmail.md`](docs/plugins/yaad-gmail.md) |
+| [`yaad-github`](cmd/yaad-github/) | GitHub PRs + issues | URL-shape + command-shape (`github: !fetch`) | [`docs/plugins/yaad-github.md`](docs/plugins/yaad-github.md) |
+
+Each plugin is a standalone Go binary built from `cmd/<plugin>/`. Operators wire them in `config.yaml` per [`docs/configs.md`](docs/configs.md) — structured per-plugin config delivered via the `config:` block + a JSON Schema declared in the plugin's `--init` capabilities (per [ADR-0006](./adr/0006-plugin-discovery-config-allowlist.md)'s 2026-05-22 amendment). Secrets stay in env-passthrough; non-secret config travels in the structured block.
+
+The plugin protocol ([ADR-0005](./adr/0005-plugin-lifecycle.md) + [ADR-0022](./adr/0022-plugin-command-protocol.md) + [ADR-0023](./adr/0023-unified-plugin-response-protocol.md)) means any binary that speaks the JSON / NDJSON contract works — third-party plugins ship as separate repos without touching this codebase.
 
 ## Connecting AI agents (MCP)
 
@@ -126,8 +168,17 @@ not a near-term cutover.
 ## Repo layout
 
 - `adr/` — Architecture Decision Records. Read these before making design changes.
-- `cmd/yaad-index/` — server binary entry point.
-- `internal/api/` — v1 HTTP handlers (`GET /v1/kinds` today; more endpoints land per [ADR-0002](./adr/0002-api-surface.md)).
+- `cmd/yaad-index/` — server binary entry point + CLI subcommands (`serve`, `keygen`, `issue-token`, `command`, `fetch`, `reindex`, `plugins`, `workflow`, `task`).
+- `cmd/yaad-{wikipedia,bgg,gmail,github}/` — bundled plugin binaries.
+- `internal/api/` — v1 HTTP handlers (entities, ingest, fill, search, notes, kinds, workflows, tasks).
+- `internal/canonical/` — daemon-managed canonical kinds + edge type vocabulary.
+- `internal/workflow/` — workflow engine (event bus subscriber, action runners, parser).
+- `internal/plugins/` — plugin registry + invocation + subprocess + capabilities.
+- `internal/vault/` — markdown vault reader / writer / reindex.
+- `internal/store/` — SQLite store, migrations, queries.
+- `internal/mcp/` — MCP tool registration (every HTTP route mirrored as an MCP tool).
+- `docs/` — operator + agent reference docs (getting-started, plugin-flow, configs, workflows, tasks, fill-gap, ingest, per-plugin notes).
+- `mcp/` — legacy TypeScript MCP wrapper (kept during the in-process MCP transition per [issue #101](https://github.com/yaad-index/yaad-index/issues/101)).
 
 ## Building and running
 
@@ -143,25 +194,22 @@ The server logs structured JSON to stderr (per [ADR-0004](./adr/0004-logging-lib
 
 ## Docker
 
-A multi-stage `Dockerfile` at the repo root builds a runnable image with bundled plugin binaries (currently `yaad-wikipedia`).
+A multi-stage `Dockerfile` at the repo root builds a runnable image with all 4 bundled plugin binaries (`yaad-wikipedia`, `yaad-bgg`, `yaad-gmail`, `yaad-github`).
 
 ```bash
-make docker-build # → yaad-index:latest, tracks yaad-wikipedia main
+make docker-build # → yaad-index:latest
 make docker-build TAG=v1.2.3 # → yaad-index:v1.2.3
 make docker-build YAAD_UID=$(id -u) YAAD_GID=$(id -g) # for non-1000 hosts (macOS etc)
-make docker-build YAAD_WIKIPEDIA_REF=5407e26f24c2 # pin plugin to a specific SHA
 ```
 
-`make docker-build` uses BuildKit (`DOCKER_BUILDKIT=1`) and forwards your ssh-agent (`--ssh default`) so the build can clone the private `yaad-wikipedia` plugin source. Have a running ssh-agent with your GitHub key loaded — the same setup you use to clone `yaad-index` itself. When the plugin repos go public, this requirement drops.
+`make docker-build` uses BuildKit (`DOCKER_BUILDKIT=1`). Plugins live in-tree under `cmd/`, so no ssh-agent or private-repo cloning is needed — they build from the same source tree as the daemon.
 
 The container's `yaad` user defaults to **uid 1000 / gid 1000**, the conventional first-user uid on debian/ubuntu/most modern distros. This matches the typical `id -u` of the host operator running the build, so bind-mounted host files (`yaad-index.db`, `vault/`) are writable from inside the container without manual chmod. If your host uid differs (e.g. macOS, multi-user shared boxes), override at build time per the third example above.
-
-The `yaad-wikipedia` plugin ref defaults to **`main`** so successive `make docker-build` runs pick up plugin updates as they land. The Makefile auto-injects a cachebust value (current timestamp) when `YAAD_WIKIPEDIA_REF=main`, so docker re-clones the plugin every build instead of reusing a stale layer. Pin to a SHA via `YAAD_WIKIPEDIA_REF=<sha>` for reproducible builds — the cachebust switches to a stable `pinned-<sha>` value and successive pinned-builds reuse the layer cache. Trade-off: tracking `main` defeats reproducibility; accepted while plugins iterate fast, revisit when the cadence settles.
 
 The image bakes:
 
 - `/usr/local/bin/yaad-index` — server binary
-- `/usr/local/lib/yaad-index/plugins/yaad-wikipedia` — bundled plugin
+- `/usr/local/lib/yaad-index/plugins/yaad-{wikipedia,bgg,gmail,github}` — bundled plugins
 - `/etc/yaad-index/config.yaml.example` — starter config
 
 Three mount points; two are required, one is optional:
