@@ -373,7 +373,7 @@ The `yaad-index issue-token --subject <agent-id> --operator <human-id> --ttl <du
 | `cache_ttl_seconds`        | int     | Global notation-cache TTL (sentinel rules: `>0` = N seconds, `0` = "no opinion fall through", `<0` = infinite). Per ADR-0008's derived-index principle. |
 | `fill_instruction`         | string  | Global fill-prompt prefix surfaced in `/v1/needs-fill`'s `instruction` field when no per-kind override exists.        |
 | `log_level`                | string  | `debug` / `info` / `warn` / `error`. Default `info`. Unknown values fall back to `info` (no fail-loud on typo).        |
-| `timezone`                 | string  | IANA TZ name (`Europe/Berlin`). Stamps timestamps on auto-commit messages + task spawns. Default UTC.                 |
+| `timezone`                 | string  | IANA TZ name (`Europe/Berlin`, `America/Los_Angeles`, `UTC`). Two semantic uses: (1) display-side timestamps (auto-commit messages, log lines, provenance stamps) — empty / unset falls back to UTC; (2) day-anchor resolution per ADR-0025 (`day:<YYYY-MM-DD>` slugs name that day in this zone) — empty / unset falls back to `time.Local` (host TZ), distinct from the display fallback because operators reading `day:today` expect their wall clock. One zone per deployment — yaad-index doesn't carry per-entity or per-request TZ overrides. |
 
 ## 10. Effective shape vs config shape
 

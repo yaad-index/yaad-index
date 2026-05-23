@@ -158,6 +158,7 @@ Verify by asking the agent to call `get_entity(id="wikipedia:tehran")` — it sh
 - [`docs/configs.md`](configs.md) — full operator-config reference: plugin allowlist, canonical_kinds, auth, cache TTLs, the YAML→subprocess env channel.
 - [`docs/workflows.md`](workflows.md) — workflow event/action vocabulary: match shapes, action types, runtime semantics.
 - [`docs/tasks.md`](tasks.md) — the agent task surface (the workflow `file_task` action lands here).
+- [`docs/date-entities.md`](date-entities.md) — day entities + canonical edge vocab (`due_on` / `occurred_on` / `is_about_day` / `references_day`) + the `is_journal` filter for journal-shaped days.
 - [`mcp/SKILL.md`](../mcp/SKILL.md) — the MCP tool reference an agent sees, with per-tool usage patterns.
 - [`docs/plugin-flow.md`](plugin-flow.md) — for plugin authors: the `--init` capability shape, `--command` / `--version` flags, NDJSON response protocol.
 - [`docs/plugins/`](plugins/) — per-plugin operator notes (wikipedia, bgg, gmail, github).
