@@ -172,16 +172,22 @@ Action templates continue to do single-expression CEL substitution per ADR-0024 
 
 Adding a template-loop construct opens a design space (nested loops, else branches, break/continue) that the daily-digest readability gain doesn't justify. Stay CEL-only.
 
-**`.join()` receiver requires cel-go's `ext.Strings()` extension.** The string-extension library is not loaded by default in cel-go. Cut 3 (the graph-walking cut, where `.join()` first becomes useful) wires the evaluator with:
+**`.join()` and `.flatten()` receivers require cel-go extensions.** Two extension libraries beyond the CEL standard:
+
+- `ext.Strings()` provides `.join(separator)` on `list<string>` — used in the daily-digest worked example.
+- `ext.Lists()` provides `.flatten()` on `list<list<T>>` → `list<T>` — used in the weekly-digest worked example (collecting one neighbor list per day in a week, then flattening).
+
+Cut 3 (the graph-walking cut, where these receivers first become useful) wires both onto the evaluator:
 
 ```go
 env, err := cel.NewEnv(
     // ... existing options ...
     ext.Strings(),
+    ext.Lists(),
 )
 ```
 
-Without `ext.Strings()`, `.join(separator)` returns a compile-time error. The other list methods we rely on (`.map`, `.filter`, `.exists`, `.all`) are CEL standard and don't need an extension.
+Without `ext.Strings()`, `.join(separator)` returns a compile-time error. Without `ext.Lists()`, `.flatten()` does the same. The other list methods we rely on (`.map`, `.filter`, `.exists`, `.all`) are CEL standard and don't need an extension.
 
 ## Worked examples (now runnable)
 
@@ -245,9 +251,9 @@ Fires when any `due_on` edge is created. The action computes the relative day-co
 This ADR ships in 4 cuts (mirroring ADR-0025's cadence):
 
 1. **Cut 1** — date helpers (`today` / `yesterday` / `tomorrow`) + the CEL evaluator binding + the **action runner kind-prefix strip** (the one-line fix in `vault_writers.go` so `target.name: today()` resolves cleanly). Smallest surface in function count; lands the clock plumbing AND the runner contract that the rest of the ADR depends on.
-2. **Cut 2** — date arithmetic (`add_days`, `days_between`). Builds on cut 1's binding.
-3. **Cut 3** — graph-walk primitives (`graph.in_edges`, `graph.out_edges`, `graph.in_neighbors`, `graph.out_neighbors`) + the per-call cap + truncation-via-struct shape (`{items, truncated, total}`) + `ext.Strings()` evaluator wiring. Largest cut; SQL-side filter wiring + new evaluator types + JOIN-based neighbor variants.
-4. **Cut 4** — docs walkthrough updates (extend `docs/workflows.md` § CEL environment with the new functions; extend `docs/date-entities.md` worked examples; ship the three concrete `vault/workflows/*.md` example files).
+2. **Cut 2** — date arithmetic + period helpers. Includes `add_days`, `days_between`, plus all of §2a: `this_week` / `this_month` / `this_year`, `days_in_week` / `days_in_month` / `days_in_year`, `week_of` / `month_of` / `year_of`. All are pure date arithmetic on string ids — no DB, no entity rows. Builds on cut 1's clock binding for the `this_*` helpers (those derive from `today()`'s underlying `clock.DayLocation()`).
+3. **Cut 3** — graph-walk primitives (`graph.in_edges`, `graph.out_edges`, `graph.in_neighbors`, `graph.out_neighbors`) + the per-call cap + truncation-via-struct shape (`{items, truncated, total}`) + `ext.Strings()` + `ext.Lists()` evaluator wiring. Largest cut; SQL-side filter wiring + new evaluator types + JOIN-based neighbor variants.
+4. **Cut 4** — docs walkthrough updates (extend `docs/workflows.md` § CEL environment with the new functions; extend `docs/date-entities.md` worked examples; ship the three concrete `vault/workflows/*.md` example files plus a weekly-digest example that exercises the §2a helpers).
 
 ## Consequences
 
