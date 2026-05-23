@@ -429,6 +429,19 @@ func (r *Reindexer) upsertEntity(ctx context.Context, e *vault.Entity) error {
 	if err := r.store.ReplaceProvenance(ctx, e.ID, vaultProvenanceToStore(e.Provenance)); err != nil {
 		return fmt.Errorf("ReplaceProvenance %s: %w", e.ID, err)
 	}
+	// ADR-0025 cut 2 (#221) day-reference shape-scan on reindex:
+	// re-derive the day-references the operator may have hand-
+	// edited into the vault frontmatter. Reindex has no live
+	// plugin attribution (the vault file's `plugin:` field is
+	// historical metadata, not a live registry handle), so
+	// DateFields is nil and every day-shaped value gets the
+	// baseline `references_day` edge. Plugins that declared a
+	// `date_fields` override on the original ingest path get a
+	// best-effort baseline edge on reindex; the ingest-side
+	// override stays accurate for the lifetime the plugin emits
+	// the field — reindex is a recovery / rebuild path, not the
+	// authoritative emission point.
+	canonical.EmitDayRefs(ctx, r.store, e.ID, e.Data, nil, r.logger)
 	// Notations cache (per yaad-index the source issue a prior PR). The vault is
 	// the canonical source for the entity_notations table — reindex
 	// reconciles the DB to the vault frontmatter `notations:` list,

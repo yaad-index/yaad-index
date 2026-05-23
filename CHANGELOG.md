@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.8.0...yaad-index-v0.9.0) (2026-05-23)
+
+
+### Features
+
+* **auth:** per-command operator-only flag on plugin CommandSpec ([#107](https://github.com/yaad-index/yaad-index/issues/107)) ([#217](https://github.com/yaad-index/yaad-index/issues/217)) ([c036b12](https://github.com/yaad-index/yaad-index/commit/c036b128de5f3cc9b74e4487d1c0afbe644da4fc))
+* **canonical:** day kind + canonical edge vocab + DayLocation ([#220](https://github.com/yaad-index/yaad-index/issues/220), ADR-0025 cut 1) ([#224](https://github.com/yaad-index/yaad-index/issues/224)) ([b2bd6f8](https://github.com/yaad-index/yaad-index/commit/b2bd6f8491a02550292fbab676ce3de4f6531793))
+* **canonical:** day-reference shape-scan on write paths ([#221](https://github.com/yaad-index/yaad-index/issues/221), ADR-0025 cut 2) ([#226](https://github.com/yaad-index/yaad-index/issues/226)) ([1602c63](https://github.com/yaad-index/yaad-index/commit/1602c636f076dbc72820b08646ce253b3206a7a3))
+* **notes:** accept Field + Kind on write surfaces ([#186](https://github.com/yaad-index/yaad-index/issues/186) Cut 2) ([#215](https://github.com/yaad-index/yaad-index/issues/215)) ([2d979b3](https://github.com/yaad-index/yaad-index/commit/2d979b3d323f9b01c1df123a8da424e255286aa9))
+* **notes:** add Field + Kind to the notes data model ([#186](https://github.com/yaad-index/yaad-index/issues/186) Cut 1) ([#213](https://github.com/yaad-index/yaad-index/issues/213)) ([80c059a](https://github.com/yaad-index/yaad-index/commit/80c059a7f291d808dee26d43ea19aae160f69e55))
+* **notes:** notes_kind filter on read paths ([#186](https://github.com/yaad-index/yaad-index/issues/186) Cut 3) ([#216](https://github.com/yaad-index/yaad-index/issues/216)) ([4e15c27](https://github.com/yaad-index/yaad-index/commit/4e15c2751e61c7b748c498f125b0ef2fb6e7c492))
+* **search:** is_journal filter on /v1/search + MCP list_entities ([#222](https://github.com/yaad-index/yaad-index/issues/222), ADR-0025 cut 3) ([#227](https://github.com/yaad-index/yaad-index/issues/227)) ([525bbd5](https://github.com/yaad-index/yaad-index/commit/525bbd522e5128fb698b358cc3d3e94f0c0f61f1))
+
 ## [0.8.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.7.0...yaad-index-v0.8.0) (2026-05-22)
 
 
