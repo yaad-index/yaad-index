@@ -81,6 +81,35 @@ func In(t time.Time) time.Time {
 	return t.In(Location())
 }
 
+// DayLocation returns the location used to compute day-anchor
+// boundaries per ADR-0025 § Timezone. Resolution chain:
+//
+//  1. Operator-configured location (when SetLocation pinned one) —
+//     same source the wider clock package uses for log + provenance
+//     timestamps.
+//  2. Host system TZ (`time.Local`) as fallback when the operator
+//     didn't set `timezone:` in config.
+//
+// Distinct from Location(): the display-side fallback is UTC
+// (preserves legacy behavior for log lines etc); ADR-0025 picks
+// host-local for day-resolution because operators reading
+// `day:today` expect "today in my wall clock," not "today in UTC."
+// Single-operator system, so the host TZ is a reliable proxy for
+// "operator's wall clock."
+//
+// Day-anchor consumers (the cut 2 shape-scan + workflow `today`
+// template helper + canonical-ID resolver) should call this rather
+// than Location() to honor the ADR-0025 fallback. Display-side
+// timestamp consumers (log lines, provenance) keep using Location().
+//
+// Always returns a non-nil *time.Location.
+func DayLocation() *time.Location {
+	if l := loc.Load(); l != nil {
+		return l
+	}
+	return time.Local
+}
+
 // LogTimeAttr is the slog ReplaceAttr that rewrites the built-in
 // `time` attribute to the operator-configured location (per yaad-
 // index PR-C). Pass it on slog.HandlerOptions.ReplaceAttr so

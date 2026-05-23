@@ -30,6 +30,8 @@ type fakeEntityStore struct {
 	archives map[string]int
 	// restores counts RestoreEntity calls per id (per #196).
 	restores map[string]int
+	// edges records CreateEdge calls per #221 (ADR-0025 cut 2).
+	edges []*store.Edge
 }
 
 func newFakeEntityStore(seed map[string]*store.Entity) *fakeEntityStore {
@@ -57,6 +59,12 @@ func (f *fakeEntityStore) UpsertEntity(_ context.Context, e *store.Entity) error
 	}
 	cp := *e
 	f.upserts = append(f.upserts, &cp)
+	// Mirror to entities map so subsequent GetEntity probes
+	// resolve — production sqlite behavior. Required for the
+	// canonical day-refs shape-scan (#221) which probes the
+	// freshly-upserted thin day row when it walks frontmatter.
+	stored := cp
+	f.entities[e.ID] = &stored
 	return nil
 }
 
@@ -110,6 +118,29 @@ func (f *fakeEntityStore) upsertSnapshot() []*store.Entity {
 	defer f.mu.Unlock()
 	out := make([]*store.Entity, len(f.upserts))
 	copy(out, f.upserts)
+	return out
+}
+
+func (f *fakeEntityStore) CreateEdge(_ context.Context, e *store.Edge) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Idempotent upsert: skip if (type, from, to) already recorded
+	// to mirror the production sqlite ON CONFLICT shape.
+	for _, prior := range f.edges {
+		if prior.Type == e.Type && prior.From == e.From && prior.To == e.To {
+			return nil
+		}
+	}
+	cp := *e
+	f.edges = append(f.edges, &cp)
+	return nil
+}
+
+func (f *fakeEntityStore) edgeSnapshot() []*store.Edge {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*store.Edge, len(f.edges))
+	copy(out, f.edges)
 	return out
 }
 
@@ -1171,4 +1202,40 @@ func TestVaultRestoreWriter_BackendNotWired(t *testing.T) {
 	err := w.RestoreEntity(context.Background(), "wf", "gmail:x", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "backend not wired")
+}
+
+// TestVaultPropertyWriter_DayShapeScanEmitsEdge (#221, ADR-0025 cut 2):
+// a set_property action that writes a `day:YYYY-MM-DD` value triggers
+// the canonical day-refs shape-scan, which materializes the day
+// entity + emits a `references_day` edge. No plugin attribution on
+// the workflow path → baseline edge type is the right one.
+func TestVaultPropertyWriter_DayShapeScanEmitsEdge(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
+	b, es, _, _ := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"task:write-report": {ID: "task:write-report", Kind: "task", CreatedAt: now},
+		},
+		map[string]*vault.Entity{
+			"task:write-report": {ID: "task:write-report", Kind: "task"},
+		},
+		now,
+	)
+	w := NewVaultPropertyWriter(b)
+	require.NoError(t, w.SetProperties(context.Background(),
+		"set-deadline", "task:write-report",
+		map[string]any{"deadline": "day:2026-11-11"},
+	))
+
+	gotEdges := es.edgeSnapshot()
+	require.Len(t, gotEdges, 1,
+		"set_property writing a day-shaped value emits exactly one canonical edge")
+	assert.Equal(t, "references_day", gotEdges[0].Type)
+	assert.Equal(t, "task:write-report", gotEdges[0].From)
+	assert.Equal(t, "day:2026-11-11", gotEdges[0].To)
+
+	// Day entity was materialized in the store as a thin row.
+	dayRow, err := es.GetEntity(context.Background(), "day:2026-11-11")
+	require.NoError(t, err, "day entity must exist after set_property emit")
+	assert.Equal(t, "day", dayRow.Kind)
 }

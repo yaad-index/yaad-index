@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/plugins/fixture"
 	"github.com/yaad-index/yaad-index/internal/store"
@@ -58,11 +59,14 @@ func TestKindsHandler_ServesSeededTestRegistryPayload(t *testing.T) {
 	assert.Equal(t, "person", designed.ToKind)
 }
 
-// TestKindsHandler_EmptyRegistry_ReturnsEmptyArrays is the the source issue
-// acceptance check: `/v1/kinds` with zero plugins registered returns
-// `{ok:true, entity_kinds:[], edge_kinds:[]}`. Confirms the
-// bootstrapKinds seed is fully retired — nothing leaks through.
-func TestKindsHandler_EmptyRegistry_ReturnsEmptyArrays(t *testing.T) {
+// TestKindsHandler_EmptyRegistry_ReturnsOnlyDaemonBuiltins pins the
+// zero-plugin shape post-ADR-0025: `day` plus the five canonical
+// edge type names (due_on, occurred_on, is_about_day, references_day,
+// ingested_on) surface as daemon-managed entries even with no
+// plugins registered. Source_plugins on those entries names the
+// synthetic "yaad-index" producer so consumers can distinguish
+// daemon-built-in kinds from plugin-emitted ones.
+func TestKindsHandler_EmptyRegistry_ReturnsOnlyDaemonBuiltins(t *testing.T) {
 	t.Parallel()
 
 	st, err := store.New(":memory:")
@@ -79,8 +83,20 @@ func TestKindsHandler_EmptyRegistry_ReturnsEmptyArrays(t *testing.T) {
 	var body kindsResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body), "decode")
 	assert.True(t, body.OK)
-	assert.Empty(t, body.EntityKinds)
-	assert.Empty(t, body.EdgeKinds)
+
+	require.Len(t, body.EntityKinds, 1, "only the daemon-built-in `day` kind surfaces with empty registry")
+	assert.Equal(t, canonical.DayKind, body.EntityKinds[0].Name)
+	assert.Equal(t, []string{daemonSourcePlugin}, body.EntityKinds[0].SourcePlugins)
+
+	gotEdgeNames := edgeNames(body.EdgeKinds)
+	assert.ElementsMatch(t, canonical.DaemonEdgeTypes(), gotEdgeNames,
+		"all five canonical edge type names surface even when no plugin advertises them")
+	for _, e := range body.EdgeKinds {
+		assert.Equal(t, canonical.DayKind, e.ToKind,
+			"canonical edge %q must terminate at the `day` kind", e.Name)
+		assert.Equal(t, []string{daemonSourcePlugin}, e.SourcePlugins,
+			"canonical edge %q source_plugins must name the daemon", e.Name)
+	}
 }
 
 // TestKindsHandler_AlphabeticalOrder asserts entity_kinds + edge_kinds
@@ -134,6 +150,11 @@ func TestKindsHandler_AlphabeticalOrder(t *testing.T) {
 // to_kind must appear in entity_kinds. A future kind added on one side
 // without the other will trip this test instead of shipping an internally
 // inconsistent /v1/kinds response.
+//
+// Daemon-built-in canonical edges per ADR-0025 leave FromKind empty
+// because the source side is open (any entity can carry a day
+// reference); the closure check skips edges with empty FromKind to
+// honor that "any source" semantic.
 func TestKindsHandler_EdgeEndpointsAreDeclaredEntities(t *testing.T) {
 	t.Parallel()
 
@@ -147,6 +168,16 @@ func TestKindsHandler_EdgeEndpointsAreDeclaredEntities(t *testing.T) {
 
 	declared := indexEntityKinds(body.EntityKinds)
 	for _, e := range body.EdgeKinds {
+		if e.FromKind == "" {
+			// Open-source edge (daemon-built-in canonical day edges):
+			// any entity may carry the reference, so the closure
+			// invariant doesn't apply to the from side.
+			_, toOK := declared[e.ToKind]
+			assert.True(t, toOK,
+				"edge_kinds[%s].to_kind=%q not in entity_kinds %v",
+				e.Name, e.ToKind, entityNames(body.EntityKinds))
+			continue
+		}
 		_, fromOK := declared[e.FromKind]
 		assert.True(t, fromOK,
 			"edge_kinds[%s].from_kind=%q not in entity_kinds %v",

@@ -301,6 +301,14 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 				"failed to mirror fill to DB")
 			return
 		}
+		// ADR-0025 cut 2 (#221) day-reference shape-scan: when the
+		// fill response writes day-shaped values into frontmatter
+		// (e.g. an agent filling a `deadline` gap with "day:2026-11-11"),
+		// ensure the target day entity exists and emit a `references_day`
+		// edge. The fill path has no plugin attribution (agent / operator
+		// driven), so DateFields is nil and every day-shaped value gets
+		// the baseline edge type.
+		canonical.EmitDayRefs(r.Context(), st, ve.ID, vaultEntityDataForDB(ve), nil, logger)
 		if err := st.AppendProvenance(r.Context(), ve.ID,
 			[]store.ProvenanceEntry{toStoreProvenance(fillEntry)},
 		); err != nil {

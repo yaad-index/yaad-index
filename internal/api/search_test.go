@@ -490,3 +490,45 @@ func Test_Search_Snippet_TruncatedToMaxChars(t *testing.T) {
 // removed entirely in a prior PR — snippet is the entity's agent-filled
 // `summary`, not a query-time derivation. The Test_Search_Snippet_
 // PerKindOverrideWins case from is gone with the per-kind chain.)
+
+// Test_Search_IsJournalFilter pins ADR-0025 cut 3 (#222): the
+// `?is_journal=true` query param forwards to the store-layer
+// journalOnly flag, restricting the result set to entities whose
+// data carries `is_journal: true`. Mirrors the store-level test
+// at the HTTP boundary.
+func Test_Search_IsJournalFilter(t *testing.T) {
+	t.Parallel()
+
+	h, st := newAPIWithStore(t)
+	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+		ID:   "day:2026-11-11",
+		Kind: "day",
+		Data: map[string]any{"is_journal": true},
+	}))
+	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+		ID:   "day:2026-11-12",
+		Kind: "day",
+		Data: map[string]any{"is_journal": false},
+	}))
+	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+		ID:   "day:2026-11-13",
+		Kind: "day",
+		Data: map[string]any{},
+	}))
+
+	// Filter off → all three day entities.
+	req, rec := searchRequest("/v1/search?kind=day")
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	got := decodeSearch(t, rec)
+	assert.Equal(t, 3, got.Total, "no filter ⇒ all day entities")
+
+	// Filter on → only the flagged entity.
+	req, rec = searchRequest("/v1/search?kind=day&is_journal=true")
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	got = decodeSearch(t, rec)
+	require.Equal(t, 1, got.Total, "filter ⇒ only is_journal=true entries")
+	require.Len(t, got.Results, 1)
+	assert.Equal(t, "day:2026-11-11", got.Results[0].ID)
+}
