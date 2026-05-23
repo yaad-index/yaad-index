@@ -44,31 +44,34 @@ An earlier prototype lived under a file-first design; this repo starts over from
 
 ## Architecture sketch
 
-```
-agent (claude / cli / curl)
- │
- │ HTTP /v1/... (REST) + /mcp (Streamable HTTP MCP)
- ▼
-┌────────────────────────────────────────────────────┐
-│ yaad-index daemon │
-│ ┌──────────┬──────────┬──────────┬──────────┐ │
-│ │ ingest │ fill │ workflow │ notes / │ │
-│ │ /search │ /gaps │ engine │ canon- │ │
-│ │ /entities│ │ │ ical │ │
-│ └──────────┴──────────┴──────────┴──────────┘ │
-└──┬──────────────────────────────────────────┬──────┘
- │ subprocess-per-request │
- ▼ ▼
- ┌─────────────────┐ ┌──────────────────────┐
- │ bundled plugins │ │ entity store │
- │ - wikipedia │ │ (per-vault SQLite) │
- │ - bgg │ └──────────────────────┘
- │ - gmail │ │
- │ - github │ ▼
- └─────────────────┘ ┌──────────────────────┐
- │ markdown vault │
- │ (source of truth) │
- └──────────────────────┘
+```mermaid
+flowchart TD
+    Agent["agent (claude / cli / curl)"]
+    Agent -->|"HTTP /v1/... (REST) + /mcp (Streamable HTTP MCP)"| Daemon
+
+    subgraph Daemon["yaad-index daemon"]
+        direction LR
+        Ingest["ingest /<br/>search /<br/>entities"]
+        Fill["fill / gaps"]
+        Workflow["workflow<br/>engine"]
+        Notes["notes /<br/>canonical"]
+    end
+
+    Daemon -->|"subprocess-per-request"| Plugins
+    Daemon <--> Store
+    Vault --> Store
+    Daemon --> Vault
+
+    subgraph Plugins["bundled plugins"]
+        direction TB
+        Wiki["yaad-wikipedia"]
+        BGG["yaad-bgg"]
+        Gmail["yaad-gmail"]
+        GitHub["yaad-github"]
+    end
+
+    Store[("entity store<br/>per-vault SQLite")]
+    Vault[("markdown vault<br/>source of truth")]
 ```
 
 Full design lives in [`adr/`](adr/). Recently-shipped: [ADR-0024](./adr/0024-workflows-and-tasks.md) (workflow engine), [ADR-0025](./adr/0025-date-entities.md) (day entities — foundation in-flight), [ADR-0026](./adr/0026-yaad-github-plugin.md) (yaad-github plugin). For the API surface itself, see [ADR-0002](./adr/0002-api-surface.md).
