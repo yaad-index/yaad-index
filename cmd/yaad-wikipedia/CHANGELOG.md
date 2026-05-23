@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/yaad-index/yaad-index/compare/yaad-wikipedia-v0.2.0...yaad-wikipedia-v0.3.0) (2026-05-23)
+
+
+### Features
+
+* **yaad-wikipedia:** migrate to YAAD_PLUGIN_CONFIG + config_schema ([#192](https://github.com/yaad-index/yaad-index/issues/192)) ([#206](https://github.com/yaad-index/yaad-index/issues/206)) ([a6c9fa9](https://github.com/yaad-index/yaad-index/commit/a6c9fa9e9bf33b03d5e12df2e11b4ef1be785222))
+
 ## [0.2.0](https://github.com/yaad-index/yaad-index/compare/yaad-wikipedia-v0.1.0...yaad-wikipedia-v0.2.0) (2026-05-15)
 
 
