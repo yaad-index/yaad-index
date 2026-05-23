@@ -63,6 +63,60 @@ days_between(day_X, day_Y)      // → int (Y - X in days, signed)
 
 Comparison via `days_between(a, b) > 0` is the substitute for an operator-form `a < b`. Verbosity is mild; implementation cost is roughly 1/5 of the custom-type alternative for ~95% of the ergonomic value.
 
+### 2a. Period helpers — helpers, not entities
+
+Week / month / year aggregation is needed for weekly digests, monthly reviews, etc. The intuitive shape would be to add `week`, `month`, `year` entity kinds with `belongs_to` edges from each day to its parent — but a year then carries 365 day-edges + 12 month-edges + 52 week-edges of pure grouping clutter, and none of those entities carry state of their own (no body, no metadata, no inbound time-bound edges). Computing the grouping at query time costs less than materializing it in the graph.
+
+This ADR adds pure CEL helpers — no new entity kinds, no `belongs_to` edges, no per-year/month/week storage. Week / month / year ids are well-known string shapes (per ISO 8601):
+
+- Week: `2026-W42` (ISO 8601 week-numbered; Monday-start; week containing Jan 4 is week 01).
+- Month: `2026-11`.
+- Year: `2026`.
+
+**Current-period helpers (parallel to `today()`):**
+
+```cel
+this_week()    // → "2026-W21"
+this_month()   // → "2026-05"
+this_year()    // → "2026"
+```
+
+**Group → days helpers (one-to-many — expand a period into its constituent day ids):**
+
+```cel
+days_in_week("2026-W42")    // → list<string>  — 7 day:YYYY-MM-DD ids
+days_in_month("2026-11")    // → list<string>  — 30 day ids
+days_in_year("2026")        // → list<string>  — 365 day ids (366 in leap years)
+```
+
+**Day → group helpers (many-to-one — find the period containing a day):**
+
+```cel
+week_of("day:2026-11-11")   // → "2026-W46"
+month_of("day:2026-11-11")  // → "2026-11"
+year_of("day:2026-11-11")   // → "2026"
+```
+
+The `day:` prefix on inputs to `*_of` helpers is consistent with `today()`'s canonical-ID return shape — operators write `week_of(today())` directly, no slugify-collision concerns because the helpers don't go through the action runner.
+
+**Worked example — weekly digest** (composes with §3's graph walking):
+
+```cel
+days_in_week(this_week()).map(d,
+  graph.in_neighbors(d, "occurred_on").items
+).flatten()
+```
+
+Walks each of the seven day-anchors in this week, collects all `occurred_on` neighbors, flattens.
+
+**Cost vs benefit:** a year-level digest does 365 day-walks at query time (52 walks weekly, ~30 walks monthly). The per-walk list cap from Q5 still applies, bounding worst-case fan-out. Year-level genuinely-yearly queries are rare in operator workflows; if a real use case for them surfaces and 365-walk-per-query proves prohibitive, a future ADR can add a dedicated API endpoint without disturbing this CEL surface.
+
+**ISO 8601 edge cases:**
+
+- ISO weeks can cross the calendar-year boundary. `days_in_week("2025-W53")` and `days_in_week("2026-W01")` both contain late-Dec-2025 / early-Jan-2026 days. The week-id is the source of truth — the contained days follow ISO 8601 week-of-year rules.
+- A day in late December may belong to ISO week 01 of the *next* calendar year: `week_of("day:2025-12-29")` returns `"2026-W01"`, not `"2025-W53"`. The slug encodes ISO-week-year, not calendar-year.
+- Year handling is calendar-year (Jan 1 to Dec 31) — these helpers don't model fiscal-year shapes. ADR-0025 § Out of scope already excluded localized week-numbering / fiscal years; same applies here.
+
 ### 3. Graph walking — overloaded function form, single-hop only
 
 ```cel
