@@ -1063,6 +1063,7 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 		Edge:     edge,
 		Bindings: make(map[string]any, len(reg.contextBinds)),
 	}
+	act.PopulateDayHelpers()
 
 	// Evaluate context bindings in order. Each binding's
 	// missing-references roll up into the Decision so the
@@ -1707,6 +1708,7 @@ func (e *Engine) runEvaluation(ctx context.Context, reg *registeredWorkflow, ent
 		Edge:     edge,
 		Bindings: make(map[string]any, len(reg.contextBinds)),
 	}
+	act.PopulateDayHelpers()
 	for _, cb := range reg.contextBinds {
 		val, bres, err := cb.program.EvalDyn(ctx, act)
 		if err != nil {
@@ -1846,6 +1848,7 @@ func (e *Engine) Discover(ctx context.Context, entityID string) ([]string, error
 	var matches []string
 	for _, reg := range regs {
 		act := decision.Activation{Entity: entity}
+		act.PopulateDayHelpers()
 		// Pre-evaluate context bindings so the condition has
 		// the same activation shape as a real fire.
 		ok := true
