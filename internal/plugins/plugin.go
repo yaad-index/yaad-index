@@ -245,19 +245,25 @@ type Capabilities struct {
 	// this field, so plugins must emit it at --init.
 	SourceNamespace string `json:"source_namespace,omitempty"`
 
-	// Commands is the list of imperative command names this plugin
-	// exposes per ADR-0022. Bare names, no `!` sigil — the sigil
-	// lives only in the invocation surface (`<plugin>: !<name>`),
-	// the advertised vocabulary is the bare string. Parallel to
-	// URLPatterns: a plugin is typically URL-shape OR command-shape,
-	// not both, but the protocol allows either or both.
+	// Commands is the list of imperative command specs this plugin
+	// exposes per ADR-0022 + the 2026-05-22 amendment for #107. Each
+	// entry carries the bare command name (no `!` sigil — the sigil
+	// lives only on the invocation surface, `<plugin>: !<name>`) plus
+	// an optional per-command operator_only flag.
+	//
+	// Wire shape accepts two forms via CommandSpec.UnmarshalJSON:
+	//   - bare string: `"fetch"` — short-form, OperatorOnly defaults
+	//     to false (agent-callable). This is the legacy shape used
+	//     by every plugin before #107.
+	//   - object: `{"name":"delete-all","operator_only":true}` —
+	//     long-form, used when a command needs the operator-only
+	//     gate.
 	//
 	// Empty / absent → plugin exposes no command-shape invocations
 	// (e.g. yaad-wikipedia, yaad-bgg today). Plugins predating
 	// ADR-0022 emit no `commands` field on the wire and decode as
-	// nil, preserving back-compat — the daemon's command-routing
-	// path simply never resolves to them.
-	Commands []string `json:"commands,omitempty"`
+	// nil, preserving back-compat.
+	Commands []CommandSpec `json:"commands,omitempty"`
 
 	// ConfigSchema declares the JSON Schema the operator's
 	// `plugins[N].config:` block must satisfy, per ADR-0006's
@@ -272,6 +278,64 @@ type Capabilities struct {
 	// declare this field and continue to receive the same config
 	// payload they did before.
 	ConfigSchema json.RawMessage `json:"config_schema,omitempty"`
+}
+
+// CommandSpec is one entry in a plugin's Capabilities.Commands list
+// per ADR-0022 + the 2026-05-22 amendment for #107. The bare command
+// name (without the `!` sigil) plus the per-command operator-only
+// flag.
+//
+// The flag controls the daemon's command-shape ingest gate: when
+// true, only operator-only JWTs may invoke the command; pair-claim
+// tokens (agent-on-behalf-of-operator) reject with
+// `operator_only_required`. When false (the default), pair-claim
+// tokens are accepted — the audit trail (JWT.sub) still distinguishes
+// agent vs operator invocations downstream.
+type CommandSpec struct {
+	// Name is the bare command name. Mandatory.
+	Name string `json:"name"`
+
+	// OperatorOnly gates the per-command auth check per #107.
+	// Default false → command is agent-callable. Set true for
+	// destructive / sensitive commands (e.g. a hypothetical
+	// `gmail: !delete-all`).
+	OperatorOnly bool `json:"operator_only,omitempty"`
+}
+
+// UnmarshalJSON accepts two wire shapes per ADR-0022's 2026-05-22
+// amendment. Pre-#107 plugins emit bare strings (`"fetch"`) which
+// decode with OperatorOnly=false; the long-form object
+// (`{"name":"...","operator_only":true}`) declares the gate.
+func (c *CommandSpec) UnmarshalJSON(b []byte) error {
+	trimmed := bytes.TrimSpace(b)
+	if len(trimmed) > 0 && trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return fmt.Errorf("decode CommandSpec string shorthand: %w", err)
+		}
+		*c = CommandSpec{Name: s}
+		return nil
+	}
+	type alias CommandSpec
+	var a alias
+	if err := json.Unmarshal(b, &a); err != nil {
+		return fmt.Errorf("decode CommandSpec object: %w", err)
+	}
+	*c = CommandSpec(a)
+	return nil
+}
+
+// MarshalJSON emits the bare-string shape when OperatorOnly is false
+// so plugins predating #107 (and the daemon's /v1/plugins enumerator,
+// which mirrors the wire shape) keep producing `"commands":["fetch"]`
+// without churn. The long-form object only appears when the
+// per-command gate is engaged.
+func (c CommandSpec) MarshalJSON() ([]byte, error) {
+	if !c.OperatorOnly {
+		return json.Marshal(c.Name)
+	}
+	type alias CommandSpec
+	return json.Marshal(alias(c))
 }
 
 // CanonicalKindExtras is the plugin-side declaration block per

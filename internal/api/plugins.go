@@ -28,11 +28,15 @@ type pluginEntry struct {
 	// signals a poll-driven plugin (yaad-gmail) — no URL-shape
 	// invocation surface.
 	URLPatterns []string `json:"url_patterns"`
-	// Commands are the bare command names this plugin advertises
-	// per ADR-0022 §1. Empty list signals a plugin with no
-	// command-shape invocation surface (yaad-wikipedia, yaad-bgg
-	// today).
-	Commands []string `json:"commands"`
+	// Commands are the imperative command entries this plugin
+	// advertises per ADR-0022 §1 + the 2026-05-22 amendment for
+	// #107. Each entry serializes either as the bare-name string
+	// (when operator_only=false — the back-compat shape) or as the
+	// long-form object `{"name":"...","operator_only":true}` when
+	// the per-command operator-only gate is engaged. Empty list
+	// signals a plugin with no command-shape invocation surface
+	// (yaad-wikipedia, yaad-bgg today).
+	Commands []plugins.CommandSpec `json:"commands"`
 	// EntityKinds + EdgeKinds carry the plugin's per-kind metadata
 	// (name + description + from_kind/to_kind on edges). Matches
 	// the shape /v1/kinds uses but scoped to one plugin.
@@ -96,7 +100,7 @@ func enumeratePlugins(registry *plugins.Registry) []pluginEntry {
 			Name: name,
 			Version: caps.Version,
 			URLPatterns: copyOrEmpty(caps.URLPatterns),
-			Commands: copyOrEmpty(caps.Commands),
+			Commands: copyCommands(caps.Commands),
 			SourceNamespace: caps.SourceNamespace,
 			EntityKinds: mapEntityKinds(caps.EntityKinds),
 			EdgeKinds: mapEdgeKinds(caps.EdgeKinds),
@@ -126,6 +130,17 @@ func copyOrEmpty(in []string) []string {
 		return []string{}
 	}
 	out := make([]string, len(in))
+	copy(out, in)
+	return out
+}
+
+// copyCommands mirrors copyOrEmpty for the CommandSpec slice the
+// /v1/plugins enumerator surfaces. Empty input emits `[]` not `null`.
+func copyCommands(in []plugins.CommandSpec) []plugins.CommandSpec {
+	if len(in) == 0 {
+		return []plugins.CommandSpec{}
+	}
+	out := make([]plugins.CommandSpec, len(in))
 	copy(out, in)
 	return out
 }

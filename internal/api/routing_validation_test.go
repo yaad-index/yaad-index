@@ -88,7 +88,7 @@ func newRoutingValidationFixture(t *testing.T) (http.Handler, *atomic.Int32) {
 			Name: "gmail",
 			SourceNamespace: "gmail",
 			EntityKinds: []plugins.KindSpec{{Name: "source"}},
-			Commands: []string{"fetch"},
+			Commands: []plugins.CommandSpec{{Name: "fetch"}},
 		},
 	})
 
@@ -241,7 +241,7 @@ func TestValidateRouting_DirectShapes(t *testing.T) {
 		MatchFunc: func(s string) bool { return s == "p1: ok-input" },
 		CapabilitiesValue: plugins.Capabilities{
 			Name: "p1",
-			Commands: []string{"go", "stop"},
+			Commands: []plugins.CommandSpec{{Name: "go"}, {Name: "stop"}},
 		},
 	})
 

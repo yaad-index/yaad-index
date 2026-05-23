@@ -176,23 +176,25 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 			return
 		}
 
-		// CLI-dispatch authorization gate per ADR-0022 §6 + yaad-index
-		//. Command-shape inputs (`<plugin>: !<command>`) require
-		// an operator-only token (Subject == Operator); pair-claim
-		// tokens representing agent-on-behalf-of-operator authority
-		// reject with 403. URL-shape inputs continue to accept any
-		// authenticated claim — that path's existing gate is
-		// unchanged (operator-fill / notes still gate on
-		// ClaimHasOperatorAuthority for their own write paths).
+		// Per-command authorization gate per ADR-0022 §5.3 (2026-05-22
+		// amendment for #107). The blanket-operator-only rule has been
+		// replaced with a per-command flag: each CommandSpec declares
+		// `operator_only: true|false`, defaulting false (agent-callable).
+		// Pair-claim tokens may invoke any command whose spec does NOT
+		// set operator_only; operator-only tokens may invoke any
+		// command. Anonymous dev-mode claims continue to pass — they
+		// satisfy ClaimIsOperatorOnly so `auth.required=false`
+		// deployments don't suddenly need real tokens.
 		//
-		// Anonymous dev-mode claims pass this gate; ClaimIsOperatorOnly
-		// permits them so `auth.required=false` deployments don't
-		// suddenly need real tokens to invoke command-shape.
-		if plugins.ParseInvocation(req.URL).Shape == plugins.InvocationCommand {
+		// Audit trail: JWT.sub continues to distinguish agent
+		// invocations (`sub=<agent>`) from operator invocations
+		// (`sub=<operator>`) — no provenance shape change needed.
+		if inv := plugins.ParseInvocation(req.URL); inv.Shape == plugins.InvocationCommand {
 			c, _ := ClaimFromContext(r.Context())
-			if !ClaimIsOperatorOnly(c) {
+			if !ClaimIsOperatorOnly(c) && commandRequiresOperator(registry, inv) {
 				writeError(w, http.StatusForbidden, "operator_only_required",
-					"command-shape dispatch requires an operator-only token (Subject == Operator); pair-claim tokens cannot invoke `<plugin>: !<command>` inputs")
+					fmt.Sprintf("command %q on plugin %q declares operator_only; pair-claim tokens cannot invoke it",
+						inv.Command, inv.Plugin))
 				return
 			}
 		}
@@ -381,6 +383,28 @@ type notationCacheHit struct {
 // cache-miss threshold (vault read failure on a hit) downgrade to a
 // "served as complete" rather than blocking ingest — the cache hit
 // itself is still valuable.
+// commandRequiresOperator looks up the dispatched command's spec on
+// the registered plugin and returns its OperatorOnly flag. Unknown
+// plugin or unknown command → false (the routing-time validator
+// rejects those paths earlier with a structured error; falling
+// through here as "agent-callable" keeps the auth gate from
+// double-reporting the same failure).
+//
+// Per ADR-0022 §5.3 (2026-05-22 amendment for #107): operator_only is
+// a per-command property, not a per-plugin or per-shape one.
+func commandRequiresOperator(registry *plugins.Registry, inv plugins.Invocation) bool {
+	p, ok := registry.LookupByName(inv.Plugin)
+	if !ok {
+		return false
+	}
+	for _, c := range p.Capabilities().Commands {
+		if c.Name == inv.Command {
+			return c.OperatorOnly
+		}
+	}
+	return false
+}
+
 // Returns the cache hit (when fresh) or nil + a bool flagging whether
 // the miss was specifically a TTL fall-through (so the caller can
 // surface `re-ingest: ... [ttl_expired]` on the auto-commit message,
