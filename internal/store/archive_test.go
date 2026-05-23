@@ -98,7 +98,7 @@ func TestSearch_ArchivedFilter(t *testing.T) {
 	require.NoError(t, s.ArchiveEntity(ctx, "boardgame:brass-lancashire"))
 
 	t.Run("default ArchivedExclude hides archived", func(t *testing.T) {
-		hits, total, err := s.Search(ctx, "Brass", "", 50, 0, ArchivedExclude)
+		hits, total, err := s.Search(ctx, "Brass", "", 50, 0, ArchivedExclude, false)
 		require.NoError(t, err)
 		require.Equal(t, 1, total, "want 1 active Brass hit (Birmingham)")
 		require.Len(t, hits, 1)
@@ -106,7 +106,7 @@ func TestSearch_ArchivedFilter(t *testing.T) {
 	})
 
 	t.Run("ArchivedInclude returns active+archived", func(t *testing.T) {
-		hits, total, err := s.Search(ctx, "Brass", "", 50, 0, ArchivedInclude)
+		hits, total, err := s.Search(ctx, "Brass", "", 50, 0, ArchivedInclude, false)
 		require.NoError(t, err)
 		require.Equal(t, 2, total, "want both Brass hits (Birmingham + Lancashire)")
 		ids := []string{hits[0].ID, hits[1].ID}
@@ -115,7 +115,7 @@ func TestSearch_ArchivedFilter(t *testing.T) {
 	})
 
 	t.Run("ArchivedOnly returns archived only", func(t *testing.T) {
-		hits, total, err := s.Search(ctx, "Brass", "", 50, 0, ArchivedOnly)
+		hits, total, err := s.Search(ctx, "Brass", "", 50, 0, ArchivedOnly, false)
 		require.NoError(t, err)
 		require.Equal(t, 1, total, "want 1 archived Brass hit (Lancashire)")
 		require.Len(t, hits, 1)

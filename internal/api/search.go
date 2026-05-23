@@ -99,7 +99,14 @@ func handleSearch(logger *slog.Logger, st store.Store) http.HandlerFunc {
 			return
 		}
 
-		hits, total, err := st.Search(r.Context(), query, kind, limit, offset, archivedFilter)
+		// is_journal filter per ADR-0025 cut 3 (#222). Truthy value
+		// scopes results to entities whose vault frontmatter sets
+		// `data.is_journal: true`. Absent / falsy → no filter.
+		// Kind-agnostic at the store layer: caller chooses whether
+		// to also pin `?kind=day` for the canonical use case.
+		journalOnly := isTruthy(q.Get("is_journal"))
+
+		hits, total, err := st.Search(r.Context(), query, kind, limit, offset, archivedFilter, journalOnly)
 		if err != nil {
 			logger.ErrorContext(r.Context(), "store.Search", "err", err,
 				"q", query, "kind", kind, "limit", limit, "offset", offset)
