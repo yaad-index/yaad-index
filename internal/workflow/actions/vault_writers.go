@@ -76,6 +76,13 @@ type EntityStore interface {
 	// soft-skip signal (entity may have been removed between
 	// trigger and fire) and the runner forwards success.
 	RestoreEntity(ctx context.Context, id string) error
+	// CreateEdge is the #221 (ADR-0025 cut 2) hook: the
+	// set_property runner consults the canonical day-refs
+	// shape-scan after writing fields, and the scan upserts
+	// canonical edges to any `day:YYYY-MM-DD`-shaped values.
+	// Mirrors the production *sqliteStore signature so the
+	// existing wiring satisfies the interface without a wrapper.
+	CreateEdge(ctx context.Context, e *store.Edge) error
 }
 
 // VaultEntityReader is the narrow subset of *vault.Reader.
@@ -406,6 +413,16 @@ func (w *VaultPropertyWriter) SetProperties(ctx context.Context, workflow, entit
 			"workflow set_property: store.UpsertEntity failed (vault already written)",
 			"entity_id", entityID, "err", err)
 	}
+	// ADR-0025 cut 2 (#221) day-reference shape-scan: when a
+	// workflow set_property writes a `day:YYYY-MM-DD` value into
+	// an entity field, ensure the target day entity exists and
+	// emit a `references_day` edge. Workflow actions have no live
+	// plugin attribution (the writing workflow names itself, not
+	// the originating plugin), so DateFields is nil and every
+	// day-shaped value gets the baseline edge type. Matches the
+	// fill + reindex shape.
+	canonical.EmitDayRefs(ctx, w.backend.Store, ve.ID,
+		vaultEntityDataForDB(ve), nil, w.backend.logger())
 	return nil
 }
 

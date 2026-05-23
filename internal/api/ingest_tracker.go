@@ -954,6 +954,14 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 			"err", err, "id", result.Entity.ID)
 		return fmt.Errorf("failed to record provenance: %w", err)
 	}
+	// ADR-0025 cut 2 (#221) day-reference shape-scan: walk the
+	// plugin-emitted frontmatter for `day:YYYY-MM-DD` canonical-ID
+	// values, ensure each target day entity exists, and emit a
+	// `references_day` edge (or the plugin-declared override per
+	// Capabilities.DateFields). Best-effort: per-ref failures log
+	// and continue without blocking the rest of the commit.
+	canonical.EmitDayRefs(ctx, t.store, result.Entity.ID, result.Entity.Data,
+		att.simulation.plugin.Capabilities().DateFields, t.logger)
 	if err := t.store.ClearGapCallDone(ctx, result.Entity.ID); err != nil {
 		t.logger.Warn("ingest simulator: ClearGapCallDone (plugin path; best-effort)",
 			"err", err, "id", result.Entity.ID)
