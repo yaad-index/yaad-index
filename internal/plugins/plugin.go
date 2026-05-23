@@ -278,6 +278,23 @@ type Capabilities struct {
 	// declare this field and continue to receive the same config
 	// payload they did before.
 	ConfigSchema json.RawMessage `json:"config_schema,omitempty"`
+
+	// DateFields maps a plugin-emitted frontmatter field name to
+	// the canonical edge type the daemon should emit when that
+	// field carries a `day:YYYY-MM-DD` canonical-ID reference per
+	// ADR-0025 cut 2 (#221). When the daemon's shape-scan finds
+	// a day reference in a declared field, the declared edge type
+	// (e.g. "due_on", "occurred_on", "is_about_day", a plugin-
+	// custom name) is emitted INSTEAD OF the baseline
+	// `references_day` — no double-edge per ADR-0025 § Auto-
+	// creation: reference-driven.
+	//
+	// Empty / absent → plugin opts out of the override entirely;
+	// every `day:`-shaped frontmatter value gets the baseline
+	// `references_day` edge. Plugins predating #221 emit no
+	// `date_fields` field on the wire and decode as nil,
+	// preserving the baseline-only behavior.
+	DateFields map[string]string `json:"date_fields,omitempty"`
 }
 
 // CommandSpec is one entry in a plugin's Capabilities.Commands list
