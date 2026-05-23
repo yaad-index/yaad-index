@@ -28,12 +28,39 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/ext"
+
+	"github.com/yaad-index/yaad-index/internal/clock"
 )
+
+// dayHelperFormat is the canonical-ID day-slug format per ADR-0025:
+// `day:YYYY-MM-DD`. Returned by the today() / yesterday() /
+// tomorrow() CEL helpers.
+const dayHelperFormat = "day:2006-01-02"
+
+// PopulateDayHelpers stamps the Activation's Today / Yesterday /
+// Tomorrow fields from a single clock.DayLocation() read, so the
+// three values are mutually consistent (no midnight-skew between
+// the three fields within one fire). Per ADR-0027 cut 1 §
+// "Evaluation cadence per fire": the engine calls this once at
+// fire-start and reuses the same Activation across every eval()
+// call in the fire.
+//
+// Reads clock.DayLocation() at call time, so an operator reload
+// that updates the timezone: config takes effect on the next fire
+// — no engine restart required (per ADR-0027 §1).
+func (a *Activation) PopulateDayHelpers() {
+	loc := clock.DayLocation()
+	now := time.Now().In(loc)
+	a.Today = now.Format(dayHelperFormat)
+	a.Yesterday = now.AddDate(0, 0, -1).Format(dayHelperFormat)
+	a.Tomorrow = now.AddDate(0, 0, 1).Format(dayHelperFormat)
+}
 
 // GraphLookup is the entity-resolution interface the CEL
 // `graph.get(id)` function dispatches through. Production wires
@@ -89,6 +116,23 @@ type Activation struct {
 	// are visible to the predicate + downstream templates by
 	// their declared name.
 	Bindings map[string]any
+
+	// Today / Yesterday / Tomorrow are the fire-scoped day-id
+	// strings backing the today() / yesterday() / tomorrow() CEL
+	// helpers per ADR-0027 cut 1. Engine populates these once at
+	// fire-start (via clock.DayLocation() in the daemon's
+	// configured TZ) and reuses the same Activation across every
+	// eval call in the fire — every callsite within a single fire
+	// sees the same day-id even if the fire crosses midnight
+	// while running. Format: `day:YYYY-MM-DD`.
+	//
+	// Empty strings are tolerated for tests / dev paths that
+	// don't pre-compute (the CEL helper then returns the empty
+	// string — workflows that depend on today() under those
+	// conditions are author-bug shaped).
+	Today     string
+	Yesterday string
+	Tomorrow  string
 }
 
 // Result is the outcome of one evaluation pass.
@@ -142,6 +186,14 @@ type Evaluator struct {
 	evalMu         sync.Mutex
 	currentTracker *refTracker
 	currentCtx     context.Context
+	// currentToday / currentYesterday / currentTomorrow back the
+	// today() / yesterday() / tomorrow() CEL helpers per ADR-0027
+	// cut 1. eval() stamps them from the incoming Activation under
+	// evalMu so the per-fire values the engine pre-computed reach
+	// every callsite in the fire consistently.
+	currentToday     string
+	currentYesterday string
+	currentTomorrow  string
 }
 
 type cacheKey struct {
@@ -212,6 +264,33 @@ func (e *Evaluator) buildEnv(bindings []string) (*cel.Env, error) {
 				[]*cel.Type{cel.StringType},
 				cel.DynType,
 				cel.UnaryBinding(e.graphGet),
+			),
+		),
+		cel.Function("today",
+			cel.Overload("today",
+				[]*cel.Type{},
+				cel.StringType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					return types.String(e.currentToday)
+				}),
+			),
+		),
+		cel.Function("yesterday",
+			cel.Overload("yesterday",
+				[]*cel.Type{},
+				cel.StringType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					return types.String(e.currentYesterday)
+				}),
+			),
+		),
+		cel.Function("tomorrow",
+			cel.Overload("tomorrow",
+				[]*cel.Type{},
+				cel.StringType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					return types.String(e.currentTomorrow)
+				}),
 			),
 		),
 		ext.Strings(),
@@ -401,9 +480,15 @@ func (p *Program) eval(ctx context.Context, act Activation) (ref.Val, Result, er
 	tracker := &refTracker{}
 	e.currentTracker = tracker
 	e.currentCtx = ctx
+	e.currentToday = act.Today
+	e.currentYesterday = act.Yesterday
+	e.currentTomorrow = act.Tomorrow
 	defer func() {
 		e.currentTracker = nil
 		e.currentCtx = nil
+		e.currentToday = ""
+		e.currentYesterday = ""
+		e.currentTomorrow = ""
 	}()
 
 	inputs := map[string]any{

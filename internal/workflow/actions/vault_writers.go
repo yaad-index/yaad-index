@@ -838,7 +838,17 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 	workflow, sourceID, edgeType, targetKind, targetName string,
 	data map[string]string,
 ) error {
-	targetSlug := slug.Slug(targetName)
+	// ADR-0027 cut 1 kind-prefix strip: when targetName is the
+	// canonical-ID form `<targetKind>:<slug>` (e.g. operator
+	// passes today() which returns "day:2026-11-11"), strip the
+	// leading "<targetKind>:" before slugifying so the slug.Slug
+	// pass doesn't mangle the colon into a hyphen. Bare
+	// targetName values (e.g. "My Daily Note") pass through
+	// unchanged. Conservative: only strip when the prefix
+	// exactly matches the declared target.kind — any other text
+	// is left alone.
+	stripped := strings.TrimPrefix(targetName, targetKind+":")
+	targetSlug := slug.Slug(stripped)
 	if targetSlug == "" {
 		return fmt.Errorf("slugify target name %q produced empty slug", targetName)
 	}

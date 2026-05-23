@@ -11,9 +11,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/yaad-index/yaad-index/internal/clock"
 )
 
 // fakeGraph is the test-side GraphLookup. Returns the seeded
@@ -388,4 +391,99 @@ func intToStr(n int) string {
 		return "-" + out
 	}
 	return out
+}
+
+// TestEvaluator_DayHelpers_ReturnActivationValues pins the
+// load-bearing contract for ADR-0027 cut 1: the today() /
+// yesterday() / tomorrow() CEL helpers return the Activation's
+// pre-computed values verbatim. The engine populates these
+// once per fire via PopulateDayHelpers; the helpers serve them
+// without re-reading the clock.
+func TestEvaluator_DayHelpers_ReturnActivationValues(t *testing.T) {
+	t.Parallel()
+	ev, err := NewEvaluator(Options{})
+	require.NoError(t, err)
+
+	cases := []struct {
+		expr string
+		want string
+	}{
+		{"today()", "day:2026-11-11"},
+		{"yesterday()", "day:2026-11-10"},
+		{"tomorrow()", "day:2026-11-12"},
+	}
+	for _, tc := range cases {
+		prog, err := ev.Compile(tc.expr, "string")
+		require.NoError(t, err, "compile %s", tc.expr)
+		got, _, err := prog.EvalString(context.Background(), Activation{
+			Today:     "day:2026-11-11",
+			Yesterday: "day:2026-11-10",
+			Tomorrow:  "day:2026-11-12",
+		})
+		require.NoError(t, err, "eval %s", tc.expr)
+		assert.Equal(t, tc.want, got, "expr=%s", tc.expr)
+	}
+}
+
+// TestEvaluator_DayHelpers_PerFireConsistency pins the cadence
+// rule: multiple today() callsites within a single fire — i.e.
+// successive eval() calls all passing the SAME Activation — return
+// the SAME value. The engine's responsibility is to call
+// PopulateDayHelpers once and reuse the activation; the evaluator
+// enforces consistency by reading the activation's fields rather
+// than re-querying the clock per-call.
+func TestEvaluator_DayHelpers_PerFireConsistency(t *testing.T) {
+	t.Parallel()
+	ev, err := NewEvaluator(Options{})
+	require.NoError(t, err)
+
+	prog, err := ev.Compile("today() + '|' + today() + '|' + today()", "string")
+	require.NoError(t, err)
+	got, _, err := prog.EvalString(context.Background(), Activation{
+		Today: "day:2026-11-11",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "day:2026-11-11|day:2026-11-11|day:2026-11-11", got)
+}
+
+// TestPopulateDayHelpers_MutuallyConsistent pins that
+// PopulateDayHelpers reads the clock once and derives all three
+// fields from that single snapshot, so a fire activation never
+// sees yesterday = day-N-1 + today = day-N+1 (mid-stamp midnight
+// crossing).
+func TestPopulateDayHelpers_MutuallyConsistent(t *testing.T) {
+	t.Parallel()
+	a := Activation{}
+	a.PopulateDayHelpers()
+
+	require.Len(t, a.Today, len("day:2006-01-02"))
+	require.Len(t, a.Yesterday, len("day:2006-01-02"))
+	require.Len(t, a.Tomorrow, len("day:2006-01-02"))
+
+	today, err := time.Parse("day:2006-01-02", a.Today)
+	require.NoError(t, err)
+	yesterday, err := time.Parse("day:2006-01-02", a.Yesterday)
+	require.NoError(t, err)
+	tomorrow, err := time.Parse("day:2006-01-02", a.Tomorrow)
+	require.NoError(t, err)
+	assert.Equal(t, today.AddDate(0, 0, -1), yesterday)
+	assert.Equal(t, today.AddDate(0, 0, 1), tomorrow)
+}
+
+// TestPopulateDayHelpers_UsesOperatorTimezone pins that the
+// operator-configured TZ flows through (per ADR-0025's
+// clock.DayLocation chain). Pacific is far enough offset from
+// UTC that the day-id will differ from UTC stamping during a
+// midnight-band window — even outside that window, the format
+// resolves against the operator's zone.
+func TestPopulateDayHelpers_UsesOperatorTimezone(t *testing.T) {
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	require.NoError(t, err)
+	clock.SetLocation(tokyo)
+	t.Cleanup(func() { clock.SetLocation(nil) })
+
+	a := Activation{}
+	a.PopulateDayHelpers()
+	expected := time.Now().In(tokyo).Format("day:2006-01-02")
+	assert.Equal(t, expected, a.Today)
 }
