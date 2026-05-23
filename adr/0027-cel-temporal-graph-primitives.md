@@ -27,9 +27,28 @@ yesterday()    // → "day:2026-11-10"
 tomorrow()     // → "day:2026-11-12"
 ```
 
-**Return shape:** canonical-ID string (`day:YYYY-MM-DD`) so the result composes directly with `graph.get(today())`, `add_canonical_edge: target.name: today()`, action-template interpolation, and every other surface that takes an entity id. No translation layer between the temporal primitive and the storage convention.
+**Return shape:** canonical-ID string (`day:YYYY-MM-DD`) so the result composes directly with `graph.get(today())`, `add_canonical_edge: target.name: today()` (see "Action runner kind-prefix strip" below), action-template interpolation, and every other surface that takes an entity id. No translation layer between the temporal primitive and the storage convention.
 
-**Resolution:** the evaluator binds `clock.DayLocation()` (per ADR-0025's TZ chain — operator config → host `time.Local`) at engine construction. Tests stub it via the existing `internal/clock` test helpers.
+**Action runner kind-prefix strip (required for the surface to compose).** The `add_canonical_edge` runner today computes `targetID = targetKind + ':' + slug.Slug(targetName)`. If `target.name` is passed `today()`'s canonical-ID return `day:2026-11-11`, `slug.Slug` mangles the colon and the result is `day:day-2026-11-11`. To preserve the "today() = id, use it anywhere" mental model, the action runner MUST strip a leading `<targetKind>:` prefix from `targetName` before slugifying:
+
+```go
+// vault_writers.go (around line 841)
+prefix := targetKind + ":"
+name := strings.TrimPrefix(targetName, prefix)
+targetSlug := slug.Slug(name)
+targetID := targetKind + ":" + targetSlug
+```
+
+Operators may write either form for `target.name`:
+- `name: today()` → evaluates to `day:2026-11-11`, prefix stripped, slug = `2026-11-11`, id = `day:2026-11-11`. ✓
+- `name: 'today()'.substring(4)` or bare-string literal `'2026-11-11'` → no prefix, slug = `2026-11-11`, id = `day:2026-11-11`. ✓
+- `name: 'My Daily Note'` (operator-named day with custom slug) → no prefix, slug = `my-daily-note`, id = `day:my-daily-note`. ✓ (existing behavior preserved.)
+
+This is the only action-runner change required by this ADR. The behavior is conservative — strip only when the prefix exactly matches the declared `target.kind`; any other text is left alone for slugification.
+
+**Resolution:** the evaluator binds `clock.DayLocation()` (per ADR-0025's TZ chain — operator config → host `time.Local`) at engine construction. Engine construction happens at daemon start AND on operator-config reload — an operator who edits `timezone:` and reloads picks up the new zone on the next reload event, not only at restart. Tests stub the clock via the existing `internal/clock` test helpers.
+
+**Evaluation cadence per fire.** `today()` / `yesterday()` / `tomorrow()` are evaluated **once per workflow fire**, cached in the fire's binding scope. Multiple `today()` callsites within one fire's actions all see the same value — important for the rare midnight-crossing case where a single fire might otherwise see day-N in one action and day-N+1 in the next. The cache is fire-scoped, not engine-scoped, so back-to-back fires across a midnight boundary correctly see different days.
 
 ### 2. Date arithmetic — function form
 
@@ -63,16 +82,27 @@ graph.out_neighbors(id, "is_about")         // → list<Entity>
 **Edge shape** (returned by `in_edges` / `out_edges`):
 
 ```
-{ from: string, to: string, type: string, data: map<string, dyn> }
+{ from: string, to: string, type: string, metadata: map<string, dyn> }
 ```
 
-Mirrors the API edge surface. The `data` dict carries the same fields the ingest layer wrote.
+Mirrors the Go `store.Edge` struct's `Metadata map[string]any` field, lowercased per CEL convention. The `metadata` dict carries the same fields the ingest layer wrote. (The separate edge-bound trigger binding from `edge_created` workflows surfaces `{type, from, to, from_title, to_title, timestamp}` — that's the trigger-event payload, structurally distinct from the `Edge` value `in_edges` / `out_edges` return; they intentionally don't share a schema because the trigger binding has access to denormalized lookups the graph-walk results don't.)
 
 **Neighbor convenience helpers** (`in_neighbors` / `out_neighbors`) return a list of Entity directly — single SQL JOIN at the daemon (edge query + entity fetch in one round trip), much faster than CEL-side `graph.in_edges(...).map(e, graph.get(e.from))` (one query + N entity fetches). Callers who need edge metadata (`data` dict, type, timestamps) still use the `_edges` form.
 
 **Single-hop only.** No `graph.walk(id, depth=N)` primitive in this cut. None of the deferred workflow examples (daily-digest, ingested-on, deadline-approaching) need multi-hop, and multi-hop CEL queries risk pathological depth-N traversals. Multi-hop walking lives at the API endpoint `/v1/entities/{id}/context?depth=N` for ad-hoc operator / agent use; a future ADR can add a bounded CEL primitive if a real multi-hop workflow surfaces.
 
-**List size cap.** Each `in_edges` / `out_edges` / `in_neighbors` / `out_neighbors` call caps at a default of 1000 entries. On overflow, the result includes a `truncated: true` flag + `total: N` count; the workflow can detect and paginate via the API if needed. The cap is configurable via an operator-config knob (`workflow.graph_walk_cap` or similar). Default 1000 is sized for the day-anchor use case — operators can raise for dense-graph deployments.
+**List size cap + return-shape wrapping.** Each `in_edges` / `out_edges` / `in_neighbors` / `out_neighbors` call caps at a default of 1000 entries. A CEL `list<T>` can't carry sidecar flags, so the function returns a struct:
+
+```
+graph.in_edges(id, ...) → { items: list<Edge>, truncated: bool, total: int }
+graph.in_neighbors(id, ...) → { items: list<Entity>, truncated: bool, total: int }
+```
+
+Callers iterate via `result.items` (the list) and check `result.truncated` / `result.total` for overflow handling. Trade-off accepted: every callsite types `.items` once for access; in exchange the truncation flag is checkable in CEL without a side-channel binding. The map / filter / join idioms still work — `result.items.map(...)` / `result.items.filter(...)`.
+
+**Truncation handling is operator's responsibility.** On overflow, the engine does NOT auto-fail the action — the workflow continues with the first 1000 entries plus a `truncated: true` marker. Workflows that need exhaustive results MUST check the flag and paginate via the API (no CEL pagination primitive in this cut).
+
+The cap is configurable via an operator-config knob (`workflow.graph_walk_cap` or similar). Default 1000 is sized for the day-anchor use case — operators can raise for dense-graph deployments.
 
 ### 4. Template interpolation — no loop construct
 
@@ -83,10 +113,21 @@ Action templates continue to do single-expression CEL substitution per ADR-0024 
 ```yaml
 - task_append:
     section: today
-    content: '{{ graph.in_neighbors(today(), "due_on").map(n, "- [[" + n.id + "]]").join("\n") }}'
+    content: '{{ graph.in_neighbors(today(), "due_on").items.map(n, "- [[" + n.id + "]]").join("\n") }}'
 ```
 
 Adding a template-loop construct opens a design space (nested loops, else branches, break/continue) that the daily-digest readability gain doesn't justify. Stay CEL-only.
+
+**`.join()` receiver requires cel-go's `ext.Strings()` extension.** The string-extension library is not loaded by default in cel-go. Cut 3 (the graph-walking cut, where `.join()` first becomes useful) wires the evaluator with:
+
+```go
+env, err := cel.NewEnv(
+    // ... existing options ...
+    ext.Strings(),
+)
+```
+
+Without `ext.Strings()`, `.join(separator)` returns a compile-time error. The other list methods we rely on (`.map`, `.filter`, `.exists`, `.all`) are CEL standard and don't need an extension.
 
 ## Worked examples (now runnable)
 
@@ -104,7 +145,7 @@ trigger:
 actions:
   - task_append:
       section: today
-      content: '{{ graph.in_neighbors(today(), "due_on").map(n, "- [[" + n.id + "]] (due)").join("\n") }}{{ graph.in_neighbors(today(), "occurred_on").map(n, "\n- [[" + n.id + "]] (occurred)").join("") }}'
+      content: '{{ graph.in_neighbors(today(), "due_on").items.map(n, "- [[" + n.id + "]] (due)").join("\n") }}{{ graph.in_neighbors(today(), "occurred_on").items.map(n, "\n- [[" + n.id + "]] (occurred)").join("") }}'
       if_already_present: replace
 ```
 ```
@@ -132,7 +173,7 @@ actions:
 ```
 ```
 
-Fires on every new entity. `add_canonical_edge`'s `target.name` field accepts the CEL expression `today()` which evaluates to a `day:`-shaped string; the runner ensures the target day entity exists (per PR-226's ensure-target work in ADR-0025 cut 2).
+Fires on every new entity. `add_canonical_edge`'s `target.name` field accepts the CEL expression `today()` which evaluates to `day:YYYY-MM-DD`; the action runner's kind-prefix strip (§1 above) removes the leading `day:` before slugifying so `target.id` resolves to the operator-expected `day:2026-11-11` shape. The runner also ensures the target day entity exists (per PR-226's ensure-target work in ADR-0025 cut 2).
 
 ### Approaching-deadline workflow
 
@@ -168,9 +209,9 @@ Fires when any `due_on` edge is created. The action computes the relative day-co
 
 This ADR ships in 4 cuts (mirroring ADR-0025's cadence):
 
-1. **Cut 1** — date helpers (`today` / `yesterday` / `tomorrow`) + the CEL evaluator binding. Smallest surface; lands the clock plumbing.
+1. **Cut 1** — date helpers (`today` / `yesterday` / `tomorrow`) + the CEL evaluator binding + the **action runner kind-prefix strip** (the one-line fix in `vault_writers.go` so `target.name: today()` resolves cleanly). Smallest surface in function count; lands the clock plumbing AND the runner contract that the rest of the ADR depends on.
 2. **Cut 2** — date arithmetic (`add_days`, `days_between`). Builds on cut 1's binding.
-3. **Cut 3** — graph-walk primitives (`graph.in_edges`, `graph.out_edges`, `graph.in_neighbors`, `graph.out_neighbors`) + the per-call cap + truncation flag. Largest cut; SQL-side filter wiring + new evaluator types.
+3. **Cut 3** — graph-walk primitives (`graph.in_edges`, `graph.out_edges`, `graph.in_neighbors`, `graph.out_neighbors`) + the per-call cap + truncation-via-struct shape (`{items, truncated, total}`) + `ext.Strings()` evaluator wiring. Largest cut; SQL-side filter wiring + new evaluator types + JOIN-based neighbor variants.
 4. **Cut 4** — docs walkthrough updates (extend `docs/workflows.md` § CEL environment with the new functions; extend `docs/date-entities.md` worked examples; ship the three concrete `vault/workflows/*.md` example files).
 
 ## Consequences
