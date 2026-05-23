@@ -59,13 +59,13 @@ func TestEntityArchive_RoundTrip(t *testing.T) {
 	require.NotNil(t, got.ArchivedAt, "archived_at non-NULL post-archive")
 
 	// Default search excludes archived rows.
-	hits, total, err := st.Search(context.Background(), "Soon-Gone", "", 50, 0, store.ArchivedExclude)
+	hits, total, err := st.Search(context.Background(), "Soon-Gone", "", 50, 0, store.ArchivedExclude, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, total, "default-filter search hides archived")
 	assert.Empty(t, hits)
 
 	// Include-archived returns it.
-	hits, total, err = st.Search(context.Background(), "Soon-Gone", "", 50, 0, store.ArchivedInclude)
+	hits, total, err = st.Search(context.Background(), "Soon-Gone", "", 50, 0, store.ArchivedInclude, false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, total)
 	assert.Len(t, hits, 1)

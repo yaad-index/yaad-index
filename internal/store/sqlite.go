@@ -1021,7 +1021,7 @@ func assertEntityExists(ctx context.Context, tx *sql.Tx, id, side string) error 
 // - Snippet is empty — extracting a substring around the match is
 // cheap to add later, but the wire shape today is the same one
 // the stub produced (Snippet field present, content placeholder).
-func (s *sqliteStore) Search(ctx context.Context, query, kind string, limit, offset int, archived ArchivedFilter) ([]Hit, int, error) {
+func (s *sqliteStore) Search(ctx context.Context, query, kind string, limit, offset int, archived ArchivedFilter, journalOnly bool) ([]Hit, int, error) {
 	pattern := "%" + query + "%"
 
 	whereParts := []string{"(id LIKE ? OR data LIKE ?)"}
@@ -1040,6 +1040,17 @@ func (s *sqliteStore) Search(ctx context.Context, query, kind string, limit, off
 		whereParts = append(whereParts, "archived_at IS NOT NULL")
 	case ArchivedInclude:
 		// no clause — full set
+	}
+	// is_journal filter per ADR-0025 cut 3 (#222). The flag lives
+	// in vault frontmatter `data:` (mirrored verbatim to the DB
+	// data column via vaultEntityDataForDB). SQLite JSON1's
+	// json_extract returns the underlying type: YAML `true`
+	// round-trips through Go bool → JSON `true` → json_extract
+	// returns 1. Both spellings handled for defense-in-depth in
+	// case a future writer emits the alternate JSON shape.
+	if journalOnly {
+		whereParts = append(whereParts,
+			"(json_extract(data, '$.is_journal') = 1 OR json_extract(data, '$.is_journal') = 'true')")
 	}
 	where := strings.Join(whereParts, " AND ")
 

@@ -410,7 +410,7 @@ type Store interface {
 	//
 	// Returns ErrNotFound (wrapped) when rootID resolves to nothing.
 	GetContextNeighbors(ctx context.Context, rootID string, maxDepth int, edgeTypes []string, maxResults int) (root *Entity, neighbors []ContextNeighbor, truncated bool, err error)
-	Search(ctx context.Context, q, kind string, limit, offset int, archived ArchivedFilter) (results []Hit, total int, err error)
+	Search(ctx context.Context, q, kind string, limit, offset int, archived ArchivedFilter, journalOnly bool) (results []Hit, total int, err error)
 
 	// ArchiveEntity flips an entity into the archived state per
 	// ADR-0018: sets `archived_at = now` and bumps `updated_at`.

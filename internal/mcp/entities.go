@@ -127,13 +127,25 @@ func registerListEntities(s *server.MCPServer, b *bridge) {
 			mcp.Required(),
 			mcp.Description("Kind filter, e.g. `wikipedia`, `person`, `boardgame`."),
 		),
+		mcp.WithBoolean("is_journal",
+			mcp.Description("Optional filter for journal-flagged entities "+
+				"per ADR-0025 cut 3. When true, restricts results to "+
+				"entities whose vault frontmatter sets "+
+				"`data.is_journal: true` — canonically used to surface "+
+				"only journal-shaped `day` entities (combine with "+
+				"`kind: day`)."),
+		),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		kind := req.GetString("kind", "")
 		if kind == "" {
 			return mcp.NewToolResultError("`kind` is required"), nil
 		}
-		return b.callTool(ctx, "GET", "/v1/search?kind="+url.QueryEscape(kind), nil)
+		path := "/v1/search?kind=" + url.QueryEscape(kind)
+		if req.GetBool("is_journal", false) {
+			path += "&is_journal=true"
+		}
+		return b.callTool(ctx, "GET", path, nil)
 	})
 }
 
