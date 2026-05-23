@@ -26,6 +26,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/buildinfo"
 	"github.com/yaad-index/yaad-index/internal/attachments"
 	"github.com/yaad-index/yaad-index/internal/auth"
+	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
@@ -279,7 +280,7 @@ func (s *ServeCmd) Run() error {
 		// so the edge path doesn't go through a merge intermediate.
 		// Effective enabled sets are symmetric.
 		enabledEdgeTypes := unionEdgeTypes(cfg.CanonicalEdgeTypes, collectPluginEmittedEdgeTypes(registry))
-		guard = config.NewCanonicalGuard(canonicalKindNames(mergedRegistry), enabledEdgeTypes)
+		guard = canonical.NewGuardWithDaemonDefaults(canonicalKindNames(mergedRegistry), enabledEdgeTypes)
 		handlerOpts = append(handlerOpts, api.WithCanonicalGuard(guard))
 		warnCanonicalEmissionGaps(logger, registry, guard)
 		// Always pass the configured cache_ttl_seconds through (even
