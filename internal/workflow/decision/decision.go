@@ -43,13 +43,20 @@ import (
 // tomorrow() CEL helpers.
 const dayHelperFormat = "day:2006-01-02"
 
-// PopulateDayHelpers stamps the Activation's Today / Yesterday /
-// Tomorrow fields from a single clock.DayLocation() read, so the
-// three values are mutually consistent (no midnight-skew between
-// the three fields within one fire). Per ADR-0027 cut 1 §
-// "Evaluation cadence per fire": the engine calls this once at
+// PopulateDayHelpers stamps the Activation's day-anchored AND
+// current-period fields from a single clock.DayLocation() read, so
+// every helper backed by the activation sees the same calendar
+// moment. Per ADR-0027 cut 1 § "Evaluation cadence per fire" + cut
+// 2 § "Per-fire caching extension": the engine calls this once at
 // fire-start and reuses the same Activation across every eval()
 // call in the fire.
+//
+// Fields populated:
+//   - Today / Yesterday / Tomorrow — cut 1 day-anchor helpers.
+//   - ThisWeek / ThisMonth / ThisYear — cut 2 current-period
+//     helpers. ThisWeek uses ISO 8601 — late-Dec days may render
+//     as the next calendar year's W01 (e.g. 2025-12-29 →
+//     "2026-W01"), matching the week_of() helper.
 //
 // Reads clock.DayLocation() at call time, so an operator reload
 // that updates the timezone: config takes effect on the next fire
@@ -60,6 +67,10 @@ func (a *Activation) PopulateDayHelpers() {
 	a.Today = now.Format(dayHelperFormat)
 	a.Yesterday = now.AddDate(0, 0, -1).Format(dayHelperFormat)
 	a.Tomorrow = now.AddDate(0, 0, 1).Format(dayHelperFormat)
+	isoYear, isoWeek := now.ISOWeek()
+	a.ThisWeek = formatWeek(isoYear, isoWeek)
+	a.ThisMonth = now.Format(monthIDFormat)
+	a.ThisYear = now.Format(yearIDFormat)
 }
 
 // GraphLookup is the entity-resolution interface the CEL
@@ -133,6 +144,18 @@ type Activation struct {
 	Today     string
 	Yesterday string
 	Tomorrow  string
+
+	// ThisWeek / ThisMonth / ThisYear back the current-period
+	// CEL helpers per ADR-0027 cut 2. Per-fire caching same
+	// pattern as Today / Yesterday / Tomorrow — populated once
+	// at fire-start from the SAME clock snapshot, so a single
+	// fire crossing a week / month / year boundary still sees
+	// one consistent period id across every action template.
+	// Formats: ThisWeek = "YYYY-Www" (ISO 8601), ThisMonth =
+	// "YYYY-MM", ThisYear = "YYYY".
+	ThisWeek  string
+	ThisMonth string
+	ThisYear  string
 }
 
 // Result is the outcome of one evaluation pass.
@@ -194,6 +217,13 @@ type Evaluator struct {
 	currentToday     string
 	currentYesterday string
 	currentTomorrow  string
+	// currentThisWeek / currentThisMonth / currentThisYear back
+	// the matching current-period helpers per ADR-0027 cut 2.
+	// Same eval-pump pattern: stamped on eval() entry from the
+	// Activation, cleared on exit.
+	currentThisWeek  string
+	currentThisMonth string
+	currentThisYear  string
 }
 
 type cacheKey struct {
@@ -293,9 +323,37 @@ func (e *Evaluator) buildEnv(bindings []string) (*cel.Env, error) {
 				}),
 			),
 		),
+		cel.Function("this_week",
+			cel.Overload("this_week",
+				[]*cel.Type{},
+				cel.StringType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					return types.String(e.currentThisWeek)
+				}),
+			),
+		),
+		cel.Function("this_month",
+			cel.Overload("this_month",
+				[]*cel.Type{},
+				cel.StringType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					return types.String(e.currentThisMonth)
+				}),
+			),
+		),
+		cel.Function("this_year",
+			cel.Overload("this_year",
+				[]*cel.Type{},
+				cel.StringType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					return types.String(e.currentThisYear)
+				}),
+			),
+		),
 		ext.Strings(),
 		regexCaptureFunction(),
 	}
+	opts = append(opts, temporalFunctions()...)
 	seen := make(map[string]struct{}, len(bindings))
 	for _, name := range bindings {
 		if _, dup := seen[name]; dup {
@@ -483,12 +541,18 @@ func (p *Program) eval(ctx context.Context, act Activation) (ref.Val, Result, er
 	e.currentToday = act.Today
 	e.currentYesterday = act.Yesterday
 	e.currentTomorrow = act.Tomorrow
+	e.currentThisWeek = act.ThisWeek
+	e.currentThisMonth = act.ThisMonth
+	e.currentThisYear = act.ThisYear
 	defer func() {
 		e.currentTracker = nil
 		e.currentCtx = nil
 		e.currentToday = ""
 		e.currentYesterday = ""
 		e.currentTomorrow = ""
+		e.currentThisWeek = ""
+		e.currentThisMonth = ""
+		e.currentThisYear = ""
 	}()
 
 	inputs := map[string]any{
