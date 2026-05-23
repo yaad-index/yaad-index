@@ -106,3 +106,37 @@ func TestIn_PreservesInstant(t *testing.T) {
 		"In() must preserve the absolute instant; only Location() differs")
 	assert.Equal(t, loc, got.Location())
 }
+
+// TestDayLocation_UnsetFallsBackToHostLocal pins the ADR-0025
+// fallback chain: when the operator hasn't set timezone:, the
+// day-resolution location is time.Local (the host TZ), distinct
+// from the display-side Location() fallback to time.UTC.
+func TestDayLocation_UnsetFallsBackToHostLocal(t *testing.T) {
+	SetLocation(nil) // explicit reset
+	t.Cleanup(func() { SetLocation(nil) })
+
+	got := DayLocation()
+	if got != time.Local {
+		t.Fatalf("DayLocation() with unset operator TZ: want time.Local (%v), got %v",
+			time.Local, got)
+	}
+}
+
+// TestDayLocation_OperatorConfigOverridesHost pins step 1 of the
+// ADR-0025 chain: when the operator has set timezone:, that
+// location is used for day-resolution too (matches the
+// display-side Location()).
+func TestDayLocation_OperatorConfigOverridesHost(t *testing.T) {
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Fatalf("LoadLocation(Asia/Tokyo): %v", err)
+	}
+	SetLocation(tokyo)
+	t.Cleanup(func() { SetLocation(nil) })
+
+	got := DayLocation()
+	if got != tokyo {
+		t.Fatalf("DayLocation() with operator-pinned Asia/Tokyo: want %v, got %v",
+			tokyo, got)
+	}
+}
