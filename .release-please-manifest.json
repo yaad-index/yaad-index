@@ -2,6 +2,6 @@
   ".": "0.9.0",
   "cmd/yaad-wikipedia": "0.3.0",
   "cmd/yaad-bgg": "0.2.0",
-  "cmd/yaad-gmail": "0.2.1",
+  "cmd/yaad-gmail": "0.3.0",
   "mcp": "0.3.0"
 }

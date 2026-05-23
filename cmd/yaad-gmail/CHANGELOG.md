@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/yaad-index/yaad-index/compare/yaad-gmail-v0.2.1...yaad-gmail-v0.3.0) (2026-05-23)
+
+
+### Features
+
+* **yaad-gmail:** migrate to YAAD_PLUGIN_CONFIG + config_schema ([#192](https://github.com/yaad-index/yaad-index/issues/192)) ([#208](https://github.com/yaad-index/yaad-index/issues/208)) ([cfbdd4b](https://github.com/yaad-index/yaad-index/commit/cfbdd4bea29e56dfddea4e993de948382e2ce17b))
+
 ## [0.2.1](https://github.com/yaad-index/yaad-index/compare/yaad-gmail-v0.2.0...yaad-gmail-v0.2.1) (2026-05-17)
 
 
