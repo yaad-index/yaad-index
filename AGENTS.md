@@ -178,6 +178,100 @@ governs.
  2026-05-08 concerns meeting; addresses the cold-reviewer's "would you miss it
  = no" by making yaad-index hold operator-truth, not just external-
  source-truth.
+- [ADR-0020 — Search with gap-field predicates](adr/0020-search-gap-predicates.md). Extends
+ `GET /v1/search` with repeated `where=` predicates over
+ `data.<field>` paths (operator-filled values from ADR-0019
+ become first-class filter axes alongside `q` and `kind`) and
+ repeated `gap_state=` filters over the ADR-0019 state machine
+ (`unfilled` / `agent-filled` / `operator-filled` / `deferred`;
+ default excludes `deferred`). Additive: existing callers keep
+ working.
+- [ADR-0021 — Daemon owns slug derivation; canonical entities are edge-target labels](adr/0021-daemon-owns-slug.md). Moves
+ the clean-slug algorithm (ADR-0017) out of plugin code into a
+ single daemon-side deterministic function — plugins no longer
+ produce slugs. Plugin emission carries a `kind: source` payload
+ plus a flat `edges` block keyed by edge type with
+ `{name, kind}` targets; source-type information (Wikipedia
+ article, BGG record, email) lives as an EDGE on the source
+ node, not as a per-plugin entity kind.
+- [ADR-0022 — Plugin command protocol](adr/0022-plugin-command-protocol.md). Adds
+ a `commands: [...]` field to plugin `--init` capabilities
+ (parallel to `url_patterns`), entries either bare-string
+ (`"fetch"`, defaults `operator_only=false`) or long-form object
+ (`{"name":"delete-all","operator_only":true}`). Invocation
+ sigil `!` on the user/agent side (e.g. `gmail: !fetch`) routes
+ through an in-memory job system (sigil-stripped bare command
+ exact-matched against advertised `commands`; no argument
+ grammar is defined in v1); routing-time validation rejects
+ unknown commands.
+ The plugin handler runs via `<plugin-binary> --command <name>`.
+ Response-shape clause superseded by ADR-0023.
+- [ADR-0023 — Unified plugin response protocol (NDJSON streaming)](adr/0023-unified-plugin-response-protocol.md). All
+ plugin responses — URL-shape AND command-shape — are
+ newline-delimited JSON on stdout, one self-contained envelope
+ per line, flushed eagerly. Three recognized line shapes:
+ entity-emission, `_error` (per-item failure, processing
+ continues), `_summary` (terminal counters). Applies uniformly
+ across `--fetch` and `--command <name>`; supersedes
+ ADR-0022's per-command multi-envelope clause.
+- [ADR-0024 — Workflows and tasks](adr/0024-workflows-and-tasks.md). Introduces
+ operator-authored **workflows** (markdown files at
+ `workflows/<name>.md`, YAML-fenced rules in the body,
+ frontmatter for metadata) with trigger / optional
+ gap-injection / CEL decision / output. yaad-index ships the
+ engine (parser, trigger detector, fill-gap integration via
+ ADR-0019, output dispatch); operators write the files.
+ Decisions are deterministic CEL by default (agent-free); the
+ `context` stanza pre-binds named CEL expressions for DRY +
+ readability. Pairs with a first-class **task** entity kind
+ surfaced through note/task endpoints.
+- [ADR-0025 — Date entities](adr/0025-date-entities.md). Adds
+ a daemon-managed `day:<YYYY-MM-DD>` canonical kind (v1.x:
+ day only; week / month / year deferred) interpreted in the
+ daemon's configured timezone (`timezone:` config knob; falls
+ back to host `time.Local`). Auto-creation is reference-driven:
+ a shape-scan on every write path emits a `references_day`
+ canonical edge for any `day:`-shaped frontmatter value; plugins
+ MAY declare `date_fields` in `--init` to promote per-field
+ references into typed canonical edges (`due_on`, `occurred_on`,
+ `is_about_day`, `ingested_on`). Days carrying operator-written
+ journal content set `data.is_journal: true` so consumers can
+ filter the journal subset.
+- [ADR-0026 — yaad-github plugin (hybrid URL+command invocation)](adr/0026-yaad-github-plugin.md). The
+ yaad-github plugin advertises both `url_patterns` (per ADR-0022)
+ for ad-hoc PR/issue ingest from links AND a `fetch` command
+ (per ADR-0022 + ADR-0023) for periodic per-repo polling.
+ Multi-instance pattern: one binary, many configured instances
+ (one per repo / org) so per-instance polling cadence and
+ credentials are independent. PR and Issue live in split
+ canonical namespaces (`github-pr:` / `github-issue:`) — both
+ reference the same `repository:` and `github-user:` anchors but
+ have distinct lifecycle vocabulary.
+- [ADR-0027 — CEL temporal + graph-walk primitives](adr/0027-cel-temporal-graph-primitives.md). Adds
+ three categories of primitive to the workflow CEL evaluator
+ from ADR-0024: **day helpers** (`today()`, `yesterday()`,
+ `tomorrow()` — canonical-ID return `day:YYYY-MM-DD` so the
+ result composes directly with `graph.get(today())` and
+ `add_canonical_edge.target.name`); **stateless temporal
+ arithmetic over day IDs** (`add_days`, `days_between` — take
+ day-ID strings, return a day ID / signed int respectively, so
+ they pair with the day helpers); **period helpers + their
+ dedicated companions** (`this_week()` / `this_month()` /
+ `this_year()` return ISO-scalar strings `"2026-W21"` /
+ `"2026-05"` / `"2026"` — pure CEL computation, NOT canonical
+ IDs — paired with `days_in_week/month/year` for fan-out into
+ day-ID lists and with `week_of/month_of/year_of` for the
+ reverse projection from a day ID; period scalars do NOT
+ resolve through `graph.get` / `add_canonical_edge` and are NOT
+ valid inputs to `add_days` / `days_between`); **graph-walk** (`graph.in_edges`,
+ `graph.out_edges`, `graph.in_neighbors`,
+ `graph.out_neighbors` — return `{items, truncated, total}`
+ structs to surface capped-result state). Per-fire caching of
+ the current-period helpers (`today` through `this_year`) keeps
+ a workflow's view of "now" stable across its evaluation.
+ Includes the action-runner kind-prefix strip in
+ `vault_writers.go` so `target.name: today()` resolves to
+ `day:2026-11-11`, not `day:day-2026-11-11`.
 
 ## Project layout
 
