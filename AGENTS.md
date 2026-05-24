@@ -247,18 +247,23 @@ governs.
  have distinct lifecycle vocabulary.
 - [ADR-0027 — CEL temporal + graph-walk primitives](adr/0027-cel-temporal-graph-primitives.md). Adds
  three categories of primitive to the workflow CEL evaluator
- from ADR-0024: date helpers (`today()`, `yesterday()`,
- `tomorrow()`, `this_week()`, `this_month()`, `this_year()` —
- canonical-ID return so the result composes with
- `graph.get(today())` and `add_canonical_edge.target.name`);
- stateless temporal arithmetic (`add_days`, `days_between`,
- `days_in_week/month/year`, `week_of/month_of/year_of` — ISO
- 8601 week semantics); graph-walk (`graph.in_edges`,
- `graph.out_edges`, `graph.in_neighbors`, `graph.out_neighbors`
- — return `{items, truncated, total}` structs to surface
- capped-result state). Per-fire caching of the date helpers
- keeps a workflow's view of "today" stable across its
- evaluation. Includes the action-runner kind-prefix strip in
+ from ADR-0024: **day helpers** (`today()`, `yesterday()`,
+ `tomorrow()` — canonical-ID return `day:YYYY-MM-DD` so the
+ result composes directly with `graph.get(today())` and
+ `add_canonical_edge.target.name`); **period helpers +
+ stateless temporal arithmetic** (`this_week()` / `this_month()`
+ / `this_year()` return ISO-scalar strings `"2026-W21"` /
+ `"2026-05"` / `"2026"` — pure CEL computation, NOT canonical
+ IDs, so they pair with `add_days`, `days_between`,
+ `days_in_week/month/year`, `week_of/month_of/year_of` for ISO
+ 8601 arithmetic but do NOT resolve through `graph.get` or
+ `add_canonical_edge`); **graph-walk** (`graph.in_edges`,
+ `graph.out_edges`, `graph.in_neighbors`,
+ `graph.out_neighbors` — return `{items, truncated, total}`
+ structs to surface capped-result state). Per-fire caching of
+ the current-period helpers (`today` through `this_year`) keeps
+ a workflow's view of "now" stable across its evaluation.
+ Includes the action-runner kind-prefix strip in
  `vault_writers.go` so `target.name: today()` resolves to
  `day:2026-11-11`, not `day:day-2026-11-11`.
 
