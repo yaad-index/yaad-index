@@ -17,7 +17,7 @@ func TestMarshal_NotationsEmittedInFrontmatter(t *testing.T) {
 	e := &Entity{
 		ID: "wikipedia:susanna-clarke",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Notations: []string{
 			"https://en.wikipedia.org/wiki/Susanna_Clarke",
 			"wikipedia: Susanna Clarke",
@@ -42,14 +42,14 @@ func TestMarshal_NotationsOmitemptyDropsField(t *testing.T) {
 
 	t.Run("nil slice", func(t *testing.T) {
 		t.Parallel()
-		e := &Entity{ID: "x:y", Kind: "x", Plugin: "p"}
+		e := &Entity{ID: "x:y", Kind: "x", Source: []string{"p/default"}}
 		b, err := Marshal(e, nil)
 		require.NoError(t, err)
 		assert.NotContains(t, string(b), "notations")
 	})
 	t.Run("empty slice", func(t *testing.T) {
 		t.Parallel()
-		e := &Entity{ID: "x:y", Kind: "x", Plugin: "p", Notations: []string{}}
+		e := &Entity{ID: "x:y", Kind: "x", Source: []string{"p/default"}, Notations: []string{}}
 		b, err := Marshal(e, nil)
 		require.NoError(t, err)
 		assert.NotContains(t, string(b), "notations")
@@ -66,7 +66,7 @@ func TestMarshal_NotationsRoundTrip(t *testing.T) {
 	original := &Entity{
 		ID: "wikipedia:susanna-clarke",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Susanna Clarke"},
 		Notations: []string{
 			"https://en.wikipedia.org/wiki/Susanna_Clarke",
@@ -98,7 +98,7 @@ func TestWriter_NotationsEndToEnd(t *testing.T) {
 	require.NoError(t, w.Write(&Entity{
 		ID: "wikipedia:tehran",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Tehran"},
 		Notations: []string{
 			"https://en.wikipedia.org/wiki/Tehran",

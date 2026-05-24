@@ -19,7 +19,7 @@ func TestMarshal_NoteCountFrontmatterAndBodyTable(t *testing.T) {
 	e := &Entity{
 		ID: "wikipedia:foo",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Notes: []Note{
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
@@ -78,7 +78,7 @@ func TestMarshal_NoCommentsOmitsCountAndSection(t *testing.T) {
 	e := &Entity{
 		ID: "wikipedia:foo",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 	}
 	b, err := Marshal(e, nil)
 	require.NoError(t, err)
@@ -98,7 +98,7 @@ func TestMarshal_CommentsRoundTrip(t *testing.T) {
 	original := &Entity{
 		ID: "wikipedia:foo",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Notes: []Note{
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
@@ -137,7 +137,7 @@ func TestMarshal_CommentsMultiParagraphRoundTrip(t *testing.T) {
 	original := &Entity{
 		ID: "wikipedia:foo",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Notes: []Note{
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
@@ -172,7 +172,7 @@ func TestMarshal_CommentsPipeEscape(t *testing.T) {
 	original := &Entity{
 		ID: "wikipedia:foo",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Notes: []Note{
 			{
 				Date: mustParseTime(t, "2026-05-03T00:00:00Z"),
@@ -254,7 +254,7 @@ func TestMarshal_CommentsHeadingRowFormat(t *testing.T) {
 			e := &Entity{
 				ID: "wikipedia:foo",
 				Kind: "wikipedia-article",
-				Plugin: "wikipedia",
+				Source: []string{"wikipedia/default"},
 				Notes: []Note{c.note},
 			}
 			b, err := Marshal(e, nil)
@@ -379,7 +379,7 @@ func TestMarshal_NotesFieldAndKindRoundTrip(t *testing.T) {
 	original := &Entity{
 		ID:     "wikipedia:foo",
 		Kind:   "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Notes: []Note{
 			{
 				Date:   mustParseTime(t, "2026-05-22T00:00:00Z"),

@@ -23,7 +23,7 @@ func seedAttachmentVault(t *testing.T, manifestPath, fileBody string) string {
 	require.NoError(t, w.Write(&Entity{
 		ID: "boardgame:fixture-2024",
 		Kind: "boardgame",
-		Plugin: "fixture",
+		Source: []string{"fixture/default"},
 		Data: map[string]any{"name": "Fixture"},
 		Attachments: []Attachment{
 			{Name: "thumb.jpg", Kind: "image/jpeg", Path: manifestPath},

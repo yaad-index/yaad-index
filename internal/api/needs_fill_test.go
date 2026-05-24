@@ -79,7 +79,7 @@ func nfFixture(
 		require.NoError(t, w.Write(&vault.Entity{
 			ID: id,
 			Kind: "boardgame",
-			Plugin: "seed",
+			Source: []string{"seed/default"},
 			Data: map[string]any{"id": id},
 			Gaps: []string{"summary"},
 			Provenance: []vault.ProvenanceEntry{
@@ -205,7 +205,7 @@ func TestNeedsFill_AllGapsFilled_Excluded(t *testing.T) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: "boardgame:filled",
 		Kind: "boardgame",
-		Plugin: "seed",
+		Source: []string{"seed/default"},
 		Data: map[string]any{"id": "boardgame:filled"},
 		Gaps: nil, // no unfilled gaps
 	}))
@@ -462,7 +462,7 @@ func nfFixtureWithGaps(
 		Provenance: []store.ProvenanceEntry{{Source: "seed", FetchedAt: &now, OK: true}},
 	}))
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: id, Kind: "boardgame", Plugin: "seed",
+		ID: id, Kind: "boardgame", Source: []string{"seed/default"},
 		Data: map[string]any{"id": id},
 		Gaps: gaps,
 		GapState: gapState,
@@ -747,7 +747,7 @@ func TestNeedsFill_NoFillableEntitiesReturnsExhaustedInOneCall(t *testing.T) {
 			Data: map[string]any{"id": id},
 		}))
 		require.NoError(t, w.Write(&vault.Entity{
-			ID: id, Kind: "boardgame", Plugin: "seed",
+			ID: id, Kind: "boardgame", Source: []string{"seed/default"},
 			Data: map[string]any{"id": id},
 			Gaps: nil,
 		}))
@@ -799,7 +799,7 @@ func TestNeedsFill_FillablePastNonFillableReturnsInOneCall(t *testing.T) {
 			ID: id, Kind: "boardgame", Data: map[string]any{"id": id},
 		}))
 		require.NoError(t, w.Write(&vault.Entity{
-			ID: id, Kind: "boardgame", Plugin: "seed",
+			ID: id, Kind: "boardgame", Source: []string{"seed/default"},
 			Data: map[string]any{"id": id},
 			Gaps: nil,
 		}))
@@ -813,7 +813,7 @@ func TestNeedsFill_FillablePastNonFillableReturnsInOneCall(t *testing.T) {
 			},
 		}))
 		require.NoError(t, w.Write(&vault.Entity{
-			ID: id, Kind: "boardgame", Plugin: "seed",
+			ID: id, Kind: "boardgame", Source: []string{"seed/default"},
 			Data: map[string]any{"id": id},
 			Gaps: []string{"summary"},
 			Provenance: []vault.ProvenanceEntry{
@@ -987,7 +987,7 @@ func TestNeedsFill_KindNotInRegistry_WorkflowInjectedGap_Surfaces(t *testing.T) 
 		Provenance: []store.ProvenanceEntry{{Source: "seed", FetchedAt: &now, OK: true}},
 	}))
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: id, Kind: "gmail", Plugin: "gmail",
+		ID: id, Kind: "gmail", Source: []string{"gmail/default"},
 		Data: map[string]any{"id": id, "subject": "linkedin notification"},
 		Gaps: []string{"hiring_alert_for"},
 		GapState: map[string]vault.GapStateEntry{
@@ -1058,7 +1058,7 @@ func TestNeedsFill_KindNotInRegistry_NoWorkflowShape_StillDropped(t *testing.T) 
 		Provenance: []store.ProvenanceEntry{{Source: "seed", FetchedAt: &now, OK: true}},
 	}))
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: id, Kind: "gmail", Plugin: "gmail",
+		ID: id, Kind: "gmail", Source: []string{"gmail/default"},
 		Data:         map[string]any{"id": id},
 		Gaps:         []string{"summary"}, // gap exists but no shape anywhere
 		Provenance:   []vault.ProvenanceEntry{{Source: "seed", FetchedAt: &now, OK: true}},

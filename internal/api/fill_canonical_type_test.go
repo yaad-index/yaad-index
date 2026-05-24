@@ -90,7 +90,7 @@ func seedSourceForAgentCanonicalTypeFill(t *testing.T, st store.Store, root, id 
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: "source",
-		Plugin: "fixture",
+		Source: []string{"fixture/default"},
 		Data: map[string]any{"name": "Test Source"},
 		Gaps: []string{"subjects"},
 	}))
@@ -545,7 +545,7 @@ func TestAgentFill_LegacyFieldsStillWork(t *testing.T) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: "source",
-		Plugin: "fixture",
+		Source: []string{"fixture/default"},
 		Data: map[string]any{"name": "Test Source"},
 		Gaps: []string{"subjects", "summary", "tags"},
 	}))
@@ -582,7 +582,7 @@ func TestNeedsFill_GapMetadataKindsSurfaces(t *testing.T) {
 	ve := &vault.Entity{
 		ID: "source:gap-metadata-kinds",
 		Kind: "source",
-		Plugin: "fixture",
+		Source: []string{"fixture/default"},
 		Gaps: []string{"subjects"},
 	}
 	entry, ok := buildNeedsFillEntry(ve.ID, ve.Kind, ve, "", reg, false)
@@ -648,7 +648,7 @@ func TestAgentFill_CanonicalType_WorkflowInjectedSpec_CreatesEdge(t *testing.T) 
 		Data: map[string]any{"id": id, "subject": "We're hiring at Acme"},
 	}))
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: id, Kind: "gmail", Plugin: "gmail",
+		ID: id, Kind: "gmail", Source: []string{"gmail/default"},
 		Data: map[string]any{"id": id, "subject": "We're hiring at Acme"},
 		Gaps: []string{"hiring_alert_for"},
 		GapState: map[string]vault.GapStateEntry{
@@ -723,7 +723,7 @@ func TestAgentFill_CanonicalType_WorkflowInjectedSpec_RoutedNotStoredAsUntyped(t
 		Data: map[string]any{"id": id},
 	}))
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: id, Kind: "gmail", Plugin: "gmail",
+		ID: id, Kind: "gmail", Source: []string{"gmail/default"},
 		Data: map[string]any{"id": id},
 		Gaps: []string{"hiring_alert_for"},
 		GapState: map[string]vault.GapStateEntry{

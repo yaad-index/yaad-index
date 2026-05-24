@@ -47,6 +47,19 @@ type pluginEntry struct {
 	// "gmail"). Empty when the plugin doesn't emit source-shape
 	// entities.
 	SourceNamespace string `json:"source_namespace,omitempty"`
+	// Instances enumerates the operator-configured runtime-config
+	// variants for this plugin per ADR-0028 §1. Single-implicit
+	// plugins (no `instances:` block in operator config) surface
+	// `[{name: "default", enabled: true}]`. Multi-instance plugins
+	// surface one entry per configured instance in declaration
+	// order. The `enabled` flag is reserved for Cut 5; until that
+	// lands every instance reports `enabled: true`.
+	Instances []pluginInstanceEntry `json:"instances"`
+}
+
+type pluginInstanceEntry struct {
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
 }
 
 type pluginKindEntry struct {
@@ -73,11 +86,11 @@ type pluginsResponse struct {
 // (url_patterns, commands, entity_kinds, edge_kinds) marshal as
 // `[]` rather than `null` so consumers get a stable shape they
 // don't have to nil-guard.
-func handlePlugins(logger *slog.Logger, registry *plugins.Registry) http.HandlerFunc {
+func handlePlugins(logger *slog.Logger, registry *plugins.Registry, pluginInstances map[string][]string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		resp := pluginsResponse{
 			OK: true,
-			Plugins: enumeratePlugins(registry),
+			Plugins: enumeratePlugins(registry, pluginInstances),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -87,7 +100,7 @@ func handlePlugins(logger *slog.Logger, registry *plugins.Registry) http.Handler
 	}
 }
 
-func enumeratePlugins(registry *plugins.Registry) []pluginEntry {
+func enumeratePlugins(registry *plugins.Registry, pluginInstances map[string][]string) []pluginEntry {
 	regPlugins := registry.Plugins()
 	out := make([]pluginEntry, 0, len(regPlugins))
 	for _, p := range regPlugins {
@@ -104,6 +117,7 @@ func enumeratePlugins(registry *plugins.Registry) []pluginEntry {
 			SourceNamespace: caps.SourceNamespace,
 			EntityKinds: mapEntityKinds(caps.EntityKinds),
 			EdgeKinds: mapEdgeKinds(caps.EdgeKinds),
+			Instances: instanceList(pluginInstances, name),
 		}
 		out = append(out, entry)
 	}
@@ -165,6 +179,25 @@ func mapEdgeKinds(in []plugins.KindSpec) []pluginEdgeEntry {
 			FromKind: k.FromKind,
 			ToKind: k.ToKind,
 		})
+	}
+	return out
+}
+
+// instanceList returns the per-plugin instance list for the
+// /v1/plugins response per ADR-0028 §1. When pluginInstances has
+// no entry for this plugin (e.g. dev binaries without operator
+// config — handler test paths), returns a synthesized
+// `[{name: "default", enabled: true}]` so the response shape is
+// stable across deployment modes. The `enabled` flag is reserved
+// for Cut 5; until that lands every instance reports `true`.
+func instanceList(pluginInstances map[string][]string, name string) []pluginInstanceEntry {
+	names, ok := pluginInstances[name]
+	if !ok || len(names) == 0 {
+		return []pluginInstanceEntry{{Name: "default", Enabled: true}}
+	}
+	out := make([]pluginInstanceEntry, 0, len(names))
+	for _, n := range names {
+		out = append(out, pluginInstanceEntry{Name: n, Enabled: true})
 	}
 	return out
 }

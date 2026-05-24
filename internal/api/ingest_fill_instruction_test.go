@@ -153,7 +153,7 @@ func newCacheHitNeedsFillAPI(t *testing.T, instruction string) (http.Handler, st
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: entityID,
 		Kind: "cached-kind",
-		Plugin: "seed",
+		Source: []string{"seed/default"},
 		Data: map[string]any{"title": "seeded"},
 		Gaps: []string{"summary", "tags"},
 		Provenance: []vault.ProvenanceEntry{

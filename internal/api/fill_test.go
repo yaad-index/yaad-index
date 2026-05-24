@@ -58,7 +58,7 @@ func seedFillEntity(t *testing.T, st store.Store, vaultRoot, id, kind string, ga
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: kind,
-		Plugin: "test-fixture",
+		Source: []string{"test-fixture/default"},
 		Data: map[string]any{"id": id},
 		Gaps: gaps,
 	}))
@@ -359,7 +359,7 @@ func Test_Fill_DurableCallback_AcrossStoreReopen(t *testing.T) {
 		require.NoError(t, w.Write(&vault.Entity{
 			ID: fillTestEntityID,
 			Kind: "boardgame",
-			Plugin: "test-fixture",
+			Source: []string{"test-fixture/default"},
 			Data: map[string]any{"id": fillTestEntityID},
 			Gaps: fillTestGaps,
 		}))

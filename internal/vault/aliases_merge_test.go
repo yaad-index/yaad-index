@@ -19,7 +19,7 @@ func TestMarshal_AliasesMergesPluginEmittedWithSynthesized(t *testing.T) {
 	e := &Entity{
 		ID: "wikipedia:susanna-clarke",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Susanna Clarke"},
 		Aliases: []string{
 			"S. Clarke",
@@ -53,7 +53,7 @@ func TestMarshal_AliasesDedupesSynthesizedAgainstPlugin(t *testing.T) {
 	e := &Entity{
 		ID: "wikipedia:susanna-clarke",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Susanna Clarke"},
 		Aliases: []string{
 			// Plugin re-emits the same title — must dedupe.
@@ -79,7 +79,7 @@ func TestMarshal_AliasesEmptyPluginPreservesSynthesizedOnly(t *testing.T) {
 	e := &Entity{
 		ID: "wikipedia:susanna-clarke",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Susanna Clarke"},
 		// No Aliases — legacy shape.
 	}
@@ -100,7 +100,7 @@ func TestMarshal_AliasesEmptyEverythingDropsField(t *testing.T) {
 	e := &Entity{
 		ID: "wikipedia:foo",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "foo"}, // title==slug → no synth
 	}
 	b, err := Marshal(e, nil)
@@ -119,7 +119,7 @@ func TestMarshal_AliasesPluginOnlyNoSynthesized(t *testing.T) {
 	e := &Entity{
 		ID: "wikipedia:foo",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "foo"}, // title==slug → no synth
 		Aliases: []string{
 			"Foo Bar Baz",
@@ -142,7 +142,7 @@ func TestMarshal_AliasesPluginEmptyStringEntriesIgnored(t *testing.T) {
 	e := &Entity{
 		ID: "wikipedia:susanna-clarke",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Susanna Clarke"},
 		Aliases: []string{"S. Clarke", "", "author: SC"},
 	}

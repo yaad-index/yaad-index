@@ -211,6 +211,18 @@ type ingestTracker struct {
 	// + thin-row materialization. nil bus skips all emissions —
 	// tests + dev deployments without a bus stay unaffected.
 	bus eventbus.Bus
+	// pluginInstances maps a plugin name → the operator's full
+	// instance list for that plugin (each entry's `name` per
+	// ADR-0028 §1). resolveInstanceName picks index 0 (the active
+	// instance for ingest under the pre-Cut-3 single-routing
+	// model); /v1/plugins surfaces the full list. Cuts 3 + 4 will
+	// widen this beyond a static "active instance" once URL
+	// routing + command-fan-out land per-invocation instance
+	// attribution; for Cut 2 every invocation maps to the first
+	// instance. Nil / absent entry falls back to `default` so
+	// test paths that don't supply a registry still produce a
+	// valid slash-form source.
+	pluginInstances map[string][]string
 }
 
 // preUpsertSnapshot fetches the entity's pre-upsert state so the
@@ -396,7 +408,7 @@ func (t *ingestTracker) publishEntityEdgeAdded(ctx context.Context, e *store.Edg
 // constructs a guard from the keys of cfg.CanonicalKinds (the
 // registry map per ADR-0013 §1) plus cfg.CanonicalEdgeTypes; tests
 // typically pass nil unless they exercise the canonical path.
-func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer, reader *vault.Reader, guard *config.CanonicalGuard, globalCacheTTLSeconds int, dispatcher *attachments.Dispatcher, writeLocks *writelocks.Manager, bus eventbus.Bus) *ingestTracker {
+func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer, reader *vault.Reader, guard *config.CanonicalGuard, globalCacheTTLSeconds int, dispatcher *attachments.Dispatcher, writeLocks *writelocks.Manager, bus eventbus.Bus, pluginInstances map[string][]string) *ingestTracker {
 	if (writer == nil) != (reader == nil) {
 		panic("newIngestTracker: vault writer and reader must both be set or both be nil")
 	}
@@ -415,7 +427,23 @@ func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer,
 		attachmentsDispatcher: dispatcher,
 		writeLocks:            writeLocks,
 		bus:                   bus,
+		pluginInstances:       pluginInstances,
 	}
+}
+
+// resolveInstanceName returns the active instance name for the
+// named plugin per ADR-0028 §5. Until Cut 3 wires URL-routing and
+// Cut 4 wires command-fan-out, every plugin invocation maps to the
+// implicit-first-instance — either the operator's explicitly
+// declared `instances[0].name` or the synthesized `default` per
+// ADR-0028 §1. Returns `default` for any plugin the registry didn't
+// surface an instance for (test paths that bypass operator-config
+// resolution; canonical-label dataview synthetic emitter; etc.).
+func (t *ingestTracker) resolveInstanceName(pluginName string) string {
+	if names, ok := t.pluginInstances[pluginName]; ok && len(names) > 0 && names[0] != "" {
+		return names[0]
+	}
+	return "default"
 }
 
 // beginAttempt creates a fresh pending record and kicks off the
@@ -1055,7 +1083,8 @@ func (t *ingestTracker) writeIngestVaultFile(ctx context.Context, e *store.Entit
 			"id", e.ID, "reason", mergeReason)
 	}
 
-	merged := buildVaultEntity(e, plugin, gaps, mergedBody, notations, aliases, newProv, existing, cacheExpires, attachmentManifest, canonicalEdges)
+	source := []string{plugin + "/" + t.resolveInstanceName(plugin)}
+	merged := buildVaultEntity(e, source, gaps, mergedBody, notations, aliases, newProv, existing, cacheExpires, attachmentManifest, canonicalEdges)
 	commitMsg := ingestCommitMessage(e.ID, existing != nil, forceRefetch, ttlExpired)
 	return t.vaultWriter.WriteWithCommit(ctx, merged, commitMsg, "agent:"+plugin)
 }
@@ -1113,7 +1142,7 @@ func mergePluginBodyForVault(existing *vault.Entity, cleanContent string) (strin
 // without operator-config gating; the gate is applied at DB-write
 // time in persistCanonicalEdges so that a later config change can
 // resurface previously-gated edges via reindex.
-func buildVaultEntity(e *store.Entity, plugin string, gaps []string, cleanContent string, notations []string, aliases []string, newProv store.ProvenanceEntry, existing *vault.Entity, cacheExpires *vault.CacheExpires, attachmentManifest []vault.Attachment, canonicalEdges []*store.Edge) *vault.Entity {
+func buildVaultEntity(e *store.Entity, source []string, gaps []string, cleanContent string, notations []string, aliases []string, newProv store.ProvenanceEntry, existing *vault.Entity, cacheExpires *vault.CacheExpires, attachmentManifest []vault.Attachment, canonicalEdges []*store.Edge) *vault.Entity {
 	provenance := []vault.ProvenanceEntry{toVaultProvenance(newProv)}
 	if existing != nil {
 		// existing first, new entry appended.
@@ -1123,10 +1152,38 @@ func buildVaultEntity(e *store.Entity, plugin string, gaps []string, cleanConten
 		provenance = acc
 	}
 
+	// Source-merge per ADR-0028 §5: when this entity already
+	// exists with a different source (e.g. multi-instance overlap
+	// per §3 + §4 once those cuts land), the new source appends
+	// to the existing slice in encounter order with first-listed
+	// winning the refresh-ownership default. Pre-Cut-3 the
+	// implicit-first-instance pattern means re-ingest produces
+	// the same source string each time — the dedup logic below
+	// keeps the slice idempotent under repeat re-ingest.
+	if existing != nil && len(existing.Source) > 0 {
+		merged := make([]string, 0, len(existing.Source)+len(source))
+		seen := make(map[string]struct{}, len(existing.Source)+len(source))
+		for _, s := range existing.Source {
+			if _, dup := seen[s]; dup {
+				continue
+			}
+			seen[s] = struct{}{}
+			merged = append(merged, s)
+		}
+		for _, s := range source {
+			if _, dup := seen[s]; dup {
+				continue
+			}
+			seen[s] = struct{}{}
+			merged = append(merged, s)
+		}
+		source = merged
+	}
+
 	merged := &vault.Entity{
 		ID: e.ID,
 		Kind: e.Kind,
-		Plugin: plugin,
+		Source: source,
 		Data: e.Data,
 		Provenance: provenance,
 		Gaps: gaps,

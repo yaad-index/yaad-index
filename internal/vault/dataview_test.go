@@ -16,9 +16,9 @@ func TestDataview_MarshalUnmarshalRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	want := &Entity{
-		ID:     "company:parloa",
+		ID:     "company:acme-platform",
 		Kind:   "company",
-		Plugin: "user",
+		Source: []string{"user/default"},
 		Dataview: []DataviewParagraph{
 			{Fields: map[string]string{
 				"role":         "Staff Platform Engineer",
@@ -63,7 +63,7 @@ func TestDataview_MarshalUnmarshalRoundTrip(t *testing.T) {
 func TestDataview_EmptyOmitsSection(t *testing.T) {
 	t.Parallel()
 
-	e := &Entity{ID: "company:parloa", Kind: "company", Plugin: "user"}
+	e := &Entity{ID: "company:acme-platform", Kind: "company", Source: []string{"user/default"}}
 	b, err := Marshal(e, nil)
 	require.NoError(t, err)
 	out := string(b)
@@ -83,7 +83,7 @@ func TestDataview_BareKeyValueLineStaysInCleanContent(t *testing.T) {
 
 	body := strings.TrimSpace(`
 ---
-id: company:parloa
+id: company:acme-platform
 kind: company
 plugin: user
 ---
@@ -109,7 +109,7 @@ func TestDataview_MarkerWrappedRoundTrip(t *testing.T) {
 
 	body := strings.TrimSpace(`
 ---
-id: company:parloa
+id: company:acme-platform
 kind: company
 plugin: user
 ---

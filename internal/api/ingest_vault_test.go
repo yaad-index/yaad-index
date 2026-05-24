@@ -72,7 +72,7 @@ func TestIngest_WritesVaultFileBeforeDB_BrassBirmingham(t *testing.T) {
 	v := readVaultFile(t, root, "boardgame", "brass-birmingham")
 	assert.Equal(t, "boardgame:brass-birmingham", v.ID)
 	assert.Equal(t, "boardgame", v.Kind)
-	assert.Equal(t, "fixture", v.Plugin, "fixture path uses 'fixture' as plugin name")
+	assert.Equal(t, []string{"fixture/default"}, v.Source, "fixture path uses 'fixture' as plugin name; default instance synthesized per ADR-0028")
 	assert.Equal(t, "Brass: Birmingham", v.Data["title"])
 	assert.NotEmpty(t, v.Provenance, "provenance accumulated in frontmatter")
 	assert.Empty(t, v.Gaps, "complete state has no gaps")

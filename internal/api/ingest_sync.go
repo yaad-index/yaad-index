@@ -76,11 +76,12 @@ func NewSyncIngester(
 	dispatcher *attachments.Dispatcher,
 	writeLocks *writelocks.Manager,
 	bus eventbus.Bus,
+	pluginInstances map[string][]string,
 ) SyncIngester {
 	return &syncIngester{
 		logger:   logger,
 		registry: registry,
-		tracker:  newIngestTracker(logger, st, vaultWriter, vaultReader, canonicalGuard, cacheTTLSeconds, dispatcher, writeLocks, bus),
+		tracker:  newIngestTracker(logger, st, vaultWriter, vaultReader, canonicalGuard, cacheTTLSeconds, dispatcher, writeLocks, bus, pluginInstances),
 	}
 }
 

@@ -202,7 +202,7 @@ func TestAddNote_ExistingVaultFile_NoAutoMaterializePath(t *testing.T) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: "boardgame",
-		Plugin: canonical.CanonicalLabelPlugin,
+		Source: []string{canonical.CanonicalLabelPlugin + "/default"},
 		Data: map[string]any{"name": "Already Materialized", "rating": int64(7)},
 	}))
 

@@ -164,7 +164,7 @@ func findExpiredCacheEntries(logger *slog.Logger, vaultPath, pluginFilter, kindF
 			logger.Warn("vault read failed", "path", path, "err", err)
 			return nil
 		}
-		if pluginFilter != "" && ent.Plugin != pluginFilter {
+		if pluginFilter != "" && ent.PluginName() != pluginFilter {
 			return nil
 		}
 		if kindFilter != "" && ent.Kind != kindFilter {
@@ -176,7 +176,7 @@ func findExpiredCacheEntries(logger *slog.Logger, vaultPath, pluginFilter, kindF
 		row := expiredEntry{
 			ID: ent.ID,
 			Kind: ent.Kind,
-			Plugin: ent.Plugin,
+			Plugin: ent.PluginName(),
 		}
 		if ent.CacheExpires != nil {
 			row.Never = ent.CacheExpires.Never
@@ -420,7 +420,7 @@ func findOlderThanCacheEntries(logger *slog.Logger, vaultPath, pluginFilter, kin
 			logger.Warn("vault read failed", "path", path, "err", err)
 			return nil
 		}
-		if pluginFilter != "" && ent.Plugin != pluginFilter {
+		if pluginFilter != "" && ent.PluginName() != pluginFilter {
 			return nil
 		}
 		if kindFilter != "" && ent.Kind != kindFilter {
@@ -433,7 +433,7 @@ func findOlderThanCacheEntries(logger *slog.Logger, vaultPath, pluginFilter, kin
 		row := expiredEntry{
 			ID: ent.ID,
 			Kind: ent.Kind,
-			Plugin: ent.Plugin,
+			Plugin: ent.PluginName(),
 		}
 		if ent.CacheExpires != nil {
 			row.Never = ent.CacheExpires.Never

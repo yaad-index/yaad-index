@@ -593,7 +593,7 @@ func Test_Entities_AttachmentManifestSurfacesOnWire(t *testing.T) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: "boardgame",
-		Plugin: "bgg",
+		Source: []string{"bgg/default"},
 		Data: map[string]any{"name": "Has Thumb"},
 		Attachments: []vault.Attachment{
 			{
@@ -638,7 +638,7 @@ func Test_Entities_NoAttachments_OmitsKeyOnWire(t *testing.T) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: "boardgame",
-		Plugin: "bgg",
+		Source: []string{"bgg/default"},
 		Data: map[string]any{"name": "Plain"},
 	}))
 

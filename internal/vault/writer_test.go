@@ -74,7 +74,7 @@ func TestWriter_WriteCanonicalLabelLandsUnderCT(t *testing.T) {
 	e := &Entity{
 		ID: "boardgame:brass-birmingham",
 		Kind: "boardgame",
-		Plugin: "operator-fill",
+		Source: []string{"operator-fill/default"},
 		Data: map[string]any{"rating": 8},
 		Gaps: []string{"want", "played"},
 	}
@@ -112,7 +112,7 @@ func TestWriter_WriteRoundTripsViaReader(t *testing.T) {
 
 	assert.Equal(t, want.ID, got.ID)
 	assert.Equal(t, want.Kind, got.Kind)
-	assert.Equal(t, want.Plugin, got.Plugin)
+	assert.Equal(t, want.Source, got.Source)
 	assert.Equal(t, want.Summary, got.Summary)
 	assert.Equal(t, want.Tags, got.Tags)
 	assert.Equal(t, want.Edges, got.Edges)
@@ -153,7 +153,7 @@ func TestWriter_AtomicWriteRejectsInvalidEntityIDPriorToWrite(t *testing.T) {
 	t.Parallel()
 
 	w, _, root := newTestVault(t)
-	bad := &Entity{ID: "no-colon", Kind: "wikipedia-article", Plugin: "wikipedia"}
+	bad := &Entity{ID: "no-colon", Kind: "wikipedia-article", Source: []string{"wikipedia/default"}}
 
 	err := w.Write(bad)
 	require.Error(t, err)
@@ -213,7 +213,7 @@ func TestWriter_RejectsSlugWithPathSeparators(t *testing.T) {
 	t.Parallel()
 
 	w, _, _ := newTestVault(t)
-	bad := &Entity{ID: "wikipedia:foo/bar", Kind: "wikipedia-article", Plugin: "wikipedia"}
+	bad := &Entity{ID: "wikipedia:foo/bar", Kind: "wikipedia-article", Source: []string{"wikipedia/default"}}
 	err := w.Write(bad)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidEntityID)
@@ -236,7 +236,7 @@ func TestWriter_ConcurrentWritesToDifferentEntitiesAreSafe(t *testing.T) {
 			e := &Entity{
 				ID: "wikipedia:concurrent-" + string(rune('a'+i)),
 				Kind: "wikipedia-article",
-				Plugin: "wikipedia",
+				Source: []string{"wikipedia/default"},
 			}
 			assert.NoError(t, w.Write(e))
 		}()

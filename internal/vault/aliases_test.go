@@ -27,7 +27,7 @@ func TestSynthesizeAliases_SourceShape(t *testing.T) {
 			entity: &Entity{
 				ID: "wikipedia:martin-wallace",
 				Kind: "wikipedia-article",
-				Plugin: "wikipedia",
+				Source: []string{"wikipedia/default"},
 				Data: map[string]any{"title": "Martin Wallace (game designer)"},
 			},
 			kinds: []string{"person", "city"},
@@ -38,7 +38,7 @@ func TestSynthesizeAliases_SourceShape(t *testing.T) {
 			entity: &Entity{
 				ID: "wikipedia:foo",
 				Kind: "wikipedia-article",
-				Plugin: "wikipedia",
+				Source: []string{"wikipedia/default"},
 				Data: map[string]any{"title": "foo"},
 			},
 			kinds: []string{"person"},
@@ -49,7 +49,7 @@ func TestSynthesizeAliases_SourceShape(t *testing.T) {
 			entity: &Entity{
 				ID: "wikipedia:foo",
 				Kind: "wikipedia-article",
-				Plugin: "wikipedia",
+				Source: []string{"wikipedia/default"},
 				Data: map[string]any{"lang": "en"},
 			},
 			kinds: []string{"person"},
@@ -60,7 +60,7 @@ func TestSynthesizeAliases_SourceShape(t *testing.T) {
 			entity: &Entity{
 				ID: "wikipedia:foo",
 				Kind: "wikipedia-article",
-				Plugin: "wikipedia",
+				Source: []string{"wikipedia/default"},
 				Data: map[string]any{"title": " "},
 			},
 			kinds: []string{"person"},
@@ -71,7 +71,7 @@ func TestSynthesizeAliases_SourceShape(t *testing.T) {
 			entity: &Entity{
 				ID: "wikipedia:foo",
 				Kind: "wikipedia-article",
-				Plugin: "wikipedia",
+				Source: []string{"wikipedia/default"},
 				Data: map[string]any{"title": 42},
 			},
 			kinds: []string{"person"},
@@ -82,7 +82,7 @@ func TestSynthesizeAliases_SourceShape(t *testing.T) {
 			entity: &Entity{
 				ID: "wikipedia:foo",
 				Kind: "wikipedia-article",
-				Plugin: "wikipedia",
+				Source: []string{"wikipedia/default"},
 				Data: map[string]any{"title": "Foo Bar"},
 			},
 			kinds: nil,
@@ -119,7 +119,7 @@ func TestSynthesizeAliases_CanonicalShape(t *testing.T) {
 			entity: &Entity{
 				ID: "person:martin-wallace",
 				Kind: "person",
-				Plugin: "wikipedia",
+				Source: []string{"wikipedia/default"},
 				Data: map[string]any{"name": "Martin Wallace"},
 			},
 			expected: []string{"Martin Wallace"},
@@ -129,7 +129,7 @@ func TestSynthesizeAliases_CanonicalShape(t *testing.T) {
 			entity: &Entity{
 				ID: "city:tehran",
 				Kind: "city",
-				Plugin: "wikipedia",
+				Source: []string{"wikipedia/default"},
 				Data: map[string]any{"name": "tehran"},
 			},
 			expected: nil,
@@ -139,7 +139,7 @@ func TestSynthesizeAliases_CanonicalShape(t *testing.T) {
 			entity: &Entity{
 				ID: "person:martin-wallace",
 				Kind: "person",
-				Plugin: "wikipedia",
+				Source: []string{"wikipedia/default"},
 				Data: map[string]any{"title": "Martin Wallace"},
 			},
 			expected: nil,
@@ -149,7 +149,7 @@ func TestSynthesizeAliases_CanonicalShape(t *testing.T) {
 			entity: &Entity{
 				ID: "person:foo",
 				Kind: "person",
-				Plugin: "wikipedia",
+				Source: []string{"wikipedia/default"},
 				Data: map[string]any{"name": ""},
 			},
 			expected: nil,
@@ -176,7 +176,7 @@ func TestMarshal_AliasesEmittedInFrontmatter(t *testing.T) {
 		e := &Entity{
 			ID: "wikipedia:martin-wallace",
 			Kind: "wikipedia-article",
-			Plugin: "wikipedia",
+			Source: []string{"wikipedia/default"},
 			Data: map[string]any{"title": "Martin Wallace (designer)"},
 		}
 		b, err := Marshal(e, []string{"person"})
@@ -190,7 +190,7 @@ func TestMarshal_AliasesEmittedInFrontmatter(t *testing.T) {
 		e := &Entity{
 			ID: "person:martin-wallace",
 			Kind: "person",
-			Plugin: "wikipedia",
+			Source: []string{"wikipedia/default"},
 			Data: map[string]any{"name": "Martin Wallace"},
 		}
 		b, err := Marshal(e, []string{"person", "city"})
@@ -204,7 +204,7 @@ func TestMarshal_AliasesEmittedInFrontmatter(t *testing.T) {
 		e := &Entity{
 			ID: "wikipedia:foo",
 			Kind: "wikipedia-article",
-			Plugin: "wikipedia",
+			Source: []string{"wikipedia/default"},
 			Data: map[string]any{"title": "foo"},
 		}
 		b, err := Marshal(e, nil)
@@ -217,7 +217,7 @@ func TestMarshal_AliasesEmittedInFrontmatter(t *testing.T) {
 		e := &Entity{
 			ID: "wikipedia:foo",
 			Kind: "wikipedia-article",
-			Plugin: "wikipedia",
+			Source: []string{"wikipedia/default"},
 		}
 		b, err := Marshal(e, nil)
 		require.NoError(t, err)
@@ -235,7 +235,7 @@ func TestMarshal_AliasesRoundTrip(t *testing.T) {
 	original := &Entity{
 		ID: "wikipedia:martin-wallace",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{
 			"title": "Martin Wallace (designer)",
 			"lang": "en",
@@ -266,7 +266,7 @@ func TestWriter_WithCanonicalKinds(t *testing.T) {
 	require.NoError(t, w.Write(&Entity{
 		ID: "person:martin-wallace",
 		Kind: "person",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"name": "Martin Wallace"},
 	}))
 

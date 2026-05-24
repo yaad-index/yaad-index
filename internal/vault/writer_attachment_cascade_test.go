@@ -22,7 +22,7 @@ func seedActiveEntityWithAttachment(t *testing.T, kind, id, name, body string) (
 	require.NoError(t, w.Write(&Entity{
 		ID: id,
 		Kind: kind,
-		Plugin: "fixture",
+		Source: []string{"fixture/default"},
 		Data: map[string]any{"name": "Cascade-Fixture"},
 		Attachments: []Attachment{
 			{Name: name, Kind: "image/jpeg", Path: filepath.Join("attachments", name)},
@@ -68,7 +68,7 @@ func TestArchiveWithCommit_NoSubdir_StillSucceeds(t *testing.T) {
 	require.NoError(t, w.Write(&Entity{
 		ID: id,
 		Kind: "boardgame",
-		Plugin: "fixture",
+		Source: []string{"fixture/default"},
 		Data: map[string]any{"name": "No-Attach"},
 	}))
 
@@ -124,7 +124,7 @@ func TestDestroyArchivedWithCommit_NoSubdir_StillRemovesMD(t *testing.T) {
 	require.NoError(t, w.Write(&Entity{
 		ID: id,
 		Kind: "boardgame",
-		Plugin: "fixture",
+		Source: []string{"fixture/default"},
 		Data: map[string]any{"name": "Plain"},
 	}))
 	require.NoError(t, w.ArchiveWithCommit(context.Background(), "boardgame", id, "archive: "+id, ""))

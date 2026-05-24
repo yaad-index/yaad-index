@@ -174,7 +174,7 @@ func TestPluginDispatch_Timeout(t *testing.T) {
 	r := New(Options{PluginDispatcher: d})
 	wf := wfWithActions("wf",
 		parser.Action{PluginDispatch: &parser.PluginDispatchAction{
-			Plugin:         "yaad-bgg",
+			Plugin:  "yaad-bgg",
 			Command:        "fetch",
 			TimeoutSeconds: 1, // ample for the 200ms delay
 		}},
@@ -201,7 +201,7 @@ func TestPluginDispatch_TimeoutExceeded(t *testing.T) {
 	r := New(Options{PluginDispatcher: d})
 	wf := wfWithActions("wf",
 		parser.Action{PluginDispatch: &parser.PluginDispatchAction{
-			Plugin:         "yaad-bgg",
+			Plugin:  "yaad-bgg",
 			Command:        "fetch",
 			TimeoutSeconds: 0, // → DefaultPluginDispatchTimeout (30s) — too long for a unit test
 		}},

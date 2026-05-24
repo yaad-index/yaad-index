@@ -270,7 +270,11 @@ func handleUserContentCreate(
 		ve := &vault.Entity{
 			ID: id,
 			Kind: userContentKind,
-			Plugin: "user",
+			// Per ADR-0028 §5 slash-form: user-generated content
+			// (ADR-0012) is sourced from the synthetic `user`
+			// plugin under the implicit `default` instance — there
+			// is no operator-config instance for the UGC emitter.
+			Source: []string{"user/default"},
 			Data: entityData,
 			Tags: append([]string(nil), req.Tags...),
 			CleanContent: req.Body,

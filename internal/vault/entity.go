@@ -25,7 +25,10 @@
 // watcher).
 package vault
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Entity is the in-memory shape of a vault file. Mirrors store.Entity
 // today but extends it with the v1 frontmatter fields (Plugin, Summary,
@@ -38,7 +41,28 @@ import "time"
 type Entity struct {
 	ID string // e.g. "wikipedia:martin-wallace"
 	Kind string // e.g. "wikipedia-article"
-	Plugin string // emitting plugin name, e.g. "wikipedia"
+
+	// Source is the slash-form attribution per ADR-0028 §5:
+	// `<plugin>/<instance>` for each source that emitted this
+	// entity. Single-instance plugins emit one entry
+	// (`["wikipedia/default"]`, `["github/personal"]`); when the
+	// same entity is ingested by multiple instances (e.g.
+	// overlapping `repos:` globs on yaad-github), the slice carries
+	// every source. First-listed wins for refresh ownership.
+	//
+	// On-disk YAML shape (handled in format.go):
+	//   - Single source ⇒ scalar: `source: wikipedia/default`
+	//   - Multi-source ⇒ sequence: `source: [github/personal, github/work]`
+	//
+	// Back-compat read: pre-ADR-0028 vault files carrying the
+	// legacy `plugin: <name>` scalar are accepted by Unmarshal
+	// and decode as `["<name>/default"]`. Reindex re-emits in
+	// the new `source:` shape.
+	//
+	// Marshal requires len(Source) >= 1; an Entity with no
+	// source is malformed.
+	Source []string
+
 	Data map[string]any // kind-specific fields (title, lang, etc.)
 	Provenance []ProvenanceEntry
 	Summary string // agent-filled gap; empty until fill
@@ -339,4 +363,27 @@ type ProvenanceEntry struct {
 type FetchAttachmentRef struct {
 	Role string `yaml:"role"`
 	URI string `yaml:"uri"`
+}
+
+// PluginName returns the bare plugin name from the first entry in
+// Source by splitting on "/". For an Entity with no Source (malformed
+// pre-Marshal state) returns the empty string. Callers that need the
+// instance name too should split Source[0] themselves.
+//
+// Existed before ADR-0028 as a direct field read (e.Plugin); the
+// helper preserves the read-the-plugin-name-only ergonomics across
+// the field rename. Multi-source entities still answer with the
+// first-listed source's plugin name (consistent with the refresh-
+// ownership default per ADR-0028 §5).
+func (e *Entity) PluginName() string {
+	if len(e.Source) == 0 {
+		return ""
+	}
+	if i := strings.Index(e.Source[0], "/"); i >= 0 {
+		return e.Source[0][:i]
+	}
+	// Source entry without slash is malformed by the post-ADR-0028
+	// contract; return the whole string as a best-effort so legacy
+	// callers get something to display while migration completes.
+	return e.Source[0]
 }

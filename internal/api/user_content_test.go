@@ -28,7 +28,7 @@ func seedUserContentEntity(t *testing.T, st store.Store, root, id, body string, 
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: userContentKind,
-		Plugin: "user",
+		Source: []string{"user/default"},
 		Data: map[string]any{"id": id, "title": "Test UGC"},
 		Tags: tags,
 		CleanContent: body,

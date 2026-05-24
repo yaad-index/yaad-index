@@ -80,11 +80,16 @@ func TestE2E_WikipediaHappyPath(t *testing.T) {
 	var entity struct {
 		ID     string         `json:"id"`
 		Kind   string         `json:"kind"`
-		Plugin string         `json:"plugin"`
+		Source []string       `json:"source"`
 		Data   map[string]any `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(body, &entity))
 	assert.Equal(t, ingestResp.Entity.ID, entity.ID)
 	assert.Equal(t, "wikipedia-article", entity.Kind)
-	assert.Equal(t, "yaad-wikipedia", entity.Plugin)
+	// Per ADR-0028 §5, the wire shape is now the slash-form
+	// source array. Single-implicit-instance plugins like
+	// yaad-wikipedia surface `<plugin>/default` (Cut 1's Load
+	// synthesizes the default instance when no `instances:`
+	// block is declared in operator config).
+	assert.Equal(t, []string{"yaad-wikipedia/default"}, entity.Source)
 }

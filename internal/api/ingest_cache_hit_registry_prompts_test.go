@@ -105,7 +105,7 @@ func newCacheHitNeedsFillWithRegistry(t *testing.T, reg map[string]config.Canoni
 	require.NoError(t, w.Write(&vault.Entity{
 		ID:     entityID,
 		Kind:   "cached-kind",
-		Plugin: "seed",
+		Source: []string{"seed/default"},
 		Data:   map[string]any{"title": "seeded"},
 		Gaps:   []string{"summary", "tags"},
 		Provenance: []vault.ProvenanceEntry{
