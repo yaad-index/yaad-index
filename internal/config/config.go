@@ -40,6 +40,20 @@ var kindOrFieldName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // URL-slug shape.
 var canonicalKindName = regexp.MustCompile(`^[a-z][a-z0-9_]*(-[a-z0-9_]+)*$`)
 
+// instanceName is the shape rule for plugin-instance names per
+// ADR-0028 §1: lowercase alphanumerics, hyphens, and underscores.
+// No leading/trailing punctuation, no consecutive non-alphanum
+// runs, no slashes (the slash is reserved for the
+// `<plugin>/<instance>` invocation + `source:` field syntax).
+var instanceName = regexp.MustCompile(`^[a-z0-9]+([_-][a-z0-9]+)*$`)
+
+// defaultInstanceName is the name synthesized for plugins whose
+// operator config omits the `instances:` block per ADR-0028 §1.
+// The same name is also valid as an explicit operator-written
+// instance name; the synthesis path produces a config equivalent
+// to writing `instances: [{name: default}]` explicitly.
+const defaultInstanceName = "default"
+
 // DefaultPath is the location yaad-index reads its config from when
 // the operator hasn't set --config / YAAD_INDEX_CONFIG.
 const DefaultPath = "~/.config/yaad-index/config.yaml"
@@ -433,6 +447,41 @@ type PluginEntry struct {
 	// values; empty means "use the daemon default."
 	FetchTimeout string         `yaml:"fetch_timeout,omitempty"`
 	Config       map[string]any `yaml:"config,omitempty"`
+
+	// Instances declares the per-plugin runtime-config variants per
+	// ADR-0028. Each entry is one independent runtime context
+	// (e.g. two Gmail accounts, two GitHub identity contexts) sharing
+	// the same plugin binary + capability set. Absent / nil → Load
+	// synthesizes a single implicit instance named `default` so the
+	// rest of the daemon can assume `len(Instances) >= 1` after a
+	// successful Load. Empty `instances: []` is a config error.
+	//
+	// Instance-level `env:` and `config:` values are runtime
+	// parameters passed to the subprocess at spawn time; the plugin's
+	// `--init` capabilities are plugin-scoped per ADR-0028 §2 and
+	// never re-probed per instance.
+	//
+	// Cross-validation against the plugin's `supports_instances`
+	// capability (ADR-0028 §9) lives downstream of config.Load —
+	// the daemon performs the fail-fast check after the plugin's
+	// `--init` has reported capabilities, since the flag is read
+	// from the plugin binary, not the operator config.
+	Instances []InstanceEntry `yaml:"instances,omitempty"`
+}
+
+// InstanceEntry is one runtime-config variant of a plugin per
+// ADR-0028 §1. Each instance has a required Name (operator-chosen,
+// unique within the plugin, matching `[a-z0-9_-]+`) plus optional
+// per-instance `env:` and `config:` blocks.
+//
+// The Name is used as the second half of the slash-form
+// `<plugin>/<instance>` invocation syntax (ADR-0028 §4) and entity
+// `source:` field shape (ADR-0028 §5). Cuts 2-5 wire those uses;
+// Cut 1 lands the schema + validation only.
+type InstanceEntry struct {
+	Name   string            `yaml:"name"`
+	Env    map[string]string `yaml:"env,omitempty"`
+	Config map[string]any    `yaml:"config,omitempty"`
 }
 
 // FetchTimeoutDuration returns the parsed FetchTimeout, or 0 when the
@@ -472,6 +521,30 @@ func Load(path string) (*Config, error) {
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config %s: %w", path, err)
 	}
+	// Synthesize the implicit `default` instance for any plugin that
+	// omitted the `instances:` block (ADR-0028 §1). Downstream code
+	// can then assume `len(entry.Instances) >= 1` without per-call-
+	// site defaulting. Runs after Validate so structural errors
+	// surface against the operator's actual input shape, not a
+	// post-synthesis shape they didn't write.
+	//
+	// The synthesized default instance inherits the plugin-level
+	// `config:` block so the back-compat single-instance path keeps
+	// the operator's existing config visible per-instance. This
+	// matters for the per-instance JSON-Schema validation gate in
+	// cmd/yaad-index — without the copy, a legacy operator config
+	// (`config: {...}` with no `instances:`) would skip per-instance
+	// schema checks entirely once the daemon migrates to the
+	// per-instance validation contract. Explicit `instances:` entries
+	// already own their own `config:` blocks and are untouched.
+	for i := range c.Plugins {
+		if c.Plugins[i].Instances == nil {
+			c.Plugins[i].Instances = []InstanceEntry{{
+				Name:   defaultInstanceName,
+				Config: c.Plugins[i].Config,
+			}}
+		}
+	}
 	return &c, nil
 }
 
@@ -505,6 +578,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("plugin %q: path %s is not executable", entry.Name, entry.Path)
 		}
 		if err := validatePluginConfig(entry.Name, entry.Config); err != nil {
+			return err
+		}
+		if err := validateInstances(entry.Name, entry.Instances); err != nil {
 			return err
 		}
 		if entry.FetchTimeout != "" {
@@ -683,3 +759,40 @@ func validateCanonicalKindConfig(path string, cfg CanonicalKindConfig) error {
 // from a YAML parse / validate error so callers can distinguish
 // "operator hasn't created the file yet" from "config is broken."
 var ErrFileMissing = errors.New("config file does not exist")
+
+// validateInstances enforces the per-plugin `instances:` structural
+// rules from ADR-0028 §1: empty array is rejected; each name must
+// match instanceName; names must be unique within the plugin. Nil
+// slice (no `instances:` block in YAML) is OK — Load synthesizes
+// the implicit `default` instance after Validate returns.
+//
+// The cross-validation gate against the plugin's `supports_instances`
+// capability (§9) is NOT performed here — that flag is read from the
+// plugin binary's `--init` output, which isn't available until the
+// daemon registers the plugin at startup. The gate runs in
+// cmd/yaad-index after capability bring-up.
+func validateInstances(pluginName string, instances []InstanceEntry) error {
+	if instances == nil {
+		return nil
+	}
+	if len(instances) == 0 {
+		return fmt.Errorf("plugin %q: instances: must not be empty (omit the block to use the implicit default instance)",
+			pluginName)
+	}
+	seen := make(map[string]int, len(instances))
+	for i, inst := range instances {
+		if inst.Name == "" {
+			return fmt.Errorf("plugin %q: instances[%d] has empty name", pluginName, i)
+		}
+		if !instanceName.MatchString(inst.Name) {
+			return fmt.Errorf("plugin %q: instances[%d].name %q is invalid (must match %s)",
+				pluginName, i, inst.Name, instanceName.String())
+		}
+		if prev, dup := seen[inst.Name]; dup {
+			return fmt.Errorf("plugin %q: instances[%d].name %q duplicates instances[%d].name",
+				pluginName, i, inst.Name, prev)
+		}
+		seen[inst.Name] = i
+	}
+	return nil
+}

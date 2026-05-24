@@ -30,6 +30,7 @@ const (
 	fakeModeBadCtor = "bad-ctor" // --version → "0.1.0"; --init → caps with malformed url_patterns regex
 	fakeModeHashOld = "hash-old" // --version → "v0.1.0+oldhash"; --init → caps with version=v0.1.0+oldhash (yaad-index)
 	fakeModeHashNewSameTag = "hash-new-same-tag" // --version → "v0.1.0+newhash"; --init → caps with version=v0.1.0+newhash — same tag, different build hash
+	fakeModeMultiInstance = "multi-instance" // --version → "0.1.0"; --init → caps with supports_instances=true + a config_schema requiring data.account (string) — used to exercise the ADR-0028 §1/§2 per-instance schema-validation gate
 )
 
 func TestMain(m *testing.M) {
@@ -45,7 +46,7 @@ func runFakePluginMain(mode string) {
 	switch {
 	case len(args) >= 2 && args[1] == "--version":
 		switch mode {
-		case fakeModeOKv1, fakeModeBadCtor:
+		case fakeModeOKv1, fakeModeBadCtor, fakeModeMultiInstance:
 			_, _ = fmt.Fprintln(os.Stdout, "0.1.0")
 			os.Exit(0)
 		case fakeModeOKv2:
@@ -100,6 +101,23 @@ func runFakePluginMain(mode string) {
 				"version": version,
 				"url_patterns": []string{`^https?://example\.test/.*`},
 				"entity_kinds": []any{},
+			}
+			_ = json.NewEncoder(os.Stdout).Encode(caps)
+			os.Exit(0)
+		case fakeModeMultiInstance:
+			caps := map[string]any{
+				"name": "fake",
+				"version": "0.1.0",
+				"url_patterns": []string{`^https?://example\.test/.*`},
+				"entity_kinds": []any{},
+				"supports_instances": true,
+				"config_schema": map[string]any{
+					"type": "object",
+					"required": []string{"account"},
+					"properties": map[string]any{
+						"account": map[string]any{"type": "string"},
+					},
+				},
 			}
 			_ = json.NewEncoder(os.Stdout).Encode(caps)
 			os.Exit(0)
@@ -449,4 +467,105 @@ func TestBuildPluginRegistry_SummaryAcrossMixedPlugins(t *testing.T) {
 	assert.Equal(t, 1, summary.Misses, "fresh plugin → first-start miss")
 	assert.Equal(t, 0, summary.Fails)
 	assert.Equal(t, 2, summary.NumReg)
+}
+
+// --- ADR-0028 Cut 1: supports_instances + per-instance schema validation ---
+
+// TestBuildPluginRegistry_PerInstanceSchemaValidation_RejectsInvalidInstance
+// pins ADR-0028 §1 + §2: every entry.Instances[i].Config gets validated
+// against the plugin's config_schema. A plugin that declares
+// supports_instances=true with a `required: [account]` schema must
+// reject a 2-instance operator config in which one instance's config
+// is missing the required field — with the offending instance named
+// in the error so the operator can correlate.
+func TestBuildPluginRegistry_PerInstanceSchemaValidation_RejectsInvalidInstance(t *testing.T) {
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	t.Setenv(fakePluginEnv, fakeModeMultiInstance)
+
+	logger, _ := captureLogger(t)
+	st := newSeededStore(t)
+	cfg := &config.Config{
+		Plugins: []config.PluginEntry{{
+			Name: "fake",
+			Path: exe,
+			Instances: []config.InstanceEntry{
+				{Name: "good", Config: map[string]any{"account": "ops@example.com"}},
+				{Name: "bad", Config: map[string]any{}}, // missing required `account`
+			},
+		}},
+	}
+
+	_, err = buildPluginRegistry(logger, st, cfg)
+	require.Error(t, err, "invalid per-instance config must fail registry build")
+	// The error MUST name the offending instance so the operator can
+	// jump straight to the bad config block. Without the instance
+	// name, the operator only sees "plugin fake: config_schema
+	// violation" and has to grep through every instance to find the
+	// one that's wrong.
+	assert.Contains(t, err.Error(), `"bad"`,
+		"error must name the failing instance; got: %v", err)
+	assert.Contains(t, err.Error(), "fake",
+		"error must name the plugin; got: %v", err)
+}
+
+// TestBuildPluginRegistry_PerInstanceSchemaValidation_AcceptsAllValid pairs
+// with the rejection test: when every per-instance config satisfies the
+// plugin's schema, the registry builds without error. Guards against
+// false positives in the validation gate.
+func TestBuildPluginRegistry_PerInstanceSchemaValidation_AcceptsAllValid(t *testing.T) {
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	t.Setenv(fakePluginEnv, fakeModeMultiInstance)
+
+	logger, _ := captureLogger(t)
+	st := newSeededStore(t)
+	cfg := &config.Config{
+		Plugins: []config.PluginEntry{{
+			Name: "fake",
+			Path: exe,
+			Instances: []config.InstanceEntry{
+				{Name: "personal", Config: map[string]any{"account": "ops@example.com"}},
+				{Name: "work", Config: map[string]any{"account": "work@example.com"}},
+			},
+		}},
+	}
+
+	_, err = buildPluginRegistry(logger, st, cfg)
+	require.NoError(t, err, "all-valid per-instance configs must pass")
+}
+
+// TestBuildPluginRegistry_SupportsInstancesFalse_RejectsMultiInstance pins
+// the ADR-0028 §9 cross-validation gate at the daemon-startup layer:
+// the existing four shipped plugins declare no supports_instances
+// (Go zero-value = false), so an operator config with 2+ instances
+// must fail-fast with a message that names the plugin + instance
+// count and points at the "reduce or remove the block" fix.
+//
+// Uses fakeModeOKv1, which doesn't declare supports_instances on its
+// --init output → decodes as false, matching the back-compat default.
+func TestBuildPluginRegistry_SupportsInstancesFalse_RejectsMultiInstance(t *testing.T) {
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	t.Setenv(fakePluginEnv, fakeModeOKv1)
+
+	logger, _ := captureLogger(t)
+	st := newSeededStore(t)
+	cfg := &config.Config{
+		Plugins: []config.PluginEntry{{
+			Name: "fake",
+			Path: exe,
+			Instances: []config.InstanceEntry{
+				{Name: "a"},
+				{Name: "b"},
+			},
+		}},
+	}
+
+	_, err = buildPluginRegistry(logger, st, cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "supports_instances=false",
+		"error must name the failing capability flag; got: %v", err)
+	assert.Contains(t, err.Error(), "fake",
+		"error must name the plugin; got: %v", err)
 }

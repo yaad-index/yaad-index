@@ -295,6 +295,38 @@ type Capabilities struct {
 	// `date_fields` field on the wire and decode as nil,
 	// preserving the baseline-only behavior.
 	DateFields map[string]string `json:"date_fields,omitempty"`
+
+	// SupportsInstances declares whether this plugin's data shape
+	// admits multiple independent runtime configurations per
+	// ADR-0028 §9. Default false — explicit opt-in. A plugin
+	// declares true when its scope is genuinely per-instance:
+	// per-account auth (yaad-gmail), per-PAT + per-org repo coverage
+	// (yaad-github), or any future plugin whose `env:` / `config:`
+	// values legitimately split into N independent contexts. A
+	// plugin declares false (or omits the field) when its data
+	// shape is shared across all callers: public APIs without per-
+	// caller scope (yaad-wikipedia), single-credential reads
+	// (yaad-bgg).
+	//
+	// Daemon enforcement at config load (cross-validated against
+	// the operator's `plugins[*].instances[]` list):
+	//   - false + 0 or 1 instance entries → OK. Zero entries
+	//     synthesizes the implicit `default` instance; one
+	//     explicit entry keeps the operator's chosen name (per
+	//     ADR-0028 §1 + §9: the flag constrains cardinality, not
+	//     naming).
+	//   - false + 2+ instance entries → fail-fast at startup with
+	//     a clear message. The plugin's data shape doesn't support
+	//     independent runtime contexts and the operator's intent
+	//     would silently break.
+	//   - true + any instance count → validated by the rest of
+	//     ADR-0028's instance rules.
+	//
+	// Plugins predating ADR-0028 emit no `supports_instances` field
+	// on the wire and decode as false (Go zero value), preserving
+	// the single-instance posture across the existing four shipped
+	// plugins.
+	SupportsInstances bool `json:"supports_instances,omitempty"`
 }
 
 // CommandSpec is one entry in a plugin's Capabilities.Commands list
