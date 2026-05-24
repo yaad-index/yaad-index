@@ -77,11 +77,13 @@ func NewSyncIngester(
 	writeLocks *writelocks.Manager,
 	bus eventbus.Bus,
 	pluginInstances map[string][]string,
+	pluginInstanceConfigs map[string][]config.InstanceEntry,
 ) SyncIngester {
 	return &syncIngester{
-		logger:   logger,
-		registry: registry,
-		tracker:  newIngestTracker(logger, st, vaultWriter, vaultReader, canonicalGuard, cacheTTLSeconds, dispatcher, writeLocks, bus, pluginInstances),
+		logger:                logger,
+		registry:              registry,
+		tracker:               newIngestTracker(logger, st, vaultWriter, vaultReader, canonicalGuard, cacheTTLSeconds, dispatcher, writeLocks, bus, pluginInstances),
+		pluginInstanceConfigs: pluginInstanceConfigs,
 	}
 }
 
@@ -89,6 +91,15 @@ type syncIngester struct {
 	logger   *slog.Logger
 	registry *plugins.Registry
 	tracker  *ingestTracker
+	// pluginInstanceConfigs carries the per-plugin instance
+	// configs so the workflow-trigger URL-shape ingest path can
+	// run the same ADR-0028 §3 pickInstance routing as the
+	// /v1/ingest HTTP handler. Without this, multi-instance
+	// plugins ingested via workflow trigger would silently fall
+	// through to resolveInstanceName's first-instance default —
+	// the §3 fail-fast contract is designed to prevent exactly
+	// that silent mis-attribution path.
+	pluginInstanceConfigs map[string][]config.InstanceEntry
 }
 
 // IngestURL implements SyncIngester. Mirrors the dispatch
@@ -117,7 +128,23 @@ func (s *syncIngester) IngestURL(ctx context.Context, url string, timeout time.D
 	if plugin == nil {
 		return "", fmt.Errorf("no plugin handles URL %s", url)
 	}
-	att := ingestAttemptForPlugin(plugin, url)
+	// ADR-0028 §3 Cut 3: workflow-trigger URL ingest must run
+	// the same instance routing + fail-fast as /v1/ingest. The
+	// §3 fail-fast contract is designed to prevent silent
+	// mis-attribution to a first-declared fallback; bypassing
+	// pickInstance here would re-open that gap on the workflow
+	// surface. Command-shape invocations stay on the fallback
+	// (per ADR-0028 §4 — command instance dispatch is Cut 4's
+	// domain).
+	var instanceName string
+	if inv.Shape != plugins.InvocationCommand {
+		picked, perr := pickInstance(plugin, s.pluginInstanceConfigs[plugin.Name()], url)
+		if perr != nil {
+			return "", fmt.Errorf("instance routing for %s: %w", url, perr)
+		}
+		instanceName = picked
+	}
+	att := ingestAttemptForPlugin(plugin, url, instanceName)
 	rec := s.tracker.beginAttempt(att)
 	snap, err := s.tracker.wait(ctx, rec, timeout)
 	if err != nil {

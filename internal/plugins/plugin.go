@@ -327,6 +327,55 @@ type Capabilities struct {
 	// the single-instance posture across the existing four shipped
 	// plugins.
 	SupportsInstances bool `json:"supports_instances,omitempty"`
+
+	// InstanceRouting declares the plugin's URL-shape instance
+	// routing strategy per ADR-0028 §3. Nullable: plugins with
+	// `supports_instances: false` always emit null here; plugins
+	// with `supports_instances: true` whose primary path is
+	// URL-shape MUST declare a non-null spec so URL ingest can
+	// pick the active instance. Plugins whose primary path is
+	// command-shape (yaad-gmail — instances fan out via §4)
+	// MAY leave it null; URL ingest then rejects with a clear
+	// "plugin advertises no URL routing" error.
+	//
+	// The daemon's URL dispatch walks: regex-match URL against
+	// the plugin's url_patterns to extract named capture groups,
+	// format match_template with those captures, glob-match the
+	// formatted string against each enabled instance's
+	// `config[<config_field>]` list in declaration order. First
+	// match wins; unmatched URL fail-fast with 400 {instance:
+	// "unrouted", url, message} per §3 — no silent fallback to
+	// the first-declared instance (would mis-attribute source:).
+	InstanceRouting *InstanceRoutingSpec `json:"instance_routing,omitempty"`
+}
+
+// InstanceRoutingSpec is the per-plugin URL-routing declaration
+// from `--init` capabilities per ADR-0028 §3. v1 defines a single
+// strategy (`glob_match`); future strategies (exact-match, regex,
+// hash-of-field) can land as additional `strategy:` values without
+// breaking the contract.
+type InstanceRoutingSpec struct {
+	// Strategy names the routing algorithm. v1: `glob_match`. The
+	// daemon rejects unknown strategy names at registration time
+	// so a plugin-author bug doesn't manifest as silently-routed
+	// ingest.
+	Strategy string `json:"strategy"`
+	// ConfigField names the per-instance config key whose value
+	// list the daemon glob-matches the formatted match_template
+	// against (e.g. `repos` for yaad-github, `accounts` for a
+	// future per-account plugin). Per-instance config under that
+	// key must be a list of glob strings; non-list values reject
+	// at config-load time.
+	ConfigField string `json:"config_field"`
+	// MatchTemplate is the formatting template the daemon applies
+	// to the URL's named capture groups before glob-matching.
+	// Field names enclosed in `{` `}` interpolate from the named
+	// capture groups in the matched url_pattern; literal `{` or
+	// `}` are unsupported in v1 (no escape). Example:
+	// `{owner}/{repo}` for yaad-github extracts `owner` + `repo`
+	// from a URL like `https://github.com/owner-a/repo-b/pull/1`
+	// and formats `owner-a/repo-b` for the glob walk.
+	MatchTemplate string `json:"match_template"`
 }
 
 // CommandSpec is one entry in a plugin's Capabilities.Commands list

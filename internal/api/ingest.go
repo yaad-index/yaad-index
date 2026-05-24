@@ -140,7 +140,7 @@ type ingestDisambiguationOption struct {
 // untouched (cache hits aren't fetches).
 const cacheNotationsSource = "cache:notations"
 
-func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, registry *plugins.Registry, vaultReader *vault.Reader, fillInstruction string, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
+func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, registry *plugins.Registry, vaultReader *vault.Reader, fillInstruction string, canonicalKindReg map[string]config.CanonicalKindConfig, pluginInstanceConfigs map[string][]config.InstanceEntry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req ingestRequest
 		dec := json.NewDecoder(r.Body)
@@ -252,9 +252,37 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 					fmt.Sprintf("no plugin handles URL %s", req.URL))
 				return
 			}
-			att = ingestAttemptForPlugin(plugin, req.URL)
+			// Command-shape ingest is Cut 4's domain; for now
+			// command invocations resolve to the implicit-first-
+			// instance via the tracker's resolveInstanceName
+			// fallback (empty instanceName here).
+			att = ingestAttemptForPlugin(plugin, req.URL, "")
 		} else if plugin, matched := registry.Lookup(req.URL); matched {
-			att = ingestAttemptForPlugin(plugin, req.URL)
+			// ADR-0028 §3 Cut 3: pick the active instance for
+			// URL-shape ingest by walking the plugin's
+			// instance_routing capability against the matched
+			// URL. Fail-fast on unrouted (no glob matches) so
+			// the operator (or agent) sees the exact URL that
+			// failed routing and can fix the missing glob entry
+			// — no silent fallback to the first-declared instance.
+			instanceName, perr := pickInstance(plugin, pluginInstanceConfigs[plugin.Name()], req.URL)
+			if perr != nil {
+				switch {
+				case errors.Is(perr, ErrUnroutedURL):
+					writeUnroutedError(w, plugin.Name(), req.URL, perr)
+					return
+				case errors.Is(perr, ErrNoURLRouting):
+					writeError(w, http.StatusBadRequest, "no_url_routing", perr.Error())
+					return
+				case errors.Is(perr, ErrUnsupportedRoutingStrategy):
+					writeError(w, http.StatusInternalServerError, "unsupported_routing_strategy", perr.Error())
+					return
+				default:
+					writeError(w, http.StatusInternalServerError, "instance_routing_failed", perr.Error())
+					return
+				}
+			}
+			att = ingestAttemptForPlugin(plugin, req.URL, instanceName)
 		} else {
 			fixtureAtt, err := ingestAttemptForURL(req.URL)
 			if errors.Is(err, errNoFixtureMatch) {
@@ -616,13 +644,17 @@ func respondFromCacheHit(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 // ingestAttemptForPlugin builds an ingest attempt that delegates to a
 // plugin's Fetch. plannedEntityID is empty — the canonical id is
 // data-derived (ADR-0002 lines 138–145), so the queued response omits
-// estimated_entity_id for these attempts.
-func ingestAttemptForPlugin(plugin plugins.Plugin, rawURL string) ingestAttempt {
+// estimated_entity_id for these attempts. instanceName carries the
+// ADR-0028 §3 picked instance (Cut 3); empty means the caller didn't
+// route through the per-instance picker and the tracker's
+// resolveInstanceName fallback applies.
+func ingestAttemptForPlugin(plugin plugins.Plugin, rawURL, instanceName string) ingestAttempt {
 	return ingestAttempt{
 		plannedEntityID: "",
 		simulation: ingestSimulation{
 			plugin: plugin,
 			rawURL: rawURL,
+			instanceName: instanceName,
 		},
 	}
 }
