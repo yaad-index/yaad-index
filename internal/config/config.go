@@ -527,9 +527,22 @@ func Load(path string) (*Config, error) {
 	// site defaulting. Runs after Validate so structural errors
 	// surface against the operator's actual input shape, not a
 	// post-synthesis shape they didn't write.
+	//
+	// The synthesized default instance inherits the plugin-level
+	// `config:` block so the back-compat single-instance path keeps
+	// the operator's existing config visible per-instance. This
+	// matters for the per-instance JSON-Schema validation gate in
+	// cmd/yaad-index — without the copy, a legacy operator config
+	// (`config: {...}` with no `instances:`) would skip per-instance
+	// schema checks entirely once the daemon migrates to the
+	// per-instance validation contract. Explicit `instances:` entries
+	// already own their own `config:` blocks and are untouched.
 	for i := range c.Plugins {
 		if c.Plugins[i].Instances == nil {
-			c.Plugins[i].Instances = []InstanceEntry{{Name: defaultInstanceName}}
+			c.Plugins[i].Instances = []InstanceEntry{{
+				Name:   defaultInstanceName,
+				Config: c.Plugins[i].Config,
+			}}
 		}
 	}
 	return &c, nil

@@ -1288,6 +1288,28 @@ func buildPluginRegistry(logger *slog.Logger, st store.Store, cfg *config.Config
 					"reduce instances: to one entry or remove the block (got %d instances)",
 				entry.Name, len(entry.Instances))
 		}
+		// ADR-0028 §1 + §2: validate every instance's `config:`
+		// block against the plugin's declared `config_schema`. The
+		// schema is plugin-scoped (one `--init`, one cache row), but
+		// each instance carries its own operator-supplied config so
+		// each one needs the gate. Fail-fast surfaces operator
+		// typos / shape mismatches at startup instead of at first
+		// fetch. The plugin-level entry.Config validation in
+		// registerPlugin still runs (catches mismatches in the
+		// legacy block); per-instance validation here closes the
+		// new surface. For the synthesized-default case, Load
+		// already copied entry.Config into the default instance's
+		// Config — so per-instance validation is double-coverage
+		// (harmless) rather than a missing path.
+		for i, inst := range entry.Instances {
+			if vErr := config.ValidatePluginConfigAgainstSchema(
+				entry.Name, inst.Config, p.Capabilities().ConfigSchema,
+			); vErr != nil {
+				return nil, fmt.Errorf(
+					"plugin %q instance %q (index %d): %w",
+					entry.Name, inst.Name, i, vErr)
+			}
+		}
 		registry.Register(p)
 		logger.Info("plugin registered",
 			"name", entry.Name, "path", entry.Path, "source", outcome.String(),
@@ -1393,9 +1415,21 @@ func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, en
 				logger.Error("cached caps malformed, ignoring cache",
 					"err", uErr, "name", name)
 				outcome = cacheFailure
-			} else if vErr := config.ValidatePluginConfigAgainstSchema(name, entry.Config, caps.ConfigSchema); vErr != nil {
-				return nil, cacheHit, fmt.Errorf("plugin %q: %w", name, vErr)
 			} else {
+				// Per-instance config_schema validation moved to
+				// buildPluginRegistry per ADR-0028 §1 + §2 — the
+				// schema is plugin-scoped but config is per-instance,
+				// so the right gate is downstream where we have both
+				// caps and the resolved entry.Instances list. The
+				// legacy plugin-level entry.Config validation here
+				// would always reject required-field schemas once
+				// the operator migrates their config to per-instance,
+				// because entry.Config is empty when explicit
+				// `instances:` are declared. Load's synthesis-copy
+				// preserves back-compat: an absent `instances:`
+				// block still routes entry.Config through schema
+				// validation via the synthesized default instance's
+				// Config field.
 				p, ctorErr := subprocess.NewWithCapabilities(name, path, caps,
 				appendFetchTimeoutOpt(entry,
 					subprocess.WithLogger(logger),
@@ -1433,14 +1467,10 @@ func registerPlugin(ctx context.Context, logger *slog.Logger, st store.Store, en
 		return nil, outcome, err
 	}
 	caps := p.Capabilities()
-	// Per #192: validate the operator's config:` block against the
-	// plugin's declared JSON Schema. Empty schema → skip (plugin
-	// hasn't declared one yet). Validation failures fail-fast at
-	// registry-load time so the operator sees the mismatch in the
-	// daemon startup log, not at first ingest.
-	if vErr := config.ValidatePluginConfigAgainstSchema(name, entry.Config, caps.ConfigSchema); vErr != nil {
-		return nil, outcome, fmt.Errorf("plugin %q: %w", name, vErr)
-	}
+	// Per-instance config_schema validation moved to
+	// buildPluginRegistry per ADR-0028 §1 + §2 (see the comment
+	// near the cross-validation gate). Same rationale as the
+	// cache-hit branch above.
 	if caps.Version != "" {
 		capsJSON, mErr := json.Marshal(caps)
 		if mErr != nil {
