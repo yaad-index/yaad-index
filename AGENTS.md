@@ -199,9 +199,11 @@ governs.
  (parallel to `url_patterns`), entries either bare-string
  (`"fetch"`, defaults `operator_only=false`) or long-form object
  (`{"name":"delete-all","operator_only":true}`). Invocation
- sigil `!` on the user/agent side (e.g.
- `gmail: !fetch since:yesterday`) routes through an in-memory
- job system; routing-time validation rejects unknown commands.
+ sigil `!` on the user/agent side (e.g. `gmail: !fetch`) routes
+ through an in-memory job system (sigil-stripped bare command
+ exact-matched against advertised `commands`; no argument
+ grammar is defined in v1); routing-time validation rejects
+ unknown commands.
  The plugin handler runs via `<plugin-binary> --command <name>`.
  Response-shape clause superseded by ADR-0023.
 - [ADR-0023 — Unified plugin response protocol (NDJSON streaming)](adr/0023-unified-plugin-response-protocol.md). All
@@ -250,14 +252,18 @@ governs.
  from ADR-0024: **day helpers** (`today()`, `yesterday()`,
  `tomorrow()` — canonical-ID return `day:YYYY-MM-DD` so the
  result composes directly with `graph.get(today())` and
- `add_canonical_edge.target.name`); **period helpers +
- stateless temporal arithmetic** (`this_week()` / `this_month()`
- / `this_year()` return ISO-scalar strings `"2026-W21"` /
+ `add_canonical_edge.target.name`); **stateless temporal
+ arithmetic over day IDs** (`add_days`, `days_between` — take
+ day-ID strings, return a day ID / signed int respectively, so
+ they pair with the day helpers); **period helpers + their
+ dedicated companions** (`this_week()` / `this_month()` /
+ `this_year()` return ISO-scalar strings `"2026-W21"` /
  `"2026-05"` / `"2026"` — pure CEL computation, NOT canonical
- IDs, so they pair with `add_days`, `days_between`,
- `days_in_week/month/year`, `week_of/month_of/year_of` for ISO
- 8601 arithmetic but do NOT resolve through `graph.get` or
- `add_canonical_edge`); **graph-walk** (`graph.in_edges`,
+ IDs — paired with `days_in_week/month/year` for fan-out into
+ day-ID lists and with `week_of/month_of/year_of` for the
+ reverse projection from a day ID; period scalars do NOT
+ resolve through `graph.get` / `add_canonical_edge` and are NOT
+ valid inputs to `add_days` / `days_between`); **graph-walk** (`graph.in_edges`,
  `graph.out_edges`, `graph.in_neighbors`,
  `graph.out_neighbors` — return `{items, truncated, total}`
  structs to surface capped-result state). Per-fire caching of
