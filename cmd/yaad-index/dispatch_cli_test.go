@@ -61,7 +61,7 @@ func TestCommandCmd_BuildsBangShapeInput(t *testing.T) {
 	srv := newFakeIngestServer(t, http.StatusOK, `{"ok":true,"state":"queued","status":"queued"}`)
 
 	cmd := &CommandCmd{
-		Plugin: "gmail",
+		Plugin:  "gmail",
 		Command: "fetch",
 		DaemonURL: srv.server.URL,
 		Wait: 0,
@@ -82,7 +82,7 @@ func TestFetchCmd_BuildsURLShapeInput(t *testing.T) {
 	srv := newFakeIngestServer(t, http.StatusOK, `{"ok":true,"state":"queued","status":"queued"}`)
 
 	cmd := &FetchCmd{
-		Plugin: "wikipedia",
+		Plugin:  "wikipedia",
 		Pattern: "Tehran",
 		DaemonURL: srv.server.URL,
 		Wait: 0,
@@ -102,7 +102,7 @@ func TestFetchCmd_PreservesMultiTokenPattern(t *testing.T) {
 	srv := newFakeIngestServer(t, http.StatusOK, `{"ok":true,"state":"queued","status":"queued"}`)
 
 	cmd := &FetchCmd{
-		Plugin: "bgg",
+		Plugin:  "bgg",
 		Pattern: "ticket to ride",
 		DaemonURL: srv.server.URL,
 		Wait: 0,
@@ -123,7 +123,7 @@ func TestCommandCmd_PassesBearerToken(t *testing.T) {
 	srv := newFakeIngestServer(t, http.StatusOK, `{"ok":true,"state":"queued","status":"queued"}`)
 
 	cmd := &CommandCmd{
-		Plugin: "gmail",
+		Plugin:  "gmail",
 		Command: "fetch",
 		DaemonURL: srv.server.URL,
 		Token: "test-jwt-12345",
@@ -143,7 +143,7 @@ func TestCommandCmd_OmitsAuthHeaderWhenNoToken(t *testing.T) {
 	srv := newFakeIngestServer(t, http.StatusOK, `{"ok":true,"state":"queued","status":"queued"}`)
 
 	cmd := &CommandCmd{
-		Plugin: "gmail",
+		Plugin:  "gmail",
 		Command: "fetch",
 		DaemonURL: srv.server.URL,
 		Wait: 0,

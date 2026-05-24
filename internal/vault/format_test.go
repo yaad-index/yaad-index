@@ -27,7 +27,7 @@ func fixtureEntity(t *testing.T) *Entity {
 	return &Entity{
 		ID: "wikipedia:martin-wallace",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{
 			"title": "Martin Wallace (game designer)",
 			"lang": "en",
@@ -75,7 +75,7 @@ func TestMarshal_RoundTrip(t *testing.T) {
 
 	assert.Equal(t, want.ID, got.ID)
 	assert.Equal(t, want.Kind, got.Kind)
-	assert.Equal(t, want.Plugin, got.Plugin)
+	assert.Equal(t, want.Source, got.Source)
 	assert.Equal(t, want.Data, got.Data)
 	assert.Equal(t, want.Summary, got.Summary)
 	assert.Equal(t, want.Tags, got.Tags)
@@ -217,7 +217,7 @@ func TestMarshal_FetchAttachmentsRoundTrip(t *testing.T) {
 	want := &Entity{
 		ID: "boardgame:130680",
 		Kind: "boardgame",
-		Plugin: "bgg",
+		Source: []string{"bgg/default"},
 		Data: map[string]any{"name": "Brass: Birmingham"},
 		Provenance: []ProvenanceEntry{
 			{
@@ -257,7 +257,7 @@ func TestMarshal_RejectsMissingRequiredFields(t *testing.T) {
 	}{
 		{"missing id", func(e *Entity) { e.ID = "" }, "id"},
 		{"missing kind", func(e *Entity) { e.Kind = "" }, "kind"},
-		{"missing plugin", func(e *Entity) { e.Plugin = "" }, "plugin"},
+		{"missing source", func(e *Entity) { e.Source = nil }, "source"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -524,7 +524,7 @@ func TestMarshal_CommentRenderingShape(t *testing.T) {
 	e := &Entity{
 		ID: "wikipedia:render-notes",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Notes: []Note{
 			{
 				Date: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC),
@@ -564,7 +564,7 @@ func TestRoundTrip_CommentsWithOperator(t *testing.T) {
 	in := &Entity{
 		ID: "wikipedia:roundtrip",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Notes: []Note{
 			{
 				Date: time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC),
@@ -605,7 +605,7 @@ func TestMarshal_BodySectionsRegeneratedFromFrontmatter(t *testing.T) {
 	e := &Entity{
 		ID: "wikipedia:x",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		// No Edges, no Notes in frontmatter — even though a real
 		// vault file might have body-section content, Marshal never
 		// sees it.
@@ -632,7 +632,7 @@ func TestMarshal_HandEditWithoutReindexLoses(t *testing.T) {
 	original := &Entity{
 		ID: "wikipedia:x",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Edges: []Edge{
 			{Type: "designed", To: "boardgame:brass"},
 		},
@@ -678,7 +678,7 @@ func TestMarshal_AttachmentsRoundTrip(t *testing.T) {
 	want := &Entity{
 		ID: "boardgame:brass-birmingham-2018",
 		Kind: "boardgame",
-		Plugin: "bgg",
+		Source: []string{"bgg/default"},
 		Data: map[string]any{"name": "Brass: Birmingham"},
 		Attachments: []Attachment{
 			{
@@ -728,7 +728,7 @@ func TestMarshal_AttachmentsEmpty_OmitsKey(t *testing.T) {
 	e := &Entity{
 		ID: "boardgame:no-attachments-2024",
 		Kind: "boardgame",
-		Plugin: "bgg",
+		Source: []string{"bgg/default"},
 		Data: map[string]any{"name": "Plain Game"},
 	}
 	b, err := Marshal(e, nil)
@@ -744,4 +744,121 @@ func TestMarshal_AttachmentsEmpty_OmitsKey(t *testing.T) {
 	if strings.Contains(string(b), "attachments:") {
 		t.Errorf("empty-slice manifest must also omit; got:\n%s", b)
 	}
+}
+
+// --- ADR-0028 Cut 2: slash-form `source:` field ---
+
+func TestMarshal_SourceSingleEntry_EmitsScalar(t *testing.T) {
+	t.Parallel()
+	e := &Entity{
+		ID: "wikipedia:foo", Kind: "wikipedia-article",
+		Source: []string{"wikipedia/default"},
+		Data: map[string]any{"title": "Foo"},
+	}
+	got, err := Marshal(e, nil)
+	require.NoError(t, err)
+	// Per ADR-0028 §5: single-entry Source must serialize as a
+	// scalar (not a 1-element sequence) so operator-common
+	// vault files stay terse on disk.
+	assert.Contains(t, string(got), "source: wikipedia/default\n")
+	assert.NotContains(t, string(got), "- wikipedia/default", "single source should NOT render as a sequence")
+}
+
+func TestMarshal_SourceMultiEntry_EmitsSequence(t *testing.T) {
+	t.Parallel()
+	e := &Entity{
+		ID: "github-pr:owner-repo-1", Kind: "github-pr",
+		Source: []string{"github/personal", "github/work"},
+		Data: map[string]any{"number": int64(1)},
+	}
+	got, err := Marshal(e, nil)
+	require.NoError(t, err)
+	// Per ADR-0028 §5: multi-source overlap promotes the field
+	// to a YAML sequence the operator can hand-edit naturally.
+	s := string(got)
+	assert.Contains(t, s, "source:")
+	assert.Contains(t, s, "- github/personal")
+	assert.Contains(t, s, "- github/work")
+}
+
+func TestUnmarshal_SourceScalar_DecodesToSingleEntry(t *testing.T) {
+	t.Parallel()
+	body := `---
+id: wikipedia:foo
+kind: wikipedia-article
+source: wikipedia/default
+data:
+  title: Foo
+---
+
+body
+`
+	e, err := Unmarshal([]byte(body))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"wikipedia/default"}, e.Source)
+}
+
+func TestUnmarshal_SourceSequence_DecodesToMultiEntry(t *testing.T) {
+	t.Parallel()
+	body := `---
+id: github-pr:owner-repo-1
+kind: github-pr
+source:
+  - github/personal
+  - github/work
+data:
+  number: 1
+---
+
+body
+`
+	e, err := Unmarshal([]byte(body))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"github/personal", "github/work"}, e.Source)
+}
+
+// TestUnmarshal_LegacyPluginScalar_LiftsToDefaultInstance pins the
+// ADR-0028 §5 back-compat read: a pre-Cut-2 vault file carrying
+// `plugin: <name>` (the legacy scalar) decodes as a single-entry
+// Source slice `["<name>/default"]` so reindex / re-ingest can
+// re-emit the new `source:` shape without bespoke migration code.
+func TestUnmarshal_LegacyPluginScalar_LiftsToDefaultInstance(t *testing.T) {
+	t.Parallel()
+	body := `---
+id: wikipedia:legacy
+kind: wikipedia-article
+plugin: wikipedia
+data:
+  title: Legacy
+---
+
+body
+`
+	e, err := Unmarshal([]byte(body))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"wikipedia/default"}, e.Source,
+		"legacy plugin: <name> must decode as Source=[<name>/default]")
+}
+
+func TestMarshal_SourceMissingSlash_Rejects(t *testing.T) {
+	t.Parallel()
+	// Producer that hasn't migrated to the ADR-0028 §5 slash-form
+	// gets caught at write-time so the bug lands at the offending
+	// site, not on a downstream reader.
+	e := &Entity{
+		ID: "x:y", Kind: "x",
+		Source: []string{"bare-plugin-name"}, // missing /instance
+		Data: map[string]any{"title": "y"},
+	}
+	_, err := Marshal(e, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrMissingRequiredField)
+}
+
+func TestEntity_PluginName_ExtractsFromSlashForm(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "wikipedia", (&Entity{Source: []string{"wikipedia/default"}}).PluginName())
+	assert.Equal(t, "github", (&Entity{Source: []string{"github/personal", "github/work"}}).PluginName(),
+		"multi-source: first-listed's plugin name wins per ADR-0028 §5 refresh-ownership default")
+	assert.Equal(t, "", (&Entity{}).PluginName(), "no source → empty")
 }

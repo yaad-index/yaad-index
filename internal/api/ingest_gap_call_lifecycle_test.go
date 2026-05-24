@@ -66,7 +66,7 @@ func seedLifecycleEntity(t *testing.T) (http.Handler, store.Store) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: lifecycleEntityID,
 		Kind: lifecycleEntityKind,
-		Plugin: "seed",
+		Source: []string{"seed/default"},
 		Data: map[string]any{"id": lifecycleEntityID},
 		Gaps: []string{"summary"},
 		Provenance: []vault.ProvenanceEntry{
@@ -319,7 +319,7 @@ func TestFill_MarkGapCallDoneFailure_Returns200(t *testing.T) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: fillTestEntityID,
 		Kind: "boardgame",
-		Plugin: "test-fixture",
+		Source: []string{"test-fixture/default"},
 		Data: map[string]any{"id": fillTestEntityID},
 		Gaps: fillTestGaps,
 	}))

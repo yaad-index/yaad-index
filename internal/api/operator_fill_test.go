@@ -79,7 +79,7 @@ func seedBoardgameForFill(t *testing.T, st store.Store, root, id string) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: "boardgame",
-		Plugin: "fixture",
+		Source: []string{"fixture/default"},
 		Data: map[string]any{"name": "Test Game"},
 		Gaps: []string{"rating", "owned", "want", "played", "knows_how_to_play"},
 	}))
@@ -288,7 +288,7 @@ func TestOperatorFill_AgentOnlyField(t *testing.T) {
 		ID: id, Kind: "agent_only_kind", Data: map[string]any{"name": "x"},
 	}))
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: id, Kind: "agent_only_kind", Plugin: "fixture",
+		ID: id, Kind: "agent_only_kind", Source: []string{"fixture/default"},
 		Data: map[string]any{"name": "x"}, Gaps: []string{"summary"},
 	}))
 	tok := mintOperatorToken(t, signer, "alice")
@@ -580,7 +580,7 @@ func TestOperatorFill_WorkflowInjectedSpec_RespectsAgentOnlyFillStrategy(t *test
 		ID: id, Kind: "company", Data: map[string]any{"id": id},
 	}))
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: id, Kind: "company", Plugin: "fixture",
+		ID: id, Kind: "company", Source: []string{"fixture/default"},
 		Data: map[string]any{"id": id},
 		Gaps: []string{"competitor"},
 		GapState: map[string]vault.GapStateEntry{

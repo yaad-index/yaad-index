@@ -374,8 +374,32 @@ func (s *ServeCmd) Run() error {
 	// events.
 	bus := eventbus.NewMemoryBus()
 
+	// pluginInstances is the plugin-name → ordered instance-name
+	// list per ADR-0028 §1. Cut 1's Load synthesis ensures every
+	// PluginEntry has at least one instance (synthesized `default`
+	// or explicit operator-named); we surface the full list here so
+	// the ingest tracker (active instance = index 0) and
+	// /v1/plugins (full list exposure) each get what they need.
+	// Cuts 3 + 4 will widen tracker usage to per-invocation
+	// routing. nil cfg path (dev binaries without an operator
+	// config) leaves the map empty — the tracker's resolver falls
+	// back to `default` and /v1/plugins synthesizes the implicit
+	// instance per ADR-0028 §1.
+	pluginInstances := map[string][]string{}
+	if cfg != nil {
+		for _, entry := range cfg.Plugins {
+			if len(entry.Instances) > 0 {
+				names := make([]string, 0, len(entry.Instances))
+				for _, inst := range entry.Instances {
+					names = append(names, inst.Name)
+				}
+				pluginInstances[entry.Name] = names
+			}
+		}
+	}
+
 	var (
-		handlerOpts    = []api.HandlerOption{api.WithEventBus(bus)}
+		handlerOpts    = []api.HandlerOption{api.WithEventBus(bus), api.WithPluginInstances(pluginInstances)}
 		guard          *config.CanonicalGuard
 		mergedRegistry map[string]config.CanonicalKindConfig
 		wfEngine       *engine.Engine
@@ -559,6 +583,7 @@ func (s *ServeCmd) Run() error {
 		syncIngester := api.NewSyncIngester(
 			logger, st, registry, writer, reader,
 			guard, cfg.CacheTTLSeconds, dispatcher, wfWriteLocks, bus,
+			pluginInstances,
 		)
 		handlerOpts = append(handlerOpts, api.WithSyncIngester(syncIngester))
 

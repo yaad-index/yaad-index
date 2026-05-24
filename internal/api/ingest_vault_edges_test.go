@@ -41,7 +41,7 @@ func TestBuildVaultEntity_CanonicalEdgesPopulateVaultEdges(t *testing.T) {
 
 	got := buildVaultEntity(
 		minimalStoreEntity("bgg:age-of-steam", "bgg"),
-		"bgg",
+		[]string{"bgg/default"},
 		nil, // gaps
 		"", // cleanContent
 		nil, // notations
@@ -87,7 +87,7 @@ func TestBuildVaultEntity_NilCanonicalEdgesPreservesExisting(t *testing.T) {
 	// must not wipe an edge set written by an earlier plugin run.
 	got := buildVaultEntity(
 		minimalStoreEntity("bgg:age-of-steam", "bgg"),
-		"bgg",
+		[]string{"bgg/default"},
 		nil, "", nil, nil, prov, existing, nil, nil,
 		nil, // canonicalEdges == nil
 	)
@@ -117,7 +117,7 @@ func TestBuildVaultEntity_EmptyCanonicalEdgesClearsExisting(t *testing.T) {
 	// edges in the new fetch".
 	got := buildVaultEntity(
 		minimalStoreEntity("bgg:age-of-steam", "bgg"),
-		"bgg",
+		[]string{"bgg/default"},
 		nil, "", nil, nil, prov, existing, nil, nil,
 		[]*store.Edge{}, // empty (not nil)
 	)
@@ -144,7 +144,7 @@ func TestBuildVaultEntity_CanonicalEdgesSkipsMalformedEntries(t *testing.T) {
 
 	got := buildVaultEntity(
 		minimalStoreEntity("bgg:foo", "bgg"),
-		"bgg",
+		[]string{"bgg/default"},
 		nil, "", nil, nil, prov, nil, nil, nil, canonicalEdges,
 	)
 

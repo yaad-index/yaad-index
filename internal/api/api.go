@@ -84,7 +84,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 		tracker = si.trackerHandle()
 	}
 	if tracker == nil {
-		tracker = newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks, cfg.eventBus)
+		tracker = newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks, cfg.eventBus, cfg.pluginInstances)
 	}
 
 	// Per yaad-index a prior PR: the protect wrapper enforces Bearer-JWT
@@ -109,7 +109,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 
 	// Protected — Bearer JWT (or anonymous bypass when auth.required=false).
 	mux.Handle("GET /v1/kinds", protect(http.HandlerFunc(handleKinds(logger, registry))))
-	mux.Handle("GET /v1/plugins", protect(http.HandlerFunc(handlePlugins(logger, registry))))
+	mux.Handle("GET /v1/plugins", protect(http.HandlerFunc(handlePlugins(logger, registry, cfg.pluginInstances))))
 	mux.Handle("POST /v1/entities/batch", protect(http.HandlerFunc(handleEntitiesBatch(logger, st))))
 	// /v1/entities/batch is a method-target path, not an entity id. The
 	// explicit GET handler below carves it out from the {id} matcher so a
@@ -229,6 +229,15 @@ type handlerConfig struct {
 	authRequired bool
 	jwks []auth.JWK
 	attachmentsDispatcher *attachments.Dispatcher
+	// pluginInstances maps plugin name → the operator's full
+	// instance list for that plugin per ADR-0028 §1. Threaded
+	// through to the ingest tracker (which uses index 0 as the
+	// active instance for the slash-form `source: <plugin>/
+	// <instance>` per ADR-0028 §5) and to the /v1/plugins handler
+	// (which surfaces the full list as the API's `instances`
+	// field). Nil / absent entry → tracker falls back to
+	// `default`; /v1/plugins surfaces an empty list.
+	pluginInstances map[string][]string
 	// writeLocks is the per-artifact daemon write-lock manager
 	// (yaad-index #23 + ADR-0024). Acquired before any vault
 	// mutation surface (ingest, fill, archive/restore, delete, UGC
@@ -470,6 +479,27 @@ func WithAuthRequired(required bool) HandlerOption {
 // vault.path is configured.
 func WithAttachmentsDispatcher(d *attachments.Dispatcher) HandlerOption {
 	return func(c *handlerConfig) { c.attachmentsDispatcher = d }
+}
+
+// WithPluginInstances wires the per-plugin instance list per
+// ADR-0028 §1 + §5. Keys are plugin names; values are the operator's
+// full ordered instance-name list (slot 0 == active instance for the
+// pre-Cut-3 single-routing model; Cuts 3 + 4 widen this). Two
+// downstream consumers:
+//
+//   - ingest tracker: builds the slash-form `source:
+//     <plugin>/<instance>` from index 0 at vault-write time.
+//   - /v1/plugins handler: surfaces the full list as the response's
+//     `instances` field so MCP / agent clients can enumerate the
+//     per-plugin instance scope.
+//
+// Nil / empty map → tracker falls back to `default` per
+// resolveInstanceName; /v1/plugins emits an empty `instances` list
+// for plugins without an entry. Operator-config-loaded daemons
+// always populate this (Cut 1's Load synthesis ensures every
+// PluginEntry has at least one instance).
+func WithPluginInstances(m map[string][]string) HandlerOption {
+	return func(c *handlerConfig) { c.pluginInstances = m }
 }
 
 // WithJWKS publishes the verifier's public key on `GET /v1/jwks` per

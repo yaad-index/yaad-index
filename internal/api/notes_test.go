@@ -43,7 +43,7 @@ func seedCommentsEntity(t *testing.T, st store.Store, vaultRoot, id, kind string
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: kind,
-		Plugin: "test-fixture",
+		Source: []string{"test-fixture/default"},
 		Data: map[string]any{"id": id, "title": "Note Test Game"},
 	}))
 }
@@ -270,7 +270,7 @@ func TestComments_StaleWriterOverwritesBodyHandEdit(t *testing.T) {
 	stale := &vault.Entity{
 		ID: commentsTestEntityID,
 		Kind: "boardgame",
-		Plugin: "test-fixture",
+		Source: []string{"test-fixture/default"},
 		Data: map[string]any{"id": commentsTestEntityID, "title": "Note Test Game"},
 	}
 

@@ -20,17 +20,85 @@ import (
 var ErrMalformedFrontmatter = errors.New("malformed frontmatter")
 
 // ErrMissingRequiredField is returned by the reader/validator when a
-// frontmatter field required by the v1 schema (id, kind, plugin) is
+// frontmatter field required by the v1 schema (id, kind, source) is
 // absent or empty. The writer validates the same set before serializing.
 var ErrMissingRequiredField = errors.New("missing required field")
+
+// sourceField is the on-disk shape of the `source:` frontmatter field
+// per ADR-0028 §5. Marshals as a scalar string when the slice carries
+// exactly one entry, and as a YAML sequence when it carries multiple.
+// Unmarshal accepts both shapes so operator-written single-source
+// entities stay terse on disk while multi-source overlap renders as
+// a sequence the operator can hand-edit naturally.
+type sourceField []string
+
+// MarshalYAML emits the slash-form source field as a scalar for
+// the single-source case (the operator-common shape) and as a
+// sequence for the multi-source case. Empty slice marshals as
+// the YAML null literal — Marshal's validateRequired catches the
+// missing-field case before we reach here.
+func (s sourceField) MarshalYAML() (any, error) {
+	switch len(s) {
+	case 0:
+		return nil, nil
+	case 1:
+		return s[0], nil
+	default:
+		return []string(s), nil
+	}
+}
+
+// UnmarshalYAML accepts either a scalar string or a sequence of
+// strings for the `source:` field per ADR-0028 §5. Mapping nodes,
+// null nodes, and other shapes return an error so misshapen
+// frontmatter surfaces at read time rather than silently
+// decoding to an empty slice.
+func (s *sourceField) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		// Null scalar (`~` / `null` / empty) decodes as empty
+		// slice; Unmarshal lifts LegacyPlugin into Source when
+		// this happens AND a legacy `plugin:` key is present.
+		if node.Tag == "!!null" || node.Value == "" {
+			*s = nil
+			return nil
+		}
+		*s = []string{node.Value}
+		return nil
+	case yaml.SequenceNode:
+		out := make([]string, 0, len(node.Content))
+		for _, child := range node.Content {
+			if child.Kind != yaml.ScalarNode {
+				return fmt.Errorf("source: sequence entry must be a string, got %v at line %d", child.Kind, child.Line)
+			}
+			out = append(out, child.Value)
+		}
+		*s = out
+		return nil
+	default:
+		return fmt.Errorf("source: expected scalar or sequence, got %v at line %d", node.Kind, node.Line)
+	}
+}
 
 // frontmatter is the on-disk YAML shape, separate from Entity so the
 // yaml struct tags don't bleed into the public Entity API. Field order
 // here drives the marshaled key order (yaml.v3 honors struct order).
+//
+// Per ADR-0028 §5, the `source:` field carries `<plugin>/<instance>`
+// slash-form attribution. The custom sourceField type marshals as a
+// scalar string when the slice has exactly one entry and as a YAML
+// sequence when it carries multiple (multi-source overlap). Unmarshal
+// accepts both shapes plus the pre-ADR-0028 legacy `plugin: <name>`
+// key for back-compat reads — reindex re-emits in the new shape.
 type frontmatter struct {
 	ID string `yaml:"id"`
 	Kind string `yaml:"kind"`
-	Plugin string `yaml:"plugin"`
+	Source sourceField `yaml:"source"`
+	// LegacyPlugin holds the pre-ADR-0028 `plugin: <name>` scalar
+	// when present in the input. Read-only / decode-only — never
+	// emitted on write. Unmarshal lifts the value into Source as a
+	// single `<name>/default` entry when Source itself is empty.
+	LegacyPlugin string `yaml:"plugin,omitempty"`
 	Aliases []string `yaml:"aliases,omitempty"`
 	Notations []string `yaml:"notations,omitempty"`
 	Data map[string]any `yaml:"data,omitempty"`
@@ -74,7 +142,7 @@ func Marshal(e *Entity, canonicalKinds []string) ([]byte, error) {
 	fm := frontmatter{
 		ID: e.ID,
 		Kind: e.Kind,
-		Plugin: e.Plugin,
+		Source: sourceField(e.Source),
 		Aliases: aliases,
 		Notations: e.Notations,
 		Data: e.Data,
@@ -135,10 +203,20 @@ func Unmarshal(b []byte) (*Entity, error) {
 		return nil, fmt.Errorf("decode frontmatter: %w", err)
 	}
 
+	// Source population per ADR-0028 §5 with back-compat for the
+	// pre-ADR `plugin: <name>` scalar: prefer the new `source:`
+	// field when present; fall back to lifting LegacyPlugin into
+	// a single `<name>/default` entry so pre-Cut-2 vault files
+	// still read cleanly through reindex.
+	source := []string(fm.Source)
+	if len(source) == 0 && fm.LegacyPlugin != "" {
+		source = []string{fm.LegacyPlugin + "/default"}
+	}
+
 	e := &Entity{
 		ID: fm.ID,
 		Kind: fm.Kind,
-		Plugin: fm.Plugin,
+		Source: source,
 		Aliases: fm.Aliases,
 		Notations: fm.Notations,
 		Data: fm.Data,
@@ -249,8 +327,23 @@ func validateRequired(e *Entity) error {
 		return fmt.Errorf("%w: id", ErrMissingRequiredField)
 	case e.Kind == "":
 		return fmt.Errorf("%w: kind", ErrMissingRequiredField)
-	case e.Plugin == "":
-		return fmt.Errorf("%w: plugin", ErrMissingRequiredField)
+	case len(e.Source) == 0:
+		return fmt.Errorf("%w: source", ErrMissingRequiredField)
+	}
+	// Per ADR-0028 §5, every Source entry must be the slash-form
+	// `<plugin>/<instance>`. Empty entries or bare-plugin shapes
+	// indicate a producer that hasn't migrated to the new
+	// attribution contract — surface at write time so the bug
+	// lands at the offending site, not on a downstream reader
+	// that gets a malformed entity.
+	for i, s := range e.Source {
+		if s == "" {
+			return fmt.Errorf("%w: source[%d] is empty", ErrMissingRequiredField, i)
+		}
+		if !strings.Contains(s, "/") {
+			return fmt.Errorf("%w: source[%d] %q missing instance suffix (expected `<plugin>/<instance>`)",
+				ErrMissingRequiredField, i, s)
+		}
 	}
 	return nil
 }

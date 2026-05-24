@@ -45,7 +45,7 @@ func TestCacheEntryExpired_SentinelRules(t *testing.T) {
 			e := &vault.Entity{
 				ID: "test:foo",
 				Kind: "test",
-				Plugin: "test-plugin",
+				Source: []string{"test-plugin/default"},
 				CacheExpires: tc.expires,
 			}
 			got := cacheEntryExpired(e, now, tc.includeInfinite)
@@ -76,7 +76,7 @@ func TestFindExpiredCacheEntries_HappyPath(t *testing.T) {
 		{
 			ID: "test:expired-one",
 			Kind: "test",
-			Plugin: "wikipedia",
+			Source: []string{"wikipedia/default"},
 			Data: map[string]any{"title": "Expired One"},
 			Provenance: []vault.ProvenanceEntry{
 				{Source: "fake:fetch", FetchedAt: &stale, OK: true},
@@ -86,7 +86,7 @@ func TestFindExpiredCacheEntries_HappyPath(t *testing.T) {
 		{
 			ID: "test:fresh-one",
 			Kind: "test",
-			Plugin: "wikipedia",
+			Source: []string{"wikipedia/default"},
 			Data: map[string]any{"title": "Fresh One"},
 			Provenance: []vault.ProvenanceEntry{
 				{Source: "fake:fetch", FetchedAt: &fresh, OK: true},
@@ -96,7 +96,7 @@ func TestFindExpiredCacheEntries_HappyPath(t *testing.T) {
 		{
 			ID: "test:no-stamp",
 			Kind: "test",
-			Plugin: "wikipedia",
+			Source: []string{"wikipedia/default"},
 			Data: map[string]any{"title": "No Stamp"},
 			Provenance: []vault.ProvenanceEntry{
 				{Source: "fake:fetch", FetchedAt: &stale, OK: true},
@@ -135,7 +135,7 @@ func TestFindExpiredCacheEntries_PluginFilter(t *testing.T) {
 		require.NoError(t, w.Write(&vault.Entity{
 			ID: "test:" + plug,
 			Kind: "test",
-			Plugin: plug,
+			Source: []string{plug + "/default"},
 			Data: map[string]any{"title": plug},
 			Provenance: []vault.ProvenanceEntry{
 				{Source: "fake:fetch", FetchedAt: &stale, OK: true},
@@ -167,7 +167,7 @@ func TestFindExpiredCacheEntries_KindFilter(t *testing.T) {
 		require.NoError(t, w.Write(&vault.Entity{
 			ID: kind + ":foo",
 			Kind: kind,
-			Plugin: "wikipedia",
+			Source: []string{"wikipedia/default"},
 			Data: map[string]any{"title": kind},
 			Provenance: []vault.ProvenanceEntry{
 				{Source: "fake:fetch", FetchedAt: &stale, OK: true},
@@ -197,7 +197,7 @@ func TestFindExpiredCacheEntries_IncludeInfinite(t *testing.T) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: "test:never-expires",
 		Kind: "test",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Never"},
 		Provenance: []vault.ProvenanceEntry{
 			{Source: "fake:fetch", FetchedAt: &stale, OK: true},
@@ -235,7 +235,7 @@ func TestFindExpiredCacheEntries_IgnoresHiddenAndNonMarkdown(t *testing.T) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: "test:real",
 		Kind: "test",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Real"},
 		Provenance: []vault.ProvenanceEntry{
 			{Source: "fake:fetch", FetchedAt: &stale, OK: true},
@@ -275,7 +275,7 @@ func TestFindOlderThanCacheEntries_DurationPredicate(t *testing.T) {
 
 	// Three entities — only the stale one should match --older-than 1h.
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: "test:stale", Kind: "test", Plugin: "wikipedia",
+		ID: "test:stale", Kind: "test", Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Stale"},
 		Provenance: []vault.ProvenanceEntry{
 			{Source: "fake:fetch", FetchedAt: &stale, OK: true},
@@ -284,7 +284,7 @@ func TestFindOlderThanCacheEntries_DurationPredicate(t *testing.T) {
 		// older-than ignores TTL.
 	}))
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: "test:fresh", Kind: "test", Plugin: "wikipedia",
+		ID: "test:fresh", Kind: "test", Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Fresh"},
 		Provenance: []vault.ProvenanceEntry{
 			{Source: "fake:fetch", FetchedAt: &fresh, OK: true},
@@ -378,7 +378,7 @@ func TestCachePurgeCmd_PluginFilter(t *testing.T) {
 
 	for _, plug := range []string{"wikipedia", "boardgamegeek"} {
 		require.NoError(t, w.Write(&vault.Entity{
-			ID: "test:" + plug, Kind: "test", Plugin: plug,
+			ID: "test:" + plug, Kind: "test", Source: []string{plug + "/default"},
 			Data: map[string]any{"title": plug},
 			Provenance: []vault.ProvenanceEntry{
 				{Source: "fake:fetch", FetchedAt: &stale, OK: true},
@@ -418,7 +418,7 @@ func TestCachePurgeCmd_OlderThanOverride(t *testing.T) {
 	// Entity with NO TTL stamped (legacy). Wouldn't match TTL
 	// predicate, but matches --older-than 30d.
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: "test:ancient", Kind: "test", Plugin: "wikipedia",
+		ID: "test:ancient", Kind: "test", Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Ancient"},
 		Provenance: []vault.ProvenanceEntry{
 			{Source: "fake:fetch", FetchedAt: &ancient, OK: true},
@@ -469,7 +469,7 @@ func writePurgeFixture(t *testing.T) (string, string) {
 	fresh := now.Add(-30 * time.Minute)
 
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: "test:expired", Kind: "test", Plugin: "wikipedia",
+		ID: "test:expired", Kind: "test", Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Expired"},
 		Provenance: []vault.ProvenanceEntry{
 			{Source: "fake:fetch", FetchedAt: &stale, OK: true},
@@ -477,7 +477,7 @@ func writePurgeFixture(t *testing.T) (string, string) {
 		CacheExpires: vault.CacheExpiresAt(pastExpiry),
 	}))
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: "test:fresh", Kind: "test", Plugin: "wikipedia",
+		ID: "test:fresh", Kind: "test", Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Fresh"},
 		Provenance: []vault.ProvenanceEntry{
 			{Source: "fake:fetch", FetchedAt: &fresh, OK: true},
@@ -503,7 +503,7 @@ func TestCacheRefetchCmd_HappyPath(t *testing.T) {
 	pastExpiry := now.Add(-time.Hour)
 
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: "wikipedia:foo", Kind: "wikipedia-article", Plugin: "wikipedia",
+		ID: "wikipedia:foo", Kind: "wikipedia-article", Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Foo"},
 		Provenance: []vault.ProvenanceEntry{
 			{Source: "fake:fetch", FetchedAt: &stale, OK: true},
@@ -556,7 +556,7 @@ func TestCacheRefetchCmd_LimitClamps(t *testing.T) {
 
 	for _, slug := range []string{"a", "b", "c"} {
 		require.NoError(t, w.Write(&vault.Entity{
-			ID: "wikipedia:" + slug, Kind: "wikipedia-article", Plugin: "wikipedia",
+			ID: "wikipedia:" + slug, Kind: "wikipedia-article", Source: []string{"wikipedia/default"},
 			Data: map[string]any{"title": slug},
 			Provenance: []vault.ProvenanceEntry{
 				{Source: "fake:fetch", FetchedAt: &stale, OK: true},
@@ -598,7 +598,7 @@ func TestCacheRefetchCmd_DaemonErrorContinues(t *testing.T) {
 
 	for _, slug := range []string{"a", "b"} {
 		require.NoError(t, w.Write(&vault.Entity{
-			ID: "wikipedia:" + slug, Kind: "wikipedia-article", Plugin: "wikipedia",
+			ID: "wikipedia:" + slug, Kind: "wikipedia-article", Source: []string{"wikipedia/default"},
 			Data: map[string]any{"title": slug},
 			Provenance: []vault.ProvenanceEntry{
 				{Source: "fake:fetch", FetchedAt: &stale, OK: true},
@@ -643,7 +643,7 @@ func TestCacheRefetchCmd_WaitSecondsPlumbed(t *testing.T) {
 	stale := now.Add(-2 * time.Hour)
 	pastExpiry := now.Add(-time.Hour)
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: "wikipedia:foo", Kind: "wikipedia-article", Plugin: "wikipedia",
+		ID: "wikipedia:foo", Kind: "wikipedia-article", Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Foo"},
 		Provenance: []vault.ProvenanceEntry{
 			{Source: "fake:fetch", FetchedAt: &stale, OK: true},
@@ -689,7 +689,7 @@ func TestCacheRefetchCmd_QueuedResponseAnnotates(t *testing.T) {
 	stale := now.Add(-2 * time.Hour)
 	pastExpiry := now.Add(-time.Hour)
 	require.NoError(t, w.Write(&vault.Entity{
-		ID: "wikipedia:foo", Kind: "wikipedia-article", Plugin: "wikipedia",
+		ID: "wikipedia:foo", Kind: "wikipedia-article", Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Foo"},
 		Provenance: []vault.ProvenanceEntry{
 			{Source: "fake:fetch", FetchedAt: &stale, OK: true},

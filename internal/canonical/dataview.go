@@ -21,7 +21,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
-// CanonicalLabelPlugin is the sentinel Plugin value stamped on
+// CanonicalLabelPlugin is the sentinel plugin name stamped on
 // auto-materialized canonical-label vault files. Distinct from
 // any real plugin name so the frontmatter signals
 // "operator-authored canonical metadata" at a glance.
@@ -155,7 +155,12 @@ func NewCanonicalLabelEntity(id, kind string, kindCfg config.CanonicalKindConfig
 	return &vault.Entity{
 		ID:     id,
 		Kind:   kind,
-		Plugin: CanonicalLabelPlugin,
+		// Per ADR-0028 §5 slash-form: a canonical-label entity
+		// sourced from operator-fill carries the sentinel
+		// plugin under the implicit `default` instance — there
+		// is no operator-config-side instance for the synthetic
+		// operator-fill emitter.
+		Source: []string{CanonicalLabelPlugin + "/default"},
 		Data:   map[string]any{},
 		Gaps:   gaps,
 	}

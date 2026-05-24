@@ -747,7 +747,7 @@ func TestVaultArchiveWriter_HappyPath(t *testing.T) {
 			id: {ID: id, Kind: "gmail", Data: map[string]any{"id": id}},
 		},
 		map[string]*vault.Entity{
-			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+			id: {ID: id, Kind: "gmail", Source: []string{"gmail/default"}},
 		},
 		now,
 	)
@@ -776,7 +776,7 @@ func TestVaultArchiveWriter_ReasonOptional(t *testing.T) {
 			id: {ID: id, Kind: "gmail", Data: map[string]any{"id": id}},
 		},
 		map[string]*vault.Entity{
-			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+			id: {ID: id, Kind: "gmail", Source: []string{"gmail/default"}},
 		},
 		now,
 	)
@@ -823,7 +823,7 @@ func TestVaultArchiveWriter_Idempotent(t *testing.T) {
 			id: {ID: id, Kind: "gmail", Data: map[string]any{"id": id}},
 		},
 		map[string]*vault.Entity{
-			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+			id: {ID: id, Kind: "gmail", Source: []string{"gmail/default"}},
 		},
 		now,
 	)
@@ -856,7 +856,7 @@ func TestVaultArchiveWriter_VaultError_NoDBToggle(t *testing.T) {
 			id: {ID: id, Kind: "gmail", Data: map[string]any{"id": id}},
 		},
 		map[string]*vault.Entity{
-			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+			id: {ID: id, Kind: "gmail", Source: []string{"gmail/default"}},
 		},
 		now,
 	)
@@ -881,7 +881,7 @@ func TestVaultArchiveWriter_LockConflictTimesOut(t *testing.T) {
 			id: {ID: id, Kind: "gmail"},
 		},
 		map[string]*vault.Entity{
-			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+			id: {ID: id, Kind: "gmail", Source: []string{"gmail/default"}},
 		},
 		now,
 	)
@@ -1135,7 +1135,7 @@ func TestVaultRestoreWriter_HappyPath(t *testing.T) {
 			id: {ID: id, Kind: "gmail", Data: map[string]any{"id": id}, ArchivedAt: &archived},
 		},
 		map[string]*vault.Entity{
-			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+			id: {ID: id, Kind: "gmail", Source: []string{"gmail/default"}},
 		},
 		now,
 	)
@@ -1165,7 +1165,7 @@ func TestVaultRestoreWriter_ReasonOptional(t *testing.T) {
 			id: {ID: id, Kind: "gmail"},
 		},
 		map[string]*vault.Entity{
-			id: {ID: id, Kind: "gmail", Plugin: "gmail"},
+			id: {ID: id, Kind: "gmail", Source: []string{"gmail/default"}},
 		},
 		now,
 	)

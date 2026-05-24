@@ -77,7 +77,7 @@ func mkEntity(id, kind string) *vault.Entity {
 	return &vault.Entity{
 		ID: id,
 		Kind: kind,
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "test"},
 	}
 }

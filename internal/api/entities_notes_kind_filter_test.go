@@ -24,7 +24,7 @@ func seedEntityWithMixedNotes(t *testing.T) (http.Handler, string) {
 	seedEntityWithVaultBody(t, st, w, &vault.Entity{
 		ID:     "wikipedia:cut3",
 		Kind:   "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data:   map[string]any{"title": "Cut 3 Fixture"},
 		Notes: []vault.Note{
 			// Legacy-shape: no kind set, no field set.

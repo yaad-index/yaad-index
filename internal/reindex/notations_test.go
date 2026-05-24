@@ -22,7 +22,7 @@ func TestReindex_NotationsRederivedFromVault(t *testing.T) {
 	want := &vault.Entity{
 		ID: "wikipedia:tehran",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Tehran"},
 		Notations: []string{
 			"https://en.wikipedia.org/wiki/Tehran",
@@ -53,7 +53,7 @@ func TestReindex_NotationsDropsOrphansFromDB(t *testing.T) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: "wikipedia:tehran",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Tehran"},
 		// Vault carries only ONE notation form.
 		Notations: []string{"https://en.wikipedia.org/wiki/Tehran"},
@@ -97,7 +97,7 @@ func TestReindex_EmptyNotationsClearsDBRows(t *testing.T) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: "wikipedia:tehran",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Tehran"},
 		// No Notations.
 	}))

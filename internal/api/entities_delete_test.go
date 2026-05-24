@@ -29,7 +29,7 @@ func seedEntityForDelete(t *testing.T, st store.Store, w *vault.Writer, id, kind
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: kind,
-		Plugin: "fixture",
+		Source: []string{"fixture/default"},
 		Data: map[string]any{"title": "Soon-Gone Game"},
 	}))
 }

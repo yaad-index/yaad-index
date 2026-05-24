@@ -593,7 +593,7 @@ func TestValidate_PluginDispatchUnknownPlugin(t *testing.T) {
 	wf := minimalWorkflow()
 	wf.AllowedPlugins = []string{"yaad-gmail"}
 	wf.Actions = []Action{{PluginDispatch: &PluginDispatchAction{
-		Plugin: "yaad-bgg", Command: "fetch",
+		Plugin:  "yaad-bgg", Command: "fetch",
 	}}}
 	err := Validate(wf)
 	require.Error(t, err)
@@ -606,7 +606,7 @@ func TestValidate_PluginDispatchNegativeTimeout(t *testing.T) {
 	wf := minimalWorkflow()
 	wf.AllowedPlugins = []string{"yaad-bgg"}
 	wf.Actions = []Action{{PluginDispatch: &PluginDispatchAction{
-		Plugin: "yaad-bgg", Command: "fetch", TimeoutSeconds: -1,
+		Plugin:  "yaad-bgg", Command: "fetch", TimeoutSeconds: -1,
 	}}}
 	err := Validate(wf)
 	require.Error(t, err)

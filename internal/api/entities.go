@@ -59,7 +59,14 @@ type attachmentRef struct {
 type entity struct {
 	ID string `json:"id"`
 	Kind string `json:"kind"`
-	Plugin string `json:"plugin,omitempty"`
+	// Source carries the ADR-0028 §5 slash-form attribution
+	// (`<plugin>/<instance>`) for each source that emitted this
+	// entity. Single-source entities serialize as a 1-element
+	// array; multi-source overlap as N-element. The pre-ADR-0028
+	// `plugin: <name>` wire shape was removed in Cut 2 (#244); MCP
+	// + API clients now read `source` and split on `/` to extract
+	// the plugin name when they need the bare value.
+	Source []string `json:"source,omitempty"`
 	Aliases []string `json:"aliases,omitempty"`
 	Notations []string `json:"notations,omitempty"`
 	Data map[string]any `json:"data"`
@@ -342,7 +349,7 @@ func mergeVaultEntity(out entity, ve *vault.Entity) entity {
 	if ve == nil {
 		return out
 	}
-	out.Plugin = ve.Plugin
+	out.Source = ve.Source
 	out.Aliases = ve.Aliases
 	out.Notations = ve.Notations
 	out.CleanContent = ve.CleanContent

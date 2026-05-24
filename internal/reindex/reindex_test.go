@@ -35,7 +35,7 @@ func newEntity(t *testing.T, id, kind string) *vault.Entity {
 	return &vault.Entity{
 		ID: id,
 		Kind: kind,
-		Plugin: "test",
+		Source: []string{"test/default"},
 		Data: map[string]any{"title": id},
 		Summary: "summary for " + id,
 	}

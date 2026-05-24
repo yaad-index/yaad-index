@@ -243,3 +243,86 @@ func TestGetPlugins_KindsAreSortedByName(t *testing.T) {
 	assert.Equal(t, []string{"apple", "mango", "zebra"}, names,
 		"entity_kinds within a plugin must be alphabetically sorted")
 }
+
+// --- ADR-0028 Cut 2: /v1/plugins surfaces per-plugin instances ---
+
+func TestGetPlugins_InstancesSingleImplicit_SurfacesDefault(t *testing.T) {
+	t.Parallel()
+
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	registry := plugins.NewRegistry()
+	registry.Register(&fixture.Plugin{
+		NameValue: "wikipedia",
+		MatchFunc: func(string) bool { return false },
+		CapabilitiesValue: plugins.Capabilities{
+			Name: "wikipedia",
+			URLPatterns: []string{`^https?://en\.wikipedia\.org/.*`},
+		},
+	})
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	// No WithPluginInstances → handler falls back to synthesized
+	// `[{name: "default", enabled: true}]` per the ADR-0028 §1
+	// implicit-instance contract.
+	h := NewHandlerWithRegistry(logger, st, registry)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/plugins", nil)
+	h.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp pluginsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Plugins, 1)
+	assert.Equal(t, []pluginInstanceEntry{{Name: "default", Enabled: true}},
+		resp.Plugins[0].Instances,
+		"single-implicit plugin must surface the synthesized default instance")
+}
+
+func TestGetPlugins_InstancesMultiInstance_SurfacesOperatorList(t *testing.T) {
+	t.Parallel()
+
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	registry := plugins.NewRegistry()
+	registry.Register(&fixture.Plugin{
+		NameValue: "github",
+		MatchFunc: func(string) bool { return false },
+		CapabilitiesValue: plugins.Capabilities{
+			Name: "github",
+			URLPatterns: []string{`^https?://github\.com/.*`},
+			SupportsInstances: true,
+		},
+	})
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	// Operator declared two instances; the handler must surface
+	// the full list in declaration order per ADR-0028 §1 + §4
+	// (fan-out semantics depend on this order).
+	h := NewHandlerWithRegistry(logger, st, registry,
+		WithPluginInstances(map[string][]string{
+			"github": {"personal", "work"},
+		}),
+	)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/plugins", nil)
+	h.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp pluginsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Plugins, 1)
+	assert.Equal(t,
+		[]pluginInstanceEntry{
+			{Name: "personal", Enabled: true},
+			{Name: "work", Enabled: true},
+		},
+		resp.Plugins[0].Instances,
+		"multi-instance plugin must surface operator's list in declaration order")
+}

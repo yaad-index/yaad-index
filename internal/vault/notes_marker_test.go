@@ -19,7 +19,7 @@ func TestMarshal_CommentsWrappedInMarkers(t *testing.T) {
 	e := &Entity{
 		ID:     "wikipedia:foo",
 		Kind:   "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Notes: []Note{
 			{
 				Date:   mustParseTime(t, "2026-05-13T00:00:00Z"),
@@ -55,7 +55,7 @@ func TestUnmarshal_MarkerWrappedRoundTrip(t *testing.T) {
 	original := &Entity{
 		ID:     "wikipedia:foo",
 		Kind:   "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Notes: []Note{
 			{
 				Date:   mustParseTime(t, "2026-05-13T00:00:00Z"),

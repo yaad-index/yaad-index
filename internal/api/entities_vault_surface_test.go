@@ -79,7 +79,7 @@ func TestGetEntity_VaultSurfaceMerged(t *testing.T) {
 	seedEntityWithVaultBody(t, st, w, &vault.Entity{
 		ID: "wikipedia:susanna-clarke",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Susanna Clarke"},
 		CleanContent: "Susanna Clarke is an English author.",
 		Summary: "British author known for Jonathan Strange & Mr Norrell.",
@@ -102,7 +102,7 @@ func TestGetEntity_VaultSurfaceMerged(t *testing.T) {
 
 	got := decodeEntityResponse(t, rec)
 	assert.Equal(t, "wikipedia:susanna-clarke", got.ID)
-	assert.Equal(t, "wikipedia", got.Plugin)
+	assert.Equal(t, []string{"wikipedia/default"}, got.Source)
 	// Vault round-trip canonicalizes a trailing newline on CleanContent.
 	assert.Equal(t, "Susanna Clarke is an English author.\n", got.CleanContent)
 	assert.Equal(t, "British author known for Jonathan Strange & Mr Norrell.", got.Summary)
@@ -130,7 +130,7 @@ func TestGetEntity_OmitsEmptyVaultFields(t *testing.T) {
 	seedEntityWithVaultBody(t, st, w, &vault.Entity{
 		ID: "wikipedia:bare",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "bare"},
 	})
 
@@ -152,9 +152,10 @@ func TestGetEntity_OmitsEmptyVaultFields(t *testing.T) {
 		assert.NotContains(t, body, key,
 			"empty vault fields must omit %s from the wire", key)
 	}
-	// `plugin` is the one field that DOES land on a bare entity (the
-	// vault writer always sets it). Keep it on the wire.
-	assert.Contains(t, body, `"plugin":"wikipedia"`)
+	// `source` (ADR-0028 §5 slash-form) is the one field that DOES
+	// land on a bare entity (the vault writer always sets it). Keep
+	// it on the wire.
+	assert.Contains(t, body, `"source":["wikipedia/default"]`)
 }
 
 // TestGetEntity_DBOnlyDeploymentSurfacesNothing pins the
@@ -214,7 +215,7 @@ func TestIngest_CacheHitInheritsVaultBodyParity(t *testing.T) {
 	seedEntityWithVaultBody(t, st, w, &vault.Entity{
 		ID: "wikipedia:parity",
 		Kind: "wikipedia-article",
-		Plugin: "wikipedia",
+		Source: []string{"wikipedia/default"},
 		Data: map[string]any{"title": "Parity"},
 		CleanContent: "Body content from the cached vault file.",
 		Summary: "Cached summary.",
@@ -244,7 +245,7 @@ func TestIngest_CacheHitInheritsVaultBodyParity(t *testing.T) {
 		"cache-hit response must surface clean_content from the vault (trailing newline canonical)")
 	assert.Equal(t, "Cached summary.", got.Entity.Summary)
 	assert.Equal(t, []string{"cached"}, got.Entity.Tags)
-	assert.Equal(t, "wikipedia", got.Entity.Plugin)
+	assert.Equal(t, []string{"wikipedia/default"}, got.Entity.Source)
 
 	// And the cache:notations provenance entry the a prior PR contract
 	// requires must still be present.

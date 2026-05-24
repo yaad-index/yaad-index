@@ -281,7 +281,7 @@ func TestIngest_CacheHit_NeedsFill_CarriesInstructionAndCanonicalVocabulary(t *t
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: entityID,
 		Kind: entityKind,
-		Plugin: "seed",
+		Source: []string{"seed/default"},
 		Data: map[string]any{"title": "seeded"},
 		Gaps: []string{"name"},
 		Provenance: []vault.ProvenanceEntry{
@@ -358,7 +358,7 @@ func TestIngest_CompleteCacheHit_DoesNotCarryNeedsFillFields(t *testing.T) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: entityID,
 		Kind: entityKind,
-		Plugin: "seed",
+		Source: []string{"seed/default"},
 		Data: map[string]any{"title": "seeded"},
 		Gaps: nil,
 		Provenance: []vault.ProvenanceEntry{

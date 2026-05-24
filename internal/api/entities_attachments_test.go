@@ -32,7 +32,7 @@ func seedAttachmentEntity(t *testing.T, st store.Store, root, id, kind, name, mi
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: kind,
-		Plugin: "fixture",
+		Source: []string{"fixture/default"},
 		Data: map[string]any{"name": "Has-attach"},
 		Attachments: []vault.Attachment{
 			{
@@ -124,7 +124,7 @@ func TestEntityAttachment_PathTraversal_OnManifestPath(t *testing.T) {
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: "boardgame",
-		Plugin: "fixture",
+		Source: []string{"fixture/default"},
 		Data: map[string]any{"name": "Poisoned"},
 		Attachments: []vault.Attachment{
 			{

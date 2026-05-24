@@ -62,7 +62,7 @@ func newAuthedCommentsFixture(t *testing.T) (http.Handler, store.Store, string, 
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: commentsAuthTestEntityID,
 		Kind: "boardgame",
-		Plugin: "test-fixture",
+		Source: []string{"test-fixture/default"},
 		Data: map[string]any{"id": commentsAuthTestEntityID, "title": "Auth Note Test"},
 	}))
 	return h, st, root, signer

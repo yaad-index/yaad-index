@@ -101,7 +101,7 @@ func seedSourceForCanonicalTypeFill(t *testing.T, st store.Store, root, id strin
 	require.NoError(t, w.Write(&vault.Entity{
 		ID: id,
 		Kind: "source",
-		Plugin: "fixture",
+		Source: []string{"fixture/default"},
 		Data: map[string]any{"name": "Test Source"},
 		Gaps: []string{"subjects"},
 	}))
