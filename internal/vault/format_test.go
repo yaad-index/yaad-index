@@ -862,3 +862,58 @@ func TestEntity_PluginName_ExtractsFromSlashForm(t *testing.T) {
 		"multi-source: first-listed's plugin name wins per ADR-0028 §5 refresh-ownership default")
 	assert.Equal(t, "", (&Entity{}).PluginName(), "no source → empty")
 }
+
+// TestMarshal_SourceMalformedSlashShape_Rejects pins the stricter
+// validation: ADR-0028 §5 requires exactly `<plugin>/<instance>`
+// (two non-empty segments). Half-shapes, over-segmented shapes,
+// and bare-plugin shapes all reject at write time so the bug
+// surfaces at the offending producer site, not in PluginName()'s
+// empty-plugin fallback or in cache-filter mis-attribution
+// downstream.
+func TestMarshal_SourceMalformedSlashShape_Rejects(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []string{
+		"github",                  // bare plugin (no slash)
+		"/default",                // empty plugin half
+		"github/",                 // empty instance half
+		"/",                       // both empty
+		"github/personal/extra",   // over-segmented
+		"a/b/c/d",                 // more over-segmentation
+	} {
+		t.Run("bad="+bad, func(t *testing.T) {
+			e := &Entity{
+				ID:     "x:y",
+				Kind:   "x",
+				Source: []string{bad},
+				Data:   map[string]any{"title": "y"},
+			}
+			_, err := Marshal(e, nil)
+			require.Error(t, err, "shape %q must be rejected", bad)
+			assert.ErrorIs(t, err, ErrMissingRequiredField)
+			assert.Contains(t, err.Error(), "exactly two non-empty segments",
+				"error message must point at the slash-form contract; got: %v", err)
+		})
+	}
+}
+
+func TestMarshal_SourceWellFormedSlashShape_Accepts(t *testing.T) {
+	t.Parallel()
+	for _, good := range []string{
+		"github/personal",
+		"wikipedia/default",
+		"bgg/main",
+		"a/b",
+		"gmail/work-account_1",
+	} {
+		t.Run("good="+good, func(t *testing.T) {
+			e := &Entity{
+				ID:     "x:y",
+				Kind:   "x",
+				Source: []string{good},
+				Data:   map[string]any{"title": "y"},
+			}
+			_, err := Marshal(e, nil)
+			require.NoError(t, err, "shape %q must be accepted", good)
+		})
+	}
+}

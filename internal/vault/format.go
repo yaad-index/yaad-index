@@ -331,17 +331,23 @@ func validateRequired(e *Entity) error {
 		return fmt.Errorf("%w: source", ErrMissingRequiredField)
 	}
 	// Per ADR-0028 §5, every Source entry must be the slash-form
-	// `<plugin>/<instance>`. Empty entries or bare-plugin shapes
-	// indicate a producer that hasn't migrated to the new
-	// attribution contract — surface at write time so the bug
-	// lands at the offending site, not on a downstream reader
-	// that gets a malformed entity.
+	// `<plugin>/<instance>` — exactly two non-empty `/`-separated
+	// segments. Empty entries, bare-plugin shapes (`github`),
+	// half-shapes (`/default`, `github/`), and over-segmented
+	// shapes (`github/personal/extra`) all indicate a producer
+	// that hasn't migrated to the new attribution contract.
+	// Reject at write time so the bug lands at the offending
+	// site, not on a downstream reader (especially PluginName(),
+	// which would return the empty string for a `/default`-style
+	// entry and silently mis-attribute the entity in cache
+	// filters and UI rendering).
 	for i, s := range e.Source {
 		if s == "" {
 			return fmt.Errorf("%w: source[%d] is empty", ErrMissingRequiredField, i)
 		}
-		if !strings.Contains(s, "/") {
-			return fmt.Errorf("%w: source[%d] %q missing instance suffix (expected `<plugin>/<instance>`)",
+		parts := strings.Split(s, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return fmt.Errorf("%w: source[%d] %q must be the slash-form `<plugin>/<instance>` (exactly two non-empty segments)",
 				ErrMissingRequiredField, i, s)
 		}
 	}
