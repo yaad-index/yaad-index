@@ -92,7 +92,12 @@ func handleCommandFanOut(
 					plugin.Name(), inv.Instance, instanceNames(instances)))
 			return
 		}
-		dispatchSingleCommand(w, r, logger, st, tracker, plugin, req, target.Name, waitSeconds, fillInstruction, canonicalKindReg)
+		extraEnv, envErr := buildInstanceEnv(plugin.Name(), target)
+		if envErr != nil {
+			writeError(w, http.StatusInternalServerError, "instance_env_failed", envErr.Error())
+			return
+		}
+		dispatchSingleCommand(w, r, logger, st, tracker, plugin, req, target.Name, extraEnv, waitSeconds, fillInstruction, canonicalKindReg)
 		return
 	}
 
@@ -107,11 +112,16 @@ func handleCommandFanOut(
 		// matches the pre-Cut-4 behavior for plugins that were
 		// loaded without operator config (test paths, dev
 		// binaries) and preserves the existing response shape.
-		dispatchSingleCommand(w, r, logger, st, tracker, plugin, req, "", waitSeconds, fillInstruction, canonicalKindReg)
+		dispatchSingleCommand(w, r, logger, st, tracker, plugin, req, "", nil, waitSeconds, fillInstruction, canonicalKindReg)
 		return
 	}
 	if len(instances) == 1 {
-		dispatchSingleCommand(w, r, logger, st, tracker, plugin, req, instances[0].Name, waitSeconds, fillInstruction, canonicalKindReg)
+		extraEnv, envErr := buildInstanceEnv(plugin.Name(), instances[0])
+		if envErr != nil {
+			writeError(w, http.StatusInternalServerError, "instance_env_failed", envErr.Error())
+			return
+		}
+		dispatchSingleCommand(w, r, logger, st, tracker, plugin, req, instances[0].Name, extraEnv, waitSeconds, fillInstruction, canonicalKindReg)
 		return
 	}
 
@@ -135,12 +145,14 @@ func dispatchSingleCommand(
 	plugin plugins.Plugin,
 	req ingestRequest,
 	instanceName string,
+	extraEnv []string,
 	waitSeconds int,
 	fillInstruction string,
 	canonicalKindReg map[string]config.CanonicalKindConfig,
 ) {
 	att := ingestAttemptForPlugin(plugin, req.URL, instanceName)
 	att.forceRefetch = req.ForceRefetch
+	att.simulation.extraEnv = extraEnv
 	rec := tracker.beginAttempt(att)
 
 	if waitSeconds == 0 {
@@ -197,7 +209,22 @@ func dispatchFanOut(
 ) {
 	results := make([]fanOutInstance, 0, len(instances))
 	for _, inst := range instances {
-		entry := runFanOutInstance(r, logger, tracker, plugin, req, inst.Name, waitSeconds)
+		extraEnv, envErr := buildInstanceEnv(plugin.Name(), inst)
+		if envErr != nil {
+			// Surface the per-instance env-build error as the
+			// per-instance result rather than aborting the
+			// walk — matches the ADR-0028 §4 "per-instance
+			// error continues" contract.
+			logger.WarnContext(r.Context(), "fan-out instance env build failed",
+				"err", envErr, "plugin", plugin.Name(), "instance", inst.Name)
+			results = append(results, fanOutInstance{
+				Instance: inst.Name,
+				State:    "failed",
+				Error:    envErr.Error(),
+			})
+			continue
+		}
+		entry := runFanOutInstance(r, logger, tracker, plugin, req, inst.Name, extraEnv, waitSeconds)
 		results = append(results, entry)
 	}
 
@@ -226,10 +253,12 @@ func runFanOutInstance(
 	plugin plugins.Plugin,
 	req ingestRequest,
 	instanceName string,
+	extraEnv []string,
 	waitSeconds int,
 ) fanOutInstance {
 	att := ingestAttemptForPlugin(plugin, req.URL, instanceName)
 	att.forceRefetch = req.ForceRefetch
+	att.simulation.extraEnv = extraEnv
 	rec := tracker.beginAttempt(att)
 
 	if waitSeconds == 0 {

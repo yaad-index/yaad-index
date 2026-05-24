@@ -276,6 +276,68 @@ func WarnInstanceRoutingOverlap(
 	}
 }
 
+// buildInstanceEnvForName looks up an instance by name in the
+// operator's configured list and returns its per-call env via
+// buildInstanceEnv. Returns nil env + nil error when the
+// instance list is empty (test paths) OR the named instance is
+// the synthesized `default` whose Config is empty AND Env is
+// nil — those cases legitimately produce no extra env. Returns
+// an error when an explicitly named instance isn't found in the
+// list (programmer bug: the dispatch layer should validate
+// existence before calling here).
+func buildInstanceEnvForName(pluginName string, instances []config.InstanceEntry, instanceName string) ([]string, error) {
+	if len(instances) == 0 {
+		return nil, nil
+	}
+	if instanceName == "" {
+		// Caller didn't pre-resolve an instance (test path /
+		// fallback). Use the first-declared instance's env as
+		// the matching default — matches the tracker's
+		// resolveInstanceName first-instance fallback.
+		return buildInstanceEnv(pluginName, instances[0])
+	}
+	inst, ok := findInstanceByName(instances, instanceName)
+	if !ok {
+		return nil, fmt.Errorf("plugin %q: instance %q not found in operator config (configured: %v)",
+			pluginName, instanceName, instanceNames(instances))
+	}
+	return buildInstanceEnv(pluginName, inst)
+}
+
+// buildInstanceEnv returns the per-call subprocess env splice for
+// an active instance per ADR-0028 §3 + §4 (Cut 4). Order:
+//   - YAAD_PLUGIN_CONFIG built from instance.Config (last-wins
+//     overrides any registry-build-time configEnv with the same
+//     key — the spawn-time env is authoritative for the active
+//     instance).
+//   - InstanceEntry.Env entries as `KEY=VALUE` strings (last-
+//     wins over YAAD_PLUGIN_CONFIG on duplicate keys; operator-
+//     written env beats daemon-derived defaults).
+//
+// Returns nil when the instance carries no config + no env (the
+// degenerate test path). Errors from PluginConfigEnv surface as
+// returned errors so the dispatch layer can fail-fast with a
+// clear message — a marshal error here indicates a malformed
+// per-instance Config that the JSON-Schema gate (Cut 1) missed.
+func buildInstanceEnv(pluginName string, instance config.InstanceEntry) ([]string, error) {
+	out := []string{}
+	if len(instance.Config) > 0 {
+		configEnv, err := config.PluginConfigEnv(pluginName, instance.Config)
+		if err != nil {
+			return nil, fmt.Errorf("build YAAD_PLUGIN_CONFIG for plugin %q instance %q: %w",
+				pluginName, instance.Name, err)
+		}
+		out = append(out, configEnv...)
+	}
+	for k, v := range instance.Env {
+		out = append(out, k+"="+v)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
 // globsOverlap reports whether two glob patterns plausibly match
 // the same value. Heuristic: identical globs always overlap;
 // either pattern being `*` always overlaps; one being a

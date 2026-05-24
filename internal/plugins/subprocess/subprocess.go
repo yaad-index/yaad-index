@@ -370,7 +370,7 @@ func (p *Plugin) Stream(ctx context.Context, rawURL string, onEnvelope plugins.E
 	}
 
 	cmd := exec.CommandContext(ctx, p.path)
-	cmd.Env = p.env()
+	cmd.Env = p.envFor(ctx)
 	cmd.Stdin = bytes.NewReader(reqBody)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -464,7 +464,7 @@ func (p *Plugin) Search(ctx context.Context, query string, limit int) ([]plugins
 	}
 
 	cmd := exec.CommandContext(ctx, p.path)
-	cmd.Env = p.env()
+	cmd.Env = p.envFor(ctx)
 	cmd.Stdin = bytes.NewReader(reqBody)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -705,7 +705,11 @@ func (p *Plugin) runInit() (Capabilities, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, p.path, "--init")
-	cmd.Env = p.env()
+	// --init runs ONCE per plugin binary per ADR-0028 §2 (cache is
+	// plugin-scoped); the per-call ExtraEnv path is for per-instance
+	// invocations (Stream/Search). envFor with a background ctx
+	// strips any caller-side ExtraEnv that might be in scope.
+	cmd.Env = p.envFor(context.Background())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -1225,20 +1229,32 @@ func stagingDirOrDefault() string {
 	return DefaultPluginStagingDir
 }
 
-// env returns this Plugin's subprocess env: the global pluginEnv()
-// (parent env + YAAD_TIMEZONE + YAAD_PLUGIN_STAGING_DIR) extended
-// with the per-plugin config env vars derived from the operator's
-// `config:` sub-block per yaad-index #7. Per-plugin entries land
-// last so they override shell-env values with the same name —
-// operator yaml is the authoritative source when both are set.
-func (p *Plugin) env() []string {
+// envFor returns this Plugin's subprocess env for a per-call
+// invocation: the global pluginEnv() (parent env + YAAD_TIMEZONE
+// + YAAD_PLUGIN_STAGING_DIR) extended with the per-plugin
+// configEnv from registry-build time and then by any per-call
+// extra env stamped via plugins.WithExtraEnv per ADR-0028 §3 +
+// §4 (Cut 4). Precedence (last-wins) — parent env, then
+// registered configEnv, then per-call ExtraEnv — so per-call
+// values override registered values that override shell.
+//
+// Per-call ExtraEnv is the surface multi-instance dispatch uses
+// to pass the active instance's YAAD_PLUGIN_CONFIG +
+// InstanceEntry.Env entries into the subprocess. Pre-Cut-4
+// configEnv stays for plugins that don't carry per-instance
+// config (the registration path still stamps the legacy config
+// at build time as a default; per-call ExtraEnv overrides per
+// invocation).
+func (p *Plugin) envFor(ctx context.Context) []string {
 	base := pluginEnv()
-	if len(p.configEnv) == 0 {
+	extra := plugins.ExtraEnvFromContext(ctx)
+	if len(p.configEnv) == 0 && len(extra) == 0 {
 		return base
 	}
-	out := make([]string, 0, len(base)+len(p.configEnv))
+	out := make([]string, 0, len(base)+len(p.configEnv)+len(extra))
 	out = append(out, base...)
 	out = append(out, p.configEnv...)
+	out = append(out, extra...)
 	return out
 }
 

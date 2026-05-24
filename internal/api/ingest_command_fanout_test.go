@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -251,4 +253,175 @@ func TestCommandFanOut_ErrorContinuesWalk(t *testing.T) {
 		"second instance must run even though the first errored — per ADR-0028 §4")
 	assert.Equal(t, int32(2), spawns.Load(),
 		"both instances must spawn despite the first instance's error")
+}
+
+// TestCommandFanOut_AsyncSpawnsAllInstances_NoDedupCollision pins
+// the ADR-0028 §4 fix from the PR-253 cold-review: fan-out across
+// N instances must produce N distinct tracker records even in the
+// async (waitSeconds=0) path. Without the instance-aware dedup
+// key, the second through Nth attempts would subscribe to the
+// first record's invocation-key entry and skip their own
+// subprocess spawn — silent-success failure where the wire
+// response says "queued for all N" but only one instance runs.
+func TestCommandFanOut_AsyncSpawnsAllInstances_NoDedupCollision(t *testing.T) {
+	t.Parallel()
+	h, spawns := newFanOutFixture(t, []config.InstanceEntry{
+		{Name: "personal"},
+		{Name: "work"},
+		{Name: "ops"},
+	})
+	rec := postIngest(t, h, map[string]any{
+		"url":          "gmail: !fetch",
+		"wait_seconds": 1,
+	})
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	// Each instance must produce its own spawn; nothing collapses
+	// via the tracker's invocation-key dedup.
+	assert.Equal(t, int32(3), spawns.Load(),
+		"3 instances → 3 distinct subprocess spawns (dedup key must include instance)")
+
+	var resp ingestFanOutResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Len(t, resp.Result, 3)
+	// All three instances reach complete (the fixture always emits
+	// a single envelope per spawn). Each carries a distinct
+	// instance name in the aggregate.
+	got := []string{resp.Result[0].Instance, resp.Result[1].Instance, resp.Result[2].Instance}
+	assert.Equal(t, []string{"personal", "work", "ops"}, got)
+}
+
+// TestCommandFanOut_PerInstanceEnvReachesPlugin pins the ADR-0028
+// §3 + §4 (Cut 4) per-instance env splice — the dispatch layer
+// builds YAAD_PLUGIN_CONFIG + InstanceEntry.Env entries from the
+// active instance and threads them into the invocation ctx via
+// plugins.WithExtraEnv. The fixture plugin's StreamFunc captures
+// the per-call ExtraEnv so the test asserts: each per-instance
+// spawn sees its own env, distinct from the other instance's
+// env. Without the per-call env splice (the silent-success
+// failure mode the PR-253 cold-review surfaced), all
+// instances would see the same registry-build-time env and the
+// per-instance values would never reach the subprocess.
+func TestCommandFanOut_PerInstanceEnvReachesPlugin(t *testing.T) {
+	t.Parallel()
+
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	type capturedCall struct {
+		envFromCtx []string
+	}
+	var (
+		mu sync.Mutex
+		calls []capturedCall
+	)
+
+	registry := plugins.NewRegistry()
+	registry.Register(&fixture.Plugin{
+		NameValue: "gmail",
+		MatchFunc: func(string) bool { return false },
+		StreamFunc: func(ctx context.Context, rawURL string, onEnvelope plugins.EnvelopeFunc, onControl plugins.ControlFunc) error {
+			mu.Lock()
+			calls = append(calls, capturedCall{
+				envFromCtx: plugins.ExtraEnvFromContext(ctx),
+			})
+			mu.Unlock()
+			return onEnvelope(&plugins.FetchResult{
+				Entity: &store.Entity{
+					ID:   "gmail:msg-" + rawURL,
+					Kind: "source",
+					Data: map[string]any{"subject": rawURL},
+				},
+				Provenance: []store.ProvenanceEntry{{Source: "gmail:fetch", OK: true}},
+			})
+		},
+		CapabilitiesValue: plugins.Capabilities{
+			Name:              "gmail",
+			SourceNamespace:   "gmail",
+			EntityKinds:       []plugins.KindSpec{{Name: "source"}},
+			Commands:          []plugins.CommandSpec{{Name: "fetch"}},
+			SupportsInstances: true,
+		},
+	})
+
+	instances := []config.InstanceEntry{
+		{
+			Name:   "personal",
+			Config: map[string]any{"account": "ops@example.test"},
+			Env:    map[string]string{"YAAD_GMAIL_ACCOUNT": "ops@example.test"},
+		},
+		{
+			Name:   "work",
+			Config: map[string]any{"account": "work@example.test"},
+			Env:    map[string]string{"YAAD_GMAIL_ACCOUNT": "work@example.test"},
+		},
+	}
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	h := NewHandlerWithRegistry(logger, st, registry,
+		WithPluginInstances(map[string][]string{"gmail": {"personal", "work"}}),
+		WithPluginInstanceConfigs(map[string][]config.InstanceEntry{"gmail": instances}),
+	)
+
+	rec := postIngest(t, h, map[string]any{
+		"url":          "gmail: !fetch",
+		"wait_seconds": 1,
+	})
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, calls, 2, "fan-out across 2 instances → 2 distinct Stream calls")
+
+	// Each call's ctx must carry the instance's specific env. The
+	// per-call ExtraEnv shape is `[]string` with `KEY=VALUE`
+	// entries: YAAD_PLUGIN_CONFIG (built from the per-instance
+	// Config map) + InstanceEntry.Env entries spliced on top.
+	assertEnvContains(t, calls[0].envFromCtx, "YAAD_GMAIL_ACCOUNT=ops@example.test")
+	assertEnvContains(t, calls[1].envFromCtx, "YAAD_GMAIL_ACCOUNT=work@example.test")
+
+	// Cross-check: neither instance saw the OTHER instance's env
+	// (silent mis-attribution would manifest as both calls seeing
+	// the same value).
+	assertEnvNotContains(t, calls[0].envFromCtx, "YAAD_GMAIL_ACCOUNT=work@example.test")
+	assertEnvNotContains(t, calls[1].envFromCtx, "YAAD_GMAIL_ACCOUNT=ops@example.test")
+
+	// Per-instance YAAD_PLUGIN_CONFIG MUST carry the instance's
+	// Config payload (built via config.PluginConfigEnv at dispatch
+	// time). The exact JSON shape includes the `_name` daemon-
+	// injection + the operator's Config keys.
+	assertEnvHasPrefixWithSubstring(t, calls[0].envFromCtx, "YAAD_PLUGIN_CONFIG=", `"account":"ops@example.test"`)
+	assertEnvHasPrefixWithSubstring(t, calls[1].envFromCtx, "YAAD_PLUGIN_CONFIG=", `"account":"work@example.test"`)
+}
+
+func assertEnvContains(t *testing.T, env []string, want string) {
+	t.Helper()
+	for _, e := range env {
+		if e == want {
+			return
+		}
+	}
+	assert.Failf(t, "env entry missing", "want %q in %v", want, env)
+}
+
+func assertEnvNotContains(t *testing.T, env []string, unwanted string) {
+	t.Helper()
+	for _, e := range env {
+		if e == unwanted {
+			assert.Failf(t, "env entry leaked", "unwanted %q present in %v", unwanted, env)
+			return
+		}
+	}
+}
+
+func assertEnvHasPrefixWithSubstring(t *testing.T, env []string, prefix, substr string) {
+	t.Helper()
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) && strings.Contains(e, substr) {
+			return
+		}
+	}
+	assert.Failf(t, "env entry missing prefix+substring combo",
+		"want entry starting with %q containing %q in %v", prefix, substr, env)
 }

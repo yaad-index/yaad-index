@@ -292,7 +292,19 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 					return
 				}
 			}
+			// ADR-0028 §4 (Cut 4): build the per-instance
+			// subprocess env splice and thread it through the
+			// ingest attempt. The simulator stamps it into the
+			// invocation ctx so subprocess.Plugin spawns this
+			// call with the active instance's
+			// YAAD_PLUGIN_CONFIG + InstanceEntry.Env entries.
+			extraEnv, envErr := buildInstanceEnvForName(plugin.Name(), pluginInstanceConfigs[plugin.Name()], instanceName)
+			if envErr != nil {
+				writeError(w, http.StatusInternalServerError, "instance_env_failed", envErr.Error())
+				return
+			}
 			att = ingestAttemptForPlugin(plugin, req.URL, instanceName)
+			att.simulation.extraEnv = extraEnv
 		} else {
 			fixtureAtt, err := ingestAttemptForURL(req.URL)
 			if errors.Is(err, errNoFixtureMatch) {
