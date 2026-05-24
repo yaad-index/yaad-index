@@ -203,6 +203,18 @@ type Evaluator struct {
 	env    *cel.Env
 	lookup GraphLookup
 
+	// walker drives the graph.in_edges / graph.out_edges /
+	// graph.in_neighbors / graph.out_neighbors CEL helpers per
+	// ADR-0027 cut 3. Optional — nil walker makes the four
+	// helpers return the empty `{items: [], truncated: false,
+	// total: 0}` struct so unit tests that don't exercise the
+	// walk surface don't have to stub it.
+	walker GraphWalker
+	// graphWalkCap is the per-call result cap for the graph-walk
+	// helpers. Defaults to DefaultGraphWalkCap when Options
+	// doesn't set it.
+	graphWalkCap int
+
 	cacheMu sync.RWMutex
 	cache   map[cacheKey]cel.Program
 
@@ -240,6 +252,16 @@ type cacheKey struct {
 type Options struct {
 	Lookup   GraphLookup
 	Bindings []string
+	// Walker drives the ADR-0027 cut 3 graph.in_edges /
+	// out_edges / in_neighbors / out_neighbors CEL helpers.
+	// Optional; nil short-circuits the helpers to empty results
+	// (the four helpers still register so workflows referencing
+	// them parse cleanly in test/dev paths).
+	Walker GraphWalker
+	// GraphWalkCap caps the per-call result list size. When 0,
+	// DefaultGraphWalkCap (1000) applies. Operator config wires
+	// this from the workflow.graph_walk_cap knob.
+	GraphWalkCap int
 }
 
 // NewEvaluator constructs an evaluator with the standard
@@ -254,9 +276,15 @@ type Options struct {
 // per workflow with the workflow's Context[].Name set in
 // Bindings.
 func NewEvaluator(opts Options) (*Evaluator, error) {
+	cap := opts.GraphWalkCap
+	if cap <= 0 {
+		cap = DefaultGraphWalkCap
+	}
 	e := &Evaluator{
-		lookup: opts.Lookup,
-		cache:  make(map[cacheKey]cel.Program),
+		lookup:       opts.Lookup,
+		walker:       opts.Walker,
+		graphWalkCap: cap,
+		cache:        make(map[cacheKey]cel.Program),
 	}
 	env, err := e.buildEnv(opts.Bindings)
 	if err != nil {
@@ -351,9 +379,11 @@ func (e *Evaluator) buildEnv(bindings []string) (*cel.Env, error) {
 			),
 		),
 		ext.Strings(),
+		ext.Lists(),
 		regexCaptureFunction(),
 	}
 	opts = append(opts, temporalFunctions()...)
+	opts = append(opts, e.graphWalkFunctions()...)
 	seen := make(map[string]struct{}, len(bindings))
 	for _, name := range bindings {
 		if _, dup := seen[name]; dup {

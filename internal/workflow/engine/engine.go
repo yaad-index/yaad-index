@@ -203,6 +203,19 @@ type Options struct {
 	// Zero → DefaultDecisionRingSize.
 	DecisionRingSize int
 
+	// Walker drives the ADR-0027 cut 3 graph-walk CEL helpers
+	// (graph.in_edges / graph.out_edges / graph.in_neighbors /
+	// graph.out_neighbors). Optional — nil makes the helpers
+	// return the empty `{items, truncated, total}` struct.
+	// Production wires a store-backed implementation; tests
+	// substitute fakes.
+	Walker decision.GraphWalker
+
+	// GraphWalkCap caps the per-call result list size on the
+	// graph-walk helpers. Zero → decision.DefaultGraphWalkCap
+	// (1000). Operator config wires this from the
+	// workflow.graph_walk_cap knob.
+	GraphWalkCap int
 }
 
 // DefaultIngestTimeout caps Engine.Dispatch's wait on the
@@ -232,6 +245,8 @@ type Engine struct {
 	ingestTimeout time.Duration
 	logger        *slog.Logger
 	ringSize      int
+	walker        decision.GraphWalker
+	graphWalkCap  int
 
 	mu        sync.RWMutex
 	workflows map[string]*registeredWorkflow
@@ -393,6 +408,8 @@ func New(opts Options) (*Engine, error) {
 		ingestTimeout: ingestTimeout,
 		logger:        logger,
 		ringSize:      ring,
+		walker:        opts.Walker,
+		graphWalkCap:  opts.GraphWalkCap,
 		workflows:     make(map[string]*registeredWorkflow),
 		dedupSeen:     make(map[dedupID]struct{}),
 		cycleLogged:   make(map[string]struct{}),
@@ -588,8 +605,10 @@ func (e *Engine) registerLocked(wf *parser.Workflow) error {
 		bindings = append(bindings, b.Name)
 	}
 	ev, err := decision.NewEvaluator(decision.Options{
-		Lookup:   &resolverGraphLookup{resolver: e.resolver},
-		Bindings: bindings,
+		Lookup:       &resolverGraphLookup{resolver: e.resolver},
+		Bindings:     bindings,
+		Walker:       e.walker,
+		GraphWalkCap: e.graphWalkCap,
 	})
 	if err != nil {
 		return fmt.Errorf("decision evaluator: %w", err)

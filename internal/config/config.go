@@ -180,6 +180,11 @@ type Config struct {
 	// over to clock.Now() / clock.In() helpers from internal/clock.
 	Timezone string `yaml:"timezone"`
 
+	// Workflow bundles per-workflow-engine knobs. v1.x carries
+	// just the graph-walk cap per ADR-0027 cut 3 (#232); future
+	// workflow-related operator knobs land here too.
+	Workflow WorkflowEntry `yaml:"workflow"`
+
 	// LogLevel is the operator-controlled threshold the slog handler
 	// filters against . One of "debug", "info" (default),
 	// "warn", "error". Empty / missing → info, which matches the
@@ -349,6 +354,19 @@ type CanonicalKindConfig struct {
 }
 
 // VaultEntry is the `vault:` block of the config document.
+// WorkflowEntry bundles per-workflow-engine operator knobs per
+// ADR-0027 cut 3.
+type WorkflowEntry struct {
+	// GraphWalkCap caps the per-call result list size on the
+	// graph.in_edges / out_edges / in_neighbors / out_neighbors
+	// CEL helpers. Zero / unset → decision.DefaultGraphWalkCap
+	// (1000). Operators with dense graphs can raise the cap;
+	// the truncation flag on the wrapping struct
+	// {items, truncated, total} signals overflow regardless of
+	// the cap value.
+	GraphWalkCap int `yaml:"graph_walk_cap"`
+}
+
 type VaultEntry struct {
 	Path string `yaml:"path"`
 

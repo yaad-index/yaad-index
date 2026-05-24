@@ -150,6 +150,148 @@ func (r *storeEntityResolver) Resolve(ctx context.Context, id string) (map[strin
 	return out, nil
 }
 
+// storeGraphWalker satisfies decision.GraphWalker against the
+// production store. Edge walks call GetEdgesTo / GetEdgesFor
+// with the optional edge-type filter; neighbor walks chain the
+// edge fetch with a GetEntities batch so the returned list<Entity>
+// arrives in two round trips (edge query + batch entity fetch)
+// rather than the N+1 shape a CEL-side
+// `graph.in_edges(id).map(e, graph.get(e.from))` would produce.
+//
+// Per-call cap is enforced after the edge fetch in-memory; the
+// store-level GetEdgesFor / GetEdgesTo don't currently take a
+// LIMIT (the existing surface walks a single entity's outbound
+// edges, bounded by per-entity edge counts in practice). When
+// graph density justifies it, push the LIMIT into SQL — for v1
+// the in-memory cap matches the operator-observed performance
+// shape on day-anchor walks.
+//
+// nil store → every method returns the empty result; useful for
+// dev binaries that don't wire a store.
+type storeGraphWalker struct {
+	st       store.Store
+	resolver *storeEntityResolver
+}
+
+func (w *storeGraphWalker) Get(ctx context.Context, id string) (map[string]any, error) {
+	if w.resolver == nil {
+		return nil, decision.ErrEntityNotFound
+	}
+	return w.resolver.Resolve(ctx, id)
+}
+
+func (w *storeGraphWalker) InEdges(ctx context.Context, toID, edgeType string, limit int) ([]decision.WalkEdge, int, error) {
+	return w.walkEdges(ctx, edgeType, limit, func(types []string) ([]store.Edge, error) {
+		return w.st.GetEdgesTo(ctx, toID, types)
+	})
+}
+
+func (w *storeGraphWalker) OutEdges(ctx context.Context, fromID, edgeType string, limit int) ([]decision.WalkEdge, int, error) {
+	return w.walkEdges(ctx, edgeType, limit, func(types []string) ([]store.Edge, error) {
+		return w.st.GetEdgesFor(ctx, fromID, types)
+	})
+}
+
+func (w *storeGraphWalker) InNeighbors(ctx context.Context, toID, edgeType string, limit int) ([]map[string]any, int, error) {
+	return w.walkNeighbors(ctx, edgeType, limit,
+		func(types []string) ([]store.Edge, error) { return w.st.GetEdgesTo(ctx, toID, types) },
+		func(e store.Edge) string { return e.From },
+	)
+}
+
+func (w *storeGraphWalker) OutNeighbors(ctx context.Context, fromID, edgeType string, limit int) ([]map[string]any, int, error) {
+	return w.walkNeighbors(ctx, edgeType, limit,
+		func(types []string) ([]store.Edge, error) { return w.st.GetEdgesFor(ctx, fromID, types) },
+		func(e store.Edge) string { return e.To },
+	)
+}
+
+func (w *storeGraphWalker) walkEdges(_ context.Context, edgeType string, limit int, fetch func([]string) ([]store.Edge, error)) ([]decision.WalkEdge, int, error) {
+	var typeFilter []string
+	if edgeType != "" {
+		typeFilter = []string{edgeType}
+	}
+	edges, err := fetch(typeFilter)
+	if err != nil {
+		return nil, 0, err
+	}
+	total := len(edges)
+	if limit > 0 && total > limit {
+		edges = edges[:limit]
+	}
+	out := make([]decision.WalkEdge, len(edges))
+	for i, e := range edges {
+		out[i] = decision.WalkEdge{
+			From:     e.From,
+			To:       e.To,
+			Type:     e.Type,
+			Metadata: e.Metadata,
+		}
+	}
+	return out, total, nil
+}
+
+func (w *storeGraphWalker) walkNeighbors(ctx context.Context, edgeType string, limit int, fetch func([]string) ([]store.Edge, error), endpoint func(store.Edge) string) ([]map[string]any, int, error) {
+	var typeFilter []string
+	if edgeType != "" {
+		typeFilter = []string{edgeType}
+	}
+	edges, err := fetch(typeFilter)
+	if err != nil {
+		return nil, 0, err
+	}
+	total := len(edges)
+	if limit > 0 && total > limit {
+		edges = edges[:limit]
+	}
+	if len(edges) == 0 {
+		return nil, total, nil
+	}
+	// De-dupe endpoint ids before the batch fetch — a single
+	// source-side entity may appear on multiple inbound edges
+	// (e.g. references_day + due_on to the same day from one
+	// task).
+	idSet := make(map[string]struct{}, len(edges))
+	ids := make([]string, 0, len(edges))
+	for _, e := range edges {
+		id := endpoint(e)
+		if _, dup := idSet[id]; dup {
+			continue
+		}
+		idSet[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	matched, _, err := w.st.GetEntities(ctx, ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	byID := make(map[string]map[string]any, len(matched))
+	for _, e := range matched {
+		m := map[string]any{
+			"id":   e.ID,
+			"kind": e.Kind,
+		}
+		if len(e.Data) > 0 {
+			dataMap := make(map[string]any, len(e.Data))
+			for k, v := range e.Data {
+				dataMap[k] = v
+			}
+			m["data"] = dataMap
+		}
+		byID[e.ID] = m
+	}
+	// Preserve edge order in the output — operator semantics
+	// expect "neighbors in the order their edges land in the
+	// store" (matches the existing GetEdges* ordering).
+	out := make([]map[string]any, 0, len(edges))
+	for _, e := range edges {
+		if m, ok := byID[endpoint(e)]; ok {
+			out = append(out, m)
+		}
+	}
+	return out, total, nil
+}
+
 // ServeCmd implements `yaad-index serve`.
 type ServeCmd struct {
 	Bind string `name:"bind" env:"YAAD_INDEX_BIND" default:"localhost:7433" help:"host:port to bind the HTTP server to."`
@@ -505,12 +647,15 @@ func (s *ServeCmd) Run() error {
 			// than silently using raw CEL source.
 			Logger: logger,
 		})
+		wfWalker := &storeGraphWalker{st: st, resolver: wfResolver}
 		wfEngine, err = engine.New(engine.Options{
 			Bus:          bus,
 			Resolver:     wfResolver,
 			Runner:       wfRunner,
 			IngestRouter: syncIngester,
 			Logger:       logger,
+			Walker:       wfWalker,
+			GraphWalkCap: cfg.Workflow.GraphWalkCap,
 		})
 		if err != nil {
 			return fmt.Errorf("init workflow engine: %w", err)
