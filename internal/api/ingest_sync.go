@@ -117,7 +117,14 @@ func (s *syncIngester) IngestURL(ctx context.Context, url string, timeout time.D
 	if plugin == nil {
 		return "", fmt.Errorf("no plugin handles URL %s", url)
 	}
-	att := ingestAttemptForPlugin(plugin, url)
+	// SyncIngester runs ADR-0024 workflow surfaces and a handful
+	// of internal-only paths; instance routing is /v1/ingest's
+	// responsibility. Pass empty instanceName so the tracker's
+	// resolveInstanceName fallback picks the first-declared
+	// instance for the slash-form source: attribution. Wiring
+	// full per-URL routing into the SyncIngester path is a Cut 4
+	// extension once command-dispatch instance attribution lands.
+	att := ingestAttemptForPlugin(plugin, url, "")
 	rec := s.tracker.beginAttempt(att)
 	snap, err := s.tracker.wait(ctx, rec, timeout)
 	if err != nil {

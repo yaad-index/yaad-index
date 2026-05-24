@@ -193,18 +193,26 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // daemon-side struct so a future schema change shows up here as
 // a compile-time mismatch via the structural-equivalence tests.
 type capabilitiesDoc struct {
-	Name                      string          `json:"name"`
-	Version                   string          `json:"version"`
-	URLPatterns               []string        `json:"url_patterns"`
-	EntityKinds               []kindSpecJSON  `json:"entity_kinds"`
-	EdgeKinds                 []kindSpecJSON  `json:"edge_kinds"`
-	CanonicalKindsEmitted     []string        `json:"canonical_kinds_emitted,omitempty"`
-	CanonicalEdgeTypesEmitted []string        `json:"canonical_edge_types_emitted,omitempty"`
-	SupportsSearch            bool            `json:"supports_search,omitempty"`
-	SourceNamespace           string          `json:"source_namespace,omitempty"`
-	CacheTTLSeconds           int             `json:"cache_ttl_seconds,omitempty"`
-	Commands                  []string        `json:"commands,omitempty"`
-	ConfigSchema              json.RawMessage `json:"config_schema,omitempty"`
+	Name                      string                  `json:"name"`
+	Version                   string                  `json:"version"`
+	URLPatterns               []string                `json:"url_patterns"`
+	EntityKinds               []kindSpecJSON          `json:"entity_kinds"`
+	EdgeKinds                 []kindSpecJSON          `json:"edge_kinds"`
+	CanonicalKindsEmitted     []string                `json:"canonical_kinds_emitted,omitempty"`
+	CanonicalEdgeTypesEmitted []string                `json:"canonical_edge_types_emitted,omitempty"`
+	SupportsSearch            bool                    `json:"supports_search,omitempty"`
+	SourceNamespace           string                  `json:"source_namespace,omitempty"`
+	CacheTTLSeconds           int                     `json:"cache_ttl_seconds,omitempty"`
+	Commands                  []string                `json:"commands,omitempty"`
+	ConfigSchema              json.RawMessage         `json:"config_schema,omitempty"`
+	SupportsInstances         bool                    `json:"supports_instances,omitempty"`
+	InstanceRouting           *instanceRoutingSpecDoc `json:"instance_routing,omitempty"`
+}
+
+type instanceRoutingSpecDoc struct {
+	Strategy      string `json:"strategy"`
+	ConfigField   string `json:"config_field"`
+	MatchTemplate string `json:"match_template"`
 }
 
 type kindSpecJSON struct {
@@ -236,6 +244,23 @@ func runInit(stdout io.Writer) error {
 		CacheTTLSeconds:           github.DefaultCacheTTLSeconds,
 		Commands:                  github.DeclaredCommands,
 		ConfigSchema:              json.RawMessage(configSchemaJSON),
+		// ADR-0028 §9 + §3 (Cut 3): yaad-github's data shape is
+		// per-PAT + per-org-repo-coverage, so multiple operator
+		// instances genuinely scope independently (one PAT per
+		// org/personal context, distinct repo lists per
+		// instance). instance_routing.glob_match resolves a
+		// URL like `https://github.com/owner/repo/pull/1` against
+		// each instance's `config.repos` list by formatting the
+		// `{owner}/{repo}` template from the url_pattern's named
+		// capture groups (per `github.BuildURLPatterns` — the
+		// `owner` and `repo` groups are the convention shared
+		// across pull/issue/commit pattern variants).
+		SupportsInstances: true,
+		InstanceRouting: &instanceRoutingSpecDoc{
+			Strategy:      "glob_match",
+			ConfigField:   "repos",
+			MatchTemplate: "{owner}/{repo}",
+		},
 	}
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")

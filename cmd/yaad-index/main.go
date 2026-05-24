@@ -365,6 +365,49 @@ func (s *ServeCmd) Run() error {
 		return fmt.Errorf("build plugin registry: %w", err)
 	}
 
+	// Build the per-plugin instance lookups per ADR-0028 §1 + §3
+	// (Cuts 1 + 3). Two parallel maps with different consumers:
+	//   - pluginInstances (name-only) → ingest tracker's
+	//     resolveInstanceName + /v1/plugins handler's instances
+	//     surface.
+	//   - pluginInstanceConfigs (full per-instance Config block)
+	//     → /v1/ingest URL routing layer for glob-match against
+	//     each instance's `config[<config_field>]`.
+	// Cut 1's Load synthesis ensures every PluginEntry has at
+	// least one instance (synthesized `default` or explicit
+	// operator-named); we surface those lists here. nil cfg path
+	// (dev binaries without an operator config) leaves both maps
+	// empty — resolveInstanceName falls back to `default` and
+	// pickInstance falls back to the single-instance fast path.
+	pluginInstances := map[string][]string{}
+	pluginInstanceConfigs := map[string][]config.InstanceEntry{}
+	if cfg != nil {
+		for _, entry := range cfg.Plugins {
+			if len(entry.Instances) > 0 {
+				names := make([]string, 0, len(entry.Instances))
+				for _, inst := range entry.Instances {
+					names = append(names, inst.Name)
+				}
+				pluginInstances[entry.Name] = names
+				pluginInstanceConfigs[entry.Name] = append([]config.InstanceEntry(nil), entry.Instances...)
+			}
+		}
+	}
+
+	// ADR-0028 §3 Cut 3 — emit a startup warning for any
+	// multi-instance plugin whose operator-config instance globs
+	// overlap. Per the §3 amendment locked in PR-242, first-match
+	// wins on the resolution path; the overlap warning is a
+	// diagnostic so the operator notices ambiguous routing rather
+	// than discover it through misattributed ingest.
+	if cfg != nil {
+		capsByName := map[string]plugins.Capabilities{}
+		for _, p := range registry.Plugins() {
+			capsByName[p.Name()] = p.Capabilities()
+		}
+		api.WarnInstanceRoutingOverlap(logger, pluginInstanceConfigs, capsByName)
+	}
+
 	// Construct the daemon-internal event bus (per ADR-0024
 	// Phase 2). The API mutation handlers publish to + the
 	// workflow engine subscribes from this same bus, so
@@ -385,21 +428,8 @@ func (s *ServeCmd) Run() error {
 	// config) leaves the map empty — the tracker's resolver falls
 	// back to `default` and /v1/plugins synthesizes the implicit
 	// instance per ADR-0028 §1.
-	pluginInstances := map[string][]string{}
-	if cfg != nil {
-		for _, entry := range cfg.Plugins {
-			if len(entry.Instances) > 0 {
-				names := make([]string, 0, len(entry.Instances))
-				for _, inst := range entry.Instances {
-					names = append(names, inst.Name)
-				}
-				pluginInstances[entry.Name] = names
-			}
-		}
-	}
-
 	var (
-		handlerOpts    = []api.HandlerOption{api.WithEventBus(bus), api.WithPluginInstances(pluginInstances)}
+		handlerOpts    = []api.HandlerOption{api.WithEventBus(bus), api.WithPluginInstances(pluginInstances), api.WithPluginInstanceConfigs(pluginInstanceConfigs)}
 		guard          *config.CanonicalGuard
 		mergedRegistry map[string]config.CanonicalKindConfig
 		wfEngine       *engine.Engine

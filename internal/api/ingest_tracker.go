@@ -124,6 +124,15 @@ type ingestSimulation struct {
 	// for the plugin path:
 	plugin plugins.Plugin
 	rawURL string
+	// instanceName is the operator-config instance name the URL
+	// resolved to per ADR-0028 §3 (Cut 3). Threaded from the
+	// /v1/ingest URL routing layer down to the vault writer so
+	// buildVaultEntity stamps the correct slash-form `source:
+	// <plugin>/<instance>` attribution. Empty falls back to
+	// ingestTracker.resolveInstanceName's first-instance default
+	// — fixture / test paths that don't go through the routing
+	// layer use that fallback.
+	instanceName string
 }
 
 // ingestAttempt bundles everything beginAttempt needs.
@@ -562,6 +571,7 @@ func (t *ingestTracker) runSimulation(rec *ingestRecord, att ingestAttempt) {
 		}
 		fixtureExpires := resolveCacheExpires(nil, 0, t.globalCacheTTLSeconds, fetchedAt)
 		if err := t.writeIngestVaultFile(ctx, att.entity, "fixture",
+			"", // instanceName — fixture path uses resolveInstanceName fallback
 			gapKeys(att.simulation.gaps), att.simulation.cleanContent,
 			nil, // fixture path — no notations
 			nil, // fixture path — no aliases
@@ -943,6 +953,7 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 		fetchedAt,
 	)
 	if err := t.writeIngestVaultFile(ctx, result.Entity, att.simulation.plugin.Name(),
+		att.simulation.instanceName, // routed instance per ADR-0028 §3 (Cut 3); empty falls back to first-instance
 		gapKeys(result.Gaps), result.RawContent, result.Notations, result.Aliases, provenance[0],
 		att.forceRefetch, att.ttlExpired,
 		resolvedExpires, attachmentManifest, result.CanonicalEdges,
@@ -1042,7 +1053,7 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 // channel (simplest concurrency model). Picking among them is a
 // follow-up when concurrent re-ingest becomes load-bearing — flagged
 // in a prior PR's body and not gated by this PR.
-func (t *ingestTracker) writeIngestVaultFile(ctx context.Context, e *store.Entity, plugin string, gaps []string, cleanContent string, notations []string, aliases []string, newProv store.ProvenanceEntry, forceRefetch, ttlExpired bool, cacheExpires *vault.CacheExpires, attachmentManifest []vault.Attachment, canonicalEdges []*store.Edge) error {
+func (t *ingestTracker) writeIngestVaultFile(ctx context.Context, e *store.Entity, plugin string, instanceName string, gaps []string, cleanContent string, notations []string, aliases []string, newProv store.ProvenanceEntry, forceRefetch, ttlExpired bool, cacheExpires *vault.CacheExpires, attachmentManifest []vault.Attachment, canonicalEdges []*store.Edge) error {
 	if t.vaultWriter == nil {
 		return nil
 	}
@@ -1083,7 +1094,17 @@ func (t *ingestTracker) writeIngestVaultFile(ctx context.Context, e *store.Entit
 			"id", e.ID, "reason", mergeReason)
 	}
 
-	source := []string{plugin + "/" + t.resolveInstanceName(plugin)}
+	// Instance attribution per ADR-0028 §3 + §5. The picked
+	// instance from the URL routing layer (Cut 3) wins when set;
+	// callers that don't go through routing (fixture path, future
+	// invocation surfaces that don't expose an instance per call)
+	// fall through to resolveInstanceName's first-instance
+	// default.
+	instance := instanceName
+	if instance == "" {
+		instance = t.resolveInstanceName(plugin)
+	}
+	source := []string{plugin + "/" + instance}
 	merged := buildVaultEntity(e, source, gaps, mergedBody, notations, aliases, newProv, existing, cacheExpires, attachmentManifest, canonicalEdges)
 	commitMsg := ingestCommitMessage(e.ID, existing != nil, forceRefetch, ttlExpired)
 	return t.vaultWriter.WriteWithCommit(ctx, merged, commitMsg, "agent:"+plugin)

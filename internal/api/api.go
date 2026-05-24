@@ -129,7 +129,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("GET /v1/edges", protect(http.HandlerFunc(handleListEdges(logger, st))))
 	mux.Handle("GET /v1/search", protect(http.HandlerFunc(handleSearch(logger, st))))
 	mux.Handle("POST /v1/search/upstream", protect(http.HandlerFunc(handleSearchUpstream(logger, registry))))
-	mux.Handle("POST /v1/ingest", protect(http.HandlerFunc(handleIngest(logger, st, tracker, registry, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg))))
+	mux.Handle("POST /v1/ingest", protect(http.HandlerFunc(handleIngest(logger, st, tracker, registry, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg, cfg.pluginInstanceConfigs))))
 	mux.Handle("GET /v1/needs-fill", protect(http.HandlerFunc(handleNeedsFill(logger, st, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg))))
 	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
 	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
@@ -238,6 +238,17 @@ type handlerConfig struct {
 	// field). Nil / absent entry → tracker falls back to
 	// `default`; /v1/plugins surfaces an empty list.
 	pluginInstances map[string][]string
+	// pluginInstanceConfigs carries the full per-instance config
+	// blocks (name + env + config map) per ADR-0028 §3 Cut 3.
+	// Used by /v1/ingest's URL routing layer to glob-match
+	// against each instance's `config[<config_field>]` list.
+	// Distinct from pluginInstances (which is name-only) because
+	// the routing layer needs the Config map; the per-plugin list
+	// remains in declaration order so first-match-wins is
+	// stable. Nil / absent entry → routing falls through to the
+	// single-instance fast path (pickInstance returns "default"
+	// or the lone instance's name without running the glob walk).
+	pluginInstanceConfigs map[string][]config.InstanceEntry
 	// writeLocks is the per-artifact daemon write-lock manager
 	// (yaad-index #23 + ADR-0024). Acquired before any vault
 	// mutation surface (ingest, fill, archive/restore, delete, UGC
@@ -500,6 +511,16 @@ func WithAttachmentsDispatcher(d *attachments.Dispatcher) HandlerOption {
 // PluginEntry has at least one instance).
 func WithPluginInstances(m map[string][]string) HandlerOption {
 	return func(c *handlerConfig) { c.pluginInstances = m }
+}
+
+// WithPluginInstanceConfigs wires the full per-plugin instance-
+// config list (name + env + config) for URL routing per ADR-0028
+// §3 (Cut 3). Map values must preserve operator declaration
+// order (first-match-wins for glob-match strategy). Nil / empty
+// disables the multi-instance routing path; pickInstance falls
+// back to the single-instance short-circuit for every URL.
+func WithPluginInstanceConfigs(m map[string][]config.InstanceEntry) HandlerOption {
+	return func(c *handlerConfig) { c.pluginInstanceConfigs = m }
 }
 
 // WithJWKS publishes the verifier's public key on `GET /v1/jwks` per

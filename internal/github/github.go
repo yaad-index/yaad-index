@@ -190,10 +190,17 @@ func BuildURLPatterns(pluginName, baseURL string) []string {
 	}
 	nameQuoted := regexp.QuoteMeta(name)
 
+	// Named capture groups `owner` + `repo` per ADR-0028 §3 Cut 3:
+	// the daemon's instance_routing.glob_match strategy extracts
+	// these into the {owner}/{repo} match_template to glob-match
+	// against each operator instance's `config.repos` list. The
+	// shorthand `<plugin>:<owner>/<repo>#<n>` pattern uses the
+	// same group names so all three URL shapes resolve to the
+	// same instance under glob walking.
 	return []string{
-		`^https?://` + hostQuoted + `/[^/]+/[^/]+/pull/\d+`,
-		`^https?://` + hostQuoted + `/[^/]+/[^/]+/issues/\d+`,
-		`(?i)^` + nameQuoted + `:\s*[^/]+/[^/]+#\d+`,
+		`^https?://` + hostQuoted + `/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/\d+`,
+		`^https?://` + hostQuoted + `/(?P<owner>[^/]+)/(?P<repo>[^/]+)/issues/\d+`,
+		`(?i)^` + nameQuoted + `:\s*(?P<owner>[^/]+)/(?P<repo>[^/]+)#\d+`,
 	}
 }
 
