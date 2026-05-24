@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.9.0...yaad-index-v0.10.0) (2026-05-24)
+
+
+### Features
+
+* **workflow:** CEL date arithmetic + period helpers ([#231](https://github.com/yaad-index/yaad-index/issues/231), ADR-0027 cut 2) ([#236](https://github.com/yaad-index/yaad-index/issues/236)) ([6d7f10f](https://github.com/yaad-index/yaad-index/commit/6d7f10f634e29cd64620709f4190acb157456942))
+* **workflow:** CEL date helpers + action runner kind-prefix strip ([#230](https://github.com/yaad-index/yaad-index/issues/230), ADR-0027 cut 1) ([#234](https://github.com/yaad-index/yaad-index/issues/234)) ([ea95ee5](https://github.com/yaad-index/yaad-index/commit/ea95ee5db4b5210f1a810976e708b67d7fb275fa))
+* **workflow:** CEL graph-walk primitives + ext.Lists wiring ([#232](https://github.com/yaad-index/yaad-index/issues/232), ADR-0027 cut 3) ([#237](https://github.com/yaad-index/yaad-index/issues/237)) ([595dca3](https://github.com/yaad-index/yaad-index/commit/595dca3c27228656159ee4eb75295318690dae8d))
+
 ## [0.9.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.8.0...yaad-index-v0.9.0) (2026-05-23)
 
 
