@@ -1271,11 +1271,30 @@ func buildPluginRegistry(logger *slog.Logger, st store.Store, cfg *config.Config
 		if err != nil {
 			return nil, fmt.Errorf("plugin %q at %s: %w", entry.Name, entry.Path, err)
 		}
+		// ADR-0028 §9 cross-validation gate: a plugin whose binary
+		// declares supports_instances=false (the default, including
+		// the zero-value for plugins predating ADR-0028) cannot run
+		// with more than one operator-configured instance. Two-plus
+		// entries would silently break the plugin's data shape
+		// (e.g. two yaad-bgg instances sharing one API key would
+		// double-write identical entities). Fail fast at startup so
+		// the operator fixes the config rather than discovers the
+		// breakage at first ingest. Runs after registerPlugin
+		// because the flag lives in the plugin's `--init`
+		// capabilities, which Load can't reach.
+		if !p.Capabilities().SupportsInstances && len(entry.Instances) >= 2 {
+			return nil, fmt.Errorf(
+				"plugin %q does not support multi-instance config (capability supports_instances=false); "+
+					"reduce instances: to one entry or remove the block (got %d instances)",
+				entry.Name, len(entry.Instances))
+		}
 		registry.Register(p)
 		logger.Info("plugin registered",
 			"name", entry.Name, "path", entry.Path, "source", outcome.String(),
 			"capabilities_name", p.Capabilities().Name,
-			"capabilities_version", p.Capabilities().Version)
+			"capabilities_version", p.Capabilities().Version,
+			"supports_instances", p.Capabilities().SupportsInstances,
+			"instances", len(entry.Instances))
 
 		switch outcome {
 		case cacheHit:

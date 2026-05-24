@@ -952,3 +952,243 @@ user_content_frontmatter_edges:
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "target_kind is required")
 }
+
+// --- ADR-0028 Cut 1: per-plugin instances[] schema + validation ---
+
+func TestLoad_InstancesAbsent_SynthesizesDefault(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-thing")
+
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: thing
+    path: `+bin+`
+`)
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	require.Len(t, cfg.Plugins, 1)
+	// Per ADR-0028 §1: when the operator omits the instances: block,
+	// Load synthesizes a single implicit instance named `default` so
+	// downstream code can assume len(Instances) >= 1.
+	require.Len(t, cfg.Plugins[0].Instances, 1)
+	assert.Equal(t, "default", cfg.Plugins[0].Instances[0].Name)
+}
+
+func TestLoad_InstancesEmptyArray_RejectsWithClearError(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-thing")
+
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: thing
+    path: `+bin+`
+    instances: []
+`)
+	_, err := Load(cfgPath)
+	require.Error(t, err)
+	// Per ADR-0028 §1: empty array is a config error — operator
+	// probably meant to delete the plugin entry. Error should point
+	// the operator at the "omit the block" fix.
+	assert.Contains(t, err.Error(), "instances:")
+	assert.Contains(t, err.Error(), "must not be empty")
+	assert.Contains(t, err.Error(), "default")
+}
+
+func TestLoad_InstancesSingleExplicit_KeepsOperatorChosenName(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-thing")
+
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: thing
+    path: `+bin+`
+    instances:
+      - name: personal
+        env:
+          THING_TOKEN_REF: thing-personal
+`)
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	require.Len(t, cfg.Plugins[0].Instances, 1)
+	// Per ADR-0028 §1 + §9 clarification: a single explicit entry
+	// keeps the operator's chosen name. No silent coercion to
+	// `default` — source: thing/personal must be preserved.
+	assert.Equal(t, "personal", cfg.Plugins[0].Instances[0].Name)
+	assert.Equal(t, "thing-personal", cfg.Plugins[0].Instances[0].Env["THING_TOKEN_REF"])
+}
+
+func TestLoad_InstancesMultiple_KeepsAllNamesInOrder(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-thing")
+
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: thing
+    path: `+bin+`
+    instances:
+      - name: personal
+      - name: assistant
+      - name: work
+`)
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	require.Len(t, cfg.Plugins[0].Instances, 3)
+	names := []string{
+		cfg.Plugins[0].Instances[0].Name,
+		cfg.Plugins[0].Instances[1].Name,
+		cfg.Plugins[0].Instances[2].Name,
+	}
+	// Per ADR-0028 §4: config-file declaration order is the
+	// fan-out order for bare-plugin command invocations + the
+	// first-match priority for URL routing. Don't reorder.
+	assert.Equal(t, []string{"personal", "assistant", "work"}, names)
+}
+
+func TestLoad_InstancesDuplicateName_Rejects(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-thing")
+
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: thing
+    path: `+bin+`
+    instances:
+      - name: personal
+      - name: personal
+`)
+	_, err := Load(cfgPath)
+	require.Error(t, err)
+	// Per ADR-0028 §1: each instance name must be unique within
+	// the plugin. The slash-form source: <plugin>/<instance>
+	// would otherwise collide.
+	assert.Contains(t, err.Error(), "duplicates")
+	assert.Contains(t, err.Error(), "personal")
+}
+
+func TestLoad_InstancesInvalidName_Rejects(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-thing")
+
+	for _, bad := range []string{
+		"Personal",     // uppercase
+		"per/sonal",    // slash (reserved for <plugin>/<instance>)
+		"-personal",    // leading hyphen
+		"personal-",    // trailing hyphen
+		"per--sonal",   // consecutive hyphens
+		"per sonal",    // space
+		"per.sonal",    // dot
+		"",             // empty
+	} {
+		t.Run("bad="+bad, func(t *testing.T) {
+			cfgPath := writeConfig(t, `
+plugins:
+  - name: thing
+    path: `+bin+`
+    instances:
+      - name: `+fmt.Sprintf("%q", bad)+`
+`)
+			_, err := Load(cfgPath)
+			require.Error(t, err, "name %q must be rejected", bad)
+		})
+	}
+}
+
+func TestLoad_InstancesEmptyName_Rejects(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-thing")
+
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: thing
+    path: `+bin+`
+    instances:
+      - {}
+`)
+	_, err := Load(cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty name")
+}
+
+func TestLoad_InstancesValidNamesAccepted(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-thing")
+
+	for _, good := range []string{
+		"default",
+		"personal",
+		"acme-org",
+		"work_account",
+		"team-1",
+		"a",
+		"a1",
+	} {
+		t.Run("good="+good, func(t *testing.T) {
+			cfgPath := writeConfig(t, `
+plugins:
+  - name: thing
+    path: `+bin+`
+    instances:
+      - name: `+good+`
+`)
+			cfg, err := Load(cfgPath)
+			require.NoError(t, err, "name %q must be accepted", good)
+			assert.Equal(t, good, cfg.Plugins[0].Instances[0].Name)
+		})
+	}
+}
+
+func TestLoad_InstancesEnvAndConfigParsed(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-thing")
+
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: thing
+    path: `+bin+`
+    instances:
+      - name: personal
+        env:
+          THING_TOKEN_REF: tok-personal
+          THING_ACCOUNT: ops@example.com
+        config:
+          repos: [user-a/repo, user-b/repo]
+          flag: true
+`)
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	inst := cfg.Plugins[0].Instances[0]
+	assert.Equal(t, "tok-personal", inst.Env["THING_TOKEN_REF"])
+	assert.Equal(t, "ops@example.com", inst.Env["THING_ACCOUNT"])
+	require.NotNil(t, inst.Config)
+	assert.Equal(t, true, inst.Config["flag"])
+	// YAML decodes a list into []any; concrete-type assertion stays
+	// loose since downstream code consumes via JSON-marshal.
+	require.Contains(t, inst.Config, "repos")
+}
+
+func TestValidateInstances_NilSlice_OK(t *testing.T) {
+	t.Parallel()
+
+	// Direct unit test on the validator: nil slice is OK so Load
+	// can synthesize the default after Validate returns. Empty
+	// slice (different from nil) is the error case.
+	require.NoError(t, validateInstances("anything", nil))
+}
