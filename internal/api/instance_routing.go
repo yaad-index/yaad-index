@@ -30,6 +30,20 @@ var ErrUnsupportedRoutingStrategy = errors.New("unsupported instance_routing.str
 // instances or use a command-shape invocation.
 var ErrNoURLRouting = errors.New("plugin advertises no URL routing")
 
+// ErrUnresolvedTemplatePlaceholder surfaces when the formatted
+// match_template still carries one or more `{name}` placeholders
+// after capture-group substitution — the plugin's url_patterns
+// don't capture the names the match_template references. Without
+// this gate, an instance glob like `acme/*` could silently match
+// a literal `acme/{repo}` formatted value via path.Match,
+// mis-routing the URL instead of surfacing the plugin-author bug.
+var ErrUnresolvedTemplatePlaceholder = errors.New("instance_routing.match_template has unresolved placeholder after capture substitution")
+
+// unresolvedPlaceholderRE matches any `{name}` substring left in
+// the formatted template — the literal-substring shape produced
+// by formatMatchTemplate when a capture group is missing.
+var unresolvedPlaceholderRE = regexp.MustCompile(`\{[A-Za-z_][A-Za-z0-9_]*\}`)
+
 // pickInstance resolves the active instance for a URL-shape
 // invocation per ADR-0028 §3. Returns the picked instance name
 // on a successful glob match, ErrUnroutedURL when no enabled
@@ -83,11 +97,23 @@ func pickInstance(plugin plugins.Plugin, instances []config.InstanceEntry, rawUR
 		return "", err
 	}
 
-	// Format the match_template with the captured named groups.
-	// Missing names render as the literal `{name}` placeholder so
-	// the glob walk can't accidentally match — operator-visible
-	// bug rather than silent mis-attribution.
+	// Format the match_template with the captured named groups,
+	// then assert every placeholder was resolved. A leftover
+	// `{name}` substring would compose with an overly broad
+	// instance glob (e.g. `acme/*` matching the literal
+	// `acme/{repo}` via path.Match) — silent mis-routing instead
+	// of fail-fast. Plugin-author bug: the url_patterns capture
+	// groups don't include every name the match_template
+	// references. Surface explicitly so the plugin gets fixed.
 	formatted := formatMatchTemplate(caps.InstanceRouting.MatchTemplate, captures)
+	if leftover := unresolvedPlaceholderRE.FindString(formatted); leftover != "" {
+		return "", fmt.Errorf("%w: plugin %q template %q formatted as %q (missing capture group for %s)",
+			ErrUnresolvedTemplatePlaceholder,
+			plugin.Name(),
+			caps.InstanceRouting.MatchTemplate,
+			formatted,
+			leftover)
+	}
 
 	// Walk instances in declaration order. First glob match wins
 	// per §3. Each instance's config[<config_field>] must be a

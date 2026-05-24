@@ -293,3 +293,43 @@ func TestErrUnroutedURL_IsDistinct(t *testing.T) {
 		"plain string-wrap does NOT preserve errors.Is; production uses fmt.Errorf with %w")
 	_ = strings.Contains // keep import for the literal check above
 }
+
+// TestPickInstance_UnresolvedPlaceholder_FailFast pins the
+// plugin-author bug surface from the PR-251 cold-review: when
+// the url_pattern captures don't cover every name the
+// match_template references, formatMatchTemplate leaves the
+// missing name as a literal `{name}` substring. Without the
+// fail-fast gate, a permissive instance glob (`acme/*`) could
+// match that literal via path.Match — silent mis-routing. Pick
+// must reject before the glob walk.
+func TestPickInstance_UnresolvedPlaceholder_FailFast(t *testing.T) {
+	t.Parallel()
+	p := fixturePlugin(t, plugins.Capabilities{
+		Name: "broken-template",
+		URLPatterns: []string{
+			// Captures only `owner`; template references both
+			// `owner` AND `repo`.
+			`^https?://example\.test/(?P<owner>[^/]+)/.*`,
+		},
+		SupportsInstances: true,
+		InstanceRouting: &plugins.InstanceRoutingSpec{
+			Strategy:      "glob_match",
+			ConfigField:   "repos",
+			MatchTemplate: "{owner}/{repo}",
+		},
+	})
+	// Operator glob `acme/*` would silently match the literal
+	// `acme/{repo}` formatted output via path.Match if the gate
+	// weren't in place.
+	instances := []config.InstanceEntry{
+		{Name: "first", Config: map[string]any{"repos": []any{"acme/*"}}},
+		{Name: "second", Config: map[string]any{"repos": []any{"bob/*"}}},
+	}
+	_, err := pickInstance(p, instances, "https://example.test/acme/xyz")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnresolvedTemplatePlaceholder)
+	// Error message must name the unresolved placeholder so the
+	// plugin author can fix the url_pattern's named captures.
+	assert.Contains(t, err.Error(), "{repo}")
+	assert.Contains(t, err.Error(), "broken-template")
+}

@@ -614,6 +614,7 @@ func (s *ServeCmd) Run() error {
 			logger, st, registry, writer, reader,
 			guard, cfg.CacheTTLSeconds, dispatcher, wfWriteLocks, bus,
 			pluginInstances,
+			pluginInstanceConfigs,
 		)
 		handlerOpts = append(handlerOpts, api.WithSyncIngester(syncIngester))
 
