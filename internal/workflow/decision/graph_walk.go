@@ -13,7 +13,6 @@ package decision
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -26,14 +25,15 @@ import (
 // edges from one workflow's frontier).
 const DefaultGraphWalkCap = 1000
 
-// WalkEdge mirrors store.Edge for the CEL surface. Field names are
-// lowercased per CEL convention (mirrors store.Edge.Metadata as
-// `metadata`).
+// WalkEdge mirrors store.Edge for the CEL surface. The CEL-side
+// rendering happens via edgesToRefVals (explicit map construction)
+// — no struct-tag-driven reflection — so the type is a plain Go
+// struct with no encoding tags.
 type WalkEdge struct {
-	From     string         `cel:"from"`
-	To       string         `cel:"to"`
-	Type     string         `cel:"type"`
-	Metadata map[string]any `cel:"metadata"`
+	From     string
+	To       string
+	Type     string
+	Metadata map[string]any
 }
 
 // GraphWalker is the store-side surface the CEL graph-walk
@@ -67,8 +67,10 @@ type GraphWalker interface {
 
 // walkResult assembles the `{items, truncated, total}` map cel-go
 // returns to workflow CEL. Common shape for both edge and neighbor
-// walks.
-func walkResult(items []ref.Val, total, limit int) ref.Val {
+// walks. Truncation is total > len(items); the per-call cap is
+// applied by the walker BEFORE the slice reaches this helper, so
+// this layer only compares the post-cap length against the total.
+func walkResult(items []ref.Val, total int) ref.Val {
 	out := map[string]any{
 		"items":     items,
 		"truncated": total > len(items),
@@ -110,12 +112,15 @@ func entitiesToRefVals(entities []map[string]any) []ref.Val {
 // via Options.Walker at NewEvaluator time) using the per-eval
 // context (e.currentCtx, guarded by evalMu).
 func (e *Evaluator) graphWalkFunctions() []cel.EnvOption {
-	mapType := cel.MapType(cel.StringType, cel.DynType)
-	listOfMaps := cel.ListType(mapType)
+	// resultType is the {items, truncated, total} struct shape
+	// every graph-walk overload returns. CEL's map<string, dyn>
+	// covers all three field types in one shape declaration —
+	// the per-overload return shape doesn't need per-field
+	// typing here because the operator accesses fields by name.
 	resultType := cel.MapType(cel.StringType, cel.DynType)
 
 	emptyResult := func() ref.Val {
-		return walkResult([]ref.Val{}, 0, e.graphWalkCap)
+		return walkResult([]ref.Val{}, 0)
 	}
 
 	walkEdgesUnary := func(walkFn func(ctx context.Context, id, edgeType string, limit int) ([]WalkEdge, int, error)) func(arg ref.Val) ref.Val {
@@ -131,7 +136,7 @@ func (e *Evaluator) graphWalkFunctions() []cel.EnvOption {
 			if err != nil {
 				return types.NewErr("graph-walk: %v", err)
 			}
-			return walkResult(edgesToRefVals(edges), total, e.graphWalkCap)
+			return walkResult(edgesToRefVals(edges), total)
 		}
 	}
 	walkEdgesBinary := func(walkFn func(ctx context.Context, id, edgeType string, limit int) ([]WalkEdge, int, error)) func(args ...ref.Val) ref.Val {
@@ -151,7 +156,7 @@ func (e *Evaluator) graphWalkFunctions() []cel.EnvOption {
 			if err != nil {
 				return types.NewErr("graph-walk: %v", err)
 			}
-			return walkResult(edgesToRefVals(edges), total, e.graphWalkCap)
+			return walkResult(edgesToRefVals(edges), total)
 		}
 	}
 	walkNeighborsUnary := func(walkFn func(ctx context.Context, id, edgeType string, limit int) ([]map[string]any, int, error)) func(arg ref.Val) ref.Val {
@@ -167,7 +172,7 @@ func (e *Evaluator) graphWalkFunctions() []cel.EnvOption {
 			if err != nil {
 				return types.NewErr("graph-walk: %v", err)
 			}
-			return walkResult(entitiesToRefVals(entities), total, e.graphWalkCap)
+			return walkResult(entitiesToRefVals(entities), total)
 		}
 	}
 	walkNeighborsBinary := func(walkFn func(ctx context.Context, id, edgeType string, limit int) ([]map[string]any, int, error)) func(args ...ref.Val) ref.Val {
@@ -187,7 +192,7 @@ func (e *Evaluator) graphWalkFunctions() []cel.EnvOption {
 			if err != nil {
 				return types.NewErr("graph-walk: %v", err)
 			}
-			return walkResult(entitiesToRefVals(entities), total, e.graphWalkCap)
+			return walkResult(entitiesToRefVals(entities), total)
 		}
 	}
 
@@ -204,7 +209,6 @@ func (e *Evaluator) graphWalkFunctions() []cel.EnvOption {
 		return e.walker.OutNeighbors(ctx, id, edgeType, limit)
 	}
 
-	_ = listOfMaps
 	return []cel.EnvOption{
 		cel.Function("graph.in_edges",
 			cel.Overload("graph_in_edges_string",
@@ -257,4 +261,3 @@ func (e *Evaluator) graphWalkFunctions() []cel.EnvOption {
 	}
 }
 
-var _ = fmt.Sprintf

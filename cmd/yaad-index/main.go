@@ -129,17 +129,26 @@ func (r *storeEntityResolver) Resolve(ctx context.Context, id string) (map[strin
 	if err != nil {
 		return nil, err
 	}
+	return entityToCELMap(e), nil
+}
+
+// entityToCELMap is the single source-of-truth shape for entities
+// crossing into the workflow CEL evaluator. Both storeEntityResolver.Resolve
+// (single-entity Get path) and storeGraphWalker.walkNeighbors (batch GetEntities
+// path) route through this helper so the CEL-side `entity.X` access pattern
+// stays consistent — adding a field here surfaces it everywhere at once,
+// avoiding the resolver/walker divergence that hand-built map shapes invite.
+//
+// `data` may be nil for canonical-label thin rows (no plugin-emitted Data);
+// CEL `has(entity.data)` returns false against an absent key cleanly, but
+// operators commonly write `entity.data.X` — a nil sub-map produces
+// `no such key: X` on the inner access, which is the expected failure shape
+// (the data field genuinely isn't there). Workflows that want to guard the
+// missing-data case use `has(entity.data) && entity.data.X != ""`.
+func entityToCELMap(e *store.Entity) map[string]any {
 	out := make(map[string]any, 3)
 	out["id"] = e.ID
 	out["kind"] = e.Kind
-	// data may be nil for canonical-label thin rows (no
-	// plugin-emitted Data); CEL `has(entity.data)` returns
-	// false against an absent key cleanly, but operators
-	// commonly write `entity.data.X` — a nil sub-map produces
-	// `no such key: X` on the inner access, which is the
-	// expected failure shape (the data field genuinely isn't
-	// there). Workflows that want to guard the missing-data
-	// case use `has(entity.data) && entity.data.X != ""`.
 	if len(e.Data) > 0 {
 		dataMap := make(map[string]any, len(e.Data))
 		for k, v := range e.Data {
@@ -147,7 +156,7 @@ func (r *storeEntityResolver) Resolve(ctx context.Context, id string) (map[strin
 		}
 		out["data"] = dataMap
 	}
-	return out, nil
+	return out
 }
 
 // storeGraphWalker satisfies decision.GraphWalker against the
@@ -266,19 +275,11 @@ func (w *storeGraphWalker) walkNeighbors(ctx context.Context, edgeType string, l
 		return nil, 0, err
 	}
 	byID := make(map[string]map[string]any, len(matched))
-	for _, e := range matched {
-		m := map[string]any{
-			"id":   e.ID,
-			"kind": e.Kind,
-		}
-		if len(e.Data) > 0 {
-			dataMap := make(map[string]any, len(e.Data))
-			for k, v := range e.Data {
-				dataMap[k] = v
-			}
-			m["data"] = dataMap
-		}
-		byID[e.ID] = m
+	for i := range matched {
+		// Loop-variable address capture is fine here because
+		// entityToCELMap reads-and-copies fields; the entity
+		// pointer doesn't escape the call.
+		byID[matched[i].ID] = entityToCELMap(&matched[i])
 	}
 	// Preserve edge order in the output — operator semantics
 	// expect "neighbors in the order their edges land in the

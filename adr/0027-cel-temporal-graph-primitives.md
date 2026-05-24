@@ -50,6 +50,8 @@ This is the only action-runner change required by this ADR. The behavior is cons
 
 **Evaluation cadence per fire.** `today()` / `yesterday()` / `tomorrow()` are evaluated **once per workflow fire**, cached in the fire's binding scope. Multiple `today()` callsites within one fire's actions all see the same value — important for the rare midnight-crossing case where a single fire might otherwise see day-N in one action and day-N+1 in the next. The cache is fire-scoped, not engine-scoped, so back-to-back fires across a midnight boundary correctly see different days.
 
+This same per-fire caching applies to **all** current-period helpers — `today`, `yesterday`, `tomorrow`, plus the §2a `this_week`, `this_month`, `this_year`. The boundary-crossing concern extends accordingly: Sunday→Monday ISO-week rollover, last-day-of-month rollover, and Dec-31→Jan-1 year rollover all behave like midnight crossings. All six current-period helpers derive from the same clock snapshot the engine takes at fire-start, so a fire that calls `today()` + `this_week()` + `this_year()` across multiple action templates never sees a mid-stamp boundary skew between them.
+
 ### 2. Date arithmetic — function form
 
 ```cel
@@ -260,7 +262,7 @@ This ADR ships in 4 cuts (mirroring ADR-0025's cadence):
 **Positive:**
 - Daily-digest, ingested-on, deadline workflows become first-class workflow-shape (no host-cron / external-script crutches).
 - ADR-0025's docs become fully runnable; the deferred worked examples ship as concrete `vault/workflows/` files in cut 4.
-- Future temporal ADRs (week/month/year aggregation if those land, recurring schedules) build on this primitive layer instead of re-litigating the surface.
+- Future temporal ADRs (recurring schedules, fiscal-year shapes, time-of-day primitives) build on this primitive layer instead of re-litigating the surface. Week / month / year aggregation already lands here via the §2a period helpers; the primitive layer is in place.
 
 **Negative:**
 - CEL evaluator gains new bindings (date helpers) and new function-overload definitions (graph walking). Evaluator-side test surface grows nontrivially.
