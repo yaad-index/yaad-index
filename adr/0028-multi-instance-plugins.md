@@ -73,7 +73,7 @@ plugins:
 - Absent / missing `instances:` block ⇒ implicit single instance named `default`. The operator never has to write `instances: [{name: default}]`; the loader synthesizes it.
 - An empty `instances: []` is a config error (no instances ⇒ plugin would be inert; the operator probably meant to delete the plugin entry).
 - `env:` and `config:` values are per-instance. Glob patterns are valid inside routing-field values (e.g. `repos: [acme-user/*]`); their semantics are plugin-defined (yaad-github expands the glob at runtime via the upstream `/orgs/{owner}/repos` API per ADR-0026 §3).
-- **Plugin self-declaration gate** — operator-config load also enforces the plugin's `supports_instances` capability per §9 below. A plugin with `supports_instances: false` may have 0 or 1 instance entries (synthesized or explicit `default`); 2+ entries fail-fast at config load with a clear error. This is the validation entry point that consumes the §9 flag.
+- **Plugin self-declaration gate** — operator-config load also enforces the plugin's `supports_instances` capability per §9 below. A plugin with `supports_instances: false` may have 0 or 1 instance entries: 0 entries (absent block) synthesizes the implicit `default`; 1 explicit entry keeps whatever `name` the operator wrote (no coercion to `default`). 2+ entries fail-fast at config load with a clear error. The flag constrains **cardinality** (≤ 1), not **naming** — `source: bgg/personal` is valid provenance when the operator wrote `instances: [{name: personal, ...}]` on a `supports_instances: false` plugin. This is the validation entry point that consumes the §9 flag.
 
 `instances[*].enabled: bool` (default `true`) controls per-instance activation — see §7.
 
@@ -106,7 +106,7 @@ When an inbound URL matches a plugin's `url_patterns`, the daemon must pick whic
 - The daemon extracts named fields (`{owner}`, `{repo}`) from the matched URL using the plugin's existing `url_patterns` regex group captures.
 - It then formats `match_template` with the extracted fields and glob-matches the result against each enabled instance's `config[<config_field>]` list (in config-file declaration order).
 - **First-match wins.** If two instances declare overlapping globs (`acme-user/*` in instance A and `acme-user/repo-a` in instance B), the first-declared instance wins. The daemon emits a startup warning when it detects overlapping coverage at config-load time.
-- **Unmatched fallback:** if no instance's globs match, route to the **first-declared enabled instance** with a warning log. Ingest always succeeds; misconfiguration surfaces via logs, not via failed `/v1/ingest` calls.
+- **Unmatched URL: fail fast.** If no enabled instance's globs match the URL's extracted fields, ingest is rejected with a `400` response shaped `{instance: "unrouted", url: "<the url>", message: "no instance's <config_field> glob matches"}`. The misconfiguration surfaces at ingest time — the operator (or agent) sees the exact URL that didn't match and adds the missing glob entry. Routing the URL to an arbitrary first-declared instance would silently misattribute the resulting entity's `source:` field to an instance that doesn't actually own that scope; a fail-by-default contract preserves provenance correctness. An opt-in permissive-fallback knob (e.g. `unmatched_url_strategy: first-declared`) is deferred to a future ADR if a real workload needs it.
 
 `strategy: "glob_match"` is the only strategy v1 defines. Plugins with `supports_instances: true` MUST declare an `instance_routing` block if their primary invocation path is URL-shape (yaad-github); plugins whose primary path is command-shape (yaad-gmail — instances dispatched only via `!fetch` fan-out per §4) MAY omit `instance_routing` even when `supports_instances: true`, and the daemon then refuses URL-shape ingest for that plugin with a clear "plugin advertises no URL routing" error.
 
@@ -193,7 +193,8 @@ Plugin `--init` capabilities gain a `supports_instances: bool` field. **Default:
 
 **Daemon enforcement at config load (composes with §1 validation):**
 
-- `supports_instances: false` + 0 or 1 instance entries in operator config ⇒ OK. Single entry runs explicitly; absent block synthesizes the implicit `default` per §1.
+- `supports_instances: false` + 0 instance entries (absent block) ⇒ OK. Loader synthesizes the implicit `default` instance per §1.
+- `supports_instances: false` + 1 explicit instance entry ⇒ OK. The instance keeps the `name` the operator wrote (`default`, `personal`, or anything else valid per §1's name-shape rules). `source:` field becomes `<plugin>/<that-name>`. The `supports_instances: false` flag constrains cardinality, not naming.
 - `supports_instances: false` + 2 or more instance entries ⇒ fail-fast at startup with: *"plugin `<name>` does not support multi-instance config; reduce `instances:` to one entry or remove the block."* The daemon does not start.
 - `supports_instances: true` + any instance count (0, 1, or many) ⇒ validated by the rest of this ADR's rules. `instance_routing` is required for URL-shape plugins as covered in §3.
 
@@ -204,7 +205,7 @@ This refinement closes the "what stops an operator from configuring multiple ins
 ## Surface changes (API)
 
 - **`/v1/plugins`** — each plugin row exposes `instances: [{name, enabled}, ...]`. Single-implicit plugins still surface `instances: [{name: "default", enabled: true}]` (the parser's one-shape rule from §5 applies here too).
-- **`/v1/ingest`** — error responses include the routed instance name, or `"unrouted"` when the §3 fallback fired (so the operator's warning-log diagnosis path has the corresponding API surface for tooling).
+- **`/v1/ingest`** — successful responses include the routed instance name. On the §3 fail-fast path (no enabled instance's globs match the URL), the response is a `400` with body `{instance: "unrouted", url: "<the url>", message: "no instance's <config_field> glob matches"}` so the caller (operator CLI / agent) sees exactly which URL failed routing and can fix the missing glob.
 - **`/v1/needs-fill`, `/v1/structure`** — unchanged. The fill / structure surface is per-plugin (capability-scoped), not per-instance.
 
 ## Out of scope (initial)

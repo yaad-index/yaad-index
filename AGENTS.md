@@ -282,13 +282,18 @@ governs.
  multi-instance support via `supports_instances: bool` in
  `--init` (default `false`); the daemon fail-fasts at config
  load when a `false`-declaring plugin has 2+ instance entries.
- `--init` runs **once per plugin** — capabilities are
- plugin-scoped; instances are runtime-config variants only. URL
- dispatch: plugins declare a nullable `instance_routing` block
- in `--init` (strategy + config_field + match_template);
- first-match-wins glob across instances, first-declared enabled
- instance handles unmatched URLs with a warning. Command
- grammar (amends ADR-0022): `<plugin>/<instance>: !<cmd>` for
+ The flag constrains **cardinality** (≤ 1 when `false`), NOT
+ naming — a `supports_instances: false` plugin with one explicit
+ instance keeps the operator's chosen name (`source: bgg/personal`
+ is valid). `--init` runs **once per plugin** — capabilities
+ are plugin-scoped; instances are runtime-config variants only.
+ URL dispatch: plugins declare a nullable `instance_routing`
+ block in `--init` (strategy + config_field + match_template);
+ first-match-wins glob across instances. **Unmatched URLs
+ fail fast** at ingest with a `400 {instance: "unrouted", url}`
+ response — no silent fallback to a first-declared instance, so
+ misattribution can't quietly land in `source:`. Command grammar
+ (amends ADR-0022): `<plugin>/<instance>: !<cmd>` for
  instance-scoped invocation; bare `<plugin>: !<cmd>` fans out
  **serially** across enabled instances in declaration order.
  Entity `source:` field is always the slash form
