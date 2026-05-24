@@ -1294,13 +1294,21 @@ func buildPluginRegistry(logger *slog.Logger, st store.Store, cfg *config.Config
 		// each instance carries its own operator-supplied config so
 		// each one needs the gate. Fail-fast surfaces operator
 		// typos / shape mismatches at startup instead of at first
-		// fetch. The plugin-level entry.Config validation in
-		// registerPlugin still runs (catches mismatches in the
-		// legacy block); per-instance validation here closes the
-		// new surface. For the synthesized-default case, Load
-		// already copied entry.Config into the default instance's
-		// Config — so per-instance validation is double-coverage
-		// (harmless) rather than a missing path.
+		// fetch.
+		//
+		// This is the SINGLE validation path. The plugin-level
+		// entry.Config validation was removed from registerPlugin
+		// (both cache-hit and fresh-init paths) because that call
+		// would always reject required-field schemas once an
+		// operator declared explicit `instances:` — entry.Config
+		// goes empty in that case while the operator's actual
+		// config lives per-instance. Back-compat for legacy
+		// single-instance configs (no `instances:` block) flows
+		// through here via Load's synthesis-copy: the synthesized
+		// `default` instance inherits entry.Config into its own
+		// Config field, so the legacy operator's config still gets
+		// schema-validated — through this loop, not the removed
+		// registerPlugin call.
 		for i, inst := range entry.Instances {
 			if vErr := config.ValidatePluginConfigAgainstSchema(
 				entry.Name, inst.Config, p.Capabilities().ConfigSchema,
