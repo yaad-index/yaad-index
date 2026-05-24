@@ -425,3 +425,81 @@ func assertEnvHasPrefixWithSubstring(t *testing.T, env []string, prefix, substr 
 	assert.Failf(t, "env entry missing prefix+substring combo",
 		"want entry starting with %q containing %q in %v", prefix, substr, env)
 }
+
+// TestCommandFanOut_EnvOnlyInstance_YAADPluginConfigPresent pins
+// the ADR-0028 §1 env-only instance shape (gmail-style: env-only
+// instance with no config: block) — buildInstanceEnv must emit
+// YAAD_PLUGIN_CONFIG unconditionally so the daemon-injected
+// `_name` field reaches the plugin. Skipping the call when
+// Config is empty would strip YAAD_PLUGIN_CONFIG entirely and
+// plugins that read `_name` (yaad-bgg, yaad-wikipedia, yaad-
+// github) would lose daemon identity for those instances.
+func TestCommandFanOut_EnvOnlyInstance_YAADPluginConfigPresent(t *testing.T) {
+	t.Parallel()
+
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	var (
+		mu          sync.Mutex
+		capturedEnv []string
+	)
+
+	registry := plugins.NewRegistry()
+	registry.Register(&fixture.Plugin{
+		NameValue: "gmail",
+		MatchFunc: func(string) bool { return false },
+		StreamFunc: func(ctx context.Context, rawURL string, onEnvelope plugins.EnvelopeFunc, onControl plugins.ControlFunc) error {
+			mu.Lock()
+			capturedEnv = plugins.ExtraEnvFromContext(ctx)
+			mu.Unlock()
+			return onEnvelope(&plugins.FetchResult{
+				Entity: &store.Entity{
+					ID:   "gmail:env-only",
+					Kind: "source",
+					Data: map[string]any{"subject": rawURL},
+				},
+				Provenance: []store.ProvenanceEntry{{Source: "gmail:fetch", OK: true}},
+			})
+		},
+		CapabilitiesValue: plugins.Capabilities{
+			Name:              "gmail",
+			SourceNamespace:   "gmail",
+			EntityKinds:       []plugins.KindSpec{{Name: "source"}},
+			Commands:          []plugins.CommandSpec{{Name: "fetch"}},
+			SupportsInstances: true,
+		},
+	})
+
+	// Single instance with ONLY env (no config block) — the
+	// gmail-style shape from ADR-0028 §1.
+	instances := []config.InstanceEntry{
+		{
+			Name: "personal",
+			Env:  map[string]string{"YAAD_GMAIL_ACCOUNT": "ops@example.test"},
+		},
+	}
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	h := NewHandlerWithRegistry(logger, st, registry,
+		WithPluginInstances(map[string][]string{"gmail": {"personal"}}),
+		WithPluginInstanceConfigs(map[string][]config.InstanceEntry{"gmail": instances}),
+	)
+
+	rec := postIngest(t, h, map[string]any{
+		"url":          "gmail/personal: !fetch",
+		"wait_seconds": 1,
+	})
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmpty(t, capturedEnv, "env-only instance must still produce extraEnv")
+	// YAAD_PLUGIN_CONFIG MUST be present even when instance.Config
+	// is empty — the daemon-injected `_name` field always lands.
+	assertEnvHasPrefixWithSubstring(t, capturedEnv, "YAAD_PLUGIN_CONFIG=", `"_name":"gmail"`)
+	// And the env-only entry from InstanceEntry.Env reaches the
+	// subprocess too.
+	assertEnvContains(t, capturedEnv, "YAAD_GMAIL_ACCOUNT=ops@example.test")
+}

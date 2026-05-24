@@ -306,29 +306,30 @@ func buildInstanceEnvForName(pluginName string, instances []config.InstanceEntry
 
 // buildInstanceEnv returns the per-call subprocess env splice for
 // an active instance per ADR-0028 §3 + §4 (Cut 4). Order:
-//   - YAAD_PLUGIN_CONFIG built from instance.Config (last-wins
-//     overrides any registry-build-time configEnv with the same
-//     key — the spawn-time env is authoritative for the active
-//     instance).
+//   - YAAD_PLUGIN_CONFIG built from instance.Config — emitted
+//     unconditionally (even when Config is empty) so the daemon-
+//     injected `_name` field always reaches the plugin per the
+//     PluginConfigEnv contract. Env-only instances (gmail-style:
+//     env: { ... } with no config: block) are first-class per
+//     ADR-0028 §1, and skipping the call would strip their
+//     YAAD_PLUGIN_CONFIG envelope entirely — plugins that read
+//     `_name` (yaad-bgg, yaad-wikipedia, yaad-github) would lose
+//     daemon identity for those instances.
 //   - InstanceEntry.Env entries as `KEY=VALUE` strings (last-
 //     wins over YAAD_PLUGIN_CONFIG on duplicate keys; operator-
 //     written env beats daemon-derived defaults).
 //
-// Returns nil when the instance carries no config + no env (the
-// degenerate test path). Errors from PluginConfigEnv surface as
-// returned errors so the dispatch layer can fail-fast with a
-// clear message — a marshal error here indicates a malformed
-// per-instance Config that the JSON-Schema gate (Cut 1) missed.
+// Errors from PluginConfigEnv surface as returned errors so the
+// dispatch layer can fail-fast with a clear message — a marshal
+// error here indicates a malformed per-instance Config that the
+// JSON-Schema gate (Cut 1) missed.
 func buildInstanceEnv(pluginName string, instance config.InstanceEntry) ([]string, error) {
-	out := []string{}
-	if len(instance.Config) > 0 {
-		configEnv, err := config.PluginConfigEnv(pluginName, instance.Config)
-		if err != nil {
-			return nil, fmt.Errorf("build YAAD_PLUGIN_CONFIG for plugin %q instance %q: %w",
-				pluginName, instance.Name, err)
-		}
-		out = append(out, configEnv...)
+	configEnv, err := config.PluginConfigEnv(pluginName, instance.Config)
+	if err != nil {
+		return nil, fmt.Errorf("build YAAD_PLUGIN_CONFIG for plugin %q instance %q: %w",
+			pluginName, instance.Name, err)
 	}
+	out := append([]string(nil), configEnv...)
 	for k, v := range instance.Env {
 		out = append(out, k+"="+v)
 	}
