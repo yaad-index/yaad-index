@@ -170,13 +170,51 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 The MCP `get_entity_with_context` tool wraps the same endpoint; agents call it with `id: day:<YYYY-MM-DD>` and walk the result's `neighbors` array.
 
-If the operator wants a daily digest, the workflow that owns "fire at end of day" lives outside yaad-index in v1.x — host cron + a `curl … /v1/entities/day:<today>/context?depth=1` invocation produces the per-day inbound edge list, and the operator's chosen rendering stage (a separate script, an `add_note` HTTP call, etc.) turns it into whatever output format they want. Date arithmetic for "yesterday" / "next week" is operator-side too — yaad-index v1.x intentionally keeps that out of CEL per ADR-0025 § Out of scope.
+## Worked example: daily-digest workflow (post-ADR-0027)
 
-## On the deferred `ingested_on` daemon-stamp
+ADR-0027 added the CEL temporal + graph-walk primitives that make daily-digest a first-class workflow shape. The example below lives at `vault/workflows/daily-digest.md`:
 
-The `ingested_on` edge type is in the canonical vocabulary (so any future workflow / external script that lands edges of that type carries a consistent semantic name) but the daemon itself never emits it in v1.x per ADR-0025 § "ingested_on auto-tag — deferred". Always-on stamping was rejected as too opinionated as a default.
+```yaml
+trigger:
+  type: manual
+actions:
+  - task_append:
+      section: today
+      content: '{{ graph.in_neighbors(today(), "due_on").items.map(n, "- [[" + n.id + "]] (due)").join("\n") }}{{ graph.in_neighbors(today(), "occurred_on").items.map(n, "\n- [[" + n.id + "]] (occurred)").join("") }}'
+      if_already_present: replace
+```
 
-In v1.x, the operator who wants "show me everything ingested today" wires an external pipeline that writes the edges — either an end-of-day cron that hits `/v1/edges` for each newly-created entity, or a separate workflow when the CEL surface grows date-aware primitives in a future ADR. The shape isn't documented as a copy-paste example here because the current CEL environment doesn't expose a `today()` helper; the moment that lands, the workflow shape opens up.
+Triggered via `yaad-index workflow trigger daily-digest`. The workflow targets `today()` (in the daemon's TZ), walks each canonical edge type relevant to "today's anchors," concatenates the lines into a task section.
+
+Weekly fan-out follows the same shape via the §2a period helpers:
+
+```yaml
+- task_append:
+    section: this-week
+    content: '{{ days_in_week(this_week()).map(d, graph.in_neighbors(d, "occurred_on").items).flatten().map(n, "- [[" + n.id + "]]").join("\n") }}'
+```
+
+See `vault/workflows/weekly-digest.md` for the full file.
+
+## Worked example: ingested-on workflow
+
+The `ingested_on` edge type is reserved in the canonical vocabulary; the daemon never emits it automatically per ADR-0025 § "ingested_on auto-tag — deferred". Operators who want "show me everything ingested today" wire an `entity_created` workflow that emits the edge explicitly. Lives at `vault/workflows/ingested-on.md`:
+
+```yaml
+trigger:
+  type: entity_created
+actions:
+  - add_canonical_edge:
+      source: 'entity.id'
+      edge_type: 'ingested_on'
+      target:
+        kind: 'day'
+        name: 'today()'
+```
+
+Fires on every new entity. `add_canonical_edge`'s `target.name` accepts the CEL expression `today()` which evaluates to `day:YYYY-MM-DD`; the action runner's kind-prefix strip (ADR-0027 cut 1) removes the leading `day:` before slugifying so the target id resolves to the canonical `day:2026-11-11` shape. The runner also ensures the target day entity exists.
+
+To opt out, remove the workflow file — the existing edges remain (harmless alongside other inbound day-edges) but stop growing. The four shipped example workflows live alongside this doc as copy-paste-adapt starting points; the agent-side query shapes (curl / MCP `get_entity_with_context`) above remain valid for ad-hoc "what's on this day?" inspection outside a fired workflow.
 
 ## References
 

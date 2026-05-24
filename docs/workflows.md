@@ -124,10 +124,105 @@ The decision pipeline uses CEL ([cel-go](https://pkg.go.dev/github.com/google/ce
 
 ### 3.2 Functions
 
+#### Lookups + utilities
+
 - `graph.get(id)` — fetch a canonical-id entity (`<kind>:<slug>`). Returns the entity's `data` map or null. **Missing entity** does NOT raise — instead the engine records a missing-reference note that gets attached to any task the workflow produces. The workflow proceeds; the operator decides whether to manually add the missing edge / ingest the missing entity.
-- `regex_capture(text, pattern, group_index)` (#123) — returns the matched capture group as string (0 = whole match) or `""` on no-match / out-of-range / negative index. Process-wide compiled-regex cache (#123). **Literal patterns are pre-validated at workflow-Compile time**; a malformed regex fails registration, not the first fire. Runtime-computed patterns can only fail at eval and return `""`.
-- `ext.Strings()` (#123) — the [cel-go strings extension](https://pkg.go.dev/github.com/google/cel-go/ext): `.split()`, `.replace()`, `.substring()`, `.lowerAscii()`, `.upperAscii()`, `.indexOf()`, etc. Member-shape on the CEL string type.
+- `regex_capture(text, pattern, group_index)` — returns the matched capture group as string (0 = whole match) or `""` on no-match / out-of-range / negative index. Process-wide compiled-regex cache. **Literal patterns are pre-validated at workflow-Compile time**; a malformed regex fails registration, not the first fire. Runtime-computed patterns can only fail at eval and return `""`.
 - `string(value)` — CEL's standard type cast. The `string(timestamp)` overload formats RFC3339 / ISO 8601 (e.g. `"2026-05-17T19:00:00Z"`) and is the way to embed `edge.timestamp` in a template: `"- alert at " + string(edge.timestamp)`. Direct concat `"prefix " + edge.timestamp` fails with `no such overload` because CEL has no implicit string/time coercion. For date-only or time-only shapes, compose with the strings extension: `string(edge.timestamp).substring(0, 10)` → `"2026-05-17"`.
+
+#### Date helpers (ADR-0027 cut 1)
+
+Three nullary functions returning canonical day-id strings (`day:YYYY-MM-DD`). Resolved via the daemon's configured TZ (`timezone:` config → host `time.Local` fallback per [ADR-0025 § Timezone](../adr/0025-date-entities.md)):
+
+- `today()` → `"day:2026-11-11"`
+- `yesterday()` → `"day:2026-11-10"`
+- `tomorrow()` → `"day:2026-11-12"`
+
+Compose directly with `graph.get(today())`, `add_canonical_edge: target.name: today()`, action-template interpolation. The `add_canonical_edge` action runner strips the leading `<kind>:` prefix before slugifying — so `target.name: today()` resolves to `day:2026-11-11`, not the doubled-prefix form.
+
+#### Date arithmetic (ADR-0027 cut 2)
+
+Function form — no operator overloading, no custom CEL types:
+
+- `add_days(day_id, n)` → `day_id` (signed; negative `n` walks backward; cross-month / cross-year correct; leap-year aware)
+- `days_between(day_a, day_b)` → int (signed; positive when `b` is after `a`)
+
+Comparison via `days_between(a, b) > 0` substitutes for an operator-form `a < b`.
+
+#### Period helpers (ADR-0027 cut 2 §2a) — helpers not entities
+
+Week / month / year are pure CEL helpers — no new entity kinds, no `belongs_to` edges. ISO 8601 week semantics throughout (Monday-start; week containing Jan 4 is week 01).
+
+Current period (parallel to `today()`, per-fire cached):
+
+- `this_week()` → `"YYYY-Www"` (e.g. `"2026-W21"`)
+- `this_month()` → `"YYYY-MM"`
+- `this_year()` → `"YYYY"`
+
+Group → days (one-to-many; returns plain `list<string>`):
+
+- `days_in_week("YYYY-Www")` → 7 day-ids (Monday-Sunday)
+- `days_in_month("YYYY-MM")` → 28-31 day-ids (leap-aware Feb)
+- `days_in_year("YYYY")` → 365 or 366 day-ids
+
+Day → group (many-to-one):
+
+- `week_of("day:YYYY-MM-DD")` → `"YYYY-Www"` (ISO-week-year, NOT calendar year — `week_of("day:2025-12-29")` returns `"2026-W01"`)
+- `month_of("day:YYYY-MM-DD")` → `"YYYY-MM"`
+- `year_of("day:YYYY-MM-DD")` → `"YYYY"`
+
+Period helpers are NOT subject to the graph-walk cap — output size is bounded by calendar shape (max 366 for `days_in_year`), not graph density. No truncation flag.
+
+#### Graph walking (ADR-0027 cut 3)
+
+Four functions × two arities (unfiltered + edge-type-filtered). Single-hop only; multi-hop queries belong on `/v1/entities/{id}/context?depth=N`.
+
+Edges:
+
+- `graph.in_edges(id)` / `graph.in_edges(id, edge_type)` — edges terminating at `id`
+- `graph.out_edges(id)` / `graph.out_edges(id, edge_type)` — edges originating at `id`
+
+Neighbors (convenience — single batch entity fetch, not the N+1 `graph.in_edges(...).map(e, graph.get(e.from))` shape):
+
+- `graph.in_neighbors(id)` / `graph.in_neighbors(id, edge_type)` — source-side entities
+- `graph.out_neighbors(id)` / `graph.out_neighbors(id, edge_type)` — target-side entities
+
+When `edge_type` is given, the daemon filters SQL-side. Without it, CEL `.filter()` on `.items` handles ad-hoc narrowing.
+
+**Return shape** — every graph-walk call returns a wrapping struct so the truncation flag can ride alongside the data (CEL `list<T>` can't carry sidecar fields):
+
+```
+{
+  items:     list<T>,     // T = Edge for *_edges, Entity for *_neighbors
+  truncated: bool,        // true when total > len(items)
+  total:     int          // unbounded count (the pre-cap row count)
+}
+```
+
+Iterate via `result.items`; check `result.truncated` for overflow handling. Workflows that need exhaustive results MUST check the flag and paginate via the API (no CEL pagination primitive). The engine does NOT auto-fail on overflow.
+
+**Edge shape** returned by `*_edges`:
+
+```
+{ from: string, to: string, type: string, metadata: map<string, dyn> }
+```
+
+Mirrors `store.Edge.Metadata` lowercased per CEL convention. (Distinct from the trigger-edge binding's shape from §3.1 — that binding carries `from_title`/`to_title`/`timestamp` denormalizations the walk-result intentionally doesn't.)
+
+**Per-call cap** defaults to 1000 entries; operators override via the top-level `workflow.graph_walk_cap` config knob (see [`docs/configs.md`](./configs.md)).
+
+#### Per-fire caching for current-period helpers
+
+`today()`, `yesterday()`, `tomorrow()`, `this_week()`, `this_month()`, and `this_year()` are evaluated **once per workflow fire** from a single clock snapshot. Multiple callsites within one fire's actions all see the same value — important for the rare boundary-crossing case (midnight, Sunday→Monday ISO-week rollover, last-day-of-month, Dec-31→Jan-1). The cache is fire-scoped, not engine-scoped; back-to-back fires across a boundary correctly see different values. Operator `timezone:` reloads take effect on the NEXT fire (no engine restart required).
+
+#### CEL extensions wired
+
+The decision pipeline wires both [`ext.Strings()`](https://pkg.go.dev/github.com/google/cel-go/ext#Strings) and [`ext.Lists()`](https://pkg.go.dev/github.com/google/cel-go/ext#Lists) so workflow templates can use:
+
+- `.split()`, `.replace()`, `.substring()`, `.lowerAscii()`, `.upperAscii()`, `.indexOf()`, `.join(separator)` — string list / member-shape (`ext.Strings`)
+- `.flatten()` on `list<list<T>>` → `list<T>` (`ext.Lists`) — useful for the weekly-digest pattern that collects per-day neighbor lists.
+
+The standard `.map()`, `.filter()`, `.exists()`, `.all()` are CEL native and don't need an extension.
 
 ### 3.3 Result types
 
