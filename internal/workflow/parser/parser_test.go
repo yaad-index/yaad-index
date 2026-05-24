@@ -233,10 +233,30 @@ func TestValidate_NameRequired(t *testing.T) {
 	assert.Contains(t, err.Error(), "name is required")
 }
 
-// TestValidate_AllowedPluginsRequired: per ADR, every workflow
-// declares its plugin scope. Empty list is a workflow-shape
-// error.
-func TestValidate_AllowedPluginsRequired(t *testing.T) {
+// TestValidate_AllowedPluginsRequired_WhenPluginDispatch: a
+// workflow whose actions include plugin_dispatch MUST declare
+// allowed_plugins. The validator enforces the gate so a
+// misconfigured dispatch can't reach a plugin outside the
+// workflow's declared scope.
+func TestValidate_AllowedPluginsRequired_WhenPluginDispatch(t *testing.T) {
+	t.Parallel()
+	wf := &Workflow{
+		Name:    "x",
+		Trigger: Trigger{Type: TriggerTypeManual},
+		Actions: []Action{{PluginDispatch: &PluginDispatchAction{Plugin: "yaad-gmail", Command: "fetch"}}},
+	}
+	err := Validate(wf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "allowed_plugins")
+	assert.Contains(t, err.Error(), "plugin_dispatch")
+}
+
+// TestValidate_AllowedPluginsOptional_WhenNoPluginDispatch: per
+// ADR-0027 cut 4 fold, workflows without plugin_dispatch (manual
+// digests, add_note / set_property / add_canonical_edge / task_append
+// only) MAY omit allowed_plugins — they have no plugin surface to
+// declare.
+func TestValidate_AllowedPluginsOptional_WhenNoPluginDispatch(t *testing.T) {
 	t.Parallel()
 	wf := &Workflow{
 		Name:    "x",
@@ -244,8 +264,7 @@ func TestValidate_AllowedPluginsRequired(t *testing.T) {
 		Actions: []Action{{AddNote: &AddNoteAction{Content: "x"}}},
 	}
 	err := Validate(wf)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "allowed_plugins")
+	require.NoError(t, err, "workflow with no plugin_dispatch may omit allowed_plugins")
 }
 
 // TestValidate_AllowedPluginsDuplicated catches the same plugin

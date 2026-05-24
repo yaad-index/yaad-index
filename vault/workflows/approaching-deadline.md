@@ -1,7 +1,7 @@
 ---
 name: approaching-deadline
 version: 1
-status: enabled
+status: active
 ---
 
 Fires when any `due_on` edge is created. Files a task line with

@@ -1,7 +1,7 @@
 ---
 name: ingested-on
 version: 1
-status: enabled
+status: active
 ---
 
 Stamps every newly-created entity with an `ingested_on` edge to

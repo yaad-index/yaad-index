@@ -1,7 +1,7 @@
 ---
 name: daily-digest
 version: 1
-status: enabled
+status: active
 ---
 
 Manual-trigger workflow per ADR-0027. Walks today's `due_on` and

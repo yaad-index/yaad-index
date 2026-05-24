@@ -47,7 +47,7 @@ func Validate(wf *Workflow) error {
 	if err := validateStatus(wf.Status); err != nil {
 		return err
 	}
-	if err := validateAllowedPlugins(wf.AllowedPlugins); err != nil {
+	if err := validateAllowedPlugins(wf.AllowedPlugins, hasPluginDispatch(wf.Actions)); err != nil {
 		return err
 	}
 	if err := validateAddableGaps(wf.AddableGaps); err != nil {
@@ -97,9 +97,28 @@ func validateStatus(s string) error {
 	return fmt.Errorf("workflow: status %q is not one of {active, paused, draft}", s)
 }
 
-func validateAllowedPlugins(plugins []string) error {
+// hasPluginDispatch reports whether the workflow's action list
+// contains at least one plugin_dispatch primitive. Used to gate
+// the allowed_plugins required-non-empty check — workflows that
+// don't dispatch through plugins (manual-trigger digests,
+// add_canonical_edge / set_property / add_note / task_append only)
+// have no plugin surface to declare and can legitimately omit
+// the field.
+func hasPluginDispatch(actions []Action) bool {
+	for _, a := range actions {
+		if a.PluginDispatch != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func validateAllowedPlugins(plugins []string, required bool) error {
 	if len(plugins) == 0 {
-		return fmt.Errorf("workflow: allowed_plugins is required and must be non-empty")
+		if required {
+			return fmt.Errorf("workflow: allowed_plugins is required and must be non-empty when actions include plugin_dispatch")
+		}
+		return nil
 	}
 	seen := make(map[string]struct{}, len(plugins))
 	for i, p := range plugins {
