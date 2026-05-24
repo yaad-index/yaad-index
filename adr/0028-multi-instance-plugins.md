@@ -160,6 +160,19 @@ Per-instance runtime state (poll cursors, last-fetched markers, per-instance cac
 
 Plugin authors continue to interact with runtime state through the existing per-plugin state API; the daemon scopes the read/write to the invoking instance transparently.
 
+> **Implementation deferral note (2026-05-24, during Cut 4 #246):**
+> the codebase has no per-plugin runtime-state surface today —
+> `plugin_capabilities` is the --init cache (plugin-scoped per §2 +
+> §8, not composite-keyed), and the only per-(plugin, kind) DB
+> surfaces are the dropped-canonical counters. The composite-key
+> shape specified above stays as the spec; the storage + API
+> surface lands when an in-tree plugin first needs per-(plugin,
+> instance) persistence. Tracking issue:
+> [yaad-index #252](https://github.com/yaad-index/yaad-index/issues/252).
+> Cut 4 ships the rest of §4 (parser + dispatch + fan-out) without
+> the §6 storage wiring; the first consumer to claim #252 lands
+> the migration and store API alongside its own code.
+
 ### 7. Per-instance `enabled: false`
 
 `instances[*].enabled: false` (default `true`) temporarily disables an instance without removing its config:
@@ -226,7 +239,7 @@ This ADR ships in 5 cuts (mirroring ADR-0027's cadence):
 
 3. **Cut 3 — URL dispatch via `instance_routing`.** Wire the `instance_routing` block in `--init` capabilities through the plugin loader; implement glob-match strategy per §3 with first-match-wins across claimed globs, overlap-warning at config-load time, and **unmatched-URL fail-fast** (reject ingest with `400 {instance: "unrouted", url, message}` per §3). Update the existing URL routing path in `internal/api/` to consult the per-instance routing table. Pair with an `instance_routing`-bearing example plugin (yaad-github fits naturally per ADR-0026 §7).
 
-4. **Cut 4 — command dispatch grammar + fan-out + runtime state.** Extend the command parser to recognize `<plugin>/<instance>` invocation per §4; implement serial fan-out for bare-plugin invocations; add the per-instance composite-key migration to the runtime-state table per §6. ADR-0022 inline amendment note linking back to this ADR's §4.
+4. **Cut 4 — command dispatch grammar + fan-out + ADR-0022 amendment.** Extend the command parser to recognize `<plugin>/<instance>` invocation per §4; implement serial fan-out for bare-plugin invocations with aggregated per-instance response; add the ADR-0022 inline amendment note linking back to this ADR's §4. The §6 per-instance composite-key migration is deferred (see the deferral note inline in §6 + [#252](https://github.com/yaad-index/yaad-index/issues/252)): no per-plugin runtime-state surface exists today, and scaffolding empty storage without a consumer invites schema drift before the first in-tree consumer defines what it needs.
 
 5. **Cut 5 — `enabled: false` flag + cache invalidation + docs.** Wire `instances[*].enabled` through all dispatch / routing / refresh paths per §7. Implement the three cache-invalidation rules per §8 (mtime + content-hash diff on instance config change; archive-on-removal). Update `docs/configs.md` with the `instances:` block + worked example; update `docs/plugin-flow.md` with the `instance_routing` capability + the command grammar extension; refresh `AGENTS.md` reference if needed.
 

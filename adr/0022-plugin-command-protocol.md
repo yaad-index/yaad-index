@@ -6,6 +6,8 @@ Proposed 2026-05-10. Response-shape clause (the "Response shape: multi-envelope 
 
 Amended 2026-05-22: per-command `operator_only` flag on `CommandSpec` replaces the blanket-operator-only-on-command-shape rule. The original §5.3 wording is preserved below as the *CLI-side* contract (cron + manual operator invocations) and the *daemon-side* ingest gate is now per-command, defaulting to agent-callable. §1 was extended to document the long-form CommandSpec wire shape; §5.3 was rewritten to reflect the per-command rule.
 
+Amended 2026-05-24 by [ADR-0028](./0028-multi-instance-plugins.md) §4: the invocation grammar gains the instance-scope qualifier `<plugin>/<instance>: !<command>` alongside the existing bare `<plugin>: !<command>` form. The bare form fans the command out **serially** across every enabled instance of the plugin in operator-config declaration order; per-instance errors are reported in an aggregated response rather than aborting the walk. Instance-scoped form routes to the single named instance. Plugins with `supports_instances: false` (the default per ADR-0028 §9) keep the bare-form-only single-instance behavior they had under the original §2 grammar.
+
 ## Depends on
 
 - [ADR-0005](./0005-plugin-lifecycle.md) — plugin invocation model (subprocess-per-request, JSON over stdio, `--init` capabilities). The command-protocol extends that contract with a parallel invocation shape.

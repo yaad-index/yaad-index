@@ -252,11 +252,21 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 					fmt.Sprintf("no plugin handles URL %s", req.URL))
 				return
 			}
-			// Command-shape ingest is Cut 4's domain; for now
-			// command invocations resolve to the implicit-first-
-			// instance via the tracker's resolveInstanceName
-			// fallback (empty instanceName here).
-			att = ingestAttemptForPlugin(plugin, req.URL, "")
+			// ADR-0028 §4 (Cut 4) command-shape dispatch:
+			//   - `<plugin>/<instance>: !<cmd>` → single-attempt
+			//     against the named instance (validated below).
+			//   - bare `<plugin>: !<cmd>` → fan out serially across
+			//     every enabled instance in declaration order.
+			//
+			// Both shapes route through handleCommandFanOut. The
+			// single-instance case (instance-scoped form OR a
+			// plugin with only one configured instance) collapses
+			// to the regular single-attempt response shape; the
+			// multi-instance bare case emits an aggregate
+			// fan-out response with per-instance status.
+			instances := pluginInstanceConfigs[plugin.Name()]
+			handleCommandFanOut(w, r, logger, st, tracker, plugin, req, inv, instances, waitSeconds, fillInstruction, canonicalKindReg)
+			return
 		} else if plugin, matched := registry.Lookup(req.URL); matched {
 			// ADR-0028 §3 Cut 3: pick the active instance for
 			// URL-shape ingest by walking the plugin's
