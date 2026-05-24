@@ -272,6 +272,36 @@ governs.
  Includes the action-runner kind-prefix strip in
  `vault_writers.go` so `target.name: today()` resolves to
  `day:2026-11-11`, not `day:day-2026-11-11`.
+- [ADR-0028 — Multi-instance plugins](adr/0028-multi-instance-plugins.md). Generalizes
+ plugin identity from `name` to `(name, instance)` so the same
+ binary can be loaded multiple times under different runtime
+ config (two Gmail accounts, multiple GitHub identity contexts,
+ etc.). Config: `plugins[*].instances[]` with per-instance
+ `env:` + `config:`; absent `instances:` synthesizes an
+ implicit instance named `default`. Plugin self-declares
+ multi-instance support via `supports_instances: bool` in
+ `--init` (default `false`); the daemon fail-fasts at config
+ load when a `false`-declaring plugin has 2+ instance entries.
+ The flag constrains **cardinality** (≤ 1 when `false`), NOT
+ naming — a `supports_instances: false` plugin with one explicit
+ instance keeps the operator's chosen name (`source: bgg/personal`
+ is valid). `--init` runs **once per plugin** — capabilities
+ are plugin-scoped; instances are runtime-config variants only.
+ URL dispatch: plugins declare a nullable `instance_routing`
+ block in `--init` (strategy + config_field + match_template);
+ first-match-wins glob across instances. **Unmatched URLs
+ fail fast** at ingest with a `400 {instance: "unrouted", url}`
+ response — no silent fallback to a first-declared instance, so
+ misattribution can't quietly land in `source:`. Command grammar
+ (amends ADR-0022): `<plugin>/<instance>: !<cmd>` for
+ instance-scoped invocation; bare `<plugin>: !<cmd>` fans out
+ **serially** across enabled instances in declaration order.
+ Entity `source:` field is always the slash form
+ `<plugin>/<instance>` (no bare-plugin shape); multi-source
+ overlap promotes the field to an array. Per-instance
+ `enabled: false` flag, runtime state composite-keyed by
+ `(plugin, instance)`, archive-not-purge on instance removal.
+ Pre-release status — no migration.
 
 ## Project layout
 
