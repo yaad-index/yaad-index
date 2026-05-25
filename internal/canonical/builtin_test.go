@@ -7,22 +7,27 @@ import (
 )
 
 // TestDaemonEntityKinds pins the entity-kind vocabulary the
-// daemon always allows. Today: `day` per ADR-0025 cut 1, plus
-// `task` per the ADR-0024 alignment landed in #268. Week /
-// month / year are deferred to a later layer per ADR-0025 §
-// Entity kinds.
+// daemon always allows. Set today: `day` per ADR-0025 cut 1,
+// `task` per the ADR-0024 alignment landed in #268, and the
+// gmail-emitted `email` / `email-address` / `label` kinds per
+// #272. Week / month / year are deferred to a later layer per
+// ADR-0025 § Entity kinds.
 func TestDaemonEntityKinds(t *testing.T) {
 	t.Parallel()
 	got := DaemonEntityKinds()
-	assert.Equal(t, []string{DayKind, TaskKind}, got)
+	assert.Equal(t, []string{DayKind, TaskKind, EmailKind, EmailAddressKind, LabelKind}, got)
 	assert.Equal(t, "day", DayKind, "slug-side spelling matches ADR-0025 § Entity kinds")
 	assert.Equal(t, "task", TaskKind, "slug-side spelling matches ADR-0024 §Task")
+	assert.Equal(t, "email", EmailKind)
+	assert.Equal(t, "email-address", EmailAddressKind)
+	assert.Equal(t, "label", LabelKind)
 }
 
 // TestDaemonEdgeTypes pins the edge type vocabulary the daemon
 // always allows. Cut-1 set per ADR-0025 § Edge types (the five
 // time-bound relationships) plus `triggered_by` per #268 for
-// the task → source attribution edge.
+// the task → source attribution edge plus the gmail-emitted
+// from/to/cc/bcc/tagged_as set per #272.
 func TestDaemonEdgeTypes(t *testing.T) {
 	t.Parallel()
 	want := []string{
@@ -32,6 +37,11 @@ func TestDaemonEdgeTypes(t *testing.T) {
 		"references_day",
 		"ingested_on",
 		"triggered_by",
+		"from",
+		"to",
+		"cc",
+		"bcc",
+		"tagged_as",
 	}
 	assert.Equal(t, want, DaemonEdgeTypes())
 }

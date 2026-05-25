@@ -31,6 +31,32 @@ const DayKind = "day"
 // the entity promotion); the canonical kind is the singular `task`.
 const TaskKind = "task"
 
+// EmailKind / EmailAddressKind / LabelKind are the canonical
+// entity kinds the gmail plugin emits per the #272 alignment.
+// Lifted out of the gmail-side declaration so they're daemon-
+// managed — operators don't need to enable them in
+// `canonical_kinds:` config, and `/v1/entities/<id>` resolves
+// even when no operator config touched the canonical-kinds
+// allow-set. The slug shapes are:
+//
+//   - `email:<message-id-slug>` — per-message anchor entity
+//     (the `is_about` target of a gmail source).
+//   - `email-address:<addr-slug>` — per-address entity (the
+//     `from`/`to`/`cc`/`bcc` target of a gmail source).
+//   - `label:<label-slug>` — per-Gmail-label entity (the
+//     `tagged_as` target of a gmail source).
+//
+// The plugin still computes the per-edge slugs via its own
+// EmailCanonicalSlug / EmailAddressSlug / LabelSlug helpers;
+// the daemon-side constants name the kinds so the canonical
+// guard + /v1/kinds aggregator + ingest auto-materialize
+// path treat them uniformly with `day` and `task`.
+const (
+	EmailKind        = "email"
+	EmailAddressKind = "email-address"
+	LabelKind        = "label"
+)
+
 // Canonical edge type names per ADR-0025 § Edge types. The
 // vocabulary is fixed at the daemon level; plugins may use these
 // for portability or declare their own edge types in their
@@ -69,18 +95,38 @@ const (
 	// behind `graph.in_neighbors(source_id, "triggered_by")` for
 	// "what tasks did this source spawn?" queries.
 	EdgeTypeTriggeredBy = "triggered_by"
+
+	// EdgeTypeFrom / -To / -Cc / -Bcc connect a gmail source
+	// entity to the per-address `email-address` canonical entity
+	// it names in the corresponding header role. Daemon-managed
+	// per the #272 alignment so operators don't need to enable
+	// them in `canonical_edge_types:` config. The plugin still
+	// owns the address-slug computation (gmail.EmailAddressSlug);
+	// these constants name the wire vocabulary so the canonical
+	// guard + /v1/kinds aggregator treat them uniformly.
+	EdgeTypeFrom = "from"
+	EdgeTypeTo   = "to"
+	EdgeTypeCc   = "cc"
+	EdgeTypeBcc  = "bcc"
+
+	// EdgeTypeTaggedAs connects a gmail source entity to the
+	// per-Gmail-label `label` canonical entity the X-GM-LABELS
+	// header surfaced (control-plane labels filtered out at
+	// edge-assembly time). Daemon-managed per #272.
+	EdgeTypeTaggedAs = "tagged_as"
 )
 
 // DaemonEntityKinds returns the canonical entity kinds the daemon
 // always allows, regardless of operator config. Today the set is
-// the `day` kind per ADR-0025 cut 1 and the `task` kind per the
-// ADR-0024 alignment landed in #268. Caller-side guards
-// (config.CanonicalGuard, /v1/kinds aggregator) fold this into
-// their effective set.
+// the `day` kind per ADR-0025 cut 1, the `task` kind per the
+// ADR-0024 alignment landed in #268, and the gmail-emitted
+// `email` / `email-address` / `label` kinds per the #272
+// alignment. Caller-side guards (config.CanonicalGuard, /v1/kinds
+// aggregator) fold this into their effective set.
 //
 // Returns a fresh slice; callers may mutate freely.
 func DaemonEntityKinds() []string {
-	return []string{DayKind, TaskKind}
+	return []string{DayKind, TaskKind, EmailKind, EmailAddressKind, LabelKind}
 }
 
 // DaemonEdgeTypes returns the canonical edge type names the daemon
@@ -99,6 +145,11 @@ func DaemonEdgeTypes() []string {
 		EdgeTypeReferencesDay,
 		EdgeTypeIngestedOn,
 		EdgeTypeTriggeredBy,
+		EdgeTypeFrom,
+		EdgeTypeTo,
+		EdgeTypeCc,
+		EdgeTypeBcc,
+		EdgeTypeTaggedAs,
 	}
 }
 

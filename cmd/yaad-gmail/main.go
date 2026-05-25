@@ -448,7 +448,25 @@ func buildSourceLine(env gmail.IngestEnvelope, fetchedAt string) sourceLine {
 
 	data := map[string]any{
 		"subject": env.Subject,
-		"date": formatRFC3339(env.Date),
+		"date":    formatRFC3339(env.Date),
+	}
+	// #272: surface from/to/cc/bcc on the structured data
+	// map so workflow CEL predicates can read them directly
+	// (`entity.data.from == "noreply@example.com"`) rather
+	// than regexing the clean_content body. Address-edge
+	// emission via Edges stays unchanged — these fields are
+	// the complementary read-side surface for the same
+	// header set. `to`/`cc` always present as arrays for
+	// shape stability; `from` omitted when absent; `bcc`
+	// omitted when empty (sent-folder-only — most inbound
+	// messages won't have the field at all).
+	if env.From != "" {
+		data["from"] = env.From
+	}
+	data["to"] = stringsCopy(env.To)
+	data["cc"] = stringsCopy(env.Cc)
+	if len(env.Bcc) > 0 {
+		data["bcc"] = stringsCopy(env.Bcc)
 	}
 
 	return sourceLine{
@@ -616,6 +634,20 @@ func formatRFC3339(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+// stringsCopy returns an empty (non-nil) slice when in is empty
+// and a fresh copy otherwise. Used by buildSourceLine so the
+// data.to / data.cc / data.bcc fields marshal as `[]` rather
+// than `null` for absent recipients — workflow CEL predicates
+// see a stable shape regardless of header presence.
+func stringsCopy(in []string) []string {
+	if len(in) == 0 {
+		return []string{}
+	}
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
 }
 
 // writeErrorPacket emits a single `_error` control packet per

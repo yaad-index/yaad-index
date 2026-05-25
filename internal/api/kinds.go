@@ -12,22 +12,31 @@ import (
 
 // daemonEntityKindDescriptions names the human-readable description
 // surfaced on /v1/kinds for each daemon-built-in canonical entity
-// kind. Two entries today: `day` per ADR-0025 cut 1, `task` per the
-// ADR-0024 alignment landed in #268. Everything else comes from
-// registered plugins.
+// kind. The set today: `day` per ADR-0025 cut 1, `task` per the
+// ADR-0024 alignment landed in #268, and the gmail-emitted
+// `email` / `email-address` / `label` kinds per #272. Everything
+// else comes from registered plugins.
 var daemonEntityKindDescriptions = map[string]string{
 	canonical.DayKind: "Date anchor entity per ADR-0025 — slug shape `day:<YYYY-MM-DD>`. " +
 		"Always available; operators don't enable via canonical_kinds: config.",
 	canonical.TaskKind: "Workflow-spawned task entity per ADR-0024 §Task — slug shape " +
 		"`task:<workflow>-<subject>` (or `task:<workflow>-err` for err tasks). " +
 		"Always available; operators don't enable via canonical_kinds: config.",
+	canonical.EmailKind: "Per-message gmail anchor entity (the `is_about` target of a gmail source) — " +
+		"slug shape `email:<message-id-slug>`. Daemon-managed per #272.",
+	canonical.EmailAddressKind: "Per-address gmail entity (the `from`/`to`/`cc`/`bcc` target of a gmail source) — " +
+		"slug shape `email-address:<addr-slug>`. Daemon-managed per #272.",
+	canonical.LabelKind: "Per-Gmail-label entity (the `tagged_as` target of a gmail source) — " +
+		"slug shape `label:<label-slug>`. Daemon-managed per #272.",
 }
 
 // daemonEdgeKindDescriptions names the canonical edge type
 // vocabulary. Cut-1 set per ADR-0025 § Edge types (the five
 // time-bound relationships, all targeting `day`) plus
 // `triggered_by` per #268 (task → source-entity attribution; the
-// source kind is open since any entity can trigger a workflow).
+// source kind is open since any entity can trigger a workflow)
+// plus the gmail-emitted address-role + label edges per #272
+// (`from`/`to`/`cc`/`bcc`/`tagged_as`).
 var daemonEdgeKindDescriptions = map[string]string{
 	canonical.EdgeTypeDueOn:         "Task / deadline entity is due on this day.",
 	canonical.EdgeTypeOccurredOn:    "Event / meeting / shipment happened or will happen on this day.",
@@ -35,6 +44,11 @@ var daemonEdgeKindDescriptions = map[string]string{
 	canonical.EdgeTypeReferencesDay: "Generic reference to this day from any entity (daemon shape-scan fallback).",
 	canonical.EdgeTypeIngestedOn:    "Entity was first received on this day. Reserved for operator-wired workflow; daemon never emits in v1.x.",
 	canonical.EdgeTypeTriggeredBy:   "Workflow-spawned task points at the source entity whose firing produced it.",
+	canonical.EdgeTypeFrom:          "Gmail source points at the email-address that sent the message.",
+	canonical.EdgeTypeTo:            "Gmail source points at an email-address listed in the To header.",
+	canonical.EdgeTypeCc:            "Gmail source points at an email-address listed in the Cc header.",
+	canonical.EdgeTypeBcc:           "Gmail source points at an email-address listed in the Bcc header (sent-folder messages only).",
+	canonical.EdgeTypeTaggedAs:      "Gmail source points at a label entity surfaced via the X-GM-LABELS header.",
 }
 
 // daemonEdgeKindEndpoints names the (from_kind, to_kind) pair the
@@ -52,6 +66,11 @@ var daemonEdgeKindEndpoints = map[string]struct{ FromKind, ToKind string }{
 	canonical.EdgeTypeReferencesDay: {ToKind: canonical.DayKind},
 	canonical.EdgeTypeIngestedOn:    {ToKind: canonical.DayKind},
 	canonical.EdgeTypeTriggeredBy:   {FromKind: canonical.TaskKind},
+	canonical.EdgeTypeFrom:          {ToKind: canonical.EmailAddressKind},
+	canonical.EdgeTypeTo:            {ToKind: canonical.EmailAddressKind},
+	canonical.EdgeTypeCc:            {ToKind: canonical.EmailAddressKind},
+	canonical.EdgeTypeBcc:           {ToKind: canonical.EmailAddressKind},
+	canonical.EdgeTypeTaggedAs:      {ToKind: canonical.LabelKind},
 }
 
 // daemonSourcePlugin is the synthetic source_plugins value the

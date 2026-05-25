@@ -84,16 +84,26 @@ func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Reg
 			To: req.To,
 			Metadata: req.Metadata,
 		}
-		// #268 day-side fold: when the manual edge points at a
-		// `day:YYYY-MM-DD` target, lazy-materialize the day
-		// entity row before CreateEdge so the FK holds without
-		// the caller having to pre-create the day. Same lazy-
-		// on-edge pattern the ingest + fill + workflow paths
-		// already follow via EmitDayRefs.
-		if _, ok := canonical.ParseDayID(req.To); ok {
-			if err := canonical.EnsureDayEntity(r.Context(), st, req.To, logger); err != nil {
-				logger.WarnContext(r.Context(), "POST /v1/edges: ensure day entity failed",
-					"day_id", req.To, "err", err)
+		// #268 / #272 thin-label target lazy-ensure: when the
+		// manual edge points at a thin-label canonical kind
+		// (`day`, `email`, `email-address`, `label`), auto-
+		// materialize the target row before CreateEdge so the
+		// FK holds without the caller having to pre-create the
+		// entity. Same lazy-on-edge pattern the ingest + fill +
+		// workflow paths already follow via EmitDayRefs /
+		// ensureCanonicalLabelRow.
+		//
+		// `task` is excluded even though it's also daemon-
+		// managed: task rows index `<vault>/tasks/*.md` files
+		// and per ADR-0024 §Task only materialize on first-
+		// create (no automatic backfill). A POST /v1/edges
+		// pointing at `task:foo` for an unknown task should
+		// 422 with missing_entity rather than silently land a
+		// phantom store row with no backing vault file.
+		if targetKind, _, ok := canonical.SplitLabelID(req.To); ok && isLazyMaterializableKind(targetKind) {
+			if _, err := canonical.EnsureLabelRow(r.Context(), st, req.To, logger); err != nil {
+				logger.WarnContext(r.Context(), "POST /v1/edges: ensure thin-label target failed",
+					"target_id", req.To, "kind", targetKind, "err", err)
 			}
 		}
 		err := st.CreateEdge(r.Context(), se)
@@ -165,10 +175,11 @@ func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Reg
 // isRegisteredEdgeKind reports whether name is advertised by any
 // registered plugin's Capabilities().EdgeKinds OR is a daemon-
 // managed canonical edge type (the day-anchored vocabulary per
-// ADR-0025 + the triggered_by edge per #268). Empty registry
-// without a daemon-built-in match means the edge name is not
-// valid for POST /v1/edges — matches the /v1/kinds shape after
-// the bootstrapKinds seed retired.
+// ADR-0025 + the triggered_by edge per #268 + the gmail-emitted
+// from/to/cc/bcc/tagged_as per #272). Empty registry without a
+// daemon-built-in match means the edge name is not valid for
+// POST /v1/edges — matches the /v1/kinds shape after the
+// bootstrapKinds seed retired.
 func isRegisteredEdgeKind(registry *plugins.Registry, name string) bool {
 	for _, edge := range canonical.DaemonEdgeTypes() {
 		if edge == name {
@@ -183,6 +194,27 @@ func isRegisteredEdgeKind(registry *plugins.Registry, name string) bool {
 		}
 	}
 	return false
+}
+
+// isLazyMaterializableKind reports whether handleCreateEdge
+// should auto-create a thin row for a manual-edge target of the
+// given kind. The set is the daemon-managed thin-label kinds
+// only — `day` per ADR-0025 cut 1 and `email` / `email-address`
+// / `label` per #272. `task` is excluded because task rows
+// index `<vault>/tasks/*.md` files per ADR-0024 §Task and only
+// materialize on first-create (no automatic backfill); auto-
+// creating a phantom `task:<slug>` row from a manual edge would
+// land an entity with no backing vault file.
+func isLazyMaterializableKind(kind string) bool {
+	switch kind {
+	case canonical.DayKind,
+		canonical.EmailKind,
+		canonical.EmailAddressKind,
+		canonical.LabelKind:
+		return true
+	default:
+		return false
+	}
 }
 
 // listEdge is the wire shape for one entry on the GET /v1/edges
