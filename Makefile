@@ -130,15 +130,20 @@ install-hooks:
 	@git config core.hooksPath $(HOOK_PATH)
 	@echo "installed $(HOOK_PATH)/pre-commit; git core.hooksPath → $(HOOK_PATH)"
 
-# Build the container image. The VERSION ldflag is passed through as
-# a build ARG so /v1/health surfaces the same identity on container
-# starts as on a local `make build`. The image is the daemon image,
-# so YAAD_INDEX_VERSION is the right per-binary identity. TAG
-# defaults to `latest`; override via `make docker-build TAG=v1.2.3`
-# for releases.
+# Build the container image. Each binary gets its own per-component
+# VERSION build-arg so the in-container plugin binaries report
+# their OWN tag (yaad-wikipedia-v0.3.0-..., yaad-bgg-v0.2.0-...,
+# etc.) instead of inheriting the daemon's tag — same fix as the
+# Makefile build / build-plugins targets, just propagated through
+# Docker's per-stage env. TAG defaults to `latest`; override via
+# `make docker-build TAG=v1.2.3` for releases.
 docker-build:
 	DOCKER_BUILDKIT=1 docker build \
-		--build-arg VERSION=$(YAAD_INDEX_VERSION) \
+		--build-arg YAAD_INDEX_VERSION=$(YAAD_INDEX_VERSION) \
+		--build-arg YAAD_WIKIPEDIA_VERSION=$(YAAD_WIKIPEDIA_VERSION) \
+		--build-arg YAAD_BGG_VERSION=$(YAAD_BGG_VERSION) \
+		--build-arg YAAD_GMAIL_VERSION=$(YAAD_GMAIL_VERSION) \
+		--build-arg YAAD_GITHUB_VERSION=$(YAAD_GITHUB_VERSION) \
 		--build-arg YAAD_UID=$(YAAD_UID) \
 		--build-arg YAAD_GID=$(YAAD_GID) \
 		-t yaad-index:$(TAG) \
