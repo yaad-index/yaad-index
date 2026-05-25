@@ -239,11 +239,13 @@ type EntityCreatedEvent struct {
 	// "what caused me to fire" deterministically rather than
 	// reverse-engineering through graph walks.
 	//
-	// Empty string when the cause isn't known (e.g. legacy
-	// publishers not yet migrated, manual /v1/ingest with no
-	// upstream context). Workflows reading `trigger.source`
-	// against such an event see `null` and can fall back to
-	// `entity` or `graph` walks.
+	// Empty string when unset; the engine falls back to ID at
+	// activation-build time so legacy publishers stay
+	// trigger.source-functional (workflows see
+	// `trigger.source == entity` rather than null). Explicit
+	// cause-stamping matters when multiple sources can resolve
+	// to the same canonical and the workflow needs to
+	// disambiguate which one drove this particular firing.
 	CausedByEntityID string
 }
 

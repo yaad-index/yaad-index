@@ -909,13 +909,24 @@ func (e *Engine) buildTriggerContext(ctx context.Context, eventType string, at t
 			source = ent
 		}
 	}
-	trig := map[string]any{
+	return triggerContextWith(source, eventType, at, cause)
+}
+
+// triggerContextWith shapes the `trigger.*` CEL map when the
+// source entity is already in hand (Dispatch / runEvaluation
+// manual paths, evaluateEdgeEvent's fromEntity reuse). Avoids
+// the re-resolve buildTriggerContext does. Nil source is
+// normalized to an empty map for the has()-safety contract.
+func triggerContextWith(source map[string]any, eventType string, at time.Time, cause string) map[string]any {
+	if source == nil {
+		source = map[string]any{}
+	}
+	return map[string]any{
 		"source":    source,
 		"event":     eventType,
 		"timestamp": at,
 		"cause":     cause,
 	}
-	return trig
 }
 
 // evaluateEdgeEvent runs the per-edge activation prep
@@ -1789,15 +1800,7 @@ func (e *Engine) runEvaluation(ctx context.Context, reg *registeredWorkflow, ent
 	// `trigger.event == "manual"`. Workflows that branch on
 	// `trigger.event` distinguish event-driven from manual
 	// firings via this shape.
-	trigger := map[string]any{
-		"source":    entity,
-		"event":     "manual",
-		"timestamp": dec.At,
-		"cause":     "",
-	}
-	if trigger["source"] == nil {
-		trigger["source"] = map[string]any{}
-	}
+	trigger := triggerContextWith(entity, "manual", dec.At, "")
 
 	act := decision.Activation{
 		Entity:   entity,
