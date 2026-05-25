@@ -24,13 +24,24 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-ARG VERSION=container
-ENV LDFLAGS="-X 'github.com/yaad-index/yaad-index/internal/buildinfo.Version=${VERSION}'"
-RUN CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o /out/yaad-index      ./cmd/yaad-index \
- && CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o /out/yaad-wikipedia  ./cmd/yaad-wikipedia \
- && CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o /out/yaad-bgg        ./cmd/yaad-bgg \
- && CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o /out/yaad-gmail      ./cmd/yaad-gmail \
- && CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o /out/yaad-github     ./cmd/yaad-github
+# Per-binary VERSION ARGs per the Makefile's component-prefix
+# convention (yaad-index-v*, yaad-wikipedia-v*, etc.). The single-
+# VERSION-arg-for-all shape from pre-#258 would re-stamp every
+# bundled plugin with the daemon's version inside the container,
+# defeating the Makefile-side per-binary injection. `make docker-
+# build` passes all 5 via --build-arg using the same per-component
+# describe outputs that drive the local build.
+ARG YAAD_INDEX_VERSION=container
+ARG YAAD_WIKIPEDIA_VERSION=container
+ARG YAAD_BGG_VERSION=container
+ARG YAAD_GMAIL_VERSION=container
+ARG YAAD_GITHUB_VERSION=container
+ENV LDFLAG_PREFIX="-X github.com/yaad-index/yaad-index/internal/buildinfo.Version="
+RUN CGO_ENABLED=0 go build -ldflags "${LDFLAG_PREFIX}${YAAD_INDEX_VERSION}"     -o /out/yaad-index      ./cmd/yaad-index \
+ && CGO_ENABLED=0 go build -ldflags "${LDFLAG_PREFIX}${YAAD_WIKIPEDIA_VERSION}" -o /out/yaad-wikipedia  ./cmd/yaad-wikipedia \
+ && CGO_ENABLED=0 go build -ldflags "${LDFLAG_PREFIX}${YAAD_BGG_VERSION}"       -o /out/yaad-bgg        ./cmd/yaad-bgg \
+ && CGO_ENABLED=0 go build -ldflags "${LDFLAG_PREFIX}${YAAD_GMAIL_VERSION}"     -o /out/yaad-gmail      ./cmd/yaad-gmail \
+ && CGO_ENABLED=0 go build -ldflags "${LDFLAG_PREFIX}${YAAD_GITHUB_VERSION}"    -o /out/yaad-github     ./cmd/yaad-github
 
 # --- runtime ----------------------------------------------------------
 # YAAD_UID / YAAD_GID default to 1000:1000 — matches the conventional
