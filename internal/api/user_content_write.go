@@ -315,12 +315,16 @@ func handleUserContentCreate(
 		// ADR-0012 (UGC is operator-authored).
 		if bus != nil {
 			// #154: queue for publish-after-unlock.
+			// CausedByEntityID = id (self-cause: UGC create
+			// is the operator-authored equivalent of a source-
+			// plugin self-ingest).
 			eventbus.QueueOrPublish(r.Context(), bus, &pending, eventbus.EntityCreatedEvent{
-				ID:        id,
-				Kind:      userContentKind,
-				SourceTag: eventbus.SourceOperator,
-				At:        time.Now().UTC(),
-				Chain:     eventbus.WorkflowChainFromContext(r.Context()),
+				ID:               id,
+				Kind:             userContentKind,
+				SourceTag:        eventbus.SourceOperator,
+				At:               time.Now().UTC(),
+				Chain:            eventbus.WorkflowChainFromContext(r.Context()),
+				CausedByEntityID: id,
 			})
 		}
 

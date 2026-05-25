@@ -318,14 +318,15 @@ func (t *ingestTracker) queueEntityUpdated(ctx context.Context, pending *eventbu
 			continue
 		}
 		evt := eventbus.EntityUpdatedEvent{
-			EntityID:  id,
-			Kind:      kind,
-			Field:     "data." + k,
-			Old:       oldVal,
-			New:       newVal,
-			SourceTag: eventbus.SourceAgent,
-			At:        now,
-			Chain:     chain,
+			EntityID:         id,
+			Kind:             kind,
+			Field:            "data." + k,
+			Old:              oldVal,
+			New:              newVal,
+			SourceTag:        eventbus.SourceAgent,
+			At:               now,
+			Chain:            chain,
+			CausedByEntityID: id,
 		}
 		if pending != nil {
 			pending.Add(evt)
@@ -338,17 +339,22 @@ func (t *ingestTracker) queueEntityUpdated(ctx context.Context, pending *eventbu
 // publishEntityCreated emits entity.created with SourceAgent
 // (ingest path) when bus is configured. Centralizes the
 // time-now + payload construction so the four call sites are
-// one-liners.
-func (t *ingestTracker) publishEntityCreated(ctx context.Context, id, kind string) {
+// one-liners. causedByID names the entity whose action drove
+// this materialization — pass the entity's own ID for a
+// source-self create (plugin ingesting its own truth), or the
+// triggering source entity's ID for canonical thin-row
+// materializations driven by another entity's edges.
+func (t *ingestTracker) publishEntityCreated(ctx context.Context, id, kind, causedByID string) {
 	if t.bus == nil {
 		return
 	}
 	t.bus.Publish(ctx, eventbus.EntityCreatedEvent{
-		ID:        id,
-		Kind:      kind,
-		SourceTag: eventbus.SourceAgent,
-		At:        time.Now().UTC(),
-		Chain:     eventbus.WorkflowChainFromContext(ctx),
+		ID:               id,
+		Kind:             kind,
+		SourceTag:        eventbus.SourceAgent,
+		At:               time.Now().UTC(),
+		Chain:            eventbus.WorkflowChainFromContext(ctx),
+		CausedByEntityID: causedByID,
 	})
 }
 
@@ -359,20 +365,23 @@ func (t *ingestTracker) publishEntityCreated(ctx context.Context, id, kind strin
 // deadlock that the prior shape produced. Nil queue falls
 // through to the legacy immediate-publish path so callers
 // outside any locked scope don't pay the indirection cost.
-func (t *ingestTracker) queueEntityCreated(ctx context.Context, pending *eventbus.PendingEvents, id, kind string) {
+// causedByID is the trigger.source attribution; see
+// publishEntityCreated for semantics.
+func (t *ingestTracker) queueEntityCreated(ctx context.Context, pending *eventbus.PendingEvents, id, kind, causedByID string) {
 	if t.bus == nil {
 		return
 	}
 	if pending == nil {
-		t.publishEntityCreated(ctx, id, kind)
+		t.publishEntityCreated(ctx, id, kind, causedByID)
 		return
 	}
 	pending.Add(eventbus.EntityCreatedEvent{
-		ID:        id,
-		Kind:      kind,
-		SourceTag: eventbus.SourceAgent,
-		At:        time.Now().UTC(),
-		Chain:     eventbus.WorkflowChainFromContext(ctx),
+		ID:               id,
+		Kind:             kind,
+		SourceTag:        eventbus.SourceAgent,
+		At:               time.Now().UTC(),
+		Chain:            eventbus.WorkflowChainFromContext(ctx),
+		CausedByEntityID: causedByID,
 	})
 }
 
@@ -382,6 +391,11 @@ func (t *ingestTracker) queueEntityCreated(ctx context.Context, pending *eventbu
 // queueEntityEdgeAdded is the publish-after-unlock variant of
 // publishEntityEdgeAdded per #154. Same nil-pending fallback
 // shape as queueEntityCreated.
+//
+// CausedByEntityID defaults to e.From: the entity at the edge
+// tail is by definition the actor that emitted this connection,
+// matching the trigger.source convention for edge-driven
+// workflow firings.
 func (t *ingestTracker) queueEntityEdgeAdded(ctx context.Context, pending *eventbus.PendingEvents, e *store.Edge) {
 	if t.bus == nil || e == nil {
 		return
@@ -391,12 +405,13 @@ func (t *ingestTracker) queueEntityEdgeAdded(ctx context.Context, pending *event
 		return
 	}
 	pending.Add(eventbus.EntityEdgeAddedEvent{
-		FromID:    e.From,
-		ToID:      e.To,
-		EdgeType:  e.Type,
-		SourceTag: eventbus.SourceAgent,
-		At:        time.Now().UTC(),
-		Chain:     eventbus.WorkflowChainFromContext(ctx),
+		FromID:           e.From,
+		ToID:             e.To,
+		EdgeType:         e.Type,
+		SourceTag:        eventbus.SourceAgent,
+		At:               time.Now().UTC(),
+		Chain:            eventbus.WorkflowChainFromContext(ctx),
+		CausedByEntityID: e.From,
 	})
 }
 
@@ -405,12 +420,13 @@ func (t *ingestTracker) publishEntityEdgeAdded(ctx context.Context, e *store.Edg
 		return
 	}
 	t.bus.Publish(ctx, eventbus.EntityEdgeAddedEvent{
-		FromID:    e.From,
-		ToID:      e.To,
-		EdgeType:  e.Type,
-		SourceTag: eventbus.SourceAgent,
-		At:        time.Now().UTC(),
-		Chain:     eventbus.WorkflowChainFromContext(ctx),
+		FromID:           e.From,
+		ToID:             e.To,
+		EdgeType:         e.Type,
+		SourceTag:        eventbus.SourceAgent,
+		At:               time.Now().UTC(),
+		Chain:            eventbus.WorkflowChainFromContext(ctx),
+		CausedByEntityID: e.From,
 	})
 }
 
@@ -627,7 +643,7 @@ func (t *ingestTracker) runSimulation(rec *ingestRecord, att ingestAttempt) {
 		}
 		if fixtureProbeOK {
 			if fixtureWasNew {
-				t.publishEntityCreated(ctx, att.entity.ID, att.entity.Kind)
+				t.publishEntityCreated(ctx, att.entity.ID, att.entity.Kind, att.entity.ID)
 			} else if fixturePrior != nil {
 				t.queueEntityUpdated(ctx, nil, att.entity.ID, att.entity.Kind,
 					fixturePrior.Data, att.entity.Data)
@@ -1012,7 +1028,7 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 	}
 	if probeOK {
 		if pluginWasNew {
-			t.queueEntityCreated(ctx, &pending, result.Entity.ID, result.Entity.Kind)
+			t.queueEntityCreated(ctx, &pending, result.Entity.ID, result.Entity.Kind, result.Entity.ID)
 		} else if pluginPrior != nil {
 			t.queueEntityUpdated(ctx, &pending, result.Entity.ID, result.Entity.Kind,
 				pluginPrior.Data, result.Entity.Data)
@@ -1408,8 +1424,9 @@ func (t *ingestTracker) materializeThinLabelRowsFromEdges(ctx context.Context, p
 		// for the first time on this ingest. The skip-if-exists
 		// probe above guarantees we only reach here on the create
 		// path, so the emit is unconditional (no extra was-new
-		// gate needed).
-		t.queueEntityCreated(ctx, pending, e.To, kind)
+		// gate needed). causedByID = e.From — the source entity
+		// whose edge drove the materialization.
+		t.queueEntityCreated(ctx, pending, e.To, kind, e.From)
 		// Provenance: stamp who referenced this label and when.
 		// Mirrors persistCanonicalEntities' provenance shape so
 		// /v1/entities surfaces look uniform across legacy stubs

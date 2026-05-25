@@ -106,13 +106,16 @@ func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Reg
 		// has landed via the manual-add surface. Source is
 		// SourceAgent — workflow-injected edges (Phase 4+) will
 		// emit via their own dispatch path and carry workflow:<name>.
+		// CausedByEntityID = FromID per the edge-tail-is-cause
+		// convention (#264).
 		bus.Publish(r.Context(), eventbus.EntityEdgeAddedEvent{
-			FromID:    se.From,
-			ToID:      se.To,
-			EdgeType:  se.Type,
-			SourceTag: eventbus.SourceAgent,
-			At:        se.UpdatedAt.UTC(),
-			Chain:     eventbus.WorkflowChainFromContext(r.Context()),
+			FromID:           se.From,
+			ToID:             se.To,
+			EdgeType:         se.Type,
+			SourceTag:        eventbus.SourceAgent,
+			At:               se.UpdatedAt.UTC(),
+			Chain:            eventbus.WorkflowChainFromContext(r.Context()),
+			CausedByEntityID: se.From,
 		})
 
 		// Edge provenance isn't persisted today (the store doesn't write

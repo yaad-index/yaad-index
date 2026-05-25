@@ -893,3 +893,111 @@ func TestEngine_ActionTemplates_CompileFailureSkipsRegistration(t *testing.T) {
 	assert.Equal(t, []string{"good"}, eng.Registered(),
 		"bad-template workflow excluded; good registered")
 }
+
+// TestEngine_TriggerSourceResolvedFromCausedBy pins the
+// acceptance case from #264: a workflow firing on a canonical
+// entity created via an `is_about` edge from a specific source
+// sees `trigger.source` resolved to the source entity that
+// emitted the edge, regardless of insertion order or other
+// sources that resolve to the same canonical. The condition
+// `trigger.source.kind == "github"` distinguishes a github-
+// driven materialization from a gmail-driven one for the same
+// canonical id.
+func TestEngine_TriggerSourceResolvedFromCausedBy(t *testing.T) {
+	t.Parallel()
+	eng, bus := newEngineWithBus(t, map[string]map[string]any{
+		"github:acme_proj_pr_42": {
+			"id":   "github:acme_proj_pr_42",
+			"kind": "github",
+		},
+		"gmail:msg-a": {
+			"id":   "gmail:msg-a",
+			"kind": "gmail",
+		},
+		"github-pr:acme_proj_pr_42": {
+			"id":   "github-pr:acme_proj_pr_42",
+			"kind": "github-pr",
+		},
+	})
+	wf := &parser.Workflow{
+		Name:           "github-driven-only",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger: parser.Trigger{
+			Type:  parser.TriggerTypeEntityCreated,
+			Match: parser.TriggerMatch{Kinds: []string{"github-pr"}},
+		},
+		Condition: `trigger.source.kind == "github"`,
+		Actions:   []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	// Gmail-caused materialization — condition false, no fire.
+	bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
+		ID:               "github-pr:acme_proj_pr_42",
+		Kind:             "github-pr",
+		SourceTag:        eventbus.SourceAgent,
+		At:               time.Now(),
+		CausedByEntityID: "gmail:msg-a",
+	})
+	eng.WaitForIdle()
+
+	// Github-caused materialization — condition true, fires.
+	bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
+		ID:               "github-pr:acme_proj_pr_42",
+		Kind:             "github-pr",
+		SourceTag:        eventbus.SourceAgent,
+		At:               time.Now(),
+		CausedByEntityID: "github:acme_proj_pr_42",
+	})
+	eng.WaitForIdle()
+
+	decs := eng.Decisions()
+	var fired []Decision
+	for _, d := range decs {
+		if d.Fired {
+			fired = append(fired, d)
+		}
+	}
+	require.Len(t, fired, 1, "exactly one firing — only the github-caused event satisfies trigger.source.kind==\"github\"")
+	assert.Equal(t, "github-pr:acme_proj_pr_42", fired[0].EntityID)
+}
+
+// TestEngine_TriggerSourceFallsBackToEntityWhenCauseUnset pins
+// the legacy-publisher safety net: when an event arrives
+// without a CausedByEntityID stamped, the engine falls back to
+// the entity itself so `trigger.source` is still populated
+// (matching the self-cause semantics for source-plugin ingests).
+func TestEngine_TriggerSourceFallsBackToEntityWhenCauseUnset(t *testing.T) {
+	t.Parallel()
+	eng, bus := newEngineWithBus(t, map[string]map[string]any{
+		"github:acme_proj_pr_42": {
+			"id":   "github:acme_proj_pr_42",
+			"kind": "github",
+		},
+	})
+	wf := &parser.Workflow{
+		Name:           "fallback-source",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger: parser.Trigger{
+			Type:  parser.TriggerTypeEntityCreated,
+			Match: parser.TriggerMatch{Kinds: []string{"github"}},
+		},
+		Condition: `trigger.source.id == entity.id`,
+		Actions:   []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	bus.Publish(context.Background(), eventbus.EntityCreatedEvent{
+		ID:        "github:acme_proj_pr_42",
+		Kind:      "github",
+		SourceTag: eventbus.SourceAgent,
+		At:        time.Now(),
+		// CausedByEntityID intentionally empty — engine
+		// must fall back to ID for trigger.source.
+	})
+	eng.WaitForIdle()
+
+	decs := eng.Decisions()
+	require.Len(t, decs, 1)
+	assert.True(t, decs[0].Fired, "trigger.source must resolve to the entity itself when CausedByEntityID is empty")
+}

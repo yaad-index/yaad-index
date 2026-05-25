@@ -121,6 +121,29 @@ type Activation struct {
 	// `to_title`, `timestamp`.
 	Edge map[string]any
 
+	// Trigger is the per-fire trigger-context surface per #264 /
+	// ADR-0024 §"Trigger context". The map carries:
+	//   - source    map[string]any  — the entity whose action
+	//                                 caused the firing (resolved
+	//                                 from the event's
+	//                                 CausedByEntityID). Empty map
+	//                                 when the cause id didn't
+	//                                 resolve in the store.
+	//   - event     string          — the bus event type
+	//                                 ("entity_created" /
+	//                                 "entity_updated" /
+	//                                 "edge_added" /
+	//                                 "fill_completed" / "manual").
+	//   - timestamp time.Time       — the event's OccurredAt stamp.
+	//   - cause     string          — optional sub-event detail
+	//                                 (e.g. the field name for
+	//                                 entity_updated). Empty when
+	//                                 not applicable.
+	// Nil for legacy callers that haven't populated the context;
+	// the CEL `trigger` variable then binds to the empty map and
+	// predicates that access fields see has() == false.
+	Trigger map[string]any
+
 	// Bindings is the named-binding map produced by evaluating
 	// the workflow's `context` stanza. Each entry's value is
 	// the result of the binding's `via` expression. Bindings
@@ -317,6 +340,7 @@ func (e *Evaluator) buildEnv(bindings []string) (*cel.Env, error) {
 	opts := []cel.EnvOption{
 		cel.Variable("entity", cel.DynType),
 		cel.Variable("edge", cel.DynType),
+		cel.Variable("trigger", cel.DynType),
 		cel.Function("graph.get",
 			cel.Overload("graph_get_string",
 				[]*cel.Type{cel.StringType},
@@ -390,7 +414,7 @@ func (e *Evaluator) buildEnv(bindings []string) (*cel.Env, error) {
 			continue
 		}
 		seen[name] = struct{}{}
-		if name == "entity" || name == "edge" {
+		if name == "entity" || name == "edge" || name == "trigger" {
 			return nil, fmt.Errorf("decision: binding name %q collides with reserved CEL variable", name)
 		}
 		opts = append(opts, cel.Variable(name, cel.DynType))
@@ -586,14 +610,18 @@ func (p *Program) eval(ctx context.Context, act Activation) (ref.Val, Result, er
 	}()
 
 	inputs := map[string]any{
-		"entity": act.Entity,
-		"edge":   act.Edge,
+		"entity":  act.Entity,
+		"edge":    act.Edge,
+		"trigger": act.Trigger,
 	}
 	if inputs["entity"] == nil {
 		inputs["entity"] = map[string]any{}
 	}
 	if inputs["edge"] == nil {
 		inputs["edge"] = map[string]any{}
+	}
+	if inputs["trigger"] == nil {
+		inputs["trigger"] = map[string]any{}
 	}
 	for name, val := range act.Bindings {
 		inputs[name] = val
