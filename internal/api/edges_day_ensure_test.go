@@ -13,12 +13,45 @@ import (
 	"github.com/yaad-index/yaad-index/internal/store"
 )
 
+// TestHandleCreateEdge_TaskTargetDoesNotLazyMaterialize pins
+// the carve-out from #272's lazy-ensure generalization: `task`
+// is daemon-managed but task rows index vault/tasks files per
+// ADR-0024 §Task and only materialize on first-create.
+// Auto-creating a phantom `task:<slug>` row from a manual edge
+// would land an entity with no backing vault file — so the
+// handler must NOT lazy-ensure for task targets. An edge to
+// an unknown task:id correctly 422s with missing_entity.
+func TestHandleCreateEdge_TaskTargetDoesNotLazyMaterialize(t *testing.T) {
+	t.Parallel()
+	h, st := newAPIWithStore(t)
+
+	require.NoError(t, st.UpsertEntity(context.Background(), &store.Entity{
+		ID: "boardgame:bz", Kind: "boardgame",
+	}))
+
+	body := edgeRequestBody(t, edgeRequest{
+		Type: canonical.EdgeTypeTriggeredBy,
+		From: "boardgame:bz",
+		To:   "task:nonexistent-task",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges", body)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code,
+		"task target without backing file must 422, not silently materialize a phantom row")
+
+	_, err := st.GetEntity(context.Background(), "task:nonexistent-task")
+	assert.ErrorIs(t, err, store.ErrNotFound,
+		"task row must NOT be lazy-materialized — vault file is authoritative")
+}
+
 // TestHandleCreateEdge_LazyMaterializesDaemonManagedTarget_Email
 // pins #272: when POST /v1/edges names an `email-address:<addr>`
 // target that hasn't been materialized yet, the handler ensures
 // the entity row first so the CreateEdge FK holds. Same lazy-
-// on-write pattern as day (#268), generalized to any daemon-
-// managed kind.
+// on-write pattern as day (#268), generalized to thin-label
+// daemon-managed kinds (excluding task — see the test above).
 func TestHandleCreateEdge_LazyMaterializesDaemonManagedTarget_Email(t *testing.T) {
 	t.Parallel()
 	h, st := newAPIWithStore(t)

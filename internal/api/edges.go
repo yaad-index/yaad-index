@@ -84,17 +84,25 @@ func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Reg
 			To: req.To,
 			Metadata: req.Metadata,
 		}
-		// #268 / #272 daemon-managed target lazy-ensure: when
-		// the manual edge points at any daemon-managed canonical
-		// kind (`day`, `task`, `email`, `email-address`, `label`)
-		// auto-materialize the target row before CreateEdge so
-		// the FK holds without the caller having to pre-create
-		// the entity. Same lazy-on-edge pattern the ingest +
-		// fill + workflow paths already follow via EmitDayRefs
-		// / ensureCanonicalLabelRow.
-		if targetKind, _, ok := canonical.SplitLabelID(req.To); ok && isDaemonManagedKind(targetKind) {
+		// #268 / #272 thin-label target lazy-ensure: when the
+		// manual edge points at a thin-label canonical kind
+		// (`day`, `email`, `email-address`, `label`), auto-
+		// materialize the target row before CreateEdge so the
+		// FK holds without the caller having to pre-create the
+		// entity. Same lazy-on-edge pattern the ingest + fill +
+		// workflow paths already follow via EmitDayRefs /
+		// ensureCanonicalLabelRow.
+		//
+		// `task` is excluded even though it's also daemon-
+		// managed: task rows index `<vault>/tasks/*.md` files
+		// and per ADR-0024 §Task only materialize on first-
+		// create (no automatic backfill). A POST /v1/edges
+		// pointing at `task:foo` for an unknown task should
+		// 422 with missing_entity rather than silently land a
+		// phantom store row with no backing vault file.
+		if targetKind, _, ok := canonical.SplitLabelID(req.To); ok && isLazyMaterializableKind(targetKind) {
 			if _, err := canonical.EnsureLabelRow(r.Context(), st, req.To, logger); err != nil {
-				logger.WarnContext(r.Context(), "POST /v1/edges: ensure daemon-managed target failed",
+				logger.WarnContext(r.Context(), "POST /v1/edges: ensure thin-label target failed",
 					"target_id", req.To, "kind", targetKind, "err", err)
 			}
 		}
@@ -188,17 +196,25 @@ func isRegisteredEdgeKind(registry *plugins.Registry, name string) bool {
 	return false
 }
 
-// isDaemonManagedKind reports whether the given entity kind is
-// in the daemon's always-allowed set (canonical.DaemonEntityKinds).
-// Used by handleCreateEdge to decide whether a manual-edge target
-// should be lazy-materialized into a thin row before CreateEdge.
-func isDaemonManagedKind(kind string) bool {
-	for _, k := range canonical.DaemonEntityKinds() {
-		if k == kind {
-			return true
-		}
+// isLazyMaterializableKind reports whether handleCreateEdge
+// should auto-create a thin row for a manual-edge target of the
+// given kind. The set is the daemon-managed thin-label kinds
+// only — `day` per ADR-0025 cut 1 and `email` / `email-address`
+// / `label` per #272. `task` is excluded because task rows
+// index `<vault>/tasks/*.md` files per ADR-0024 §Task and only
+// materialize on first-create (no automatic backfill); auto-
+// creating a phantom `task:<slug>` row from a manual edge would
+// land an entity with no backing vault file.
+func isLazyMaterializableKind(kind string) bool {
+	switch kind {
+	case canonical.DayKind,
+		canonical.EmailKind,
+		canonical.EmailAddressKind,
+		canonical.LabelKind:
+		return true
+	default:
+		return false
 	}
-	return false
 }
 
 // listEdge is the wire shape for one entry on the GET /v1/edges
