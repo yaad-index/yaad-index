@@ -196,8 +196,11 @@ func (w *FileTaskWriter) AppendTaskSection(ctx context.Context, workflow, subjec
 		// class entity so /v1/entities/task:<slug>, set_property,
 		// and graph walks reach it. Best-effort — file write is
 		// the load-bearing step; store / edge errors degrade to
-		// "row materializes on next reindex" rather than failing
-		// the task spawn.
+		// "row absent for this task" rather than failing the
+		// task spawn. No automatic backfill — the next spawn
+		// that touches a fresh task file gets a fresh
+		// materialization; a row that failed to upsert here
+		// stays absent until the operator recreates the task.
 		w.materializeTaskEntity(ctx, workflow, subject, dedupKey, entityID)
 		return nil
 	}
@@ -221,8 +224,9 @@ func (w *FileTaskWriter) AppendTaskSection(ctx context.Context, workflow, subjec
 //
 // Errors are logged at WARN and swallowed: the on-disk file is
 // the source of truth per ADR-0008, so a transient store
-// failure leaves the file behind to be picked up by the
-// startup reindex pass.
+// failure leaves the file behind without a backing row. There
+// is no automatic backfill in v1.x — a row that failed here
+// stays absent until the task is recreated.
 func (w *FileTaskWriter) materializeTaskEntity(ctx context.Context, workflow, subject, dedupKey, entityID string) {
 	if w.store == nil {
 		return

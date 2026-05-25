@@ -133,7 +133,9 @@ func (w *FileErrTaskWriter) AppendErrTask(ctx context.Context, workflow string, 
 
 // materializeErrTaskEntity mirrors the err-task into the
 // store. Best-effort — store failures log at WARN and the
-// on-disk file remains authoritative for the reindex pass.
+// on-disk file remains authoritative. No automatic backfill
+// in v1.x; a row that failed to upsert here stays absent
+// until the err task is recreated.
 func (w *FileErrTaskWriter) materializeErrTaskEntity(ctx context.Context, workflow string, when time.Time) {
 	if w.store == nil {
 		return
