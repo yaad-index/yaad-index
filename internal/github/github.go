@@ -82,11 +82,20 @@ var KnownCanonicalKinds = []string{
 	CanonicalKindUser,
 }
 
-// CanonicalEdgeType* constants name the six edge types yaad-
-// github emits per ADR-0026 §1 + §Consequences. Operators
-// enable each in `canonical_edge_types:` config per ADR-0008.
+// CanonicalEdgeType* constants name the edge types yaad-github
+// emits per ADR-0026 §1 + §Consequences. Operators enable each
+// in `canonical_edge_types:` config per ADR-0008.
+//
+// `is_a` is the universal source-type edge per ADR-0021,
+// targeting `source-type:github-record`. `is_about` is the
+// canonical-resolves edge that targets the per-item canonical
+// kind (`github-pr:<slug>` / `github-issue:<slug>`), matching
+// the bgg + wikipedia + gmail convention so a uniform
+// `?edge_type=is_about` query reaches every source plugin's
+// canonical link.
 const (
 	EdgeTypeIsA        = "is_a"
+	EdgeTypeIsAbout    = "is_about"
 	EdgeTypeInRepo     = "in_repo"
 	EdgeTypeAuthoredBy = "authored_by"
 	EdgeTypeInvolves   = "involves"
@@ -100,6 +109,7 @@ const (
 // in github_test.go enforce the order.
 var KnownCanonicalEdgeTypes = []string{
 	EdgeTypeIsA,
+	EdgeTypeIsAbout,
 	EdgeTypeInRepo,
 	EdgeTypeAuthoredBy,
 	EdgeTypeInvolves,

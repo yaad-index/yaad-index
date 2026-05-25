@@ -82,6 +82,8 @@ func TestWriteEnvelope_PR_ShapeMatchesADR(t *testing.T) {
 
 	// Edges: ADR-0026 §1 + §Consequences.
 	assert.Equal(t, []edgeTargetDoc{{Name: "github-record", Kind: "source-type"}}, s.Edges["is_a"])
+	assert.Equal(t, []edgeTargetDoc{{Name: "acme_proj_pr_42", Kind: "github-pr"}}, s.Edges["is_about"],
+		"is_about resolves PR source to the github-pr canonical entity")
 	assert.Equal(t, []edgeTargetDoc{{Name: "acme/proj", Kind: "repository"}}, s.Edges["in_repo"])
 	assert.Equal(t, []edgeTargetDoc{{Name: "author-user", Kind: "github-user"}}, s.Edges["authored_by"])
 	assert.Equal(t, []edgeTargetDoc{
@@ -145,6 +147,10 @@ func TestWriteEnvelope_Issue_NoPRSpecificFields(t *testing.T) {
 	// reviewed_by edge bucket should be absent for issues.
 	_, hasReviewedBy := s.Edges["reviewed_by"]
 	assert.False(t, hasReviewedBy, "reviewed_by must be PR-only")
+	// is_about resolves issues to the github-issue canonical
+	// entity (the PR test covers the github-pr branch).
+	assert.Equal(t, []edgeTargetDoc{{Name: "acme_proj_issue_42", Kind: "github-issue"}}, s.Edges["is_about"],
+		"is_about resolves issue source to the github-issue canonical entity")
 }
 
 func TestWriteEnvelope_OriginatingNotation_FirstWhenShorthand(t *testing.T) {

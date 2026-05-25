@@ -29,10 +29,14 @@ func TestKnownCanonicalKinds_MatchesADR0026(t *testing.T) {
 
 func TestKnownCanonicalEdgeTypes_MatchesADR0026(t *testing.T) {
 	t.Parallel()
-	// ADR-0026 §1 + §Consequences declares six edge types. Same
+	// ADR-0026 §1 + §Consequences declares the edge types
+	// yaad-github emits. `is_a` is the universal source-type
+	// edge; `is_about` is the canonical-resolves edge to the
+	// per-item canonical kind (github-pr / github-issue). Same
 	// pinning rationale as above.
 	assert.Equal(t, []string{
 		"is_a",
+		"is_about",
 		"in_repo",
 		"authored_by",
 		"involves",
