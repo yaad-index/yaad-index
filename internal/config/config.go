@@ -374,11 +374,13 @@ type CanonicalKindConfig struct {
 	// action hint naming the resolver plugin. When unset, fills
 	// auto-materialize a thin row as today.
 	//
-	// Operator-fill can bypass the check by setting top-level
-	// `allow_unresolved: true` on the operator_fill payload; the
-	// bypass is stamped into provenance for audit. Plugin-emit
-	// edge paths are unaffected — the plugin IS the resolver
-	// when it emits its own canonical-edge targets.
+	// Operator-fill can bypass the check by passing
+	// `?allow_unresolved=true` on the POST /v1/entities/{id}/
+	// operator-fill request; the bypass is stamped into the
+	// commit message (`... (allow_unresolved)`) for audit.
+	// Plugin-emit edge paths are unaffected — the plugin IS
+	// the resolver when it emits its own canonical-edge
+	// targets.
 	ResolverPlugin string `yaml:"resolver_plugin,omitempty" json:"resolver_plugin,omitempty"`
 }
 
