@@ -149,6 +149,88 @@ func TestIndexFromVault_NilStoreNoOp(t *testing.T) {
 	assert.Equal(t, 0, n)
 }
 
+// TestIndexFromVault_RebuildsTriggeredByFromVia pins the
+// post-PR-271-review behavior: the startup reindex walks each
+// task file's `via:` breadcrumb list and emits a triggered_by
+// edge per non-`unknown` source so pre-#268 task files (which
+// landed without the spawn-side edge surface) get full graph-
+// reachability without requiring a re-spawn.
+func TestIndexFromVault_RebuildsTriggeredByFromVia(t *testing.T) {
+	t.Parallel()
+	st := newReindexTestStore(t)
+
+	// Seed two source entities so the triggered_by FK can hold.
+	require.NoError(t, st.UpsertEntity(context.Background(), &store.Entity{
+		ID: "github-pr:acme-corp_widget_pr_42", Kind: "github-pr",
+	}))
+	require.NoError(t, st.UpsertEntity(context.Background(), &store.Entity{
+		ID: "gmail:msg-a", Kind: "gmail",
+	}))
+
+	root := t.TempDir()
+	tasksDir := filepath.Join(root, "tasks")
+	writeTaskFile(t, tasksDir, "watcher-pr-42.md", `---
+kind: task
+workflow: watcher
+subject: pr-42
+created_at: 2099-05-25T12:00:00Z
+via:
+  - workflow: watcher
+    entity: github-pr:acme-corp_widget_pr_42
+  - workflow: watcher
+    entity: gmail:msg-a
+  - workflow: watcher
+    entity: unknown
+---
+
+## Body
+`)
+
+	reader := NewReader(root)
+	_, err := IndexFromVault(context.Background(), st, reader, quietLogger())
+	require.NoError(t, err)
+
+	taskID := "task:watcher-pr-42"
+	edges, err := st.GetEdgesFor(context.Background(), taskID, []string{canonical.EdgeTypeTriggeredBy})
+	require.NoError(t, err)
+	require.Len(t, edges, 2, "two non-`unknown` via entries become two triggered_by edges")
+	gotTargets := map[string]bool{}
+	for _, e := range edges {
+		gotTargets[e.To] = true
+	}
+	assert.True(t, gotTargets["github-pr:acme-corp_widget_pr_42"])
+	assert.True(t, gotTargets["gmail:msg-a"])
+}
+
+// TestIndexFromVault_TriggeredBySkipsMissingSource: a via
+// breadcrumb naming a source that's no longer in the store
+// (operator-pruned, or never-ingested) skips silently — the
+// reindex log stays clean for the common migration shape.
+func TestIndexFromVault_TriggeredBySkipsMissingSource(t *testing.T) {
+	t.Parallel()
+	st := newReindexTestStore(t)
+	root := t.TempDir()
+	tasksDir := filepath.Join(root, "tasks")
+	writeTaskFile(t, tasksDir, "wf-x.md", `---
+kind: task
+workflow: wf
+subject: x
+created_at: 2099-05-25T12:00:00Z
+via:
+  - workflow: wf
+    entity: nonexistent:gone
+---
+`)
+
+	reader := NewReader(root)
+	_, err := IndexFromVault(context.Background(), st, reader, quietLogger())
+	require.NoError(t, err, "missing source via doesn't fail the reindex")
+
+	edges, err := st.GetEdgesFor(context.Background(), "task:wf-x", []string{canonical.EdgeTypeTriggeredBy})
+	require.NoError(t, err)
+	assert.Empty(t, edges, "edge to missing source skipped")
+}
+
 // helper assert for `errors.Is`-style sentinel checks (silences
 // the `errors` import when no test actually uses it).
 var _ = errors.Is
