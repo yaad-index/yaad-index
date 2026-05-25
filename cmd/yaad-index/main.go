@@ -1359,8 +1359,12 @@ func buildPluginRegistry(logger *slog.Logger, st store.Store, cfg *config.Config
 		// disabled. Likely operator mistake (plugin is fully
 		// shut off) but not load-fatal; the plugin stays
 		// registered, dispatch surfaces the "no_enabled_
-		// instances" error per call.
-		if p.Capabilities().SupportsInstances && len(entry.Instances) >= 2 {
+		// instances" error per call. Covers both the 1-instance
+		// case (operator disabled the lone configured instance
+		// on a supports_instances=true plugin — silent
+		// registration without this WARN) and the multi-instance
+		// case (operator disabled everything during maintenance).
+		if p.Capabilities().SupportsInstances && len(entry.Instances) >= 1 {
 			anyEnabled := false
 			for _, inst := range entry.Instances {
 				if inst.IsEnabled() {

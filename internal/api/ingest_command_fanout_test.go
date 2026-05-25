@@ -538,7 +538,7 @@ func TestCommandFanOut_EnabledFalse_FanOutSkipsDisabled(t *testing.T) {
 
 // TestCommandFanOut_EnabledFalse_InstanceScopedRejects pins that
 // the explicit `<plugin>/<disabled-instance>: !<cmd>` form rejects
-// with 503 instance_disabled — operator turned the target off
+// with 400 instance_disabled — operator turned the target off
 // deliberately; the daemon surfaces that explicitly rather than
 // silently routing to another instance.
 func TestCommandFanOut_EnabledFalse_InstanceScopedRejects(t *testing.T) {
@@ -551,7 +551,7 @@ func TestCommandFanOut_EnabledFalse_InstanceScopedRejects(t *testing.T) {
 		"url":          "gmail/work: !fetch",
 		"wait_seconds": 1,
 	})
-	require.Equal(t, http.StatusServiceUnavailable, rec.Code, "body=%s", rec.Body.String())
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
 	assert.Contains(t, rec.Body.String(), "instance_disabled")
 	assert.Contains(t, rec.Body.String(), "work")
 	assert.Equal(t, int32(0), spawns.Load(),
@@ -572,7 +572,7 @@ func TestCommandFanOut_EnabledFalse_AllDisabled_NoEnabledInstances(t *testing.T)
 		"url":          "gmail: !fetch",
 		"wait_seconds": 1,
 	})
-	require.Equal(t, http.StatusServiceUnavailable, rec.Code, "body=%s", rec.Body.String())
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
 	assert.Contains(t, rec.Body.String(), "no_enabled_instances")
 	assert.Equal(t, int32(0), spawns.Load(),
 		"all-disabled state must not spawn any subprocess")

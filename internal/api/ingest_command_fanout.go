@@ -97,8 +97,17 @@ func handleCommandFanOut(
 		// disabled instance rejects with a clear error so the
 		// caller knows the configured target was deliberately
 		// turned off (vs typo'd / missing).
+		//
+		// 400 Bad Request, not 503: `enabled: false` is operator
+		// config state, not a transient server outage. 5xx
+		// would invite retries / proxy backoff that can't help
+		// — only an operator config change unblocks the request.
+		// 400 matches the existing ADR-0028 §3 `unrouted_url`
+		// shape from Cut 3: same class of "request well-formed
+		// but the routing config doesn't accept it" rather than
+		// "transient server failure."
 		if !target.IsEnabled() {
-			writeError(w, http.StatusServiceUnavailable, "instance_disabled",
+			writeError(w, http.StatusBadRequest, "instance_disabled",
 				fmt.Sprintf("plugin %q instance %q is disabled (enabled: false in operator config)",
 					plugin.Name(), inv.Instance))
 			return
@@ -134,7 +143,11 @@ func handleCommandFanOut(
 		return
 	}
 	if len(enabled) == 0 {
-		writeError(w, http.StatusServiceUnavailable, "no_enabled_instances",
+		// 400, not 503: same operator-config-state reasoning as
+		// the instance_disabled branch above. Retries can't
+		// help — only the operator re-enabling at least one
+		// instance unblocks the bare-plugin invocation surface.
+		writeError(w, http.StatusBadRequest, "no_enabled_instances",
 			fmt.Sprintf("plugin %q has no enabled instances (all %d configured instances have enabled: false)",
 				plugin.Name(), len(instances)))
 		return
