@@ -145,10 +145,17 @@ func (r *storeEntityResolver) Resolve(ctx context.Context, id string) (map[strin
 // `no such key: X` on the inner access, which is the expected failure shape
 // (the data field genuinely isn't there). Workflows that want to guard the
 // missing-data case use `has(entity.data) && entity.data.X != ""`.
+//
+// `slug` is the after-colon suffix of the canonical id (`<kind>:<slug>` per
+// ADR-0021), derived rather than stored. Surfaced because the documented
+// `subject: '{{ entity.slug }}'` shape would otherwise fail with `no such
+// key: slug`. For an id missing the colon separator the slug degrades to
+// the full id — safe shape for malformed/legacy rows.
 func entityToCELMap(e *store.Entity) map[string]any {
-	out := make(map[string]any, 3)
+	out := make(map[string]any, 4)
 	out["id"] = e.ID
 	out["kind"] = e.Kind
+	out["slug"] = strings.TrimPrefix(e.ID, e.Kind+":")
 	if len(e.Data) > 0 {
 		dataMap := make(map[string]any, len(e.Data))
 		for k, v := range e.Data {
