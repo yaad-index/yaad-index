@@ -163,6 +163,72 @@ Operator keys starting with `_` are rejected at Load (a defensive guard against 
 
 The two channels are explicit: `config:` for structured non-secret values that benefit from yaml-shaped expression (lists, maps); daemon-process env for secrets.
 
+### 3.2 Per-plugin `instances:` sub-block (ADR-0028)
+
+A plugin entry MAY carry an `instances:` block declaring N runtime-config variants of the same plugin binary — per ADR-0028 §1. Use this when one plugin binary needs to run against multiple independent runtime contexts (two Gmail accounts, two GitHub identity contexts, etc.):
+
+```yaml
+plugins:
+  - name: gmail
+    path: /opt/yaad/yaad-gmail
+    instances:
+      - name: personal
+        env:
+          YAAD_GMAIL_ACCOUNT: ops@example.com
+          YAAD_GMAIL_APP_PASSWORD_REF: gmail-personal
+      - name: work
+        env:
+          YAAD_GMAIL_ACCOUNT: work@example.com
+          YAAD_GMAIL_APP_PASSWORD_REF: gmail-work
+  - name: github
+    path: /opt/yaad/yaad-github
+    instances:
+      - name: personal
+        config:
+          repos: [alice/dotfiles, alice/notes]
+        env:
+          YAAD_GITHUB_TOKEN_REF: github-personal
+      - name: acme-org
+        config:
+          repos: [acme-org/*]
+        env:
+          YAAD_GITHUB_TOKEN_REF: github-acme
+```
+
+Each instance has:
+
+- `name` — operator-chosen, unique within the plugin, matches `[a-z0-9]+([_-][a-z0-9]+)*` (no slash; slash is reserved for the `<plugin>/<instance>` invocation + entity `source:` shape).
+- `env` (optional) — env-var entries spliced into the subprocess at spawn time for THIS instance's invocations.
+- `config` (optional) — the per-instance structured config, delivered as `YAAD_PLUGIN_CONFIG` (same surface as the legacy plugin-level `config:` block).
+- `enabled` (optional, default `true`) — operator on/off flag per ADR-0028 §7. When `false`: invisible to URL routing + command dispatch + scheduled refresh; config + runtime state retained for easy re-enable.
+
+**Implicit single-instance.** A plugin entry without an `instances:` block synthesizes a single implicit instance named `default` — the operator never has to write `instances: [{name: default}]`. The synthesized default's `config:` inherits the legacy plugin-level `config:` block so existing single-instance configs flow through the new per-instance dispatch unchanged.
+
+**Plugin self-declares support.** Plugin `--init` capabilities carry a `supports_instances: bool` field (default `false`). Operators with two-plus instance entries for a plugin that didn't opt in get a fail-fast at startup — the plugin's data shape doesn't support independent runtime contexts (e.g. yaad-bgg uses a single API key for all reads; running two "instances" would silently double-write identical entities into one DB row). Plugin authors opt in by setting `supports_instances: true` when their scope is genuinely per-instance.
+
+**Invocation surfaces** (per ADR-0028 §3 + §4):
+
+- URL ingest → routed automatically to the matching instance via the plugin's declared `instance_routing` capability (e.g. yaad-github globs the URL's `{owner}/{repo}` against each instance's `config.repos`).
+- Command invocation `<plugin>/<instance>: !<cmd>` → routes to exactly the named instance.
+- Bare command invocation `<plugin>: !<cmd>` → fans out **serially** across every enabled instance in operator-config declaration order; results aggregated per-instance in the response.
+
+**Entity attribution** (per ADR-0028 §5): every entity carries `source: <plugin>/<instance>` slash-form attribution. Multi-source overlap (same entity matched by 2+ instances' globs) promotes the field to an array.
+
+**Validation at Load time:**
+
+- Empty `instances: []` → reject (operator likely meant to delete the plugin entry).
+- Duplicate instance name within a plugin → reject.
+- Name doesn't match the shape rule → reject.
+- `supports_instances: false` plugin + 2+ instance entries → reject.
+- `supports_instances: false` plugin + the sole instance disabled → reject (the plugin would silently never run).
+- Multi-instance plugin with EVERY instance disabled → WARN (likely operator mistake but not load-fatal; dispatch returns `no_enabled_instances` per call).
+
+**Per-instance `config:` validation.** When the plugin declares a `config_schema` in `--init`, the daemon validates each instance's `config:` block against it at startup. Validation errors name the offending plugin + instance + index for diagnostics.
+
+**Config changes take effect at next daemon restart** in v1. The §8 hot-reload mechanics (file watcher, mtime/hash diff, runtime cache invalidation, instance-removal archival) are deferred — see [#254](https://github.com/yaad-index/yaad-index/issues/254). Restart the daemon after editing `instances:` to pick up the change.
+
+**Relationship to `_name`.** The daemon-injected `_name` field documented under §3.1 continues to carry the plugin's `name:` value. ADR-0028's per-instance shape adds the `<plugin>/<instance>` slash-form on the `source:` field (§5) and per-instance `env:` splice on the subprocess (§4 + §3); the existing `_name` semantic is unchanged.
+
 ## 4. `vault:` — the source-of-truth root (ADR-0008)
 
 ```yaml

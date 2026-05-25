@@ -503,3 +503,77 @@ func TestCommandFanOut_EnvOnlyInstance_YAADPluginConfigPresent(t *testing.T) {
 	// subprocess too.
 	assertEnvContains(t, capturedEnv, "YAAD_GMAIL_ACCOUNT=ops@example.test")
 }
+
+// --- ADR-0028 Cut 5: enabled flag ---
+
+func boolPtr(b bool) *bool { return &b }
+
+// TestCommandFanOut_EnabledFalse_FanOutSkipsDisabled pins ADR-0028
+// §7 (Cut 5): disabled instances are invisible to the bare-plugin
+// fan-out walk. Two enabled + one disabled → only the 2 enabled
+// instances spawn; the disabled one is absent from the aggregate.
+func TestCommandFanOut_EnabledFalse_FanOutSkipsDisabled(t *testing.T) {
+	t.Parallel()
+	h, spawns := newFanOutFixture(t, []config.InstanceEntry{
+		{Name: "personal"},
+		{Name: "work", Enabled: boolPtr(false)},
+		{Name: "ops"},
+	})
+	rec := postIngest(t, h, map[string]any{
+		"url":          "gmail: !fetch",
+		"wait_seconds": 1,
+	})
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	assert.Equal(t, int32(2), spawns.Load(),
+		"disabled instance must be skipped — only 2 of 3 spawn")
+
+	var resp ingestFanOutResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Len(t, resp.Result, 2, "aggregate must omit the disabled instance")
+	got := []string{resp.Result[0].Instance, resp.Result[1].Instance}
+	assert.Equal(t, []string{"personal", "ops"}, got,
+		"enabled instances surface in declaration order, disabled filtered out")
+}
+
+// TestCommandFanOut_EnabledFalse_InstanceScopedRejects pins that
+// the explicit `<plugin>/<disabled-instance>: !<cmd>` form rejects
+// with 400 instance_disabled — operator turned the target off
+// deliberately; the daemon surfaces that explicitly rather than
+// silently routing to another instance.
+func TestCommandFanOut_EnabledFalse_InstanceScopedRejects(t *testing.T) {
+	t.Parallel()
+	h, spawns := newFanOutFixture(t, []config.InstanceEntry{
+		{Name: "personal"},
+		{Name: "work", Enabled: boolPtr(false)},
+	})
+	rec := postIngest(t, h, map[string]any{
+		"url":          "gmail/work: !fetch",
+		"wait_seconds": 1,
+	})
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "instance_disabled")
+	assert.Contains(t, rec.Body.String(), "work")
+	assert.Equal(t, int32(0), spawns.Load(),
+		"disabled-instance rejection must skip the subprocess spawn")
+}
+
+// TestCommandFanOut_EnabledFalse_AllDisabled_NoEnabledInstances pins
+// the rare-but-real case: all instances disabled. Bare-plugin
+// dispatch returns `no_enabled_instances` (operator's invocation
+// hits a fully-off plugin); per-instance fan-out doesn't run.
+func TestCommandFanOut_EnabledFalse_AllDisabled_NoEnabledInstances(t *testing.T) {
+	t.Parallel()
+	h, spawns := newFanOutFixture(t, []config.InstanceEntry{
+		{Name: "personal", Enabled: boolPtr(false)},
+		{Name: "work", Enabled: boolPtr(false)},
+	})
+	rec := postIngest(t, h, map[string]any{
+		"url":          "gmail: !fetch",
+		"wait_seconds": 1,
+	})
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "no_enabled_instances")
+	assert.Equal(t, int32(0), spawns.Load(),
+		"all-disabled state must not spawn any subprocess")
+}

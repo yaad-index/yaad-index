@@ -183,6 +183,11 @@ Plugin authors continue to interact with runtime state through the existing per-
 - **Config retained, runtime state retained** — re-enabling the instance later picks up where it left off (poll cursors etc. intact).
 - **`/v1/plugins` surfaces it** — each plugin row's `instances` field includes the disabled instance with `enabled: false` so the operator can see the full configured set, not just the active subset.
 
+**Two config-load edge cases land alongside the flag:**
+
+- `supports_instances: false` + the sole configured instance disabled ⇒ fail-fast at config load. The plugin would silently never run; this is operator-mistake territory and surfacing at load beats discovering at first ingest.
+- `supports_instances: true` + every instance disabled ⇒ WARN at config load (not error). The plugin stays registered; dispatch surfaces `no_enabled_instances` on every invocation. Likely an operator-mistake heads-up but not load-fatal (operator may have temporarily turned everything off during maintenance).
+
 ### 8. Cache invalidation — scope follows data scope
 
 Three cache surfaces, three invalidation rules:
@@ -190,6 +195,27 @@ Three cache surfaces, three invalidation rules:
 - **Plugin `--init` capabilities cache** — plugin-scoped (per §2). Adding / removing / editing an instance does NOT invalidate. Only `path:` change re-probes (per ADR-0006).
 - **Routing / URL-pattern compilation cache** — recompiled when any instance's routing-field (e.g. `repos:`) changes. Detection: config-file mtime + content-hash diff at next routing-table refresh.
 - **Instance removal** — daemon detects the instance is gone from the next config reload, marks its runtime-state rows `archived: true` (per ADR-0018's archive-not-delete principle), and removes the instance from routing. Operator can re-add the instance later (state un-archives) or explicitly purge with a CLI command. Per §5, single-source entities owned only by the removed instance follow the existing archive-on-source-loss path; multi-source entities just lose that one entry from their `source:` array.
+
+> **Implementation deferral note (2026-05-25, during Cut 5 #247):**
+> the routing-cache invalidation + instance-removal-detection
+> rules above assume hot-reload infrastructure the daemon doesn't
+> have today — operator config is read ONCE at startup; there's
+> no file watcher, no mtime / hash diff, no routing-table refresh
+> at runtime. Cut 5 ships the rest of §7 (the `enabled` flag is
+> fully wired) but defers §8's hot-reload mechanics: in v1,
+> **config changes take effect at next daemon restart**. The
+> spec above stays as the design; the hot-reload + instance-
+> removal-archival wiring lands when an in-tree consumer needs
+> runtime config swaps (operator workflow needing to add/disable
+> instances without bouncing the daemon, runtime-state archival
+> needing the §6 storage from
+> [#252](https://github.com/yaad-index/yaad-index/issues/252)).
+> Tracking issue:
+> [#254](https://github.com/yaad-index/yaad-index/issues/254).
+> The CLI command sketched above (`yaad-index instances purge
+> --plugin <name> --instance <name>`) is deferred alongside the
+> hot-reload surface — it lands when #252's storage arrives so
+> the purge operates on real per-(plugin, instance) state rows.
 
 ### 9. Plugin self-declares multi-instance support — `supports_instances: bool`
 
@@ -241,7 +267,7 @@ This ADR ships in 5 cuts (mirroring ADR-0027's cadence):
 
 4. **Cut 4 — command dispatch grammar + fan-out + ADR-0022 amendment.** Extend the command parser to recognize `<plugin>/<instance>` invocation per §4; implement serial fan-out for bare-plugin invocations with aggregated per-instance response; add the ADR-0022 inline amendment note linking back to this ADR's §4. The §6 per-instance composite-key migration is deferred (see the deferral note inline in §6 + [#252](https://github.com/yaad-index/yaad-index/issues/252)): no per-plugin runtime-state surface exists today, and scaffolding empty storage without a consumer invites schema drift before the first in-tree consumer defines what it needs.
 
-5. **Cut 5 — `enabled: false` flag + cache invalidation + docs.** Wire `instances[*].enabled` through all dispatch / routing / refresh paths per §7. Implement the three cache-invalidation rules per §8 (mtime + content-hash diff on instance config change; archive-on-removal). Update `docs/configs.md` with the `instances:` block + worked example; update `docs/plugin-flow.md` with the `instance_routing` capability + the command grammar extension; refresh `AGENTS.md` reference if needed.
+5. **Cut 5 — `enabled: false` flag + docs.** Wire `instances[*].enabled` through all dispatch / routing paths per §7 (URL routing skips disabled, command fan-out + instance-scoped both skip / reject, `/v1/plugins` surfaces the flag). Land the two §7 config-load edges: single-instance plugin with its sole instance disabled → fail-fast at load; multi-instance plugin with all instances disabled → WARN at load. Update `docs/configs.md` with the `instances:` block + worked example; update `docs/plugin-flow.md` with the `instance_routing` capability + the command grammar extension; refresh `AGENTS.md` reference if needed. The §8 cache-invalidation hot-reload mechanics are **deferred** to [#254](https://github.com/yaad-index/yaad-index/issues/254) (see the deferral note inline in §8): the daemon reads operator config once at startup today, so config changes take effect at next restart in v1. The instance-purge CLI is deferred alongside, since it depends on the §6 storage from [#252](https://github.com/yaad-index/yaad-index/issues/252) to have something to purge.
 
 Cuts 3 and 4 are the largest; cuts 1, 2, and 5 are mostly mechanical once the shape is fixed.
 

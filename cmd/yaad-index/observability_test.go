@@ -569,3 +569,72 @@ func TestBuildPluginRegistry_SupportsInstancesFalse_RejectsMultiInstance(t *test
 	assert.Contains(t, err.Error(), "fake",
 		"error must name the plugin; got: %v", err)
 }
+
+// --- ADR-0028 Cut 5: enabled flag config-load gates ---
+
+// TestBuildPluginRegistry_SoleInstanceDisabled_FailsFast pins
+// the ADR-0028 §7 config-load fail-fast: a supports_instances=
+// false plugin with its sole configured instance disabled would
+// silently never run. Fail at config load with a clear error
+// pointing at the offending entry.
+func TestBuildPluginRegistry_SoleInstanceDisabled_FailsFast(t *testing.T) {
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	t.Setenv(fakePluginEnv, fakeModeOKv1) // supports_instances=false (default)
+
+	logger, _ := captureLogger(t)
+	st := newSeededStore(t)
+	disabled := false
+	cfg := &config.Config{
+		Plugins: []config.PluginEntry{{
+			Name: "fake",
+			Path: exe,
+			Instances: []config.InstanceEntry{
+				{Name: "default", Enabled: &disabled},
+			},
+		}},
+	}
+
+	_, err = buildPluginRegistry(logger, st, cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "only configured instance",
+		"error must point at the sole-instance-disabled case: %v", err)
+	assert.Contains(t, err.Error(), "default",
+		"error must name the offending instance: %v", err)
+}
+
+// TestBuildPluginRegistry_AllInstancesDisabled_WARN pins the
+// ADR-0028 §7 multi-instance-all-disabled WARN path: the daemon
+// stays up (operator may have temporarily turned everything off
+// during maintenance) but emits a WARN so the operator notices.
+// Covers both the multi-instance and the 1-instance variants of
+// supports_instances=true with all-disabled state per the
+// PR-255 review nit (extend WARN gate to len >= 1).
+func TestBuildPluginRegistry_AllInstancesDisabled_WARN(t *testing.T) {
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	t.Setenv(fakePluginEnv, fakeModeMultiInstance) // supports_instances=true
+
+	logger, buf := captureLogger(t)
+	st := newSeededStore(t)
+	disabled := false
+	cfg := &config.Config{
+		Plugins: []config.PluginEntry{{
+			Name: "fake",
+			Path: exe,
+			Instances: []config.InstanceEntry{
+				{Name: "personal", Config: map[string]any{"account": "p@e.test"}, Enabled: &disabled},
+				{Name: "work", Config: map[string]any{"account": "w@e.test"}, Enabled: &disabled},
+			},
+		}},
+	}
+
+	_, err = buildPluginRegistry(logger, st, cfg)
+	require.NoError(t, err, "all-disabled multi-instance must NOT fail load (WARN, not error)")
+
+	logs := parseLogLines(t, buf)
+	warn := findLog(logs, "plugin has no enabled instances")
+	require.NotNil(t, warn, "all-disabled state must emit a WARN; got logs=%+v", logs)
+	assert.Equal(t, "WARN", warn.Level)
+	assert.Equal(t, "fake", warn.Name)
+}

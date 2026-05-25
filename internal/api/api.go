@@ -109,7 +109,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 
 	// Protected — Bearer JWT (or anonymous bypass when auth.required=false).
 	mux.Handle("GET /v1/kinds", protect(http.HandlerFunc(handleKinds(logger, registry))))
-	mux.Handle("GET /v1/plugins", protect(http.HandlerFunc(handlePlugins(logger, registry, cfg.pluginInstances))))
+	mux.Handle("GET /v1/plugins", protect(http.HandlerFunc(handlePlugins(logger, registry, cfg.pluginInstanceConfigs))))
 	mux.Handle("POST /v1/entities/batch", protect(http.HandlerFunc(handleEntitiesBatch(logger, st))))
 	// /v1/entities/batch is a method-target path, not an entity id. The
 	// explicit GET handler below carves it out from the {id} matcher so a
