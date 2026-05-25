@@ -182,29 +182,14 @@ func readSummary(path string) (TaskSummary, error) {
 
 // taskFrontmatter mirrors the on-disk YAML shape — both the
 // regular-task fields (Phase 4.A + 5.A) and the err-task
-// extension field (Phase 5.B). `Via` is the breadcrumb list
-// per #163 — each entry names the (workflow, entity) pair that
-// produced a fire on this task. Carried so the #268 startup
-// reindex can rebuild the `triggered_by` edges from it
-// without needing the writer to be invoked first.
+// extension field (Phase 5.B).
 type taskFrontmatter struct {
-	Kind      string         `yaml:"kind"`
-	Workflow  string         `yaml:"workflow"`
-	Subject   string         `yaml:"subject,omitempty"`
-	DedupKey  string         `yaml:"dedup_key,omitempty"`
-	Errored   bool           `yaml:"errored,omitempty"`
-	CreatedAt time.Time      `yaml:"created_at,omitempty"`
-	Via       []viaBreadcrumb `yaml:"via,omitempty"`
-}
-
-// viaBreadcrumb mirrors the breadcrumb-entry shape the actions
-// package's FileTaskWriter writes. Kept as a local type so the
-// tasks package doesn't pick up an import on actions (which
-// imports tasks indirectly via the reindex helper); the YAML
-// shape stays compatible by construction.
-type viaBreadcrumb struct {
-	Workflow string `yaml:"workflow"`
-	Entity   string `yaml:"entity"`
+	Kind      string    `yaml:"kind"`
+	Workflow  string    `yaml:"workflow"`
+	Subject   string    `yaml:"subject,omitempty"`
+	DedupKey  string    `yaml:"dedup_key,omitempty"`
+	Errored   bool      `yaml:"errored,omitempty"`
+	CreatedAt time.Time `yaml:"created_at,omitempty"`
 }
 
 // splitFrontmatter peels the leading `---\n...---\n` YAML
@@ -247,48 +232,5 @@ func summaryFromFrontmatter(id, path string, fm taskFrontmatter) TaskSummary {
 		CreatedAt: fm.CreatedAt,
 		Path:      path,
 	}
-}
-
-// breadcrumbSourceIDs returns the unique non-`unknown` Entity
-// ids drawn from the task's `via:` breadcrumb list, suitable
-// as `triggered_by` edge targets at startup-reindex time. Order
-// preserved (insertion order); duplicates dropped via a small
-// set so the same source listed twice (re-fire) doesn't double-
-// emit. Exported through readVia rather than as a top-level
-// helper because callers always want the (source-ids, error)
-// pair from a path, not from a pre-parsed frontmatter.
-func readVia(path string) ([]string, error) {
-	body, err := readFile(path)
-	if err != nil {
-		return nil, err
-	}
-	fm, _, err := splitFrontmatter(body)
-	if err != nil {
-		return nil, err
-	}
-	if len(fm.Via) == 0 {
-		return nil, nil
-	}
-	seen := make(map[string]struct{}, len(fm.Via))
-	out := make([]string, 0, len(fm.Via))
-	for _, v := range fm.Via {
-		id := v.Entity
-		if id == "" || id == "unknown" {
-			continue
-		}
-		if _, dup := seen[id]; dup {
-			continue
-		}
-		seen[id] = struct{}{}
-		out = append(out, id)
-	}
-	return out, nil
-}
-
-// readFile is a thin pass-through that exists so tests can
-// stub the disk read if needed. Kept package-private; the
-// production Reader's ReadFile is the public surface.
-func readFile(path string) ([]byte, error) {
-	return os.ReadFile(path)
 }
 
