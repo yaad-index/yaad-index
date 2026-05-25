@@ -133,6 +133,16 @@ type ingestSimulation struct {
 	// — fixture / test paths that don't go through the routing
 	// layer use that fallback.
 	instanceName string
+	// extraEnv carries the per-instance subprocess env splice per
+	// ADR-0028 §3 + §4 (Cut 4). The dispatch layer builds this
+	// from YAAD_PLUGIN_CONFIG(instance.Config) + instance.Env
+	// entries and the simulator stamps it into the invocation
+	// ctx via plugins.WithExtraEnv before calling plugin.Stream
+	// / plugin.Fetch. Empty leaves the subprocess running with
+	// just its registry-build-time configEnv (the pre-Cut-4
+	// path) — fixture / test paths that don't carry a per-
+	// instance env stay on that fallback.
+	extraEnv []string
 }
 
 // ingestAttempt bundles everything beginAttempt needs.
@@ -476,9 +486,20 @@ func (t *ingestTracker) beginAttempt(att ingestAttempt) *ingestRecord {
 	// goroutine; subscribers receive the runner's pointer and
 	// wait on its transition channel. Fixture-path attempts skip
 	// this — they're test fixtures dispatching per-call by design.
+	// Per ADR-0028 §4 Cut 4: the dedup key includes the resolved
+	// instance name so a fan-out across N instances of the same
+	// (plugin, URL) tuple produces N distinct records — without
+	// the instance segment, two fan-out attempts would collapse
+	// into one record (the second subscribing to the first) and
+	// only one instance would actually run. Empty instance name
+	// keeps the pre-Cut-4 single-instance shape (`<plugin>:<url>`)
+	// for fixture/test paths that don't carry an instance.
 	invocationKey := ""
 	if att.simulation.plugin != nil && att.simulation.rawURL != "" {
 		invocationKey = att.simulation.plugin.Name() + ":" + att.simulation.rawURL
+		if att.simulation.instanceName != "" {
+			invocationKey = att.simulation.plugin.Name() + "/" + att.simulation.instanceName + ":" + att.simulation.rawURL
+		}
 	}
 
 	t.mu.Lock()
@@ -711,6 +732,15 @@ func (t *ingestTracker) runPluginSimulation(ctx context.Context, rec *ingestReco
 	// envelopes are persisted silently with an INFO breadcrumb;
 	// command-shape callers (gmail: !fetch) get proper job-id surface
 	// in the future in-memory job system, not here.
+	//
+	// ADR-0028 §3 + §4 (Cut 4): stamp the per-instance subprocess
+	// env splice into the invocation ctx so subprocess.Plugin
+	// spawns this attempt with the active instance's
+	// YAAD_PLUGIN_CONFIG + InstanceEntry.Env entries. Empty
+	// extraEnv leaves ctx unchanged (no-op clone), so fixture /
+	// test paths flow through unchanged.
+	ctx = plugins.WithExtraEnv(ctx, att.simulation.extraEnv)
+
 	var (
 		envelopeIndex int
 		firstHandled bool

@@ -529,14 +529,28 @@ func Load(path string) (*Config, error) {
 	// post-synthesis shape they didn't write.
 	//
 	// The synthesized default instance inherits the plugin-level
-	// `config:` block so the back-compat single-instance path keeps
-	// the operator's existing config visible per-instance. This
-	// matters for the per-instance JSON-Schema validation gate in
-	// cmd/yaad-index — without the copy, a legacy operator config
-	// (`config: {...}` with no `instances:`) would skip per-instance
-	// schema checks entirely once the daemon migrates to the
-	// per-instance validation contract. Explicit `instances:` entries
-	// already own their own `config:` blocks and are untouched.
+	// `config:` block so the back-compat single-instance path
+	// keeps the operator's existing config visible per-instance.
+	// Two consumers:
+	//   - per-instance JSON-Schema validation gate in cmd/yaad-index
+	//     (Cut 1): without the Config copy, a legacy operator
+	//     config (`config: {...}` with no `instances:`) would skip
+	//     per-instance schema checks entirely.
+	//   - per-call subprocess env splice (Cut 4): the dispatch
+	//     layer builds YAAD_PLUGIN_CONFIG from instance.Config
+	//     each call. Without the copy, single-instance plugins
+	//     would receive an empty YAAD_PLUGIN_CONFIG when the
+	//     daemon switched to per-call env (the legacy registry-
+	//     build-time configEnv is dropped in favor of the per-
+	//     call ctx splice).
+	// Explicit `instances:` entries already own their own `config:`
+	// + `env:` blocks and are untouched. PluginEntry today has no
+	// `env:` field — instance-level env is the only operator-
+	// writable env surface (per ADR-0028 §1); the synthesized
+	// default's Env stays nil for back-compat single-instance
+	// plugins, matching the pre-Cut-4 reality where no per-spawn
+	// env-passthrough existed beyond the global pluginEnv() +
+	// YAAD_PLUGIN_CONFIG path.
 	for i := range c.Plugins {
 		if c.Plugins[i].Instances == nil {
 			c.Plugins[i].Instances = []InstanceEntry{{

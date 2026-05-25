@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -227,4 +228,63 @@ func TestCapabilities_DateFieldsOmitemptyWhenAbsent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(body), "date_fields",
 		"omitempty must drop the field when DateFields is nil")
+}
+
+// --- ADR-0028 Cut 4: `<plugin>/<instance>` grammar ---
+
+func TestParseInvocation_InstanceScopedCommand(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		input            string
+		wantPlugin       string
+		wantInstance     string
+		wantCommand      string
+	}{
+		{"gmail/personal: !fetch", "gmail", "personal", "fetch"},
+		{"github/acme-org: !fetch", "github", "acme-org", "fetch"},
+		{"github/acme-org:!fetch", "github", "acme-org", "fetch"}, // no space
+		{"plugin/inst: !cmd arg-ignored", "plugin", "inst", "cmd arg-ignored"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			got := ParseInvocation(tc.input)
+			require.Equal(t, InvocationCommand, got.Shape, "expected command-shape for %q", tc.input)
+			assert.Equal(t, tc.wantPlugin, got.Plugin)
+			assert.Equal(t, tc.wantInstance, got.Instance)
+			assert.Equal(t, tc.wantCommand, got.Command)
+		})
+	}
+}
+
+// TestParseInvocation_BarePluginNoInstance pins the back-compat
+// path: bare `<plugin>: !<cmd>` still parses with empty Instance
+// (the dispatch layer fans out across enabled instances in this case).
+func TestParseInvocation_BarePluginNoInstance(t *testing.T) {
+	t.Parallel()
+	got := ParseInvocation("gmail: !fetch")
+	require.Equal(t, InvocationCommand, got.Shape)
+	assert.Equal(t, "gmail", got.Plugin)
+	assert.Equal(t, "", got.Instance)
+	assert.Equal(t, "fetch", got.Command)
+}
+
+// TestParseInvocation_EmptyInstanceFallsToURL pins the
+// shape-rejection: a malformed `/foo:` or `foo/:` prefix doesn't
+// silently mis-parse as command-shape. URL-shape path takes over
+// so the existing "no plugin handles URL" guard rejects cleanly.
+func TestParseInvocation_EmptyInstanceFallsToURL(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []string{
+		"/personal: !fetch",  // empty plugin half
+		"gmail/: !fetch",     // empty instance half
+		"/: !fetch",          // both empty
+	} {
+		t.Run(bad, func(t *testing.T) {
+			t.Parallel()
+			got := ParseInvocation(bad)
+			assert.Equal(t, InvocationURL, got.Shape,
+				"malformed plugin/instance prefix must NOT parse as command-shape")
+		})
+	}
 }

@@ -32,9 +32,20 @@ const (
 // Per ADR-0022 §2 the `!` sigil lives in the invocation surface only;
 // the plugin's `commands` list contains bare names. ParseInvocation
 // strips the sigil at parse time so downstream code never sees it.
+//
+// Instance is the ADR-0028 §4 (Cut 4) instance-scope qualifier. When
+// the input shape is `<plugin>/<instance>: !<command>`, Instance
+// carries the named instance; the daemon's dispatch layer routes the
+// command to exactly that instance. When the input is bare
+// `<plugin>: !<command>` Instance is empty, and the dispatch layer
+// fans the command out serially across all enabled instances per
+// ADR-0028 §4. URL-shape Invocations always leave Instance empty —
+// URL-shape instance routing happens via Cut 3's instance_routing
+// capability, not via grammar.
 type Invocation struct {
 	Shape InvocationShape
 	Plugin string
+	Instance string
 	URL string
 	Command string
 }
@@ -73,13 +84,31 @@ func ParseInvocation(input string) Invocation {
 		return Invocation{Shape: InvocationURL, URL: input}
 	}
 
+	// ADR-0028 §4 (Cut 4): the plugin prefix may carry an instance
+	// qualifier as `<plugin>/<instance>`. Split on the first `/`
+	// before the `:`-separator if present; the suffix is the
+	// instance name. Empty halves (`/foo` or `foo/`) fall through
+	// to URL-shape — the dispatch surface's existing "no plugin
+	// handles URL" guard rejects them so the operator sees a
+	// recognizable error.
+	var instance string
+	if slash := strings.IndexByte(plugin, '/'); slash >= 0 {
+		pluginPart := plugin[:slash]
+		instancePart := plugin[slash+1:]
+		if pluginPart == "" || instancePart == "" {
+			return Invocation{Shape: InvocationURL, URL: input}
+		}
+		plugin = pluginPart
+		instance = instancePart
+	}
+
 	// Command-shape: the rest must begin with `!` after leading
 	// whitespace. The colon-to-bang gap is part of the typed
 	// invocation form (`gmail: !fetch`); we tolerate `gmail:!fetch`
 	// for terseness — the discriminator is the `!`, not its column.
 	rest = strings.TrimLeft(rest, " \t")
 	if !strings.HasPrefix(rest, "!") {
-		return Invocation{Shape: InvocationURL, Plugin: plugin, URL: input}
+		return Invocation{Shape: InvocationURL, Plugin: plugin, Instance: instance, URL: input}
 	}
 	cmd := strings.TrimSpace(rest[1:])
 	if cmd == "" {
@@ -88,11 +117,12 @@ func ParseInvocation(input string) Invocation {
 		// rejects it via the existing "no plugin handles URL"
 		// path (or the future routing-time validator catches it
 		// per ADR-0022 §4).
-		return Invocation{Shape: InvocationURL, Plugin: plugin, URL: input}
+		return Invocation{Shape: InvocationURL, Plugin: plugin, Instance: instance, URL: input}
 	}
 	return Invocation{
 		Shape: InvocationCommand,
 		Plugin: plugin,
+		Instance: instance,
 		Command: cmd,
 	}
 }

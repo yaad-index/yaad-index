@@ -34,10 +34,15 @@ func (e *routingValidationError) Error() string { return e.Message }
 //
 // Behavior by input shape:
 //
-// - Command-shape (`<plugin>: !<command>`): the namespace MUST be
-// a registered plugin. Lookup misses → 404 plugin_not_found.
+// - Command-shape (`<plugin>: !<command>` or
+// `<plugin>/<instance>: !<command>`): the namespace MUST be a
+// registered plugin. Lookup misses → 404 plugin_not_found.
 // Lookup hits + command in plugin.Capabilities().Commands → pass.
 // Lookup hits + command NOT in list → 400 invalid_input.
+// Instance qualifier (when present) is NOT validated here — the
+// dispatch layer in handleIngest resolves the instance against
+// the operator's configured list and surfaces a separate error
+// for unknown instances per ADR-0028 §4.
 //
 // - URL-shape (`<plugin>: <pattern>` or full URL): if the
 // namespace prefix matches a registered plugin's Name(),
