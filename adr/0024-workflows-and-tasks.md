@@ -135,10 +135,13 @@ The `dedup` uses `skip` rather than `update` because `archive_entity` / `restore
 A **task** is a workflow's instance — a first-class entity created when a workflow's output produces one.
 
 - Each task is its own entity with its own ID, frontmatter, and edges.
-- Edges to: the spawning workflow, the source entities the workflow loaded (PR, jira, project, email, etc.).
+- Entity id shape: `task:<workflow-slug>-<subject-slug>` (or `task:<workflow-slug>-err` for err tasks). On-disk vault path is `<vault>/tasks/<slug>.md`; the canonical kind is the singular `task` while the operator-facing directory keeps the plural `tasks/` convention.
+- Edges: a `triggered_by` edge from the task to the source entity whose firing produced it (the entity the workflow loaded — PR, issue, email, etc.). Spec also calls for a workflow → task edge; that target requires a `workflow` entity kind which v1.x doesn't yet ship, so the spawning-workflow attribution lives in the task frontmatter's `workflow:` field and in the `via:` breadcrumb list instead.
 - Properties: priority (operator-modifiable), snooze (see below), notes (operator notes, agent-readable on load).
 - Close: either operator-marks-done (default) or condition-based per workflow pattern (e.g., PR-merged → auto-close).
 - Auto-archive on done (per ADR-0018 archive lifecycle). Workflow can opt out per-pattern via `auto_archive_on_done: false` for cases where the operator wants the audit trail of completed tasks to stick around.
+
+The `task` kind + `triggered_by` edge type are daemon-managed (always available, like `day` and the day-anchored edges per ADR-0025); operators don't enable them in `canonical_kinds:` / `canonical_edge_types:` config. Vault is authoritative per ADR-0008: store rows materialize on task-file create (and a daemon-startup pass walks `<vault>/tasks/*.md` to materialize any rows missing from the index).
 
 #### Snooze semantics
 
@@ -460,6 +463,21 @@ Adds the workflow-engine shapes the github plugin's closed-item lifecycle (per A
 - **New `match.field_changed` shape.** Trigger-side filter naming which field's delta the workflow cares about (e.g., `data.state`). Combines with the existing `canonical_kind` match (already supported by `edge_created` triggers, extended here to `entity_updated`).
 - **New `archive_entity` + `restore_entity` actions.** Mirror pair wrapping ADR-0018's archive lifecycle. Both take a CEL-templated `target:` (usually `{{ entity.id }}`) and an optional `reason:` provenance string. Idempotent at the engine layer — re-firing on the same archive state is a no-op. Do NOT fire `entity.updated` themselves (archive flag is metadata, not `data.*`), so cannot self-trigger.
 - **Worked example** added for the GitHub archive-on-close / restore-on-open mirror pair as two workflow files. Demonstrates the `entity_updated` trigger + `field_changed: data.state` + `canonical_kind: [github-pr, github-issue]` match + `dedup.policy: skip` (idempotent actions need no per-fire task surface).
+
+Status remains PROPOSED pending operator hard-gate review of this revision.
+
+### 2026-05-25 — task entity promotion (#268)
+
+Aligns the implementation with the §Task spec text. Pre-#268 tasks lived as markdown files under `<vault>/tasks/` without a backing entity row; `/v1/entities/task:<slug>` 404'd, `set_property` couldn't target a task id, and graph walks couldn't reach tasks.
+
+- **New daemon-managed kind**: `task` (joins `day` per ADR-0025 in `DaemonEntityKinds()` — operator doesn't enable in `canonical_kinds:` config).
+- **New daemon-managed edge type**: `triggered_by` from task → triggering source entity. Joins the day-anchored vocabulary in `DaemonEdgeTypes()`.
+- **Path routing**: `vault.KindDir(kind="task")` maps to the `tasks/` directory so the canonical `<root>/<kind>/<slug>.md` resolver finds the on-disk file at the operator-facing `<root>/tasks/<slug>.md` location. Symmetric across reader / writer / archive / destroy sites.
+- **Spawn-side materialization**: `FileTaskWriter.AppendTaskSection` first-create and `FileErrTaskWriter.AppendErrTask` first-create both upsert the `task:<slug>` row + (for normal tasks with a triggering entityID) emit a `triggered_by` edge. Idempotent on subsequent appends; the row stays put so operator / workflow set_property mutations survive.
+- **Reindex pass**: `tasks.IndexFromVault` walks `<vault>/tasks/*.md` at daemon startup and upserts any rows missing from the store. Pre-existing rows are preserved (`GetEntity`-then-skip) so a prior daemon's task state survives the restart.
+- **Workflow surface**: `set_property` targeting a task id now works through the existing `VaultPropertyWriter` (kind-aware vault path resolution). The unchanged `/v1/tasks` API + MCP tools (`task_list` / `task_load` / `task_resolve`) remain operational — the store row is the index over the file, not a replacement.
+
+Day-side (#268 day fold): the day-anchored materialization paths already in the codebase (ingest `EmitDayRefs`, fill `EmitDayRefs`, workflow `set_property` `EmitDayRefs`, `add_canonical_edge` `EnsureLabelRow`, reindex `EmitDayRefs`, canonical_type ops `ensureCanonicalLabelRow`) cover their respective edge-write sites. The one gap closed in this revision: `POST /v1/edges` with a `day:YYYY-MM-DD` target now lazy-ensures the day entity row before `CreateEdge` so manual edge-creation matches the lazy-on-write pattern. The `isRegisteredEdgeKind` validator also folds in `DaemonEdgeTypes()` so operators can `POST /v1/edges` with `references_day` / `triggered_by` / etc. without registering a plugin that advertises them.
 
 Status remains PROPOSED pending operator hard-gate review of this revision.
 

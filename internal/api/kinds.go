@@ -12,27 +12,46 @@ import (
 
 // daemonEntityKindDescriptions names the human-readable description
 // surfaced on /v1/kinds for each daemon-built-in canonical entity
-// kind per ADR-0025. The map is intentionally tiny: the daemon
-// itself owns only the `day` kind today; everything else comes
-// from registered plugins.
+// kind. Two entries today: `day` per ADR-0025 cut 1, `task` per the
+// ADR-0024 alignment landed in #268. Everything else comes from
+// registered plugins.
 var daemonEntityKindDescriptions = map[string]string{
 	canonical.DayKind: "Date anchor entity per ADR-0025 — slug shape `day:<YYYY-MM-DD>`. " +
+		"Always available; operators don't enable via canonical_kinds: config.",
+	canonical.TaskKind: "Workflow-spawned task entity per ADR-0024 §Task — slug shape " +
+		"`task:<workflow>-<subject>` (or `task:<workflow>-err` for err tasks). " +
 		"Always available; operators don't enable via canonical_kinds: config.",
 }
 
 // daemonEdgeKindDescriptions names the canonical edge type
-// vocabulary per ADR-0025 § Edge types. ToKind on every entry is
-// `day` (these are all time-anchored edges); FromKind stays empty
-// because the source side is open (any entity can carry a day
-// reference). Cut 1 surfaces the vocabulary on /v1/kinds without
-// any code path emitting the edges yet; cut 2 wires the daemon
-// shape-scan + plugin date_fields capability that materializes them.
+// vocabulary. Cut-1 set per ADR-0025 § Edge types (the five
+// time-bound relationships, all targeting `day`) plus
+// `triggered_by` per #268 (task → source-entity attribution; the
+// source kind is open since any entity can trigger a workflow).
 var daemonEdgeKindDescriptions = map[string]string{
-	canonical.EdgeTypeDueOn: "Task / deadline entity is due on this day.",
-	canonical.EdgeTypeOccurredOn: "Event / meeting / shipment happened or will happen on this day.",
-	canonical.EdgeTypeIsAboutDay: "Newsletter / digest / journal entry describes this day.",
+	canonical.EdgeTypeDueOn:         "Task / deadline entity is due on this day.",
+	canonical.EdgeTypeOccurredOn:    "Event / meeting / shipment happened or will happen on this day.",
+	canonical.EdgeTypeIsAboutDay:    "Newsletter / digest / journal entry describes this day.",
 	canonical.EdgeTypeReferencesDay: "Generic reference to this day from any entity (daemon shape-scan fallback).",
-	canonical.EdgeTypeIngestedOn: "Entity was first received on this day. Reserved for operator-wired workflow; daemon never emits in v1.x.",
+	canonical.EdgeTypeIngestedOn:    "Entity was first received on this day. Reserved for operator-wired workflow; daemon never emits in v1.x.",
+	canonical.EdgeTypeTriggeredBy:   "Workflow-spawned task points at the source entity whose firing produced it.",
+}
+
+// daemonEdgeKindEndpoints names the (from_kind, to_kind) pair the
+// /v1/kinds aggregator stamps for each daemon-built-in edge type.
+// Empty from_kind means "any entity can serve as the source"; same
+// shape applies to to_kind. Day-anchored edges land on
+// `to_kind=day` with open from_kind; the triggered_by edge has
+// `from_kind=task` with open to_kind (the source side carries any
+// triggering entity, per the per-firing source attribution from
+// #264).
+var daemonEdgeKindEndpoints = map[string]struct{ FromKind, ToKind string }{
+	canonical.EdgeTypeDueOn:         {ToKind: canonical.DayKind},
+	canonical.EdgeTypeOccurredOn:    {ToKind: canonical.DayKind},
+	canonical.EdgeTypeIsAboutDay:    {ToKind: canonical.DayKind},
+	canonical.EdgeTypeReferencesDay: {ToKind: canonical.DayKind},
+	canonical.EdgeTypeIngestedOn:    {ToKind: canonical.DayKind},
+	canonical.EdgeTypeTriggeredBy:   {FromKind: canonical.TaskKind},
 }
 
 // daemonSourcePlugin is the synthetic source_plugins value the
@@ -103,15 +122,19 @@ func aggregateKinds(registry *plugins.Registry) kindsResponse {
 		}
 	}
 
-	// Same shape for the canonical edge type vocabulary. ToKind
-	// is `day` on every entry — these are all time-anchored edges
-	// per ADR-0025 § Edge types. FromKind is intentionally empty
-	// (any entity can carry a day reference).
+	// Same shape for the canonical edge type vocabulary.
+	// daemonEdgeKindEndpoints supplies the (from_kind, to_kind)
+	// per edge — day-anchored edges land on `to_kind=day`; the
+	// triggered_by edge has `from_kind=task`. Unknown edge names
+	// (e.g. test fixtures with no endpoint entry) fall through
+	// to empty endpoints.
 	for _, edge := range canonical.DaemonEdgeTypes() {
+		ep := daemonEdgeKindEndpoints[edge]
 		edgeIdx[edge] = &edgeKind{
-			Name: edge,
-			Description: daemonEdgeKindDescriptions[edge],
-			ToKind: canonical.DayKind,
+			Name:          edge,
+			Description:   daemonEdgeKindDescriptions[edge],
+			FromKind:      ep.FromKind,
+			ToKind:        ep.ToKind,
 			SourcePlugins: []string{daemonSourcePlugin},
 		}
 	}

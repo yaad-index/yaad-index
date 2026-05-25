@@ -259,7 +259,7 @@ func (w *Writer) pathFor(e *Entity) (dir, slug string, err error) {
 	if e.Kind == "" {
 		return "", "", fmt.Errorf("%w: kind", ErrMissingRequiredField)
 	}
-	dir = filepath.Join(w.root, e.Kind)
+	dir = filepath.Join(w.root, KindDir(e.Kind))
 	return dir, slug, nil
 }
 
@@ -289,7 +289,7 @@ func (w *Writer) DeleteWithCommit(ctx context.Context, kind, id, message, author
 	if err != nil {
 		return err
 	}
-	relPath := filepath.Join(kind, slug+".md")
+	relPath := filepath.Join(KindDir(kind), slug+".md")
 	return w.removeAtRelPath(ctx, relPath, "delete", message, author)
 }
 
@@ -314,7 +314,7 @@ func (w *Writer) DestroyArchivedWithCommit(ctx context.Context, kind, id, messag
 	if err != nil {
 		return err
 	}
-	relPath := filepath.Join(ArchiveDir, kind, slug+".md")
+	relPath := filepath.Join(ArchiveDir, KindDir(kind), slug+".md")
 	if err := w.removeAtRelPath(ctx, relPath, "destroy", message, author); err != nil {
 		return err
 	}
@@ -325,7 +325,7 @@ func (w *Writer) DestroyArchivedWithCommit(ctx context.Context, kind, id, messag
 	// without attachments have no subdir to clean up). Failures here
 	// log at WARN — the .md is already gone and the DB cascade has
 	// run; reindex will reconcile residual files on next walk.
-	subdirRel := filepath.Join(ArchiveDir, kind, slug)
+	subdirRel := filepath.Join(ArchiveDir, KindDir(kind), slug)
 	if err := os.RemoveAll(filepath.Join(w.root, subdirRel)); err != nil {
 		w.logger.Warn("destroy attachment subdir cleanup failed (manifest entries are already orphaned)",
 			"rel_path", subdirRel, "err", err)
@@ -400,8 +400,8 @@ func (w *Writer) moveBetweenArchive(ctx context.Context, kind, id, message, auth
 		return err
 	}
 
-	activeRel := filepath.Join(kind, slug+".md")
-	archiveRel := filepath.Join(ArchiveDir, kind, slug+".md")
+	activeRel := filepath.Join(KindDir(kind), slug+".md")
+	archiveRel := filepath.Join(ArchiveDir, KindDir(kind), slug+".md")
 	var srcRel, dstRel string
 	if archiving {
 		srcRel, dstRel = activeRel, archiveRel
@@ -443,11 +443,11 @@ func (w *Writer) moveBetweenArchive(ctx context.Context, kind, id, message, auth
 	// source to exist.
 	var srcSubRel, dstSubRel string
 	if archiving {
-		srcSubRel = filepath.Join(kind, slug)
-		dstSubRel = filepath.Join(ArchiveDir, kind, slug)
+		srcSubRel = filepath.Join(KindDir(kind), slug)
+		dstSubRel = filepath.Join(ArchiveDir, KindDir(kind), slug)
 	} else {
-		srcSubRel = filepath.Join(ArchiveDir, kind, slug)
-		dstSubRel = filepath.Join(kind, slug)
+		srcSubRel = filepath.Join(ArchiveDir, KindDir(kind), slug)
+		dstSubRel = filepath.Join(KindDir(kind), slug)
 	}
 	srcSubFull := filepath.Join(w.root, srcSubRel)
 	dstSubFull := filepath.Join(w.root, dstSubRel)

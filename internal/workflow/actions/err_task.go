@@ -25,12 +25,18 @@ package actions
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/yaad-index/yaad-index/internal/canonical"
+	"github.com/yaad-index/yaad-index/internal/store"
+	"github.com/yaad-index/yaad-index/internal/vault"
 )
 
 // ErrTaskWriter is the err-task surface the engine invokes
@@ -54,19 +60,37 @@ type ErrTaskWriter interface {
 // using the same atomic-write + slugified-path pattern as
 // FileTaskWriter. Safe for concurrent use; an internal
 // mutex serializes the read-modify-write cycle.
+//
+// #268 mirrors the err-task into the store on first-create
+// (kind=task, errored=true in the data map) so the same
+// /v1/entities lookup + workflow-set_property surface works
+// for err tasks alongside regular tasks. No triggered_by
+// edge — err tasks aren't entity-scoped.
 type FileErrTaskWriter struct {
 	vaultRoot string
-	mu        sync.Mutex
+	// store mirrors first-create err-task files into entity
+	// rows (kind=task, errored=true). Nil-safe; see
+	// NewFileErrTaskWriter for semantics.
+	store  store.Store
+	logger *slog.Logger
+	mu     sync.Mutex
 }
 
 // NewFileErrTaskWriter constructs a writer rooted at the
-// vault path. Mirrors NewFileTaskWriter's signature.
-func NewFileErrTaskWriter(vaultRoot string) *FileErrTaskWriter {
-	return &FileErrTaskWriter{vaultRoot: vaultRoot}
+// vault path. Mirrors NewFileTaskWriter's signature. st may
+// be nil for test fixtures that don't wire a backing store
+// (the on-disk file shape stays the same); production wires
+// a real store so err tasks land as first-class entities.
+// logger may be nil; falls back to slog.Default().
+func NewFileErrTaskWriter(vaultRoot string, st store.Store, logger *slog.Logger) *FileErrTaskWriter {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &FileErrTaskWriter{vaultRoot: vaultRoot, store: st, logger: logger}
 }
 
 // AppendErrTask implements ErrTaskWriter.
-func (w *FileErrTaskWriter) AppendErrTask(_ context.Context, workflow string, when time.Time, entityID, errMsg string) error {
+func (w *FileErrTaskWriter) AppendErrTask(ctx context.Context, workflow string, when time.Time, entityID, errMsg string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -85,7 +109,11 @@ func (w *FileErrTaskWriter) AppendErrTask(_ context.Context, workflow string, wh
 		// First failure since the last resolution — create
 		// the err task file with frontmatter + Failures
 		// section + the first entry.
-		return w.writeAtomic(path, freshErrTaskBody(workflow, when, line))
+		if err := w.writeAtomic(path, freshErrTaskBody(workflow, when, line)); err != nil {
+			return err
+		}
+		w.materializeErrTaskEntity(ctx, workflow, when)
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("read existing err task %q: %w", path, err)
@@ -103,6 +131,32 @@ func (w *FileErrTaskWriter) AppendErrTask(_ context.Context, workflow string, wh
 	return w.writeAtomic(path, []byte(body))
 }
 
+// materializeErrTaskEntity mirrors the err-task into the
+// store. Best-effort — store failures log at WARN and the
+// on-disk file remains authoritative for the reindex pass.
+func (w *FileErrTaskWriter) materializeErrTaskEntity(ctx context.Context, workflow string, when time.Time) {
+	if w.store == nil {
+		return
+	}
+	wfSlug := slugify(workflow)
+	if wfSlug == "" {
+		return
+	}
+	taskID := canonical.TaskKind + ":" + wfSlug + "-err"
+	if err := w.store.UpsertEntity(ctx, &store.Entity{
+		ID:   taskID,
+		Kind: canonical.TaskKind,
+		Data: map[string]any{
+			"workflow":   workflow,
+			"errored":    true,
+			"created_at": when.UTC().Format(time.RFC3339),
+		},
+	}); err != nil && !errors.Is(err, store.ErrNotFound) {
+		w.logger.WarnContext(ctx, "err-task entity store upsert failed (vault file landed)",
+			"task_id", taskID, "err", err)
+	}
+}
+
 // errTaskPath returns the canonical err-task file path:
 // `<vault>/tasks/<workflow-slug>-err.md`. The `-err` suffix
 // distinguishes the err task from regular workflow tasks
@@ -114,7 +168,7 @@ func (w *FileErrTaskWriter) AppendErrTask(_ context.Context, workflow string, wh
 // a rare-and-fixable surface).
 func (w *FileErrTaskWriter) errTaskPath(workflow string) string {
 	wfSlug := slugify(workflow)
-	return filepath.Join(w.vaultRoot, "tasks", wfSlug+"-err.md")
+	return filepath.Join(w.vaultRoot, vault.KindDir(canonical.TaskKind), wfSlug+"-err.md")
 }
 
 // writeAtomic mirrors FileTaskWriter.writeFile — temp file +

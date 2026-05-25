@@ -687,7 +687,7 @@ func (s *ServeCmd) Run() error {
 			return fmt.Errorf("init workflow plugin dispatcher: %w", err)
 		}
 		wfRunner := actions.New(actions.Options{
-			TaskWriter:       actions.NewFileTaskWriter(cfg.Vault.Path, mergedRegistry),
+			TaskWriter:       actions.NewFileTaskWriter(cfg.Vault.Path, mergedRegistry, st, logger),
 			NoteWriter:       actions.NewVaultNoteWriter(wfWriterBackend),
 			GapWriter:        actions.NewVaultGapWriter(wfWriterBackend),
 			PropertyWriter:   actions.NewVaultPropertyWriter(wfWriterBackend),
@@ -703,7 +703,7 @@ func (s *ServeCmd) Run() error {
 			// (condition-eval, subject-render, action-runner
 			// non-MissingRef errors) accumulate into the
 			// workflow's err task at tasks/<workflow>-err.md.
-			ErrTaskWriter: actions.NewFileErrTaskWriter(cfg.Vault.Path),
+			ErrTaskWriter: actions.NewFileErrTaskWriter(cfg.Vault.Path, st, logger),
 			// Receives the rendered-template drift Warn when
 			// the engine ships a non-nil RenderedTemplates map
 			// that lacks an expected (idx, field) entry —
@@ -759,8 +759,21 @@ func (s *ServeCmd) Run() error {
 		// runners write tasks under. Registers GET /v1/tasks
 		// + GET /v1/tasks/{id} + POST /v1/tasks/{id}/resolve
 		// per ADR-0024 §"Agent surface".
-		handlerOpts = append(handlerOpts, api.WithTasksReader(wftasks.NewReader(cfg.Vault.Path)))
+		tasksReader := wftasks.NewReader(cfg.Vault.Path)
+		handlerOpts = append(handlerOpts, api.WithTasksReader(tasksReader))
 		handlerOpts = append(handlerOpts, api.WithTasksWriter(wftasks.NewWriter(cfg.Vault.Path)))
+		// #268: walk vault/tasks/ at startup and materialize a
+		// `task:<slug>` entity row for any file without one.
+		// Pre-existing rows are preserved — the pass is the
+		// ADR-0008 vault-is-authoritative recovery shape for
+		// task files that pre-date the entity promotion (or
+		// landed via a daemon without store wiring).
+		if created, err := wftasks.IndexFromVault(context.Background(), st, tasksReader, logger); err != nil {
+			logger.Warn("task reindex from vault failed (degraded — tasks remain readable via /v1/tasks)",
+				"err", err)
+		} else if created > 0 {
+			logger.Info("task reindex from vault materialized rows", "count", created)
+		}
 		logger.Info("workflow engine active",
 			"reconcile_interval", loader.DefaultPollInterval.String(),
 			"http_trigger_path", "/v1/workflows/trigger")
@@ -1922,3 +1935,4 @@ func unionEdgeTypes(a, b []string) []string {
 	}
 	return out
 }
+

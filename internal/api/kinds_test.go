@@ -60,12 +60,12 @@ func TestKindsHandler_ServesSeededTestRegistryPayload(t *testing.T) {
 }
 
 // TestKindsHandler_EmptyRegistry_ReturnsOnlyDaemonBuiltins pins the
-// zero-plugin shape post-ADR-0025: `day` plus the five canonical
-// edge type names (due_on, occurred_on, is_about_day, references_day,
-// ingested_on) surface as daemon-managed entries even with no
-// plugins registered. Source_plugins on those entries names the
-// synthetic "yaad-index" producer so consumers can distinguish
-// daemon-built-in kinds from plugin-emitted ones.
+// zero-plugin shape: the daemon-managed entity kinds (`day` per
+// ADR-0025 cut 1, `task` per #268) and the canonical edge type
+// vocabulary surface even with no plugins registered.
+// Source_plugins on those entries names the synthetic "yaad-index"
+// producer so consumers can distinguish daemon-built-in kinds from
+// plugin-emitted ones.
 func TestKindsHandler_EmptyRegistry_ReturnsOnlyDaemonBuiltins(t *testing.T) {
 	t.Parallel()
 
@@ -84,16 +84,18 @@ func TestKindsHandler_EmptyRegistry_ReturnsOnlyDaemonBuiltins(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body), "decode")
 	assert.True(t, body.OK)
 
-	require.Len(t, body.EntityKinds, 1, "only the daemon-built-in `day` kind surfaces with empty registry")
-	assert.Equal(t, canonical.DayKind, body.EntityKinds[0].Name)
-	assert.Equal(t, []string{daemonSourcePlugin}, body.EntityKinds[0].SourcePlugins)
+	gotEntityNames := entityNames(body.EntityKinds)
+	assert.ElementsMatch(t, canonical.DaemonEntityKinds(), gotEntityNames,
+		"daemon-built-in entity kinds surface even when no plugin advertises them")
+	for _, e := range body.EntityKinds {
+		assert.Equal(t, []string{daemonSourcePlugin}, e.SourcePlugins,
+			"daemon entity %q source_plugins must name the daemon", e.Name)
+	}
 
 	gotEdgeNames := edgeNames(body.EdgeKinds)
 	assert.ElementsMatch(t, canonical.DaemonEdgeTypes(), gotEdgeNames,
-		"all five canonical edge type names surface even when no plugin advertises them")
+		"canonical edge type names surface even when no plugin advertises them")
 	for _, e := range body.EdgeKinds {
-		assert.Equal(t, canonical.DayKind, e.ToKind,
-			"canonical edge %q must terminate at the `day` kind", e.Name)
 		assert.Equal(t, []string{daemonSourcePlugin}, e.SourcePlugins,
 			"canonical edge %q source_plugins must name the daemon", e.Name)
 	}
@@ -168,24 +170,24 @@ func TestKindsHandler_EdgeEndpointsAreDeclaredEntities(t *testing.T) {
 
 	declared := indexEntityKinds(body.EntityKinds)
 	for _, e := range body.EdgeKinds {
-		if e.FromKind == "" {
-			// Open-source edge (daemon-built-in canonical day edges):
-			// any entity may carry the reference, so the closure
-			// invariant doesn't apply to the from side.
+		// Daemon-built-in edges may leave from_kind or to_kind
+		// empty to mean "open" — day-anchored edges leave
+		// from_kind empty (any entity can carry a day reference);
+		// the triggered_by edge leaves to_kind empty (the source
+		// is any triggering entity). The closure invariant only
+		// applies to the side that's actually pinned.
+		if e.FromKind != "" {
+			_, fromOK := declared[e.FromKind]
+			assert.True(t, fromOK,
+				"edge_kinds[%s].from_kind=%q not in entity_kinds %v",
+				e.Name, e.FromKind, entityNames(body.EntityKinds))
+		}
+		if e.ToKind != "" {
 			_, toOK := declared[e.ToKind]
 			assert.True(t, toOK,
 				"edge_kinds[%s].to_kind=%q not in entity_kinds %v",
 				e.Name, e.ToKind, entityNames(body.EntityKinds))
-			continue
 		}
-		_, fromOK := declared[e.FromKind]
-		assert.True(t, fromOK,
-			"edge_kinds[%s].from_kind=%q not in entity_kinds %v",
-			e.Name, e.FromKind, entityNames(body.EntityKinds))
-		_, toOK := declared[e.ToKind]
-		assert.True(t, toOK,
-			"edge_kinds[%s].to_kind=%q not in entity_kinds %v",
-			e.Name, e.ToKind, entityNames(body.EntityKinds))
 	}
 }
 

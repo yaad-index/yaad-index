@@ -22,6 +22,15 @@ import "github.com/yaad-index/yaad-index/internal/config"
 // daemon's configured timezone (per ADR-0025 § Timezone).
 const DayKind = "day"
 
+// TaskKind is the canonical entity kind for workflow-spawned tasks
+// per ADR-0024 §"Task" (the spec the #268 alignment satisfies).
+// Slug shape is `task:<workflow-slug>-<subject-slug>` (or
+// `task:<workflow-slug>-err` for err-tasks). The on-disk vault path
+// is `<root>/tasks/<slug>.md` — the directory name is the plural
+// `tasks` (the operator convention since the file shape predates
+// the entity promotion); the canonical kind is the singular `task`.
+const TaskKind = "task"
+
 // Canonical edge type names per ADR-0025 § Edge types. The
 // vocabulary is fixed at the daemon level; plugins may use these
 // for portability or declare their own edge types in their
@@ -51,17 +60,27 @@ const (
 	// workflow per ADR-0025 §"ingested_on auto-tag — deferred"; the
 	// daemon itself never emits this edge in v1.x.
 	EdgeTypeIngestedOn = "ingested_on"
+
+	// EdgeTypeTriggeredBy connects a workflow-spawned task entity
+	// to the source entity whose firing produced it. Emitted by
+	// the task writer on first-create per ADR-0024 §"Task"
+	// (alignment landed in #268). `from` is the task; `to` is the
+	// triggering source. The edge is the load-bearing primitive
+	// behind `graph.in_neighbors(source_id, "triggered_by")` for
+	// "what tasks did this source spawn?" queries.
+	EdgeTypeTriggeredBy = "triggered_by"
 )
 
 // DaemonEntityKinds returns the canonical entity kinds the daemon
-// always allows, regardless of operator config. Currently just the
-// `day` kind per ADR-0025 cut 1; week / month / year are deferred.
-// Caller-side guards (config.CanonicalGuard, /v1/kinds aggregator)
-// fold this into their effective set.
+// always allows, regardless of operator config. Today the set is
+// the `day` kind per ADR-0025 cut 1 and the `task` kind per the
+// ADR-0024 alignment landed in #268. Caller-side guards
+// (config.CanonicalGuard, /v1/kinds aggregator) fold this into
+// their effective set.
 //
 // Returns a fresh slice; callers may mutate freely.
 func DaemonEntityKinds() []string {
-	return []string{DayKind}
+	return []string{DayKind, TaskKind}
 }
 
 // DaemonEdgeTypes returns the canonical edge type names the daemon
@@ -79,6 +98,7 @@ func DaemonEdgeTypes() []string {
 		EdgeTypeIsAboutDay,
 		EdgeTypeReferencesDay,
 		EdgeTypeIngestedOn,
+		EdgeTypeTriggeredBy,
 	}
 }
 

@@ -40,14 +40,19 @@ package actions
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/store"
+	"github.com/yaad-index/yaad-index/internal/vault"
 )
 
 // FileTaskWriter writes task files under the given vault
@@ -62,6 +67,17 @@ import (
 // fields under the `Extras` inline catch-all. Task files are
 // workflow-managed; operators rarely hand-edit the frontmatter,
 // so this v1 trade-off is acceptable.
+//
+// **Entity promotion (#268).** First-create of a task file also
+// upserts a `task:<slug>` row in the store with `kind: task` and
+// (when entityID is non-empty) emits a `triggered_by` edge from
+// the task to the triggering source entity. The store + edge
+// surface makes `/v1/entities/task:<slug>` resolvable, lets
+// workflow `set_property` target task ids, and lets
+// `graph.in_neighbors(source_id, "triggered_by")` answer "which
+// tasks did this source spawn?" queries. Subsequent appends to
+// the same task file leave the store row alone (idempotent —
+// the row's already in shape).
 type FileTaskWriter struct {
 	vaultRoot string
 	// kinds is the operator's canonical-kinds registry, used
@@ -69,6 +85,18 @@ type FileTaskWriter struct {
 	// in `[[ ]]` per #163. Nil-safe: a nil/empty registry
 	// disables wikilink wrapping (every string passes through).
 	kinds map[string]config.CanonicalKindConfig
+
+	// store mirrors first-create task files into entity rows +
+	// edges per #268. Nil-safe: a nil store skips the
+	// materialization step so test fixtures that just want the
+	// on-disk file shape don't need to wire a backing store.
+	store store.Store
+
+	// logger surfaces non-fatal store/edge materialization
+	// failures at WARN. The on-disk file write is the load-
+	// bearing op; store errors degrade to "row will materialize
+	// on next reindex" rather than failing the task spawn.
+	logger *slog.Logger
 
 	// mu serializes the read-modify-write cycle so a single
 	// task_append on the same file path can't race. For
@@ -86,8 +114,25 @@ type FileTaskWriter struct {
 // strings in task content + breadcrumb entity refs wrap into
 // `[[ ]]` only when `kind` is in this registry. Pass nil to
 // disable wikilink wrapping (test-friendly default).
-func NewFileTaskWriter(vaultRoot string, kinds map[string]config.CanonicalKindConfig) *FileTaskWriter {
-	return &FileTaskWriter{vaultRoot: vaultRoot, kinds: kinds}
+//
+// st is the entity store the writer mirrors first-create tasks
+// into per #268. Nil disables the materialization step (file-
+// only mode — useful for unit fixtures); production wires a
+// real store so /v1/entities/task:id resolves and set_property
+// can target task ids.
+//
+// logger surfaces non-fatal store materialization failures.
+// Nil falls back to slog.Default().
+func NewFileTaskWriter(vaultRoot string, kinds map[string]config.CanonicalKindConfig, st store.Store, logger *slog.Logger) *FileTaskWriter {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &FileTaskWriter{
+		vaultRoot: vaultRoot,
+		kinds:     kinds,
+		store:     st,
+		logger:    logger,
+	}
 }
 
 // MissingRefsSectionName is the body section the task_append
@@ -117,7 +162,7 @@ const MissingRefsSectionName = "Missing references"
 // `kind` in the canonical-kinds registry becomes
 // `[[<kind>:<id>]]` in the task body. Strings outside that
 // shape pass through unchanged.
-func (w *FileTaskWriter) AppendTaskSection(_ context.Context, workflow, subject, dedupKey, entityID, section, content, ifAlreadyPresent string) error {
+func (w *FileTaskWriter) AppendTaskSection(ctx context.Context, workflow, subject, dedupKey, entityID, section, content, ifAlreadyPresent string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -144,7 +189,17 @@ func (w *FileTaskWriter) AppendTaskSection(_ context.Context, workflow, subject,
 		if err != nil {
 			return err
 		}
-		return w.writeFile(path, body)
+		if err := w.writeFile(path, body); err != nil {
+			return err
+		}
+		// #268: mirror the new task into the store as a first-
+		// class entity so /v1/entities/task:<slug>, set_property,
+		// and graph walks reach it. Best-effort — file write is
+		// the load-bearing step; store / edge errors degrade to
+		// "row materializes on next reindex" rather than failing
+		// the task spawn.
+		w.materializeTaskEntity(ctx, workflow, subject, dedupKey, entityID)
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("read existing task %q: %w", path, err)
@@ -155,6 +210,93 @@ func (w *FileTaskWriter) AppendTaskSection(_ context.Context, workflow, subject,
 		return err
 	}
 	return w.writeFile(path, []byte(body))
+}
+
+// materializeTaskEntity upserts the task row + `triggered_by`
+// edge for #268. Called only on the first-create path of
+// AppendTaskSection (subsequent appends leave the row alone —
+// it's already in shape). entityID may be empty (manual trigger
+// without a target); the triggered_by edge is skipped in that
+// case rather than emitted against an empty endpoint.
+//
+// Errors are logged at WARN and swallowed: the on-disk file is
+// the source of truth per ADR-0008, so a transient store
+// failure leaves the file behind to be picked up by the
+// startup reindex pass.
+func (w *FileTaskWriter) materializeTaskEntity(ctx context.Context, workflow, subject, dedupKey, entityID string) {
+	if w.store == nil {
+		return
+	}
+	taskID := TaskEntityID(workflow, subject)
+	if taskID == "" {
+		return
+	}
+	data := map[string]any{
+		"workflow":   workflow,
+		"created_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	if subject != "" {
+		data["subject"] = subject
+	}
+	if dedupKey != "" {
+		data["dedup_key"] = dedupKey
+	}
+	if err := w.store.UpsertEntity(ctx, &store.Entity{
+		ID:   taskID,
+		Kind: canonical.TaskKind,
+		Data: data,
+	}); err != nil {
+		w.logger.WarnContext(ctx, "task entity store upsert failed (vault file landed)",
+			"task_id", taskID, "err", err)
+		return
+	}
+	if entityID == "" || entityID == viaUnknownEntity {
+		return
+	}
+	edge := &store.Edge{Type: canonical.EdgeTypeTriggeredBy, From: taskID, To: entityID}
+	if err := w.store.CreateEdge(ctx, edge); err != nil {
+		// ErrMissingEntity here means the source entity isn't
+		// in the store — common for manual-trigger inputs that
+		// reference an unknown id. Don't WARN on that shape;
+		// the missing-ref path already covers it from the CEL
+		// side.
+		if !errors.Is(err, store.ErrMissingEntity) {
+			w.logger.WarnContext(ctx, "task triggered_by edge create failed",
+				"task_id", taskID, "source_id", entityID, "err", err)
+		}
+	}
+}
+
+// TaskEntityID returns the canonical entity id for the task
+// produced by (workflow, subject) per ADR-0024 §"Task" /
+// #268. Matches the on-disk filename convention so the vault
+// path resolver (vault.KindDir-aware) can reach the file from
+// the id without a separate mapping table.
+func TaskEntityID(workflow, subject string) string {
+	wfSlug := slugify(workflow)
+	subSlug := slugify(subject)
+	name := wfSlug
+	if subSlug != "" {
+		name = wfSlug + "-" + subSlug
+	}
+	if name == "" {
+		return ""
+	}
+	return canonical.TaskKind + ":" + name
+}
+
+// TaskVaultPath is the public-facing version of taskPath — the
+// startup reindex walker uses it to compute the canonical path
+// for a (workflow, subject) pair without instantiating a
+// FileTaskWriter.
+func TaskVaultPath(vaultRoot, workflow, subject string) string {
+	wfSlug := slugify(workflow)
+	subSlug := slugify(subject)
+	name := wfSlug
+	if subSlug != "" {
+		name = wfSlug + "-" + subSlug
+	}
+	return filepath.Join(vaultRoot, vault.KindDir(canonical.TaskKind), name+".md")
 }
 
 // viaEntityValue normalizes the entity id into the value the
@@ -336,14 +478,12 @@ func rewriteMissingRefsSection(existing string, refs []string) (string, error) {
 
 // taskPath computes the canonical task file path. workflow
 // + subject are slugified so the path is filesystem-safe.
+// Routes through vault.KindDir so the on-disk task directory
+// (operator-facing `tasks/`) stays aligned with the kind-
+// keyed entity path the vault reader/writer derives — same
+// physical location either way.
 func (w *FileTaskWriter) taskPath(workflow, subject string) string {
-	wfSlug := slugify(workflow)
-	subSlug := slugify(subject)
-	name := wfSlug
-	if subSlug != "" {
-		name = wfSlug + "-" + subSlug
-	}
-	return filepath.Join(w.vaultRoot, "tasks", name+".md")
+	return TaskVaultPath(w.vaultRoot, workflow, subject)
 }
 
 // slugify converts an arbitrary string to a filesystem-
