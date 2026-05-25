@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 
+	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/plugins"
 )
 
@@ -86,11 +87,11 @@ type pluginsResponse struct {
 // (url_patterns, commands, entity_kinds, edge_kinds) marshal as
 // `[]` rather than `null` so consumers get a stable shape they
 // don't have to nil-guard.
-func handlePlugins(logger *slog.Logger, registry *plugins.Registry, pluginInstances map[string][]string) http.HandlerFunc {
+func handlePlugins(logger *slog.Logger, registry *plugins.Registry, pluginInstanceConfigs map[string][]config.InstanceEntry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		resp := pluginsResponse{
 			OK: true,
-			Plugins: enumeratePlugins(registry, pluginInstances),
+			Plugins: enumeratePlugins(registry, pluginInstanceConfigs),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -100,7 +101,7 @@ func handlePlugins(logger *slog.Logger, registry *plugins.Registry, pluginInstan
 	}
 }
 
-func enumeratePlugins(registry *plugins.Registry, pluginInstances map[string][]string) []pluginEntry {
+func enumeratePlugins(registry *plugins.Registry, pluginInstanceConfigs map[string][]config.InstanceEntry) []pluginEntry {
 	regPlugins := registry.Plugins()
 	out := make([]pluginEntry, 0, len(regPlugins))
 	for _, p := range regPlugins {
@@ -117,7 +118,7 @@ func enumeratePlugins(registry *plugins.Registry, pluginInstances map[string][]s
 			SourceNamespace: caps.SourceNamespace,
 			EntityKinds: mapEntityKinds(caps.EntityKinds),
 			EdgeKinds: mapEdgeKinds(caps.EdgeKinds),
-			Instances: instanceList(pluginInstances, name),
+			Instances: instanceList(pluginInstanceConfigs, name),
 		}
 		out = append(out, entry)
 	}
@@ -184,20 +185,22 @@ func mapEdgeKinds(in []plugins.KindSpec) []pluginEdgeEntry {
 }
 
 // instanceList returns the per-plugin instance list for the
-// /v1/plugins response per ADR-0028 §1. When pluginInstances has
-// no entry for this plugin (e.g. dev binaries without operator
-// config — handler test paths), returns a synthesized
-// `[{name: "default", enabled: true}]` so the response shape is
-// stable across deployment modes. The `enabled` flag is reserved
-// for Cut 5; until that lands every instance reports `true`.
-func instanceList(pluginInstances map[string][]string, name string) []pluginInstanceEntry {
-	names, ok := pluginInstances[name]
-	if !ok || len(names) == 0 {
+// /v1/plugins response per ADR-0028 §1 + §7. When
+// pluginInstanceConfigs has no entry for this plugin (e.g. dev
+// binaries without operator config — handler test paths),
+// returns a synthesized `[{name: "default", enabled: true}]` so
+// the response shape is stable across deployment modes. For
+// configured plugins, each entry's `enabled` field reflects the
+// operator's actual InstanceEntry.IsEnabled() per Cut 5 — nil /
+// true → true, explicit false → false.
+func instanceList(pluginInstanceConfigs map[string][]config.InstanceEntry, name string) []pluginInstanceEntry {
+	instances, ok := pluginInstanceConfigs[name]
+	if !ok || len(instances) == 0 {
 		return []pluginInstanceEntry{{Name: "default", Enabled: true}}
 	}
-	out := make([]pluginInstanceEntry, 0, len(names))
-	for _, n := range names {
-		out = append(out, pluginInstanceEntry{Name: n, Enabled: true})
+	out := make([]pluginInstanceEntry, 0, len(instances))
+	for _, inst := range instances {
+		out = append(out, pluginInstanceEntry{Name: inst.Name, Enabled: inst.IsEnabled()})
 	}
 	return out
 }

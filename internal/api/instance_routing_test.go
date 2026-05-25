@@ -333,3 +333,80 @@ func TestPickInstance_UnresolvedPlaceholder_FailFast(t *testing.T) {
 	assert.Contains(t, err.Error(), "{repo}")
 	assert.Contains(t, err.Error(), "broken-template")
 }
+
+// --- ADR-0028 Cut 5: enabled flag in pickInstance ---
+
+// TestPickInstance_EnabledFalse_SkipsDisabledInGlobWalk pins ADR-
+// 0028 §7 (Cut 5): pickInstance filters disabled instances before
+// the glob walk. A URL whose only matching glob lives on a
+// disabled instance surfaces as ErrUnroutedURL — the operator
+// turned that path off deliberately.
+func TestPickInstance_EnabledFalse_SkipsDisabledInGlobWalk(t *testing.T) {
+	t.Parallel()
+	p := fixturePlugin(t, plugins.Capabilities{
+		Name:              "github",
+		URLPatterns:       []string{`^https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/\d+`},
+		SupportsInstances: true,
+		InstanceRouting: &plugins.InstanceRoutingSpec{
+			Strategy:      "glob_match",
+			ConfigField:   "repos",
+			MatchTemplate: "{owner}/{repo}",
+		},
+	})
+	disabled := false
+	instances := []config.InstanceEntry{
+		{Name: "personal", Config: map[string]any{"repos": []any{"alice/*"}}, Enabled: &disabled},
+		{Name: "acme-org", Config: map[string]any{"repos": []any{"acme-org/*"}}},
+	}
+	// URL matches the disabled instance's glob only; expect unrouted.
+	_, err := pickInstance(p, instances, "https://github.com/alice/project/pull/1")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnroutedURL,
+		"disabled instance's glob must not satisfy URL routing")
+}
+
+// TestPickInstance_EnabledFalse_AllDisabled_Unrouted pins the
+// all-disabled case for URL routing: when every configured
+// instance is disabled, pickInstance returns ErrUnroutedURL with
+// a diagnostic naming the count so the operator knows their
+// config turned everything off.
+func TestPickInstance_EnabledFalse_AllDisabled_Unrouted(t *testing.T) {
+	t.Parallel()
+	p := fixturePlugin(t, plugins.Capabilities{
+		Name:              "github",
+		URLPatterns:       []string{`^https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/\d+`},
+		SupportsInstances: true,
+		InstanceRouting: &plugins.InstanceRoutingSpec{
+			Strategy:      "glob_match",
+			ConfigField:   "repos",
+			MatchTemplate: "{owner}/{repo}",
+		},
+	})
+	disabled := false
+	instances := []config.InstanceEntry{
+		{Name: "personal", Config: map[string]any{"repos": []any{"alice/*"}}, Enabled: &disabled},
+		{Name: "work", Config: map[string]any{"repos": []any{"bob/*"}}, Enabled: &disabled},
+	}
+	_, err := pickInstance(p, instances, "https://github.com/alice/project/pull/1")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnroutedURL)
+	assert.Contains(t, err.Error(), "no enabled instances")
+}
+
+// TestEnabledInstances_FiltersDisabled pins the helper's filter
+// semantics: nil pointer = enabled (default); explicit false =
+// disabled (filtered out).
+func TestEnabledInstances_FiltersDisabled(t *testing.T) {
+	t.Parallel()
+	disabled := false
+	enabled := true
+	in := []config.InstanceEntry{
+		{Name: "default-on"},                       // nil → enabled
+		{Name: "explicit-on", Enabled: &enabled},   // true → enabled
+		{Name: "explicit-off", Enabled: &disabled}, // false → filtered
+	}
+	out := enabledInstances(in)
+	require.Len(t, out, 2)
+	assert.Equal(t, "default-on", out[0].Name)
+	assert.Equal(t, "explicit-on", out[1].Name)
+}

@@ -176,6 +176,58 @@ One `ProvenanceEntry` stamped by the plugin: `{source, fetched_at, ok}`. If a pl
 
 The per-fetch subprocess timeout is operator-side config (not plugin-declared) — see the `fetch_timeout` field on the operator's `plugins:` config entry in [`docs/configs.md`](./configs.md). Default `subprocess.DefaultFetchTimeout` (60s) applies when the operator hasn't set it.
 
+### 3.1 Multi-instance capability surface (ADR-0028)
+
+Plugins whose data shape supports N independent runtime contexts (per-account auth, per-PAT repo coverage, etc.) opt in via two additional `--init` fields:
+
+```json
+{
+  "name": "github",
+  "version": "0.4.0",
+  "url_patterns": [
+    "^https?://github\\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/\\d+"
+  ],
+  "commands": ["fetch"],
+  "supports_instances": true,
+  "instance_routing": {
+    "strategy": "glob_match",
+    "config_field": "repos",
+    "match_template": "{owner}/{repo}"
+  }
+}
+```
+
+- **`supports_instances: bool`** (default `false`) — explicit opt-in for the per-ADR-0028 multi-instance contract. Plugins that don't opt in keep working as single-instance under the implicit-`default` synthesis. The daemon fail-fasts at config load when an operator declares 2+ instances for a `supports_instances: false` plugin (the plugin's data shape doesn't support independent runtime contexts and the operator config would silently break).
+- **`instance_routing`** (nullable) — required when `supports_instances: true` AND the plugin accepts URL-shape ingest. Carries the routing strategy the daemon uses to pick which instance handles a URL:
+  - `strategy: "glob_match"` (v1 only) — extract named capture groups from the matched `url_patterns` regex, format `match_template`, glob-match the result against each enabled instance's `config[<config_field>]` list in declaration order; first-match wins. URLs with no matching glob reject with `400 {instance: "unrouted", url, message}` per ADR-0028 §3 fail-fast — no silent fallback.
+  - `config_field` — the per-instance config key whose value list the daemon glob-matches against (e.g. `repos` for yaad-github).
+  - `match_template` — formatted from the URL's named captures (e.g. `{owner}/{repo}` for yaad-github). Required placeholders that the URL pattern doesn't capture cause an error at routing time (plugin-author bug).
+
+Plugins whose primary path is command-shape (e.g. yaad-gmail — instances dispatched only via `!fetch` fan-out) MAY leave `instance_routing` null; URL ingest then rejects for that plugin with a clear "plugin advertises no URL routing" error.
+
+### 3.2 Command grammar extension (ADR-0028 §4)
+
+ADR-0022's `<plugin>: !<command>` grammar gains an instance qualifier:
+
+- **`<plugin>/<instance>: !<command>`** — instance-scoped invocation. Routes to the single named instance. Unknown instance name → `404 unknown_instance`. Disabled instance (per ADR-0028 §7 `enabled: false`) → `503 instance_disabled`.
+- **`<plugin>: !<command>`** (bare, no slash) — fans the command out **serially** across every enabled instance of the plugin in operator-config declaration order. Each instance's run completes (stream-to-end + exit per ADR-0023) before the next starts; logs are linear and instance-attributed. Per-instance errors are recorded in the aggregate response and do NOT abort the walk.
+
+Aggregate response shape for bare-plugin fan-out across 2+ instances:
+
+```json
+{
+  "ok": true,
+  "state": "fan_out",
+  "plugin": "gmail",
+  "result": [
+    {"instance": "personal", "state": "complete", "entity_id": "gmail:msg-abc"},
+    {"instance": "work", "state": "failed", "error": "auth refused"}
+  ]
+}
+```
+
+Single-instance plugins (1 configured instance OR instance-scoped form against 1 instance) collapse to the regular single-attempt response shape — no `fan_out` wrapper. Back-compat for the common single-instance deployment.
+
 ## 4. Cache TTL — three-level resolution
 
 Per-entity cache freshness resolves at fetch time across three input layers, narrowest-wins:

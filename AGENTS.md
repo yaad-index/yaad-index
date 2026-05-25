@@ -299,9 +299,20 @@ governs.
  Entity `source:` field is always the slash form
  `<plugin>/<instance>` (no bare-plugin shape); multi-source
  overlap promotes the field to an array. Per-instance
- `enabled: false` flag, runtime state composite-keyed by
- `(plugin, instance)`, archive-not-purge on instance removal.
- Pre-release status — no migration.
+ `enabled: false` flag (Cut 5) wired through URL routing +
+ command dispatch + `/v1/plugins` exposure; single-instance
+ plugin with sole instance disabled fail-fasts at config load,
+ multi-instance plugin with all instances disabled WARNs +
+ dispatch returns `no_enabled_instances` per call. §6 runtime-
+ state composite-key surface deferred to [#252](https://github.com/yaad-index/yaad-index/issues/252)
+ (no in-tree consumer yet); §8 hot-reload mechanics deferred to
+ [#254](https://github.com/yaad-index/yaad-index/issues/254)
+ (daemon reads operator config once at startup; config changes
+ take effect at next restart in v1). Per-instance subprocess env
+ splice via ctx-based per-call mechanism (plugins.WithExtraEnv /
+ ExtraEnvFromContext); YAAD_PLUGIN_CONFIG built from the active
+ instance's Config at spawn time, instance.Env entries spliced
+ on top. Pre-release status — no migration.
 
 ## Project layout
 

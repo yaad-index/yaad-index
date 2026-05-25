@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/plugins/fixture"
 	"github.com/yaad-index/yaad-index/internal/store"
@@ -305,8 +306,8 @@ func TestGetPlugins_InstancesMultiInstance_SurfacesOperatorList(t *testing.T) {
 	// the full list in declaration order per ADR-0028 §1 + §4
 	// (fan-out semantics depend on this order).
 	h := NewHandlerWithRegistry(logger, st, registry,
-		WithPluginInstances(map[string][]string{
-			"github": {"personal", "work"},
+		WithPluginInstanceConfigs(map[string][]config.InstanceEntry{
+			"github": {{Name: "personal"}, {Name: "work"}},
 		}),
 	)
 
@@ -325,4 +326,52 @@ func TestGetPlugins_InstancesMultiInstance_SurfacesOperatorList(t *testing.T) {
 		},
 		resp.Plugins[0].Instances,
 		"multi-instance plugin must surface operator's list in declaration order")
+}
+
+// TestGetPlugins_Instances_EnabledFlagSurfaces pins ADR-0028 §7
+// (Cut 5): /v1/plugins surfaces each instance's actual `enabled`
+// flag (default-true nil pointer + explicit false) so operators
+// see the full configured set including disabled instances.
+func TestGetPlugins_Instances_EnabledFlagSurfaces(t *testing.T) {
+	t.Parallel()
+
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	registry := plugins.NewRegistry()
+	registry.Register(&fixture.Plugin{
+		NameValue: "gmail",
+		MatchFunc: func(string) bool { return false },
+		CapabilitiesValue: plugins.Capabilities{
+			Name:              "gmail",
+			SupportsInstances: true,
+		},
+	})
+
+	disabled := false
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	h := NewHandlerWithRegistry(logger, st, registry,
+		WithPluginInstanceConfigs(map[string][]config.InstanceEntry{
+			"gmail": {
+				{Name: "personal"},                       // default-true
+				{Name: "work", Enabled: &disabled},       // explicit false
+			},
+		}),
+	)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/plugins", nil)
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp pluginsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Plugins, 1)
+	assert.Equal(t,
+		[]pluginInstanceEntry{
+			{Name: "personal", Enabled: true},
+			{Name: "work", Enabled: false},
+		},
+		resp.Plugins[0].Instances,
+		"surface actual per-instance enabled state, not hardcoded true")
 }

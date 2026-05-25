@@ -1344,6 +1344,37 @@ func buildPluginRegistry(logger *slog.Logger, st store.Store, cfg *config.Config
 					"reduce instances: to one entry or remove the block (got %d instances)",
 				entry.Name, len(entry.Instances))
 		}
+		// ADR-0028 §7 Cut 5: a single-instance plugin
+		// (supports_instances=false) with its sole instance
+		// disabled is operator-mistake — the plugin would
+		// silently never run. Fail-fast at config load.
+		if !p.Capabilities().SupportsInstances && len(entry.Instances) == 1 && !entry.Instances[0].IsEnabled() {
+			return nil, fmt.Errorf(
+				"plugin %q has its only configured instance %q disabled (enabled: false); "+
+					"the plugin will never run — remove the instance entry or set enabled: true",
+				entry.Name, entry.Instances[0].Name)
+		}
+		// ADR-0028 §7 Cut 5: warn (not error) when every
+		// configured instance of a multi-instance plugin is
+		// disabled. Likely operator mistake (plugin is fully
+		// shut off) but not load-fatal; the plugin stays
+		// registered, dispatch surfaces the "no_enabled_
+		// instances" error per call.
+		if p.Capabilities().SupportsInstances && len(entry.Instances) >= 2 {
+			anyEnabled := false
+			for _, inst := range entry.Instances {
+				if inst.IsEnabled() {
+					anyEnabled = true
+					break
+				}
+			}
+			if !anyEnabled {
+				logger.Warn("plugin has no enabled instances",
+					"name", entry.Name,
+					"configured_instances", len(entry.Instances),
+					"note", "all instances declare enabled: false; plugin will reject every invocation with no_enabled_instances")
+			}
+		}
 		// ADR-0028 §1 + §2: validate every instance's `config:`
 		// block against the plugin's declared `config_schema`. The
 		// schema is plugin-scoped (one `--init`, one cache row), but

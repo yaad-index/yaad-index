@@ -476,12 +476,31 @@ type PluginEntry struct {
 //
 // The Name is used as the second half of the slash-form
 // `<plugin>/<instance>` invocation syntax (ADR-0028 §4) and entity
-// `source:` field shape (ADR-0028 §5). Cuts 2-5 wire those uses;
-// Cut 1 lands the schema + validation only.
+// `source:` field shape (ADR-0028 §5).
+//
+// Enabled is the ADR-0028 §7 on/off flag (Cut 5). Nil pointer or
+// true → enabled; false → disabled. A disabled instance stays in
+// operator config + retains runtime state but is invisible to URL
+// routing (Cut 3), command dispatch (Cut 4 fan-out + instance-
+// scoped form both skip), and scheduled refresh. /v1/plugins
+// surfaces the disabled instance so operators see the full
+// configured set. Pointer shape keeps the YAML default-on contract
+// (absent → enabled) distinct from explicit `enabled: false`.
 type InstanceEntry struct {
-	Name   string            `yaml:"name"`
-	Env    map[string]string `yaml:"env,omitempty"`
-	Config map[string]any    `yaml:"config,omitempty"`
+	Name    string            `yaml:"name"`
+	Env     map[string]string `yaml:"env,omitempty"`
+	Config  map[string]any    `yaml:"config,omitempty"`
+	Enabled *bool             `yaml:"enabled,omitempty"`
+}
+
+// IsEnabled returns true when this instance is operator-enabled
+// per ADR-0028 §7. Nil pointer (operator omitted the flag) → true
+// (default-on); explicit `enabled: false` → false.
+func (e InstanceEntry) IsEnabled() bool {
+	if e.Enabled == nil {
+		return true
+	}
+	return *e.Enabled
 }
 
 // FetchTimeoutDuration returns the parsed FetchTimeout, or 0 when the

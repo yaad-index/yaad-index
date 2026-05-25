@@ -92,6 +92,17 @@ func handleCommandFanOut(
 					plugin.Name(), inv.Instance, instanceNames(instances)))
 			return
 		}
+		// ADR-0028 §7 Cut 5: a disabled instance is invisible
+		// to dispatch. Operator-scoped invocation against a
+		// disabled instance rejects with a clear error so the
+		// caller knows the configured target was deliberately
+		// turned off (vs typo'd / missing).
+		if !target.IsEnabled() {
+			writeError(w, http.StatusServiceUnavailable, "instance_disabled",
+				fmt.Sprintf("plugin %q instance %q is disabled (enabled: false in operator config)",
+					plugin.Name(), inv.Instance))
+			return
+		}
 		extraEnv, envErr := buildInstanceEnv(plugin.Name(), target)
 		if envErr != nil {
 			writeError(w, http.StatusInternalServerError, "instance_env_failed", envErr.Error())
@@ -101,11 +112,18 @@ func handleCommandFanOut(
 		return
 	}
 
-	// Bare-plugin form. 0 configured instances should be
-	// impossible post-Cut-1 (Load synthesizes the implicit
-	// `default` instance when the operator omits the block), so
-	// reaching here with zero is a daemon-startup bug we surface
-	// rather than crash.
+	// Bare-plugin form. Filter to enabled instances per ADR-0028
+	// §7 — disabled instances are invisible to fan-out. The
+	// pre-filter is on `instances` (the configured set);
+	// `enabled` carries the dispatch-visible subset.
+	enabled := enabledInstances(instances)
+
+	// 0 configured instances should be impossible post-Cut-1
+	// (Load synthesizes the implicit `default` instance when the
+	// operator omits the block), so reaching here with zero is a
+	// daemon-startup bug we surface rather than crash. 0 enabled
+	// (but >=1 configured) means the operator disabled every
+	// instance — reject with a clear error.
 	if len(instances) == 0 {
 		// Fall back to single-attempt with empty instance name so
 		// the tracker's resolveInstanceName picks `default`. This
@@ -115,21 +133,29 @@ func handleCommandFanOut(
 		dispatchSingleCommand(w, r, logger, st, tracker, plugin, req, "", nil, waitSeconds, fillInstruction, canonicalKindReg)
 		return
 	}
-	if len(instances) == 1 {
-		extraEnv, envErr := buildInstanceEnv(plugin.Name(), instances[0])
+	if len(enabled) == 0 {
+		writeError(w, http.StatusServiceUnavailable, "no_enabled_instances",
+			fmt.Sprintf("plugin %q has no enabled instances (all %d configured instances have enabled: false)",
+				plugin.Name(), len(instances)))
+		return
+	}
+	if len(enabled) == 1 {
+		extraEnv, envErr := buildInstanceEnv(plugin.Name(), enabled[0])
 		if envErr != nil {
 			writeError(w, http.StatusInternalServerError, "instance_env_failed", envErr.Error())
 			return
 		}
-		dispatchSingleCommand(w, r, logger, st, tracker, plugin, req, instances[0].Name, extraEnv, waitSeconds, fillInstruction, canonicalKindReg)
+		dispatchSingleCommand(w, r, logger, st, tracker, plugin, req, enabled[0].Name, extraEnv, waitSeconds, fillInstruction, canonicalKindReg)
 		return
 	}
 
 	// Multi-instance fan-out. Per ADR-0028 §4 serial in
 	// declaration order; per-instance error logged + reported
 	// but doesn't abort the walk. Logs are linear and
-	// instance-attributed via the logger context.
-	dispatchFanOut(w, r, logger, tracker, plugin, req, instances, waitSeconds)
+	// instance-attributed via the logger context. Disabled
+	// instances are filtered out via `enabled` so the walk only
+	// considers operator-active runtime contexts.
+	dispatchFanOut(w, r, logger, tracker, plugin, req, enabled, waitSeconds)
 }
 
 // dispatchSingleCommand runs a single command-shape attempt

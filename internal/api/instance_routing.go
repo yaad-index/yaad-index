@@ -56,17 +56,46 @@ var unresolvedPlaceholderRE = regexp.MustCompile(`\{[A-Za-z_][A-Za-z0-9_]*\}`)
 // to the implicit / explicit single instance name without
 // running the glob walk — the routing surface only matters when
 // there's more than one candidate.
+//
+// Disabled instances (ADR-0028 §7 Cut 5) are filtered out at
+// the top of the function so neither the short-circuit nor the
+// glob walk considers them. A single-explicit-instance plugin
+// with that instance disabled returns ErrUnroutedURL — the
+// caller (URL ingest) surfaces the operator-visible
+// "unrouted_url" envelope so the operator knows their config
+// turned off the only path.
 func pickInstance(plugin plugins.Plugin, instances []config.InstanceEntry, rawURL string) (string, error) {
 	caps := plugin.Capabilities()
+
+	enabled := enabledInstances(instances)
 
 	// Short-circuit: 0 instances (test paths) → "default"; 1
 	// instance → that instance's name. The glob walk only runs
 	// for the 2+ case where there's an actual decision to make.
-	if len(instances) == 0 {
+	if len(enabled) == 0 {
+		// Either zero configured instances OR all configured
+		// instances are disabled. The former is a test/dev path;
+		// the latter is an operator-visible "everything's off"
+		// state. For the test path, "default" preserves
+		// pre-Cut-5 behavior; for the all-disabled case the
+		// caller's fail-fast surfaces via ErrUnroutedURL only
+		// when there were instances declared but all disabled
+		// (otherwise the test path continues).
+		if len(instances) > 0 {
+			return "", fmt.Errorf("%w: plugin %q has no enabled instances (all %d configured instances have enabled: false)",
+				ErrUnroutedURL, plugin.Name(), len(instances))
+		}
 		return "default", nil
 	}
-	if len(instances) == 1 {
-		return instances[0].Name, nil
+	if len(enabled) == 1 && len(instances) == 1 {
+		// Genuinely-single-instance plugin (1 configured, 1
+		// enabled). Skip the routing scan — no decision to
+		// make. Distinct from the 1-enabled-of-N case where
+		// the operator disabled other instances: that case
+		// still walks routing so a URL that doesn't match the
+		// surviving instance's glob surfaces as unrouted
+		// rather than getting silently routed there.
+		return enabled[0].Name, nil
 	}
 
 	// Multi-instance: require a routing declaration. Per ADR-0028
@@ -115,12 +144,16 @@ func pickInstance(plugin plugins.Plugin, instances []config.InstanceEntry, rawUR
 			leftover)
 	}
 
-	// Walk instances in declaration order. First glob match wins
-	// per §3. Each instance's config[<config_field>] must be a
-	// list of glob strings; non-list / wrong-shape values skip
-	// that instance (operator-visible config error logged at
-	// config-load time via warnInstanceRoutingOverlap).
-	for _, inst := range instances {
+	// Walk enabled instances in declaration order. First glob
+	// match wins per §3. Each instance's config[<config_field>]
+	// must be a list of glob strings; non-list / wrong-shape
+	// values skip that instance (operator-visible config error
+	// logged at config-load time via warnInstanceRoutingOverlap).
+	// Disabled instances per ADR-0028 §7 are filtered out via
+	// enabledInstances at function-entry — they don't appear in
+	// the walk and a URL whose only matching glob lives on a
+	// disabled instance surfaces as unrouted.
+	for _, inst := range enabled {
 		globs := extractGlobList(inst.Config, caps.InstanceRouting.ConfigField)
 		for _, glob := range globs {
 			matched, err := path.Match(glob, formatted)
@@ -274,6 +307,22 @@ func WarnInstanceRoutingOverlap(
 			}
 		}
 	}
+}
+
+// enabledInstances returns the subset of `instances` whose
+// `enabled` flag is true (or absent, defaulting to true) per
+// ADR-0028 §7 Cut 5. Used by pickInstance + the fan-out walk so
+// disabled instances are invisible to URL routing + command
+// dispatch. Returns a fresh slice — callers may mutate the
+// result without affecting the source.
+func enabledInstances(instances []config.InstanceEntry) []config.InstanceEntry {
+	out := make([]config.InstanceEntry, 0, len(instances))
+	for _, inst := range instances {
+		if inst.IsEnabled() {
+			out = append(out, inst)
+		}
+	}
+	return out
 }
 
 // buildInstanceEnvForName looks up an instance by name in the
