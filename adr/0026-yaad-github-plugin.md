@@ -283,7 +283,7 @@ After full sync, the canonical-kinds layer carries:
 - `repository:<owner>_<repo>` for each repo touched
 - `github-user:<login>` for each author / assignee / reviewer / commenter / mentioned-in
 
-Edge density: ~5-8 edges per PR/issue entity (`is_a` + `in_repo` + `authored_by` + `involves` + 0-3 reviewer/assignee edges).
+Edge density: ~6-9 edges per PR/issue entity (`is_a` + `is_about` + `in_repo` + `authored_by` + `involves` + 0-3 reviewer/assignee edges).
 
 ### Query expressivity
 
@@ -326,7 +326,9 @@ These are deliberately deferred — the read-only-snapshot graph needs to prove 
 
 ## Migration / backward compatibility
 
-Greenfield. No prior github plugin to migrate from. The `repository` canonical kind doesn't currently exist in the system; this ADR introduces it. The 5 new edge types (`in_repo`, `authored_by`, `involves`, `assigned_to`, `reviewed_by`) are also new — operators must enable them in `canonical_edge_types:` config.
+Greenfield. No prior github plugin to migrate from. The `repository` canonical kind doesn't currently exist in the system; this ADR introduces it. The 5 GitHub-specific edge types (`in_repo`, `authored_by`, `involves`, `assigned_to`, `reviewed_by`) are also new — operators must enable them in `canonical_edge_types:` config.
+
+Operators must additionally enable `is_about` for the canonical-resolves edge to flow. `is_about` is not GitHub-specific (bgg, wikipedia, gmail already emit it), so operators running any of those plugins already have it enabled; for a github-only deployment it's a one-line addition.
 
 ## Revisions
 
