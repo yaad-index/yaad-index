@@ -52,7 +52,7 @@ Plugin advertises both `url_patterns` and `commands` in its `--init` capabilitie
   ],
   "edge_kinds": [],
   "canonical_kinds_emitted": ["github-pr", "github-issue", "repository", "github-user"],
-  "canonical_edge_types_emitted": ["is_a", "in_repo", "authored_by", "involves", "assigned_to", "reviewed_by"],
+  "canonical_edge_types_emitted": ["is_a", "is_about", "in_repo", "authored_by", "involves", "assigned_to", "reviewed_by"],
   "source_namespace": "<see §2>",
   "commands": ["fetch"],
   "supports_search": false,
@@ -85,6 +85,8 @@ PRs and issues are emitted as two separate canonical kinds, not one parameterize
 **Decision: Option A** — single `source_namespace: "github"` advertised, plugin emits the discriminator via `structured.kind` semantically AND via canonical-kind emission in the `edges` block. The daemon's existing canonical-kinds gating handles the rest. If ADR-0021 ever grows per-envelope namespace support, the decision is worth revisiting.
 
 Entity IDs: `github:<owner>_<repo>_pr_<num>` and `github:<owner>_<repo>_issue_<num>` (daemon-derived via `slug.Slug(name)`). The PR-vs-issue distinction lives in the slug.
+
+**Canonical-resolves edge — `is_about`.** The plugin emits the canonical-kind mapping via an `is_about` edge from the source record to the per-item canonical entity: `(github:<owner>_<repo>_pr_<n>) -[is_about]-> (github-pr:<owner>_<repo>_pr_<n>)` for PRs, and the parallel `github-issue:` target for issues. This matches the bgg + wikipedia + gmail canonical-resolves convention (uniform `?edge_type=is_about` reaches every source plugin's canonical link) and is what triggers the daemon to materialize the `github-pr` / `github-issue` thin row so workflows triggering on `canonical_kind: [github-pr]` / `[github-issue]` fire. The `is_a` edge remains the universal ADR-0021 source-type pointer (`source-type:github-record`); the two edges coexist and serve distinct roles.
 
 ### 3. Repo configuration — structured `config:` block
 

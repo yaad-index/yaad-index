@@ -170,6 +170,16 @@ func buildData(item *Item) map[string]any {
 func buildEdges(item *Item) map[string][]edgeTargetDoc {
 	edges := map[string][]edgeTargetDoc{
 		EdgeTypeIsA: {{Name: SourceTypeName, Kind: SourceTypeKind}},
+		// `is_about` resolves the source record to its per-type
+		// canonical kind (`github-pr` or `github-issue`) so the
+		// daemon materializes the canonical entity and workflows
+		// triggering on `canonical_kind: [github-pr]` /
+		// `[github-issue]` fire. Mirrors the bgg / wikipedia /
+		// gmail convention for the canonical-resolves edge.
+		EdgeTypeIsAbout: {{
+			Name: item.Target.EntityName(),
+			Kind: item.Type.CanonicalKind(),
+		}},
 		EdgeTypeInRepo: {{
 			Name: fmt.Sprintf("%s/%s", item.Target.Owner, item.Target.Repo),
 			Kind: CanonicalKindRepository,
