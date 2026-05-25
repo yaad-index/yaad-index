@@ -209,7 +209,7 @@ Plugins whose primary path is command-shape (e.g. yaad-gmail — instances dispa
 
 ADR-0022's `<plugin>: !<command>` grammar gains an instance qualifier:
 
-- **`<plugin>/<instance>: !<command>`** — instance-scoped invocation. Routes to the single named instance. Unknown instance name → `404 unknown_instance`. Disabled instance (per ADR-0028 §7 `enabled: false`) → `503 instance_disabled`.
+- **`<plugin>/<instance>: !<command>`** — instance-scoped invocation. Routes to the single named instance. Unknown instance name → `404 unknown_instance`. Disabled instance (per ADR-0028 §7 `enabled: false`) → `400 instance_disabled` (4xx not 5xx — operator config state, not transient outage; matches the §3 `unrouted_url` wire shape).
 - **`<plugin>: !<command>`** (bare, no slash) — fans the command out **serially** across every enabled instance of the plugin in operator-config declaration order. Each instance's run completes (stream-to-end + exit per ADR-0023) before the next starts; logs are linear and instance-attributed. Per-instance errors are recorded in the aggregate response and do NOT abort the walk.
 
 Aggregate response shape for bare-plugin fan-out across 2+ instances:
