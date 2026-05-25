@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -478,4 +479,80 @@ func stringEllipsis(s string, max int) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// checkCanonicalTypeResolverPlugins walks the canonical_type
+// fill ops and, for each entry whose target kind has a
+// `resolver_plugin:` config set, requires the canonical id to
+// already exist in the store. Returns a non-nil opError on the
+// first unresolved-target violation with HTTP 422
+// `unresolved_target` + a suggested-action hint naming the
+// resolver plugin.
+//
+// Per #276:
+//
+//   - Kinds without `resolver_plugin:` set fall through to the
+//     existing auto-materialize path — agents / operators can
+//     introduce new entries freely.
+//   - Kinds with `resolver_plugin:` set require pre-existence:
+//     the agent should have ingested through the named plugin
+//     first; only the resolver plugin's emit path can introduce
+//     new canonical-id values for the kind.
+//   - The plugin-emit edge path (bgg → is_about → boardgame:X)
+//     is unaffected — this helper runs only on fill paths
+//     (POST /v1/entities/{id}/fill, /operator-fill).
+//
+// Caller-side opt-out: operator-fill can pass
+// `allowUnresolved = true` to short-circuit the check (audit-
+// stamped at the caller). Agent-fill never opts out.
+func checkCanonicalTypeResolverPlugins(
+	ctx context.Context,
+	st store.Store,
+	canonicalKindReg map[string]config.CanonicalKindConfig,
+	ops []operatorFillOp,
+	allowUnresolved bool,
+) *opError {
+	if allowUnresolved {
+		return nil
+	}
+	for _, op := range ops {
+		if op.Kind != opSet {
+			continue
+		}
+		entries, ok := op.Value.([]canonicalLabelEntry)
+		if !ok {
+			continue
+		}
+		for _, e := range entries {
+			kind, _, ok := splitCanonicalLabelID(e.ID)
+			if !ok {
+				continue
+			}
+			cfg, ok := canonicalKindReg[kind]
+			if !ok {
+				continue
+			}
+			if cfg.ResolverPlugin == "" {
+				continue
+			}
+			if _, err := st.GetEntity(ctx, e.ID); err == nil {
+				continue
+			} else if !errors.Is(err, store.ErrNotFound) {
+				return &opError{
+					status:  http.StatusInternalServerError,
+					code:    "internal_error",
+					message: fmt.Sprintf("probe target %q: %v", e.ID, err),
+				}
+			}
+			return &opError{
+				status: http.StatusUnprocessableEntity,
+				code:   "unresolved_target",
+				message: fmt.Sprintf(
+					"field %q: target %q has resolver_plugin=%q but no entity exists; ingest via the %q plugin first then re-run the fill",
+					op.Field, e.ID, cfg.ResolverPlugin, cfg.ResolverPlugin,
+				),
+			}
+		}
+	}
+	return nil
 }

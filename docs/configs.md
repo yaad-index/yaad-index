@@ -262,6 +262,7 @@ The operator's canonical-kind registry. ADR-0013 §1 makes each canonical kind t
 ```yaml
 canonical_kinds:
   boardgame:
+    resolver_plugin: bgg              # per #276; see below
     gaps:
       rating:
         type: int
@@ -291,6 +292,7 @@ canonical_kinds:
 - Key (`boardgame`) — canonical kind name. Shape: `[a-z][a-z0-9_]*(-[a-z0-9_]+)*` (lowercase + digits + hyphens between groups). Hyphens permitted for plugin-emitted multi-word kinds like `tv-show`, `email-address`, `film-series`.
 - `gaps` — map of gap-field name → `GapSpec`. See §5.2.
 - `instruction` — per-kind AI-fill instruction. Pointer-shape `*InstructionSpec`: absence inherits from `canonical_kinds_defaults`; explicit `{enabled: false}` opts out.
+- `resolver_plugin` — per #276; optional string naming the plugin authoritative for this kind. When set, `canonical_type` gap fills targeting this kind require the canonical id to already exist in the store (the agent should have ingested through the named plugin first); fills against an unresolved target return `422 unresolved_target`. When unset, fills auto-materialize a thin row as today. Operator-fill can bypass per-call with `?allow_unresolved=true` (commit-message-stamped for audit). The plugin-emit edge path is unaffected.
 
 ### 5.2 GapSpec shape (per gap)
 
