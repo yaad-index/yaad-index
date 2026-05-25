@@ -289,19 +289,6 @@ func TaskEntityID(workflow, subject string) string {
 	return canonical.TaskKind + ":" + name
 }
 
-// TaskVaultPath is the public-facing version of taskPath — the
-// startup reindex walker uses it to compute the canonical path
-// for a (workflow, subject) pair without instantiating a
-// FileTaskWriter.
-func TaskVaultPath(vaultRoot, workflow, subject string) string {
-	wfSlug := slugify(workflow)
-	subSlug := slugify(subject)
-	name := wfSlug
-	if subSlug != "" {
-		name = wfSlug + "-" + subSlug
-	}
-	return filepath.Join(vaultRoot, vault.KindDir(canonical.TaskKind), name+".md")
-}
 
 // viaEntityValue normalizes the entity id into the value the
 // via list stores: the raw id when non-empty, else the
@@ -488,6 +475,20 @@ func rewriteMissingRefsSection(existing string, refs []string) (string, error) {
 // physical location either way.
 func (w *FileTaskWriter) taskPath(workflow, subject string) string {
 	return TaskVaultPath(w.vaultRoot, workflow, subject)
+}
+
+// TaskVaultPath is the public-facing version of taskPath —
+// allows callers to compute the canonical vault path for a
+// (workflow, subject) pair without instantiating a
+// FileTaskWriter.
+func TaskVaultPath(vaultRoot, workflow, subject string) string {
+	wfSlug := slugify(workflow)
+	subSlug := slugify(subject)
+	name := wfSlug
+	if subSlug != "" {
+		name = wfSlug + "-" + subSlug
+	}
+	return filepath.Join(vaultRoot, vault.KindDir(canonical.TaskKind), name+".md")
 }
 
 // slugify converts an arbitrary string to a filesystem-
