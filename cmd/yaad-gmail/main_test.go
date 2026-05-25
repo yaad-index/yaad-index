@@ -374,3 +374,84 @@ func TestParseLogLevel(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildSourceLine_AddressFields_PopulatedFromEnvelope pins
+// #272: buildSourceLine surfaces from/to/cc/bcc into the
+// structured.data map so workflow CEL predicates can read
+// `entity.data.from == "noreply@example.com"` etc. directly.
+// to / cc render as `[]` (not null) for stable shape; bcc is
+// omitted when empty (sent-folder-only field).
+func TestBuildSourceLine_AddressFields_PopulatedFromEnvelope(t *testing.T) {
+	t.Parallel()
+
+	env := gmail.IngestEnvelope{
+		SourceID: "gmail:msg-x",
+		Subject:  "subject",
+		From:     "alice@example.com",
+		To:       []string{"bob@example.com", "carol@example.com"},
+		Cc:       []string{"dave@example.com"},
+		Bcc:      nil,
+	}
+	got := buildSourceLine(env, "2099-05-25T12:00:00Z")
+	d := got.Structured.Data
+
+	if d["from"] != "alice@example.com" {
+		t.Errorf("data.from: got %v, want alice@example.com", d["from"])
+	}
+	toSlice, ok := d["to"].([]string)
+	if !ok || len(toSlice) != 2 {
+		t.Errorf("data.to: got %v (%T), want []string of len 2", d["to"], d["to"])
+	}
+	ccSlice, ok := d["cc"].([]string)
+	if !ok || len(ccSlice) != 1 {
+		t.Errorf("data.cc: got %v (%T), want []string of len 1", d["cc"], d["cc"])
+	}
+	if _, hasBcc := d["bcc"]; hasBcc {
+		t.Errorf("data.bcc: must be omitted when envelope Bcc is empty")
+	}
+}
+
+// TestBuildSourceLine_AddressFields_ShapeStableForAbsentHeaders
+// pins the absent-header degradation: missing From omits the
+// field; missing To / Cc still emit `[]` for shape stability
+// (CEL `entity.data.to` always traverses cleanly).
+func TestBuildSourceLine_AddressFields_ShapeStableForAbsentHeaders(t *testing.T) {
+	t.Parallel()
+
+	env := gmail.IngestEnvelope{
+		SourceID: "gmail:msg-y",
+		Subject:  "subject",
+	}
+	got := buildSourceLine(env, "2099-05-25T12:00:00Z")
+	d := got.Structured.Data
+
+	if _, hasFrom := d["from"]; hasFrom {
+		t.Errorf("data.from: must be omitted when envelope From is empty")
+	}
+	toSlice, ok := d["to"].([]string)
+	if !ok || len(toSlice) != 0 {
+		t.Errorf("data.to: got %v (%T), want empty []string", d["to"], d["to"])
+	}
+	ccSlice, ok := d["cc"].([]string)
+	if !ok || len(ccSlice) != 0 {
+		t.Errorf("data.cc: got %v (%T), want empty []string", d["cc"], d["cc"])
+	}
+}
+
+// TestBuildSourceLine_AddressFields_SentFolderBcc pins that a
+// sent-folder message's Bcc list surfaces on data.bcc.
+func TestBuildSourceLine_AddressFields_SentFolderBcc(t *testing.T) {
+	t.Parallel()
+
+	env := gmail.IngestEnvelope{
+		SourceID: "gmail:msg-sent",
+		Subject:  "sent",
+		From:     "operator@example.com",
+		Bcc:      []string{"hidden@example.com"},
+	}
+	got := buildSourceLine(env, "2099-05-25T12:00:00Z")
+	bccSlice, ok := got.Structured.Data["bcc"].([]string)
+	if !ok || len(bccSlice) != 1 || bccSlice[0] != "hidden@example.com" {
+		t.Errorf("data.bcc: got %v (%T), want [hidden@example.com]", got.Structured.Data["bcc"], got.Structured.Data["bcc"])
+	}
+}

@@ -84,16 +84,18 @@ func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Reg
 			To: req.To,
 			Metadata: req.Metadata,
 		}
-		// #268 day-side fold: when the manual edge points at a
-		// `day:YYYY-MM-DD` target, lazy-materialize the day
-		// entity row before CreateEdge so the FK holds without
-		// the caller having to pre-create the day. Same lazy-
-		// on-edge pattern the ingest + fill + workflow paths
-		// already follow via EmitDayRefs.
-		if _, ok := canonical.ParseDayID(req.To); ok {
-			if err := canonical.EnsureDayEntity(r.Context(), st, req.To, logger); err != nil {
-				logger.WarnContext(r.Context(), "POST /v1/edges: ensure day entity failed",
-					"day_id", req.To, "err", err)
+		// #268 / #272 daemon-managed target lazy-ensure: when
+		// the manual edge points at any daemon-managed canonical
+		// kind (`day`, `task`, `email`, `email-address`, `label`)
+		// auto-materialize the target row before CreateEdge so
+		// the FK holds without the caller having to pre-create
+		// the entity. Same lazy-on-edge pattern the ingest +
+		// fill + workflow paths already follow via EmitDayRefs
+		// / ensureCanonicalLabelRow.
+		if targetKind, _, ok := canonical.SplitLabelID(req.To); ok && isDaemonManagedKind(targetKind) {
+			if _, err := canonical.EnsureLabelRow(r.Context(), st, req.To, logger); err != nil {
+				logger.WarnContext(r.Context(), "POST /v1/edges: ensure daemon-managed target failed",
+					"target_id", req.To, "kind", targetKind, "err", err)
 			}
 		}
 		err := st.CreateEdge(r.Context(), se)
@@ -165,10 +167,11 @@ func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Reg
 // isRegisteredEdgeKind reports whether name is advertised by any
 // registered plugin's Capabilities().EdgeKinds OR is a daemon-
 // managed canonical edge type (the day-anchored vocabulary per
-// ADR-0025 + the triggered_by edge per #268). Empty registry
-// without a daemon-built-in match means the edge name is not
-// valid for POST /v1/edges — matches the /v1/kinds shape after
-// the bootstrapKinds seed retired.
+// ADR-0025 + the triggered_by edge per #268 + the gmail-emitted
+// from/to/cc/bcc/tagged_as per #272). Empty registry without a
+// daemon-built-in match means the edge name is not valid for
+// POST /v1/edges — matches the /v1/kinds shape after the
+// bootstrapKinds seed retired.
 func isRegisteredEdgeKind(registry *plugins.Registry, name string) bool {
 	for _, edge := range canonical.DaemonEdgeTypes() {
 		if edge == name {
@@ -180,6 +183,19 @@ func isRegisteredEdgeKind(registry *plugins.Registry, name string) bool {
 			if k.Name == name {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// isDaemonManagedKind reports whether the given entity kind is
+// in the daemon's always-allowed set (canonical.DaemonEntityKinds).
+// Used by handleCreateEdge to decide whether a manual-edge target
+// should be lazy-materialized into a thin row before CreateEdge.
+func isDaemonManagedKind(kind string) bool {
+	for _, k := range canonical.DaemonEntityKinds() {
+		if k == kind {
+			return true
 		}
 	}
 	return false

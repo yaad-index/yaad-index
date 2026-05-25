@@ -28,6 +28,24 @@ type IngestEnvelope struct {
 	// Subject + Date come from the parsed RFC-822 headers.
 	Subject string
 	Date time.Time
+	// From / To / Cc / Bcc carry the parsed RFC-822 address
+	// headers per #272. Each entry is a bare email address
+	// (display-name stripped by ParseMessage's net/mail parse).
+	// From is single-valued (RFC-5322 multi-from collapses to
+	// the first address per ParseMessage's contract); empty
+	// when the source carries no From header. To / Cc are
+	// inbound on both folders; Bcc is populated only when the
+	// source message came from the sent folder (inbound BCC
+	// headers don't reach the recipient reliably).
+	//
+	// Surfaced through the wire layer into entity.data so
+	// workflow CEL predicates can read
+	// `entity.data.from == "noreply@example.com"` directly
+	// without regexing the clean_content body.
+	From string
+	To   []string
+	Cc   []string
+	Bcc  []string
 	// Body is the raw RFC-822 body bytes for vault clean_content.
 	Body []byte
 	// Edges is the cross-canonical edge list (is_about + from/to/
@@ -170,13 +188,17 @@ func (p *Poller) Tick(ctx context.Context) (ingested int, errs []error) {
 			}
 
 			env := IngestEnvelope{
-				SourceID: SourceNamespace + ":" + SourceSlug(pm.Subject, pm.MessageID),
-				MessageID: pm.MessageID,
-				Subject: pm.Subject,
-				Date: pm.Date,
-				Body: pm.Body,
-				Edges: AssembleEdges(pm, p.IngestedLabel, p.SkipLabel),
-				HTMLBody: htmlBody,
+				SourceID:    SourceNamespace + ":" + SourceSlug(pm.Subject, pm.MessageID),
+				MessageID:   pm.MessageID,
+				Subject:     pm.Subject,
+				Date:        pm.Date,
+				From:        pm.From,
+				To:          pm.To,
+				Cc:          pm.Cc,
+				Bcc:         pm.Bcc,
+				Body:        pm.Body,
+				Edges:       AssembleEdges(pm, p.IngestedLabel, p.SkipLabel),
+				HTMLBody:    htmlBody,
 				Attachments: attachments,
 			}
 

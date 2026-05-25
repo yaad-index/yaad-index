@@ -13,6 +13,37 @@ import (
 	"github.com/yaad-index/yaad-index/internal/store"
 )
 
+// TestHandleCreateEdge_LazyMaterializesDaemonManagedTarget_Email
+// pins #272: when POST /v1/edges names an `email-address:<addr>`
+// target that hasn't been materialized yet, the handler ensures
+// the entity row first so the CreateEdge FK holds. Same lazy-
+// on-write pattern as day (#268), generalized to any daemon-
+// managed kind.
+func TestHandleCreateEdge_LazyMaterializesDaemonManagedTarget_Email(t *testing.T) {
+	t.Parallel()
+	h, st := newAPIWithStore(t)
+
+	require.NoError(t, st.UpsertEntity(context.Background(), &store.Entity{
+		ID: "boardgame:bx", Kind: "boardgame",
+	}))
+
+	body := edgeRequestBody(t, edgeRequest{
+		Type: canonical.EdgeTypeFrom,
+		From: "boardgame:bx",
+		To:   "email-address:noreply-at-example-com",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges", body)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code,
+		"email-address target should lazy-materialize, not 422 with missing_entity")
+
+	got, err := st.GetEntity(context.Background(), "email-address:noreply-at-example-com")
+	require.NoError(t, err, "email-address entity row materialized on demand")
+	assert.Equal(t, canonical.EmailAddressKind, got.Kind)
+}
+
 // TestHandleCreateEdge_LazyMaterializesDayTarget pins #268: when
 // POST /v1/edges names a `day:YYYY-MM-DD` target that hasn't
 // been materialized yet, the handler ensures the day entity
