@@ -118,7 +118,7 @@ func (r *Reader) pathFor(kind, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(r.root, kind, slug+".md"), nil
+	return filepath.Join(r.root, KindDir(kind), slug+".md"), nil
 }
 
 // canonicalLabelPathFor mirrors pathFor for the
@@ -150,7 +150,7 @@ func (r *Reader) archivePathFor(kind, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(r.root, ArchiveDir, kind, slug+".md"), nil
+	return filepath.Join(r.root, ArchiveDir, KindDir(kind), slug+".md"), nil
 }
 
 // ArchiveDir is the relative subdirectory under the vault root that
@@ -220,9 +220,9 @@ func (r *Reader) OpenAttachment(kind, id, name string) (io.ReadCloser, *Attachme
 	}
 	var entityDir string
 	if archived {
-		entityDir = filepath.Join(r.root, ArchiveDir, kind, slug)
+		entityDir = filepath.Join(r.root, ArchiveDir, KindDir(kind), slug)
 	} else {
-		entityDir = filepath.Join(r.root, kind, slug)
+		entityDir = filepath.Join(r.root, KindDir(kind), slug)
 	}
 	resolved := filepath.Join(entityDir, filepath.Clean(manifest.Path))
 

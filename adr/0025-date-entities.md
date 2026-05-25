@@ -64,6 +64,7 @@ A field NOT listed in `date_fields` still flows through the daemon shape-scan an
 - **Fill** (`POST /v1/entities/{id}/fill`) — when an agent-fill response adds or updates a field carrying a day reference.
 - **Workflow actions** — `add_canonical_edge` targeting a day entity, `set_property` writing a day-shaped field.
 - **Operator vault edits** — reindex picks up new day references on the next walk and ensures the target day entities exist.
+- **Manual edge creation** (`POST /v1/edges`) — when the operator-supplied edge target is a `day:YYYY-MM-DD` id, the handler ensures the day entity row exists before `CreateEdge` so the FK holds without the caller having to pre-create the day. Added in the #268 alignment after the earlier text omitted this surface.
 
 Upsert is idempotent: if `day:2026-11-11` already exists, the daemon reuses the existing entity; if not, it creates one. No dangling references at write commit — the edge target always resolves.
 

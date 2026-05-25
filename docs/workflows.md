@@ -305,6 +305,8 @@ Append a line to a named section of `tasks/<workflow>-<subject>.md`. `<subject>`
 - `content` (required) — CEL template; the engine renders before dispatch.
 - `if_already_present` — `skip` (default) / `replace` / `append-anyway`. `skip` is the no-op-on-duplicate semantics; `replace` rewrites the matching line only (not the section); `append-anyway` writes a duplicate.
 
+**Tasks are first-class entities** (per ADR-0024 §Task / #268). First-create also upserts a `task:<workflow>-<subject>` row into the entity store (kind=task) and — when the trigger carries a source entity — emits a `triggered_by` edge from the task to that source. So `/v1/entities/task:<slug>` resolves, `set_property` can target the task id, and `graph.in_neighbors(source_id, "triggered_by")` answers "which tasks did this source spawn?" queries. Subsequent appends to the same task file leave the store row + edge alone — operator / cross-workflow mutations on the row survive. Pre-#268 task files already on disk won't have rows backfilled automatically; operators wanting the full entity surface on a pre-existing task recreate it.
+
 ### 5.2 `add_note`
 
 ```yaml

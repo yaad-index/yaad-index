@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/store"
@@ -83,6 +84,18 @@ func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Reg
 			To: req.To,
 			Metadata: req.Metadata,
 		}
+		// #268 day-side fold: when the manual edge points at a
+		// `day:YYYY-MM-DD` target, lazy-materialize the day
+		// entity row before CreateEdge so the FK holds without
+		// the caller having to pre-create the day. Same lazy-
+		// on-edge pattern the ingest + fill + workflow paths
+		// already follow via EmitDayRefs.
+		if _, ok := canonical.ParseDayID(req.To); ok {
+			if err := canonical.EnsureDayEntity(r.Context(), st, req.To, logger); err != nil {
+				logger.WarnContext(r.Context(), "POST /v1/edges: ensure day entity failed",
+					"day_id", req.To, "err", err)
+			}
+		}
 		err := st.CreateEdge(r.Context(), se)
 		if errors.Is(err, store.ErrMissingEntity) {
 			// missing_entity carries the offending id in the message so
@@ -150,10 +163,18 @@ func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Reg
 }
 
 // isRegisteredEdgeKind reports whether name is advertised by any
-// registered plugin's Capabilities().EdgeKinds. Empty registry means
-// no edge kinds are valid — matches the new /v1/kinds shape after
-// the bootstrapKinds seed was retired.
+// registered plugin's Capabilities().EdgeKinds OR is a daemon-
+// managed canonical edge type (the day-anchored vocabulary per
+// ADR-0025 + the triggered_by edge per #268). Empty registry
+// without a daemon-built-in match means the edge name is not
+// valid for POST /v1/edges — matches the /v1/kinds shape after
+// the bootstrapKinds seed retired.
 func isRegisteredEdgeKind(registry *plugins.Registry, name string) bool {
+	for _, edge := range canonical.DaemonEdgeTypes() {
+		if edge == name {
+			return true
+		}
+	}
 	for _, p := range registry.Plugins() {
 		for _, k := range p.Capabilities().EdgeKinds {
 			if k.Name == name {

@@ -6,20 +6,24 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestDaemonEntityKinds_IncludesDay pins the cut-1 entity-kind
-// vocabulary: just `day` for v1.x. Week / month / year are
-// deferred to a later layer per ADR-0025 § Entity kinds.
-func TestDaemonEntityKinds_IncludesDay(t *testing.T) {
+// TestDaemonEntityKinds pins the entity-kind vocabulary the
+// daemon always allows. Today: `day` per ADR-0025 cut 1, plus
+// `task` per the ADR-0024 alignment landed in #268. Week /
+// month / year are deferred to a later layer per ADR-0025 §
+// Entity kinds.
+func TestDaemonEntityKinds(t *testing.T) {
 	t.Parallel()
 	got := DaemonEntityKinds()
-	assert.Equal(t, []string{DayKind}, got)
+	assert.Equal(t, []string{DayKind, TaskKind}, got)
 	assert.Equal(t, "day", DayKind, "slug-side spelling matches ADR-0025 § Entity kinds")
+	assert.Equal(t, "task", TaskKind, "slug-side spelling matches ADR-0024 §Task")
 }
 
-// TestDaemonEdgeTypes_FiveCanonicalNames pins the cut-1 edge type
-// vocabulary per ADR-0025 § Edge types: the five names that
-// describe time-bound relationships.
-func TestDaemonEdgeTypes_FiveCanonicalNames(t *testing.T) {
+// TestDaemonEdgeTypes pins the edge type vocabulary the daemon
+// always allows. Cut-1 set per ADR-0025 § Edge types (the five
+// time-bound relationships) plus `triggered_by` per #268 for
+// the task → source attribution edge.
+func TestDaemonEdgeTypes(t *testing.T) {
 	t.Parallel()
 	want := []string{
 		"due_on",
@@ -27,6 +31,7 @@ func TestDaemonEdgeTypes_FiveCanonicalNames(t *testing.T) {
 		"is_about_day",
 		"references_day",
 		"ingested_on",
+		"triggered_by",
 	}
 	assert.Equal(t, want, DaemonEdgeTypes())
 }

@@ -687,7 +687,7 @@ func (s *ServeCmd) Run() error {
 			return fmt.Errorf("init workflow plugin dispatcher: %w", err)
 		}
 		wfRunner := actions.New(actions.Options{
-			TaskWriter:       actions.NewFileTaskWriter(cfg.Vault.Path, mergedRegistry),
+			TaskWriter:       actions.NewFileTaskWriter(cfg.Vault.Path, mergedRegistry, st, logger),
 			NoteWriter:       actions.NewVaultNoteWriter(wfWriterBackend),
 			GapWriter:        actions.NewVaultGapWriter(wfWriterBackend),
 			PropertyWriter:   actions.NewVaultPropertyWriter(wfWriterBackend),
@@ -703,7 +703,7 @@ func (s *ServeCmd) Run() error {
 			// (condition-eval, subject-render, action-runner
 			// non-MissingRef errors) accumulate into the
 			// workflow's err task at tasks/<workflow>-err.md.
-			ErrTaskWriter: actions.NewFileErrTaskWriter(cfg.Vault.Path),
+			ErrTaskWriter: actions.NewFileErrTaskWriter(cfg.Vault.Path, st, logger),
 			// Receives the rendered-template drift Warn when
 			// the engine ships a non-nil RenderedTemplates map
 			// that lacks an expected (idx, field) entry —
@@ -1922,3 +1922,4 @@ func unionEdgeTypes(a, b []string) []string {
 	}
 	return out
 }
+
