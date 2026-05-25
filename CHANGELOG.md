@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.10.0...yaad-index-v0.11.0) (2026-05-25)
+
+
+### Features
+
+* ADR-0028 Cut 5 — enabled flag + docs (closes [#241](https://github.com/yaad-index/yaad-index/issues/241) cascade) ([#255](https://github.com/yaad-index/yaad-index/issues/255)) ([806decc](https://github.com/yaad-index/yaad-index/commit/806decc49c4687f481f246bdb149bbedcbf21580))
+* **api,github:** ADR-0028 Cut 3 — URL dispatch via instance_routing ([#251](https://github.com/yaad-index/yaad-index/issues/251)) ([39b8cca](https://github.com/yaad-index/yaad-index/commit/39b8cca2d778589fc13a31a93ff59dce67ab28f0))
+* **config:** ADR-0028 Cut 1 — instances[] schema + supports_instances gate ([#248](https://github.com/yaad-index/yaad-index/issues/248)) ([19dc5fb](https://github.com/yaad-index/yaad-index/commit/19dc5fb759cf7b8daffa161f7513dc49e9c41fce))
+* **plugins,api:** ADR-0028 Cut 4 — command dispatch grammar + serial fan-out ([#253](https://github.com/yaad-index/yaad-index/issues/253)) ([0902107](https://github.com/yaad-index/yaad-index/commit/0902107207b046cc33fc243719f3f6085aa1598a))
+* **vault,api:** ADR-0028 Cut 2 — entity source: slash-form everywhere ([#250](https://github.com/yaad-index/yaad-index/issues/250)) ([9cd41ad](https://github.com/yaad-index/yaad-index/commit/9cd41ad200d6f89fd26fc40679d328afa0372f88))
+
 ## [0.10.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.9.0...yaad-index-v0.10.0) (2026-05-24)
 
 
