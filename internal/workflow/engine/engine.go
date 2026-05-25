@@ -875,14 +875,47 @@ func (e *Engine) runWorkflowAgainstEvent(qe queuedEvent, reg *registeredWorkflow
 	case eventbus.EntityEdgeAddedEvent:
 		return e.evaluateEdgeEvent(qe.ctx, reg, ev)
 	case eventbus.EntityCreatedEvent:
-		return e.evaluateAndRecord(qe.ctx, reg, ev.ID, nil, ev.Chain)
+		trig := e.buildTriggerContext(qe.ctx, "entity_created", ev.At, ev.CausedByEntityID, ev.ID, "")
+		return e.evaluateAndRecord(qe.ctx, reg, ev.ID, nil, trig, ev.Chain)
 	case eventbus.FillCompletedEvent:
-		return e.evaluateAndRecord(qe.ctx, reg, ev.EntityID, nil, ev.Chain)
+		trig := e.buildTriggerContext(qe.ctx, "fill_completed", ev.At, ev.EntityID, ev.EntityID, ev.Gap)
+		return e.evaluateAndRecord(qe.ctx, reg, ev.EntityID, nil, trig, ev.Chain)
 	case eventbus.EntityUpdatedEvent:
-		return e.evaluateAndRecord(qe.ctx, reg, ev.EntityID, nil, ev.Chain)
+		trig := e.buildTriggerContext(qe.ctx, "entity_updated", ev.At, ev.CausedByEntityID, ev.EntityID, ev.Field)
+		return e.evaluateAndRecord(qe.ctx, reg, ev.EntityID, nil, trig, ev.Chain)
 	default:
 		return false
 	}
+}
+
+// buildTriggerContext shapes the `trigger.*` CEL map per #264 /
+// ADR-0024 §"Trigger context": resolves CausedByEntityID into a
+// full entity map (falling back to fallbackEntityID when the
+// publisher didn't stamp a cause), stamps the event-type label
+// + timestamp, and stamps `cause` when the event carries a
+// sub-event detail (the changed field for entity_updated, the
+// gap name for fill_completed). Missing-ref resolution failures
+// land as an empty `trigger.source` map — predicates that
+// reference fields see has() == false, mirroring the engine's
+// entity-resolve missing-ref handling.
+func (e *Engine) buildTriggerContext(ctx context.Context, eventType string, at time.Time, causedByID, fallbackEntityID, cause string) map[string]any {
+	sourceID := causedByID
+	if sourceID == "" {
+		sourceID = fallbackEntityID
+	}
+	source := map[string]any{}
+	if sourceID != "" {
+		if ent, err := e.resolveEntity(ctx, sourceID); err == nil && ent != nil {
+			source = ent
+		}
+	}
+	trig := map[string]any{
+		"source":    source,
+		"event":     eventType,
+		"timestamp": at,
+		"cause":     cause,
+	}
+	return trig
 }
 
 // evaluateEdgeEvent runs the per-edge activation prep
@@ -907,7 +940,31 @@ func (e *Engine) evaluateEdgeEvent(ctx context.Context, reg *registeredWorkflow,
 	if title := titleOf(toEntity); title != "" {
 		edgeMap["to_title"] = title
 	}
-	return e.evaluateAndRecord(ctx, reg, edge.ToID, edgeMap, edge.Chain)
+	// trigger.source defaults to fromEntity (the edge tail is
+	// the actor that emitted the connection), or the resolved
+	// CausedByEntityID when the publisher explicitly stamped a
+	// different cause.
+	trig := map[string]any{
+		"event":     "edge_added",
+		"timestamp": edge.At,
+		"cause":     edge.EdgeType,
+	}
+	causedBy := edge.CausedByEntityID
+	if causedBy == "" {
+		causedBy = edge.FromID
+	}
+	if causedBy == edge.FromID && fromEntity != nil {
+		trig["source"] = fromEntity
+	} else if causedBy != "" {
+		if ent, err := e.resolveEntity(ctx, causedBy); err == nil && ent != nil {
+			trig["source"] = ent
+		} else {
+			trig["source"] = map[string]any{}
+		}
+	} else {
+		trig["source"] = map[string]any{}
+	}
+	return e.evaluateAndRecord(ctx, reg, edge.ToID, edgeMap, trig, edge.Chain)
 }
 
 // sortByFilename orders workflows by their parser-stamped
@@ -1044,7 +1101,7 @@ func titleOf(entity map[string]any) string {
 // worker's per-event chain. False on cycle-suppress, condition
 // false, dedup-skip, or any action chain that didn't include
 // claim_entity.
-func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow, entityID string, edge map[string]any, chain []string) bool {
+func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow, entityID string, edge map[string]any, trigger map[string]any, chain []string) bool {
 	dec := Decision{
 		Workflow: reg.workflow.Name,
 		EntityID: entityID,
@@ -1080,6 +1137,7 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 	act := decision.Activation{
 		Entity:   entity,
 		Edge:     edge,
+		Trigger:  trigger,
 		Bindings: make(map[string]any, len(reg.contextBinds)),
 	}
 	act.PopulateDayHelpers()
@@ -1678,8 +1736,12 @@ func (e *Engine) Dispatch(ctx context.Context, name, input string) (Decision, er
 	}
 
 	// Manual dispatch starts a fresh chain — no upstream
-	// workflow firing produced this invocation.
-	e.evaluateAndRecord(ctx, reg, target, nil, nil)
+	// workflow firing produced this invocation. Trigger context
+	// per #264: synthesize a manual-shape trigger so workflows
+	// referencing `trigger.*` see a non-empty map (source
+	// resolves to the target entity for self-cause).
+	manualTrigger := e.buildTriggerContext(ctx, "manual", time.Now().UTC(), target, target, "")
+	e.evaluateAndRecord(ctx, reg, target, nil, manualTrigger, nil)
 	return e.findRecentDecision(name, target), nil
 }
 
@@ -1722,9 +1784,25 @@ func (e *Engine) runEvaluation(ctx context.Context, reg *registeredWorkflow, ent
 		return
 	}
 
+	// Manual-trigger / Dispatch path: synthesize a self-cause
+	// trigger context per #264 — `trigger.source == entity`,
+	// `trigger.event == "manual"`. Workflows that branch on
+	// `trigger.event` distinguish event-driven from manual
+	// firings via this shape.
+	trigger := map[string]any{
+		"source":    entity,
+		"event":     "manual",
+		"timestamp": dec.At,
+		"cause":     "",
+	}
+	if trigger["source"] == nil {
+		trigger["source"] = map[string]any{}
+	}
+
 	act := decision.Activation{
 		Entity:   entity,
 		Edge:     edge,
+		Trigger:  trigger,
 		Bindings: make(map[string]any, len(reg.contextBinds)),
 	}
 	act.PopulateDayHelpers()

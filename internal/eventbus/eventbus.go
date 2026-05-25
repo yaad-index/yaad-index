@@ -227,6 +227,24 @@ type EntityCreatedEvent struct {
 	// this; the engine reads it before firing a workflow and
 	// skips when the workflow's own name appears.
 	Chain []string
+
+	// CausedByEntityID is the canonical id of the entity whose
+	// action caused this materialization. For a source-plugin
+	// ingest creating the source entity itself, this is the
+	// entity's own ID (self-cause). For a canonical thin-row
+	// materialized from another entity's `is_about` edge, this
+	// is the source entity emitting the edge. The workflow
+	// engine resolves this id at fire-time to populate the
+	// `trigger.source` CEL surface so workflows can read
+	// "what caused me to fire" deterministically rather than
+	// reverse-engineering through graph walks.
+	//
+	// Empty string when the cause isn't known (e.g. legacy
+	// publishers not yet migrated, manual /v1/ingest with no
+	// upstream context). Workflows reading `trigger.source`
+	// against such an event see `null` and can fall back to
+	// `entity` or `graph` walks.
+	CausedByEntityID string
 }
 
 func (e EntityCreatedEvent) Topic() Topic           { return TopicEntityCreated }
@@ -263,6 +281,20 @@ type EntityEdgeAddedEvent struct {
 
 	// Chain is the workflow-name list per #147 cycle detection.
 	Chain []string
+
+	// CausedByEntityID is the canonical id of the entity whose
+	// action caused this edge to be added. By convention this
+	// is FromID (the entity at the edge tail emitted the
+	// connection), but publishers MAY override when the cause
+	// differs from the tail — e.g. an operator-driven add via
+	// POST /v1/edges is still attributed to FromID per the
+	// emitter-of-the-edge invariant. The workflow engine reads
+	// this to populate `trigger.source` on edge-driven firings.
+	//
+	// Empty string when unset; the engine falls back to FromID
+	// at activation-build time so legacy publishers stay
+	// trigger.source-functional.
+	CausedByEntityID string
 }
 
 func (e EntityEdgeAddedEvent) Topic() Topic           { return TopicEntityEdgeAdded }
@@ -365,6 +397,20 @@ type EntityUpdatedEvent struct {
 	// a workflow and skips when the workflow's own name
 	// appears.
 	Chain []string
+
+	// CausedByEntityID is the canonical id of the entity whose
+	// action caused this field-level update. For an ingest
+	// re-fetch surfacing per-field deltas on an existing source
+	// entity, this is the entity's own id (self-cause — the
+	// source plugin re-fetched its own truth). The workflow
+	// engine reads this to populate `trigger.source` so
+	// workflows can branch on which source initiated the
+	// update.
+	//
+	// Empty string when unset; the engine falls back to
+	// EntityID at activation-build time so legacy publishers
+	// stay trigger.source-functional.
+	CausedByEntityID string
 }
 
 func (e EntityUpdatedEvent) Topic() Topic            { return TopicEntityUpdated }

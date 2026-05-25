@@ -122,14 +122,17 @@ func applyCanonicalTypeEdges(
 				// first time on this fill — emit per ADR-0024
 				// Phase 2. SplitLabelID was already validated
 				// inside EnsureLabelRow, so the kind extraction
-				// here can't fail.
+				// here can't fail. CausedByEntityID = sourceID:
+				// the entity being filled is the actor whose
+				// fill drove the materialization.
 				kind, _, _ := splitCanonicalLabelID(label)
 				eventbus.QueueOrPublish(ctx, bus, pending, eventbus.EntityCreatedEvent{
-					ID:        label,
-					Kind:      kind,
-					SourceTag: source,
-					At:        time.Now().UTC(),
-					Chain:     eventbus.WorkflowChainFromContext(ctx),
+					ID:               label,
+					Kind:             kind,
+					SourceTag:        source,
+					At:               time.Now().UTC(),
+					Chain:            eventbus.WorkflowChainFromContext(ctx),
+					CausedByEntityID: sourceID,
 				})
 			}
 			if err := st.CreateEdge(ctx, &store.Edge{
@@ -146,12 +149,13 @@ func applyCanonicalTypeEdges(
 				// on these to surface "this entity got tagged as
 				// X" downstream effects.
 				eventbus.QueueOrPublish(ctx, bus, pending, eventbus.EntityEdgeAddedEvent{
-					FromID:    sourceID,
-					ToID:      label,
-					EdgeType:  op.Field,
-					SourceTag: source,
-					At:        time.Now().UTC(),
-					Chain:     eventbus.WorkflowChainFromContext(ctx),
+					FromID:           sourceID,
+					ToID:             label,
+					EdgeType:         op.Field,
+					SourceTag:        source,
+					At:               time.Now().UTC(),
+					Chain:            eventbus.WorkflowChainFromContext(ctx),
+					CausedByEntityID: sourceID,
 				})
 			}
 		}

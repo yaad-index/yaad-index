@@ -862,12 +862,15 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 		return fmt.Errorf("ensure label row %q: %w", targetID, err)
 	}
 	if created && w.bus != nil {
+		// CausedByEntityID = sourceID: the entity the workflow
+		// action operated on drove this thin-row materialization.
 		w.bus.Publish(ctx, eventbus.EntityCreatedEvent{
-			ID:        targetID,
-			Kind:      targetKind,
-			SourceTag: source,
-			At:        time.Now().UTC(),
-			Chain:     chain,
+			ID:               targetID,
+			Kind:             targetKind,
+			SourceTag:        source,
+			At:               time.Now().UTC(),
+			Chain:            chain,
+			CausedByEntityID: sourceID,
 		})
 	}
 
@@ -880,12 +883,13 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 	}
 	if w.bus != nil {
 		w.bus.Publish(ctx, eventbus.EntityEdgeAddedEvent{
-			FromID:    sourceID,
-			ToID:      targetID,
-			EdgeType:  edgeType,
-			SourceTag: source,
-			At:        time.Now().UTC(),
-			Chain:     chain,
+			FromID:           sourceID,
+			ToID:             targetID,
+			EdgeType:         edgeType,
+			SourceTag:        source,
+			At:               time.Now().UTC(),
+			Chain:            chain,
+			CausedByEntityID: sourceID,
 		})
 	}
 

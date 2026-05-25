@@ -487,3 +487,90 @@ func TestPopulateDayHelpers_UsesOperatorTimezone(t *testing.T) {
 	expected := time.Now().In(tokyo).Format("day:2006-01-02")
 	assert.Equal(t, expected, a.Today)
 }
+
+// TestEvaluator_TriggerSourceFieldsAccessible pins that the
+// `trigger.source.<field>` shape works through CEL's dynamic
+// map traversal — the workflow engine populates Activation.
+// Trigger with a `source` map keyed by entity fields, and
+// predicate / template references navigate it like any other
+// map.
+func TestEvaluator_TriggerSourceFieldsAccessible(t *testing.T) {
+	t.Parallel()
+	ev, err := NewEvaluator(Options{})
+	require.NoError(t, err)
+
+	prog, err := ev.Compile(`trigger.source.data.type == "pr"`, "bool")
+	require.NoError(t, err)
+
+	got, _, err := prog.EvalBool(context.Background(), Activation{
+		Entity: map[string]any{},
+		Trigger: map[string]any{
+			"source": map[string]any{
+				"data": map[string]any{"type": "pr"},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, got)
+}
+
+// TestEvaluator_TriggerEventDistinguishesCreateVsUpdate pins
+// the acceptance case from #264: a workflow can condition on
+// the event type to fire only on update events, ignoring the
+// initial create.
+func TestEvaluator_TriggerEventDistinguishesCreateVsUpdate(t *testing.T) {
+	t.Parallel()
+	ev, err := NewEvaluator(Options{})
+	require.NoError(t, err)
+
+	prog, err := ev.Compile(`trigger.event == "entity_updated"`, "bool")
+	require.NoError(t, err)
+
+	createFire, _, err := prog.EvalBool(context.Background(), Activation{
+		Entity:  map[string]any{},
+		Trigger: map[string]any{"event": "entity_created"},
+	})
+	require.NoError(t, err)
+	assert.False(t, createFire, "entity_created event must not match the updated-only predicate")
+
+	updateFire, _, err := prog.EvalBool(context.Background(), Activation{
+		Entity:  map[string]any{},
+		Trigger: map[string]any{"event": "entity_updated"},
+	})
+	require.NoError(t, err)
+	assert.True(t, updateFire, "entity_updated event must match")
+}
+
+// TestEvaluator_TriggerAbsent_AccessReturnsFalse pins that a
+// nil Trigger is benign: predicates referencing `trigger.event`
+// against an empty trigger see has() == false, so they
+// evaluate cleanly without raising EvalError. Mirrors the
+// existing entity/edge nil-tolerance contract.
+func TestEvaluator_TriggerAbsent_AccessReturnsFalse(t *testing.T) {
+	t.Parallel()
+	ev, err := NewEvaluator(Options{})
+	require.NoError(t, err)
+
+	prog, err := ev.Compile(`has(trigger.event)`, "bool")
+	require.NoError(t, err)
+
+	got, _, err := prog.EvalBool(context.Background(), Activation{
+		Entity: map[string]any{},
+		// Trigger intentionally nil — eval defaults to empty map.
+	})
+	require.NoError(t, err)
+	assert.False(t, got, "absent trigger.event must report has() == false, not error")
+}
+
+// TestEvaluator_TriggerBindingNameCollidesReserved pins that
+// declaring a context binding named `trigger` is rejected at
+// env-build time, mirroring the existing `entity`/`edge`
+// reservation. The engine surfaces this as a workflow-load
+// error before any event reaches the evaluator.
+func TestEvaluator_TriggerBindingNameCollidesReserved(t *testing.T) {
+	t.Parallel()
+	_, err := NewEvaluator(Options{Bindings: []string{"trigger"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trigger")
+	assert.Contains(t, err.Error(), "reserved")
+}

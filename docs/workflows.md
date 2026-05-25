@@ -120,7 +120,40 @@ The decision pipeline uses CEL ([cel-go](https://pkg.go.dev/github.com/google/ce
 
 - `entity` — the triggering entity (dynamic map of its frontmatter `data` + injected `id` + `kind`). Always populated even when the trigger doesn't carry an entity (empty map for manual triggers without an `input`).
 - `edge` — the triggering edge (empty map when the trigger doesn't carry an edge). Fields: `type`, `from`, `to`, `from_title`, `to_title`, `timestamp`. `has(edge.type)` is the standard guard for predicates that support both edge-shape and non-edge triggers. `edge.timestamp` is a CEL `Timestamp`; wrap with `string(...)` to embed in template strings (see §3.2).
-- `<binding>` — each entry in the workflow's `context:` stanza becomes a dynamic variable with the same name. Pre-evaluated once per fire (see §4).
+- `trigger` — the per-firing trigger context (see §3.1.1). Always populated; predicates referencing missing sub-fields see `has() == false` rather than raising.
+- `<binding>` — each entry in the workflow's `context:` stanza becomes a dynamic variable with the same name. Pre-evaluated once per fire (see §4). `entity`, `edge`, and `trigger` are reserved — declaring a binding with one of those names is rejected at workflow-load time.
+
+#### 3.1.1 Trigger context
+
+`trigger.*` describes *what caused this firing*. Fields:
+
+| Field              | Type             | Meaning                                                                                                                                                                          |
+|--------------------|------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `trigger.source`   | entity (dyn map) | The fully-resolved entity whose action initiated the event (e.g. the source emitting the `is_about` edge that materialized this canonical). Empty map when the cause id didn't resolve. |
+| `trigger.event`    | string           | The bus event type: `entity_created`, `entity_updated`, `edge_added`, `fill_completed`, or `manual`.                                                                              |
+| `trigger.timestamp`| timestamp        | When the originating event occurred. Wrap with `string(...)` to embed in templates.                                                                                              |
+| `trigger.cause`    | string           | Sub-event detail. Field name for `entity_updated` (e.g. `data.state`), edge type for `edge_added`, gap name for `fill_completed`, empty for `entity_created` / `manual`.          |
+
+The engine resolves `trigger.source` from the event envelope's `caused_by_entity_id`, falling back to the triggering entity itself when the publisher didn't stamp a cause — so legacy events stay trigger.source-functional. For self-triggered events (source-plugin re-ingesting its own truth), `trigger.source == entity` by construction.
+
+**When to reach for `trigger.*` instead of graph walks.** Use `trigger.source` when multiple sources can resolve to the same canonical and the workflow needs the firing source specifically — e.g. both yaad-gmail and yaad-github emit `is_about → github-pr:X`; reading `graph.in_neighbors(entity.id, "is_about").items[0]` picks an arbitrary in-neighbor, while `trigger.source` deterministically gives you the one whose action caused *this firing*. Use `trigger.event` to distinguish create vs update on the same entity (`condition: 'trigger.event == "entity_updated"'`), and `trigger.cause` to scope an `entity_updated` workflow to a specific field without redeclaring `field_changed` on the trigger match.
+
+**Worked example — github-PR archive workflow that only fires on gmail-driven materializations:**
+
+```yaml
+trigger:
+  type: entity_created
+  match: { canonical_kind: [github-pr] }
+context:
+  - name: src
+    via: 'trigger.source'
+condition: 'trigger.source.kind == "gmail"'
+subject: '{{ trigger.source.data.subject }} → {{ entity.data.title }}'
+actions:
+  - task_append:
+      target: 'task:inbox-from-gmail'
+      content: '- [PR] {{ entity.data.title }} (via {{ trigger.source.data.from }})'
+```
 
 ### 3.2 Functions
 
