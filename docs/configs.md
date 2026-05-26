@@ -224,6 +224,7 @@ Each instance has:
 - `supports_instances: false` plugin + the sole instance disabled → reject (the plugin would silently never run).
 - Multi-instance plugin with EVERY instance disabled → WARN (likely operator mistake but not load-fatal; dispatch returns `no_enabled_instances` per call).
 - `data_dir` (when set) → must be an absolute path; reject otherwise.
+- `env[YAAD_PLUGIN_DATA_DIR]` → reject. The key is daemon-owned per #284 — letting an operator env entry through would shadow the daemon-provisioned directory via exec.Cmd's last-wins duplicate-key semantics. Use `instances[*].data_dir` for the override.
 
 **Per-instance `config:` validation.** When the plugin declares a `config_schema` in `--init`, the daemon validates each instance's `config:` block against it at startup. Validation errors name the offending plugin + instance + index for diagnostics.
 

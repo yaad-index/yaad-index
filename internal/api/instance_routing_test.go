@@ -529,3 +529,4 @@ func TestBuildInstanceEnv_StampsDataDirOperatorOverride(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "YAAD_PLUGIN_DATA_DIR=/srv/yaad/state/github-personal")
 }
+

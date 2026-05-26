@@ -1260,3 +1260,29 @@ func TestValidateInstances_DataDirEmpty_OK(t *testing.T) {
 	in := []InstanceEntry{{Name: "personal"}}
 	require.NoError(t, validateInstances("github", in))
 }
+
+// TestValidateInstances_DataDirEnvShadow_Rejected pins the
+// shadow-rejection contract: an operator who writes a colliding
+// `env: { YAAD_PLUGIN_DATA_DIR: ... }` entry is rejected at
+// config-load. The key is daemon-owned per #284 — letting it
+// through would shadow the daemon-provisioned directory via
+// exec.Cmd's last-wins duplicate-key semantics and hand the
+// plugin a path the daemon didn't MkdirAll 0700 for. The error
+// points the operator at `instances[*].data_dir` (the right
+// knob for override).
+func TestValidateInstances_DataDirEnvShadow_Rejected(t *testing.T) {
+	t.Parallel()
+	in := []InstanceEntry{
+		{
+			Name: "personal",
+			Env: map[string]string{
+				"YAAD_PLUGIN_DATA_DIR": "/operator/attempted/shadow",
+			},
+		},
+	}
+	err := validateInstances("github", in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "YAAD_PLUGIN_DATA_DIR")
+	assert.Contains(t, err.Error(), "reserved")
+	assert.Contains(t, err.Error(), "data_dir")
+}

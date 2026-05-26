@@ -96,6 +96,8 @@ plugins:
 
 **SDK helper contract.** `pkg/plugin/data.DataDir()` returns the env value verbatim, or empty string when unset. Empty return means the plugin is running outside yaad-index or against a daemon predating #284 — plugins MUST check for empty and decline to persist durable state rather than falling back to a hardcoded path the operator hasn't sanctioned. Same shape contract as `pkg/plugin/attach.StagingDir()` but with a stricter empty-default (StagingDir falls back to `/tmp`; DataDir does not fall back).
 
+**`YAAD_PLUGIN_DATA_DIR` is reserved.** Operators cannot write `instances[*].env: { YAAD_PLUGIN_DATA_DIR: ... }`; config-load rejects with a clear error pointing at `instances[*].data_dir` (the structured override knob). The key is daemon-owned because the daemon provisions the directory at boot with `0700` perms — letting an operator env entry through would shadow the daemon value via exec.Cmd's last-wins duplicate-key semantics and hand the plugin a path the daemon didn't `MkdirAll 0700` for.
+
 **`${NAME}` reference expansion in env values (per #256).** `instances[*].env` values support `${NAME}` reference expansion at instance-env-build time. The daemon walks each value and substitutes any `${NAME}` literal with the corresponding entry from its own process environment (typically populated by systemd's `EnvironmentFile=/etc/yaad-index/yaad-index.env` directive). Operators put per-instance secrets in `yaad-index.env` (`0600` permissions) and reference them from `config.yaml` (`0644`), keeping the operator config secret-free and shareable.
 
 ```yaml
