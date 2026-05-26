@@ -136,18 +136,18 @@ The needs_fill response with full instruction + canonical_vocabulary payload is 
 
 ### 6. `GET /v1/needs-fill` — pull-based batch gap-call surface
 
-Returns entities with unfilled gaps + their gap-call payloads:
+Returns entities with unfilled gaps + their gap-call payloads. `canonical_vocabulary` lives at the **response root** (one copy per response, not per entry — see #275 amendment in §Revisions) so multi-entity pages don't repeat the registry block N times:
 
 ```json
 {
  "ok": true,
+ "canonical_vocabulary": {...},
  "entities": [
  {
  "id": "wikipedia:tolkien",
  "kind": "wikipedia",
  "gaps": {"birth_place": "<AI-prompt>", "occupation": "<AI-prompt>"},
  "instruction": "...",
- "canonical_vocabulary": {...},
  "clean_content": "..."
  },
  ...
@@ -159,6 +159,7 @@ Returns entities with unfilled gaps + their gap-call payloads:
 **Query params:**
 - `limit` — optional, default 50, cap 200. Bounds `entities` array length.
 - `cursor` — optional, opaque string from a previous response's `next_cursor`. Resumes pagination.
+- `exclude` — optional comma-separated list of fields to strip from the response per #275. Supported names: `canonical_vocabulary` (drops the top-level registry block when the agent has already cached it from `/v1/structure` or `/v1/kinds`), `clean_content` (drops the per-entry body when the agent has cached it from `/v1/entities/<id>`). Unknown names are silently ignored.
 
 **Use cases:**
 - **Cron-driven batch fills.** Operator's tool polls + dispatches AI to clean up gaps on its own schedule.
@@ -315,3 +316,16 @@ The new-kind case (operator adds a new canonical-kind, expects existing source e
 - Config-version field on every API request/response (premature infrastructure — agents already get fresh CV inline from each `needs_fill` response, no cache-coherence pain to solve).
 - `/v1/structure/diff?since=<version>` — server-computed diff of structural changes between two `version` snapshots. v2 if operator-tooling complexity warrants; v1 has clients diff full snapshots themselves.
 - Multi-language CV / per-vault CV / namespace-scoped CV (single-tenant config in v1).
+
+## Revisions
+
+### 2026-05-26 — needs-fill payload de-dup + `?exclude=` (#275)
+
+`/v1/needs-fill` previously repeated the full `canonical_vocabulary` registry on every entry of its response. With 12+ canonical kinds and dozens of gaps each, even a `limit=10` page could overflow agent context windows. This revision moves the field to the response root (one copy per response) and adds an opt-out query param for callers that have cached the registry separately.
+
+- **Top-level `canonical_vocabulary`.** `needsFillResponse` carries the registry once at response root; per-entity `canonical_vocabulary` removed from `needsFillEntry`. Page size drops from O(N × vocab) to O(N + vocab). The `/v1/ingest` cache-hit needs_fill response shape (`ingestNeedsFillResponse`) already carried the field at root (single-entity envelope); no structural change there.
+- **`?exclude=field1,field2` query param.** Comma-separated list of fields to strip from the response. v1 supports two names: `canonical_vocabulary` (drops the top-level registry block) and `clean_content` (blanks the per-entry body). Default is empty (include everything) so existing callers see no behavior change beyond the dedup itself. Unknown names silently ignored. Applies symmetrically to `/v1/needs-fill` and `/v1/ingest` cache-hit responses.
+- **Caching agents.** An agent that fetched the operator's registry from `/v1/structure` or `/v1/kinds` at session start passes `?exclude=canonical_vocabulary` on every needs-fill page. An agent that fetched a body via `/v1/entities/<id>` passes `?exclude=clean_content` on subsequent revisits.
+- **MCP `needs_fill` tool** at `/mcp` adds the matching `exclude` parameter so MCP-client callers get the same opt-out surface.
+
+Status remains PROPOSED pending operator hard-gate review of this revision.

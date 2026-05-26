@@ -646,19 +646,29 @@ func respondFromCacheHit(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 	if hit.vaultEntity != nil {
 		cleanContent = hit.vaultEntity.CleanContent
 	}
+	// #275: honor `?exclude=` for canonical_vocabulary +
+	// clean_content so the cache-hit response shape stays
+	// symmetric with /v1/needs-fill.
+	excluded := parseNeedsFillExclude(r.URL.Query().Get("exclude"))
+	if excluded[needsFillFieldCleanContent] {
+		cleanContent = ""
+	}
+	resp := ingestNeedsFillResponse{
+		OK:                    true,
+		State:                 "needs_fill",
+		Status:                "needs_fill",
+		Entity:                wireEntity,
+		CleanContent:          cleanContent,
+		CleanContentTruncated: false,
+		Gaps:                  gaps,
+		Instruction:           resolveInstruction(wireEntity.Kind, fillInstruction, canonicalKindReg),
+	}
+	if !excluded[needsFillFieldCanonicalVocabulary] {
+		resp.CanonicalVocabulary = config.LegacyRegistryWireShape(canonicalKindReg)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	if err := json.NewEncoder(w).Encode(ingestNeedsFillResponse{
-		OK: true,
-		State: "needs_fill",
-		Status: "needs_fill",
-		Entity: wireEntity,
-		CleanContent: cleanContent,
-		CleanContentTruncated: false,
-		Gaps: gaps,
-		Instruction: resolveInstruction(wireEntity.Kind, fillInstruction, canonicalKindReg),
-		CanonicalVocabulary: config.LegacyRegistryWireShape(canonicalKindReg),
-	}); err != nil {
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		logger.ErrorContext(r.Context(), "encode /v1/ingest cache-hit needs_fill response", "err", err)
 	}
 }
@@ -728,17 +738,26 @@ func respondIngestNeedsFill(w http.ResponseWriter, r *http.Request, logger *slog
 	for k, v := range snap.gaps {
 		gapsCopy[k] = v
 	}
-	if err := json.NewEncoder(w).Encode(ingestNeedsFillResponse{
-		OK: true,
-		State: "needs_fill",
-		Status: "needs_fill",
-		Entity: toAPIEntity(got),
-		CleanContent: snap.cleanContent,
+	// #275: same `?exclude=` honoring as the cache-hit emit.
+	excluded := parseNeedsFillExclude(r.URL.Query().Get("exclude"))
+	cleanContent := snap.cleanContent
+	if excluded[needsFillFieldCleanContent] {
+		cleanContent = ""
+	}
+	resp := ingestNeedsFillResponse{
+		OK:                    true,
+		State:                 "needs_fill",
+		Status:                "needs_fill",
+		Entity:                toAPIEntity(got),
+		CleanContent:          cleanContent,
 		CleanContentTruncated: snap.cleanContentTruncated,
-		Gaps: gapsCopy,
-		Instruction: resolveInstruction(got.Kind, fillInstruction, canonicalKindReg),
-		CanonicalVocabulary: config.LegacyRegistryWireShape(canonicalKindReg),
-	}); err != nil {
+		Gaps:                  gapsCopy,
+		Instruction:           resolveInstruction(got.Kind, fillInstruction, canonicalKindReg),
+	}
+	if !excluded[needsFillFieldCanonicalVocabulary] {
+		resp.CanonicalVocabulary = config.LegacyRegistryWireShape(canonicalKindReg)
+	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		logger.ErrorContext(r.Context(), "encode /v1/ingest needs_fill response", "err", err)
 	}
 }

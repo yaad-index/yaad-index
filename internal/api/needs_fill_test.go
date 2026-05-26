@@ -319,8 +319,8 @@ func TestNeedsFill_PerKindInstruction_Resolves(t *testing.T) {
 	// shape on the wire, preserving pre-ADR-0016 yaad-mcp client
 	// compat. The internal registry (typed) is converted via
 	// LegacyRegistryWireShape on emit.
-	assert.Equal(t, config.LegacyRegistryWireShape(reg), got.Entities[0].CanonicalVocabulary,
-		"canonical_vocabulary surfaced via legacy wire-shape projection")
+	assert.Equal(t, config.LegacyRegistryWireShape(reg), got.CanonicalVocabulary,
+		"canonical_vocabulary surfaced at response-root (post-#275; pre-#275 was per-entry)")
 }
 
 // vault-nil deploy: even when the DB carries flag-NULL candidates,
@@ -1135,4 +1135,99 @@ func TestNeedsFill_VaultNotExist_QuietDebugSkip(t *testing.T) {
 		"missing-vault-file is the expected pure-pointer shape; should NOT emit WARN.\nlog dump: %s", logOutput)
 	assert.Contains(t, logOutput, "no vault file (pure-pointer row)",
 		"should still emit a debug record so operators can trace the skip if needed")
+}
+
+// TestNeedsFill_CanonicalVocabularyDeDupedAtResponseRoot pins
+// the core #275 acceptance: across a multi-entity response, the
+// canonical_vocabulary block lives at the response root (one
+// copy) rather than per-entry (N copies). Pre-#275 every entry
+// carried the full registry, which blew agent-context windows
+// once the kind set grew past a handful.
+func TestNeedsFill_CanonicalVocabularyDeDupedAtResponseRoot(t *testing.T) {
+	t.Parallel()
+	reg := map[string]config.CanonicalKindConfig{
+		"boardgame": {
+			Gaps: config.GapsFromMap(map[string]string{"summary": "Game summary."}),
+		},
+	}
+	ids := []string{"boardgame:a", "boardgame:b", "boardgame:c"}
+	h, _ := nfFixture(t, ids, "", reg)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	got := decodeNFResponse(t, rec)
+	require.Len(t, got.Entities, 3)
+	assert.NotEmpty(t, got.CanonicalVocabulary,
+		"canonical_vocabulary must be present at response root")
+
+	// Per-entry canonical_vocabulary field is gone from the
+	// struct, but probe the raw JSON to be sure no entity
+	// payload accidentally re-emits it.
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	entities, _ := raw["entities"].([]any)
+	require.Len(t, entities, 3)
+	for i, e := range entities {
+		entMap, _ := e.(map[string]any)
+		_, has := entMap["canonical_vocabulary"]
+		assert.False(t, has, "entity[%d] must NOT carry canonical_vocabulary (deduped to root)", i)
+	}
+}
+
+// TestNeedsFill_ExcludeCanonicalVocabulary pins the
+// `?exclude=canonical_vocabulary` opt-out for caching agents
+// that have already fetched the registry from /v1/structure or
+// /v1/kinds.
+func TestNeedsFill_ExcludeCanonicalVocabulary(t *testing.T) {
+	t.Parallel()
+	reg := map[string]config.CanonicalKindConfig{
+		"boardgame": {Gaps: config.GapsFromMap(map[string]string{"summary": "s"})},
+	}
+	h, _ := nfFixture(t, []string{"boardgame:a"}, "", reg)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v1/needs-fill?exclude=canonical_vocabulary", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	got := decodeNFResponse(t, rec)
+	assert.Empty(t, got.CanonicalVocabulary,
+		"?exclude=canonical_vocabulary must drop the registry block")
+	require.Len(t, got.Entities, 1, "entities still surface; only the vocab is stripped")
+}
+
+// TestNeedsFill_ExcludeCleanContent pins the
+// `?exclude=clean_content` opt-out for callers that have
+// cached the body via /v1/entities.
+func TestNeedsFill_ExcludeCleanContent(t *testing.T) {
+	t.Parallel()
+	reg := map[string]config.CanonicalKindConfig{
+		"boardgame": {Gaps: config.GapsFromMap(map[string]string{"summary": "s"})},
+	}
+	h, _ := nfFixture(t, []string{"boardgame:a"}, "", reg)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v1/needs-fill?exclude=clean_content", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	got := decodeNFResponse(t, rec)
+	require.Len(t, got.Entities, 1)
+	assert.Empty(t, got.Entities[0].CleanContent,
+		"?exclude=clean_content must blank the per-entry body")
+}
+
+// TestNeedsFill_ExcludeBothFields exercises the multi-field
+// shape `?exclude=canonical_vocabulary,clean_content` to
+// confirm comma-separated parsing.
+func TestNeedsFill_ExcludeBothFields(t *testing.T) {
+	t.Parallel()
+	reg := map[string]config.CanonicalKindConfig{
+		"boardgame": {Gaps: config.GapsFromMap(map[string]string{"summary": "s"})},
+	}
+	h, _ := nfFixture(t, []string{"boardgame:a"}, "", reg)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v1/needs-fill?exclude=canonical_vocabulary,clean_content", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	got := decodeNFResponse(t, rec)
+	assert.Empty(t, got.CanonicalVocabulary)
+	require.Len(t, got.Entities, 1)
+	assert.Empty(t, got.Entities[0].CleanContent)
 }
