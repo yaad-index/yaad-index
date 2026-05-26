@@ -244,6 +244,41 @@ func ResolveID(input string) (id int64, canonicalURL string, err error) {
 type Plugin struct {
 	client *bggo.Client
 	apiKey string
+	// extraClientOpts are bggo.Option values forwarded into the
+	// Plugin's internal Client construction when WithClient is
+	// NOT supplied. Tests use WithBggClientOptions to point the
+	// internal client at an httptest.Server (instead of supplying
+	// a fully-built client via WithClient, which would skip the
+	// Plugin's own cookie-jar restore path).
+	extraClientOpts []bggo.Option
+	// username + password are the optional BGG credentials for
+	// per-game collection enrichment per #282. When both are
+	// non-empty AND dataDir is set, fetchByID also calls
+	// /xmlapi2/collection?showprivate=1 + merges the operator's
+	// per-game fields (status flags, personal rating, num plays,
+	// comment, privateinfo) into the canonical row. When either
+	// is empty, enrichment is silently off and the plugin
+	// behaves as the /thing-only legacy path.
+	username string
+	password string
+	// dataDir is the daemon-managed per-instance persistent
+	// state directory (YAAD_PLUGIN_DATA_DIR, see #284). The
+	// plugin persists its session-cookie jar to
+	// `<dataDir>/session.json` so subsequent subprocess
+	// invocations skip the Login round-trip when the jar's
+	// session is still valid. Empty disables persistence —
+	// each subprocess re-logins from scratch.
+	dataDir string
+	// warnf is the side-channel logger for non-fatal events
+	// (collection-enrichment fall-through, cookie-jar write
+	// errors, etc.). main.go injects a stderr-backed function;
+	// tests inject a buffer-backed function. nil silences.
+	warnf func(format string, args ...any)
+	// enrichmentSession holds the active credentials' username
+	// after a successful Login OR successful cookie-jar
+	// restore. Empty means the credentials have not yet been
+	// exercised in this subprocess lifetime.
+	enrichmentSession string
 }
 
 // Option configures a Plugin at construction.
@@ -251,27 +286,118 @@ type Option func(*Plugin)
 
 // WithClient overrides the default bggo.Client. Tests inject a
 // client wired to an httptest.Server-backed bggo.WithHost +
-// WithScheme.
+// WithScheme when they don't care about the Plugin's cookie-jar
+// restore flow; otherwise prefer WithBggClientOptions so the
+// Plugin can construct its own client + run the jar restore.
 func WithClient(c *bggo.Client) Option {
 	return func(p *Plugin) { p.client = c }
+}
+
+// WithBggClientOptions forwards extra bggo.Option values into the
+// Plugin's internal client construction. Tests pass
+// WithHost / WithScheme here so the Plugin builds its own client
+// pointed at an httptest.Server — the cookie-jar restore path
+// runs unchanged. Production code (cmd/yaad-bgg/main.go) doesn't
+// need this and uses the default bggo host.
+func WithBggClientOptions(opts ...bggo.Option) Option {
+	return func(p *Plugin) {
+		p.extraClientOpts = append(p.extraClientOpts, opts...)
+	}
+}
+
+// WithCredentials enables per-game collection enrichment by
+// wiring the BGG username + password. Both empty → enrichment
+// off (legacy /thing-only behavior). Both non-empty + dataDir
+// set → enrichment on. Either empty → enrichment off (silent;
+// per #282 acceptance "if either is missing, enrichment is
+// silently off").
+func WithCredentials(username, password string) Option {
+	return func(p *Plugin) {
+		p.username = username
+		p.password = password
+	}
+}
+
+// WithDataDir wires the daemon-managed persistent-state
+// directory (YAAD_PLUGIN_DATA_DIR, #284) so the plugin can
+// persist its session-cookie jar across subprocess invocations.
+// Empty string disables persistence — each subprocess starts
+// from a fresh login.
+func WithDataDir(dir string) Option {
+	return func(p *Plugin) { p.dataDir = dir }
+}
+
+// WithWarnLogger wires the side-channel logger for non-fatal
+// events (collection enrichment fall-through, cookie-jar write
+// errors, etc.). main.go injects a stderr-backed function;
+// tests inject a buffer-backed function. nil silences (the
+// zero-value default — Plugin code checks for nil before
+// calling).
+func WithWarnLogger(f func(format string, args ...any)) Option {
+	return func(p *Plugin) { p.warnf = f }
 }
 
 // New constructs a Plugin with a bggo.Client built from apiKey.
 // apiKey is required (BGG returns rate-limited / fields-limited
 // data on anonymous calls); empty string is rejected per the operator's
 // fail-closed spec.
+//
+// Options apply BEFORE the cookie-jar restore + WithCookies
+// wiring so a test that supplies WithClient skips the cookie
+// jar entirely (the supplied client owns its own state).
 func New(apiKey string, opts ...Option) (*Plugin, error) {
 	if apiKey == "" {
 		return nil, errors.New("bgg.New: BGG_API_KEY is required (yaad-bgg fails closed; no anonymous fallback)")
 	}
 	p := &Plugin{
 		apiKey: apiKey,
-		client: bggo.NewClient(apiKey),
 	}
 	for _, o := range opts {
 		o(p)
 	}
+	if p.client == nil {
+		clientOpts := append([]bggo.Option{}, p.extraClientOpts...)
+		// #282: try to restore a persisted session cookie jar so
+		// the first authenticated fetch in this subprocess
+		// lifetime can skip the Login round-trip. Absent /
+		// expired / unparseable jars resolve to a fresh login on
+		// first authed fetch.
+		if p.enrichmentEnabled() {
+			username, cookies, err := loadCookieJar(p.dataDir)
+			switch {
+			case err == nil:
+				if username == p.username {
+					clientOpts = append(clientOpts, bggo.WithCookies(username, cookies))
+					p.enrichmentSession = username
+				}
+			case errors.Is(err, errCookieJarAbsent):
+				// Expected on first run; nothing to log.
+			default:
+				p.warn("bgg: cookie jar load failed (will re-login on next authed fetch): %v", err)
+			}
+		}
+		p.client = bggo.NewClient(apiKey, clientOpts...)
+	}
 	return p, nil
+}
+
+// enrichmentEnabled reports whether per-game collection
+// enrichment should run for this Plugin per #282. Requires
+// both creds AND the daemon-managed data dir — without a dir
+// the plugin can't persist cookies across subprocess
+// invocations + would re-login on every dispatch, which
+// hammers BGG and slows every fetch. The conservative gate
+// matches the issue's "if either is missing, enrichment is
+// silently off" rule.
+func (p *Plugin) enrichmentEnabled() bool {
+	return p.username != "" && p.password != "" && p.dataDir != ""
+}
+
+// warn calls the side-channel logger if set, ignoring otherwise.
+func (p *Plugin) warn(format string, args ...any) {
+	if p.warnf != nil {
+		p.warnf(format, args...)
+	}
 }
 
 // FetchOutcome carries the result of a successful Fetch. Mutually-
@@ -468,15 +594,38 @@ func (p *Plugin) fetchByID(ctx context.Context, id int64, canonicalURL, original
 	}
 	bg.Notations = dedupeStrings(bg.Notations)
 
+	provenance := []ProvenanceEntry{
+		{
+			Source: canonicalURL,
+			FetchedAt: now,
+			OK: true,
+		},
+	}
+
+	// #282: per-game collection enrichment. When credentials +
+	// data dir are configured AND the game is in the operator's
+	// BGG collection, merge personal fields onto bg.Data.
+	// Anything that goes wrong here is non-fatal — the /thing
+	// result still lands; the operator sees a stderr WARN.
+	if p.enrichmentEnabled() {
+		entry, source, enrichErr := p.fetchCollectionEntry(ctx, id)
+		if enrichErr != nil {
+			p.warn("bgg: collection enrichment failed for id %d: %v (falling back to /thing-only)", id, enrichErr)
+		} else if entry != nil {
+			mergeOperatorFields(bg.Data, entry)
+		}
+		if source != "" {
+			provenance = append(provenance, ProvenanceEntry{
+				Source: source,
+				FetchedAt: now,
+				OK: enrichErr == nil,
+			})
+		}
+	}
+
 	return &FetchOutcome{
 		Boardgame: bg,
-		Provenance: []ProvenanceEntry{
-			{
-				Source: canonicalURL,
-				FetchedAt: now,
-				OK: true,
-			},
-		},
+		Provenance: provenance,
 	}, nil
 }
 

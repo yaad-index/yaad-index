@@ -5,7 +5,7 @@ go 1.26.1
 require (
 	github.com/alecthomas/kong v1.15.0
 	github.com/emersion/go-imap v1.2.1
-	github.com/fzerorubigd/bggo v0.1.1
+	github.com/fzerorubigd/bggo v0.2.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/cel-go v0.28.1
 	github.com/google/go-github/v68 v68.0.0
