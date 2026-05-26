@@ -105,6 +105,8 @@ func registerAll(s *server.MCPServer, b *bridge) {
 	registerDeferGap(s, b)
 	registerNeedsFill(s, b)
 	registerCVStatus(s, b)
+	registerCanonicalRegistryEffective(s, b)
+	registerCanonicalRegistryAvailable(s, b)
 
 	// Edges.
 	registerEdges(s, b)

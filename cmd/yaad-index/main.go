@@ -470,7 +470,8 @@ func (s *ServeCmd) Run() error {
 	var (
 		handlerOpts    = []api.HandlerOption{api.WithEventBus(bus), api.WithPluginInstances(pluginInstances), api.WithPluginInstanceConfigs(pluginInstanceConfigs)}
 		guard          *config.CanonicalGuard
-		mergedRegistry map[string]config.CanonicalKindConfig
+		mergedRegistry           map[string]config.CanonicalKindConfig
+		canonicalKindProvenance  config.RegistryProvenance
 		wfEngine       *engine.Engine
 	)
 	if cfg != nil {
@@ -481,7 +482,7 @@ func (s *ServeCmd) Run() error {
 		// AI-fill prompts. Plugin-emitted canonical_kinds_emitted
 		// auto-activate via the merge (no operator re-declaration).
 		pluginGaps, pluginEmittedKinds := collectPluginCanonicalContributions(registry)
-		mergedRegistry = config.MergeCanonicalRegistry(
+		mergedRegistry, canonicalKindProvenance = config.MergeCanonicalRegistryWithProvenance(
 			pluginGaps,
 			pluginEmittedKinds,
 			cfg.CanonicalKindsDefaults,
@@ -538,6 +539,7 @@ func (s *ServeCmd) Run() error {
 		handlerOpts = append(handlerOpts, api.WithMCPServerVersion(buildinfo.Version))
 		if len(mergedRegistry) > 0 {
 			handlerOpts = append(handlerOpts, api.WithCanonicalKindRegistry(mergedRegistry))
+			handlerOpts = append(handlerOpts, api.WithCanonicalKindProvenance(canonicalKindProvenance))
 			logger.Info("canonical_kinds registry merged + surfaced (per ADR-0013 §2 a prior PR, ADR-0016 §4 four-layer merge)",
 				"kinds", len(mergedRegistry),
 				"plugin_emitted", len(pluginEmittedKinds),

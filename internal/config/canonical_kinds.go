@@ -681,6 +681,94 @@ func MergeCanonicalRegistry(
 	opPerKind map[string]CanonicalKindConfig,
 	logger *slog.Logger,
 ) map[string]CanonicalKindConfig {
+	merged, _ := MergeCanonicalRegistryWithProvenance(pluginGaps, pluginEmittedKinds, opDefaults, opPerKind, logger)
+	return merged
+}
+
+// LayerProvenance names a layer in the canonical-registry merge.
+// Returned per gap by MergeCanonicalRegistryWithProvenance so
+// callers (per #48 slice 3 — `/v1/canonical_registry/effective`)
+// can show operators which layer supplied each spec.
+type LayerProvenance string
+
+const (
+	// LayerUniversalDefaults is the universal `DefaultGaps()`
+	// layer — name / summary / tags. Applies to every active
+	// kind.
+	LayerUniversalDefaults LayerProvenance = "code_defaults"
+
+	// LayerBuiltinKindGaps is the kind-specific daemon-shipped
+	// gap-set from `BuiltinKindGaps(kind)` per #48 slice 2.
+	// Layered above the universal defaults; below plugin extras.
+	LayerBuiltinKindGaps LayerProvenance = "builtin_kind"
+
+	// LayerPluginExtras is the plugin's `canonical_kinds_extras`
+	// declared in `--init` (ADR-0016 §2 Layer 2).
+	LayerPluginExtras LayerProvenance = "plugin_extras"
+
+	// LayerOperatorDefaults is the operator's
+	// `canonical_kinds_defaults` block — cross-kind operator
+	// overrides applied to every active kind.
+	LayerOperatorDefaults LayerProvenance = "operator_defaults"
+
+	// LayerOperatorPerKind is the operator's per-kind block
+	// (`canonical_kinds.<kind>`). Highest precedence; the
+	// last-write-wins target on every gap field.
+	LayerOperatorPerKind LayerProvenance = "operator"
+)
+
+// RegistryProvenance carries per-(kind, field) source-layer info
+// for the merged canonical registry. The outer key is the kind
+// name; the inner key is the gap field name; the value names the
+// layer that last wrote that field (the layer that survived the
+// last-write-wins merge).
+//
+// Instruction provenance is recorded at the key `"_instruction"`
+// (reserved — the gap-field name shape forbids leading
+// underscore so there's no collision with a real gap).
+type RegistryProvenance map[string]map[string]LayerProvenance
+
+// InstructionProvenanceKey is the reserved key under each kind's
+// provenance map at which the instruction's source layer lives.
+// Leading underscore forbidden in gap-field names guarantees no
+// collision.
+const InstructionProvenanceKey = "_instruction"
+
+// BuiltinKindGapsList names every kind for which
+// `BuiltinKindGaps` ships a non-empty default gap-set. Used by
+// `/v1/canonical_registry/available` per #48 slice 3 to list
+// Layer 1.5 kinds operators can discover + opt into. Order is
+// stable + lexicographic for deterministic operator-facing
+// output.
+func BuiltinKindGapsList() []string {
+	return []string{
+		"article",
+		"boardgame",
+		"book",
+		"person",
+		"place",
+		"recipe",
+	}
+}
+
+// MergeCanonicalRegistryWithProvenance is `MergeCanonicalRegistry`
+// with per-field source-layer tracking per #48 slice 3. The
+// merged result is identical to the bare-return form; the second
+// return adds a per-(kind, field) map naming the layer that
+// supplied (or last overwrote) each spec — useful for the
+// `/v1/canonical_registry/effective` operator-introspection
+// surface.
+//
+// Provenance is recorded on every write into `gaps`. Subsequent
+// overrides update the recorded source layer so the final value
+// matches the surviving spec.
+func MergeCanonicalRegistryWithProvenance(
+	pluginGaps map[string]map[string]GapSpec,
+	pluginEmittedKinds []string,
+	opDefaults CanonicalKindConfig,
+	opPerKind map[string]CanonicalKindConfig,
+	logger *slog.Logger,
+) (map[string]CanonicalKindConfig, RegistryProvenance) {
 	// logger is reserved for the §5 plugin-vs-plugin conflict
 	// WARN path which is deferred to a follow-up (needs per-
 	// plugin field provenance). Kept on the signature so callers
@@ -700,9 +788,14 @@ func MergeCanonicalRegistry(
 	}
 
 	out := make(map[string]CanonicalKindConfig, len(kinds))
+	prov := make(RegistryProvenance, len(kinds))
 	for kind := range kinds {
 		// Layer 1: universal code defaults (every kind).
 		gaps := DefaultGaps()
+		gapProv := make(map[string]LayerProvenance, len(gaps))
+		for fieldName := range gaps {
+			gapProv[fieldName] = LayerUniversalDefaults
+		}
 
 		// Layer 1.5: kind-specific code defaults per ADR-0019 step 4
 		// (e.g. boardgame's rating/owned/want/played operator gaps).
@@ -710,17 +803,20 @@ func MergeCanonicalRegistry(
 		// any built-in that they want to reshape.
 		for fieldName, spec := range BuiltinKindGaps(kind) {
 			gaps[fieldName] = spec
+			gapProv[fieldName] = LayerBuiltinKindGaps
 		}
 
 		// Layer 2: plugin extras for this kind.
 		for fieldName, spec := range pluginGaps[kind] {
 			gaps[fieldName] = spec
+			gapProv[fieldName] = LayerPluginExtras
 		}
 
 		// Layer 3: operator-defaults (root). Adds / overrides
 		// across every kind.
 		for fieldName, spec := range opDefaults.Gaps {
 			gaps[fieldName] = spec
+			gapProv[fieldName] = LayerOperatorDefaults
 		}
 
 		// Layer 4: operator per-kind. Adds / overrides the
@@ -728,6 +824,7 @@ func MergeCanonicalRegistry(
 		if perKind, ok := opPerKind[kind]; ok {
 			for fieldName, spec := range perKind.Gaps {
 				gaps[fieldName] = spec
+				gapProv[fieldName] = LayerOperatorPerKind
 			}
 		}
 
@@ -737,12 +834,16 @@ func MergeCanonicalRegistry(
 		// the code default (Enabled=false, Text="") when the
 		// operator doesn't override.
 		instr := DefaultInstruction()
+		instrProv := LayerUniversalDefaults
 		if opDefaults.Instruction != nil {
 			instr = *opDefaults.Instruction
+			instrProv = LayerOperatorDefaults
 		}
 		if perKind, ok := opPerKind[kind]; ok && perKind.Instruction != nil {
 			instr = *perKind.Instruction
+			instrProv = LayerOperatorPerKind
 		}
+		gapProv[InstructionProvenanceKey] = instrProv
 
 		// ResolverPlugin per #276 — operator-only field; plugins
 		// don't declare a resolver for their own emitted kinds
@@ -759,6 +860,7 @@ func MergeCanonicalRegistry(
 			Instruction:    &instr,
 			ResolverPlugin: resolverPlugin,
 		}
+		prov[kind] = gapProv
 	}
-	return out
+	return out, prov
 }
