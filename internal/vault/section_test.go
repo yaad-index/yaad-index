@@ -368,3 +368,307 @@ func TestParseSections_ByteOffsetsAreAddressable(t *testing.T) {
 	require.Equal(t, body[got[1].ByteOffset:got[1].ByteOffset+len("## First")], "## First")
 	require.Equal(t, body[got[2].ByteOffset:got[2].ByteOffset+len("## Second")], "## Second")
 }
+
+// --- InsertSection (#299) -------------------------------------------------
+
+func TestInsertSection_AppendsAtEnd(t *testing.T) {
+	body := "intro\n## First\nfirst body\n"
+	sections := vault.ParseSections(body)
+	out, offset, err := vault.InsertSection(body, sections, len(sections), 2, "Second", "second body\n")
+	require.NoError(t, err)
+	parsed := vault.ParseSections(out)
+	require.Len(t, parsed, 3, "intro + two ##-sections")
+	require.Equal(t, "Second", parsed[2].Heading)
+	require.Equal(t, "second body\n", parsed[2].Body)
+	// Returned offset must point at the new section's heading line
+	// in the new body — pin the post-write locator contract.
+	require.Equal(t, offset, parsed[2].ByteOffset)
+}
+
+func TestInsertSection_AfterSpecificSection(t *testing.T) {
+	body := "intro\n## First\nfirst body\n## Third\nthird body\n"
+	sections := vault.ParseSections(body)
+	// after idx=1 (the First section) → new section lands between First and Third.
+	out, offset, err := vault.InsertSection(body, sections, 1, 2, "Second", "second body\n")
+	require.NoError(t, err)
+	parsed := vault.ParseSections(out)
+	require.Len(t, parsed, 4)
+	require.Equal(t, []string{"", "First", "Second", "Third"}, []string{
+		parsed[0].Heading, parsed[1].Heading, parsed[2].Heading, parsed[3].Heading,
+	})
+	require.Equal(t, "second body\n", parsed[2].Body)
+	require.Equal(t, offset, parsed[2].ByteOffset)
+}
+
+func TestInsertSection_DepthDefaultsToAfterSection(t *testing.T) {
+	body := "## First\nfirst\n"
+	sections := vault.ParseSections(body)
+	out, _, err := vault.InsertSection(body, sections, 0, 0 /* default depth */, "Second", "x\n")
+	require.NoError(t, err)
+	parsed := vault.ParseSections(out)
+	require.Len(t, parsed, 2)
+	require.Equal(t, 2, parsed[1].Depth, "default depth follows after-section's depth")
+}
+
+func TestInsertSection_PrependAfterPreHeadingBody(t *testing.T) {
+	body := "intro\n## Existing\nbody\n"
+	sections := vault.ParseSections(body)
+	out, offset, err := vault.InsertSection(body, sections, -1, 2, "New", "n\n")
+	require.NoError(t, err)
+	parsed := vault.ParseSections(out)
+	require.Len(t, parsed, 3)
+	require.Equal(t, "intro\n", parsed[0].Body)
+	require.Equal(t, "New", parsed[1].Heading)
+	require.Equal(t, "Existing", parsed[2].Heading)
+	require.Equal(t, offset, parsed[1].ByteOffset)
+}
+
+func TestInsertSection_PrependToHeadlessNoPreText(t *testing.T) {
+	body := "## Existing\nbody\n"
+	sections := vault.ParseSections(body)
+	out, offset, err := vault.InsertSection(body, sections, -1, 2, "First", "x\n")
+	require.NoError(t, err)
+	parsed := vault.ParseSections(out)
+	require.Len(t, parsed, 2)
+	require.Equal(t, "First", parsed[0].Heading)
+	require.Equal(t, "Existing", parsed[1].Heading)
+	require.Equal(t, offset, parsed[0].ByteOffset)
+}
+
+func TestInsertSection_ContainmentMovesNestedHeadings(t *testing.T) {
+	// Inserting a same-depth sibling AFTER A (which contains a nested
+	// ### A.sub) must land BETWEEN A's subtree and B's heading, not
+	// inside A's containment range.
+	body := "## A\nA body\n### A.sub\nsub body\n## B\nB body\n"
+	sections := vault.ParseSections(body)
+	// afterIdx=0 is A; A's containment runs through A.sub up to B's
+	// heading start, so the insert offset lands just before B.
+	out, offset, err := vault.InsertSection(body, sections, 0, 2, "Between", "between body\n")
+	require.NoError(t, err)
+	require.Contains(t, out, "## Between\nbetween body\n")
+	parsed := vault.ParseSections(out)
+	// 4 sections: ## A (containing ### A.sub), ### A.sub, ## Between, ## B.
+	require.Len(t, parsed, 4)
+	// new section ordered between A's containment and B.
+	require.Equal(t, []string{"A", "A.sub", "Between", "B"},
+		[]string{parsed[0].Heading, parsed[1].Heading, parsed[2].Heading, parsed[3].Heading})
+	// A still owns A.sub textually (containment preserved).
+	require.Contains(t, parsed[0].Body, "### A.sub")
+	require.Equal(t, offset, parsed[2].ByteOffset, "returned offset locates the new section")
+}
+
+func TestInsertSection_AppendsNewlineWhenBodyLacksOne(t *testing.T) {
+	body := "## First\nx\n"
+	sections := vault.ParseSections(body)
+	out, _, err := vault.InsertSection(body, sections, 0, 2, "Second", "body-no-trailing-newline")
+	require.NoError(t, err)
+	require.True(t, strings.HasSuffix(out, "body-no-trailing-newline\n"),
+		"function normalizes trailing newline so next heading parses on its own line")
+}
+
+func TestInsertSection_RejectsEmptyHeading(t *testing.T) {
+	body := "## First\nx\n"
+	sections := vault.ParseSections(body)
+	_, _, err := vault.InsertSection(body, sections, 0, 2, "", "x\n")
+	require.Error(t, err)
+}
+
+func TestInsertSection_RejectsOutOfRangeDepth(t *testing.T) {
+	body := "## First\nx\n"
+	sections := vault.ParseSections(body)
+	_, _, err := vault.InsertSection(body, sections, 0, 7, "X", "x\n")
+	require.Error(t, err)
+}
+
+// --- RenameSectionHeading (#299) -----------------------------------------
+
+func TestRenameSectionHeading_PreservesBodyAndNested(t *testing.T) {
+	body := "## Old\nold body\n### nested\nnested body\n## Sibling\nsib body\n"
+	sections := vault.ParseSections(body)
+	// idx 0 is the parent `## Old`; idx 1 is `### nested`; idx 2 is sibling.
+	out, err := vault.RenameSectionHeading(body, sections, 0, "New")
+	require.NoError(t, err)
+	parsed := vault.ParseSections(out)
+	require.Len(t, parsed, 3)
+	require.Equal(t, "New", parsed[0].Heading)
+	require.Equal(t, 2, parsed[0].Depth, "depth preserved")
+	// Parent body preserved verbatim, including the nested ### heading.
+	require.Contains(t, parsed[0].Body, "old body\n")
+	require.Contains(t, parsed[0].Body, "### nested\nnested body\n")
+	// Sibling untouched.
+	require.Equal(t, "Sibling", parsed[2].Heading)
+}
+
+func TestRenameSectionHeading_PreservesDepth(t *testing.T) {
+	body := "### Deep\nx\n"
+	sections := vault.ParseSections(body)
+	out, err := vault.RenameSectionHeading(body, sections, 0, "Renamed")
+	require.NoError(t, err)
+	parsed := vault.ParseSections(out)
+	require.Equal(t, 3, parsed[0].Depth, "depth (`###`) preserved")
+	require.Equal(t, "Renamed", parsed[0].Heading)
+}
+
+func TestRenameSectionHeading_RejectsPreHeadingSection(t *testing.T) {
+	body := "intro\n## Headed\nx\n"
+	sections := vault.ParseSections(body)
+	_, err := vault.RenameSectionHeading(body, sections, 0, "Anything")
+	require.Error(t, err, "pre-heading section has no heading line to rename")
+}
+
+func TestRenameSectionHeading_RejectsEmptyHeading(t *testing.T) {
+	body := "## First\nx\n"
+	sections := vault.ParseSections(body)
+	_, err := vault.RenameSectionHeading(body, sections, 0, "")
+	require.Error(t, err)
+}
+
+func TestRenameSectionHeading_OutOfRange(t *testing.T) {
+	body := "## First\nx\n"
+	sections := vault.ParseSections(body)
+	_, err := vault.RenameSectionHeading(body, sections, 99, "X")
+	require.Error(t, err)
+}
+
+// --- DeleteSection (#299) ------------------------------------------------
+
+func TestDeleteSection_RemovesHeadingAndBody(t *testing.T) {
+	body := "## A\nA body\n## B\nB body\n## C\nC body\n"
+	sections := vault.ParseSections(body)
+	out, err := vault.DeleteSection(body, sections, 1) // delete B
+	require.NoError(t, err)
+	parsed := vault.ParseSections(out)
+	require.Len(t, parsed, 2)
+	require.Equal(t, []string{"A", "C"}, []string{parsed[0].Heading, parsed[1].Heading})
+}
+
+func TestDeleteSection_RemovesNestedSubtree(t *testing.T) {
+	// Deleting `## Parent` must remove its `### Child` per the
+	// containment model.
+	body := "## Parent\np body\n### Child\nc body\n## Sibling\ns body\n"
+	sections := vault.ParseSections(body)
+	out, err := vault.DeleteSection(body, sections, 0)
+	require.NoError(t, err)
+	parsed := vault.ParseSections(out)
+	require.Len(t, parsed, 1)
+	require.Equal(t, "Sibling", parsed[0].Heading)
+	require.NotContains(t, out, "### Child", "nested heading deleted with parent")
+}
+
+func TestDeleteSection_LeafOnlyLeavesParent(t *testing.T) {
+	body := "## Parent\np body\n### Child\nc body\n"
+	sections := vault.ParseSections(body)
+	out, err := vault.DeleteSection(body, sections, 1) // delete just Child
+	require.NoError(t, err)
+	parsed := vault.ParseSections(out)
+	require.Len(t, parsed, 1)
+	require.Equal(t, "Parent", parsed[0].Heading)
+	require.Equal(t, "p body\n", parsed[0].Body)
+}
+
+func TestDeleteSection_RejectsPreHeadingSection(t *testing.T) {
+	body := "intro\n## A\nx\n"
+	sections := vault.ParseSections(body)
+	_, err := vault.DeleteSection(body, sections, 0)
+	require.Error(t, err)
+}
+
+func TestDeleteSection_OutOfRange(t *testing.T) {
+	body := "## A\nx\n"
+	sections := vault.ParseSections(body)
+	_, err := vault.DeleteSection(body, sections, 99)
+	require.Error(t, err)
+}
+
+// --- SectionSlugConflicts (#299) -----------------------------------------
+
+func TestSectionSlugConflicts_DetectsSameParentSiblingCollision(t *testing.T) {
+	body := "## A\nx\n## B\ny\n"
+	sections := vault.ParseSections(body)
+	// Renaming B (idx 1) to "A" would slug-collide with the existing
+	// top-level A (no parent, so siblings span the whole doc).
+	require.True(t, vault.SectionSlugConflicts(sections, 1, "a"))
+}
+
+func TestSectionSlugConflicts_AllowsRenameToOwnSlug(t *testing.T) {
+	body := "## A\nx\n## B\ny\n"
+	sections := vault.ParseSections(body)
+	// idx is excluded from its own sibling scan — renaming to the
+	// current slug is a no-op, not a collision.
+	require.False(t, vault.SectionSlugConflicts(sections, 0, "a"))
+}
+
+func TestSectionSlugConflicts_AllowsDifferentDepth(t *testing.T) {
+	body := "## A\nx\n### Subsection\ny\n"
+	sections := vault.ParseSections(body)
+	// Renaming `## A` (idx 0) to "subsection" doesn't collide with
+	// `### Subsection` (idx 1) — different depth.
+	require.False(t, vault.SectionSlugConflicts(sections, 0, "subsection"))
+}
+
+// Pin the containment-model invariant: same slug at the same
+// depth under DIFFERENT parents is a legal document state.
+// Renaming the nested heading must NOT collide with another
+// parent's nested heading of the same name.
+func TestSectionSlugConflicts_AllowsSameSlugUnderDifferentParents(t *testing.T) {
+	body := "## A\nA body\n### Notes\nan note\n## B\nB body\n### Other\nother\n"
+	sections := vault.ParseSections(body)
+	// idx 3 is `### Other` under `## B`. Renaming it to "Notes"
+	// must NOT collide with `### Notes` under `## A` — they have
+	// different parents.
+	require.False(t, vault.SectionSlugConflicts(sections, 3, "notes"),
+		"`### Notes` under `## A` is not a sibling of `### Other` under `## B`")
+}
+
+func TestSectionSlugConflicts_RejectsSameSlugUnderSameParent(t *testing.T) {
+	body := "## A\nA body\n### Notes\nfirst\n### Other\nx\n## B\ny\n"
+	sections := vault.ParseSections(body)
+	// idx 2 is `### Other` under `## A`. Renaming to "Notes"
+	// COLLIDES with the other `### Notes` under the same `## A`.
+	require.True(t, vault.SectionSlugConflicts(sections, 2, "notes"))
+}
+
+// --- SectionSlugConflictsAtInsertion (#299) ------------------------------
+
+func TestSectionSlugConflictsAtInsertion_DetectsTopLevelCollision(t *testing.T) {
+	body := "## A\nx\n## B\ny\n"
+	sections := vault.ParseSections(body)
+	// Adding a new ## A after idx 1 (## B) — top-level, no parent —
+	// collides with existing ## A.
+	require.True(t, vault.SectionSlugConflictsAtInsertion(sections, 1, 2, "a"))
+}
+
+func TestSectionSlugConflictsAtInsertion_AllowsSameSlugDifferentParents(t *testing.T) {
+	body := "## A\nA body\n### Notes\nan note\n## B\nB body\n"
+	sections := vault.ParseSections(body)
+	// Adding ### Notes after idx 2 (## B) — parent is ## B, which
+	// has no children yet. ### Notes under ## A is a different
+	// parent, so no collision.
+	require.False(t, vault.SectionSlugConflictsAtInsertion(sections, 2, 3, "notes"),
+		"adding ### Notes under ## B doesn't collide with ### Notes under ## A")
+}
+
+func TestSectionSlugConflictsAtInsertion_DetectsSameParentCollision(t *testing.T) {
+	body := "## A\nA body\n### Notes\nan note\n## B\nB body\n"
+	sections := vault.ParseSections(body)
+	// Adding ### Notes after idx 1 (### Notes under ## A) — same
+	// parent (## A), collides with itself.
+	require.True(t, vault.SectionSlugConflictsAtInsertion(sections, 1, 3, "notes"))
+}
+
+func TestSectionSlugConflictsAtInsertion_AppendAtEnd(t *testing.T) {
+	body := "## A\nx\n"
+	sections := vault.ParseSections(body)
+	// afterIdx == len(sections) means append; top-level depth 2
+	// "A" would collide.
+	require.True(t, vault.SectionSlugConflictsAtInsertion(sections, len(sections), 2, "a"))
+	require.False(t, vault.SectionSlugConflictsAtInsertion(sections, len(sections), 2, "b"))
+}
+
+func TestSectionSlugConflictsAtInsertion_PrependDoesntCollideWithChildParent(t *testing.T) {
+	// Prepending ## A when an existing nested ### a exists under
+	// some other heading — different depth, no collision.
+	body := "## X\nx\n### a\ny\n"
+	sections := vault.ParseSections(body)
+	require.False(t, vault.SectionSlugConflictsAtInsertion(sections, -1, 2, "a"))
+}

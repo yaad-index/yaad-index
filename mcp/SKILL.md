@@ -15,11 +15,11 @@ Two connection paths to the same 33-tool surface — pick whichever fits your ag
 - **Direct (preferred):** the daemon exposes its full tool surface as a Streamable-HTTP MCP server at `<base-url>/mcp` (same host + port that serves `/v1/...`, e.g. `http://localhost:7433/mcp`). Auth: the same Bearer JWT that protects every REST route — issue with `yaad-index issue-token --operator <op> --agent <name>`, send as `Authorization: Bearer <token>`. The full daemon mux handles the call in-process; no wrapper to run.
 - **Legacy stdio wrapper:** the bundled `mcp/` Node process (TypeScript) speaks stdio MCP and forwards every tool to the daemon's REST surface. Still bundled, still works — use it when your agent runtime can't speak Streamable HTTP, or when you're already wired against it. Both paths surface identical tool semantics (same names, same arguments, same response shapes); the direct path eliminates the wrapper hop.
 
-**Tool inventory is live.** Both paths advertise the same 33 tools via the MCP `tools/list` call. The catalog below is the per-tool reference; `tools/list` is the authoritative live source on a running daemon.
+**Tool inventory is live.** Both paths advertise the same 36 tools via the MCP `tools/list` call. The catalog below is the per-tool reference; `tools/list` is the authoritative live source on a running daemon.
 
 ## What yaad-mcp is
 
-An MCP surface over yaad-index — a knowledge index that turns URLs into structured entities, plus the workflow engine that reacts to graph changes. Thirty-three tools, all active: `ingest`, `get_entity`, `get_entity_with_context`, `edges`, `get_entities_batch`, `fill`, `set_operator_fill`, `defer_gap`, `add_note`, `list_entities`, `search_local`, `search_upstream`, `structure`, `cv_status`, `reindex`, `kinds`, `plugins`, `needs_fill`, `archive_entity`, `restore_entity`, `delete_entity`, plus the user-content (UGC) read trio `get_user_content`, `list_user_content_sections`, `get_user_content_section` and write trio `create_user_content`, `edit_user_content_section`, `delete_user_content`, plus the workflow surface `workflow_list`, `workflow_discover`, `workflow_trigger` and task surface `task_list`, `task_load`, `task_resolve` (per ADR-0024 §"Agent surface"). Outbox channels (Discord / email / etc.) will land via a separate yaad-outbox surface when that repo ships; they're not part of this MCP today.
+An MCP surface over yaad-index — a knowledge index that turns URLs into structured entities, plus the workflow engine that reacts to graph changes. Thirty-six tools, all active: `ingest`, `get_entity`, `get_entity_with_context`, `edges`, `get_entities_batch`, `fill`, `set_operator_fill`, `defer_gap`, `add_note`, `list_entities`, `search_local`, `search_upstream`, `structure`, `cv_status`, `reindex`, `kinds`, `plugins`, `needs_fill`, `archive_entity`, `restore_entity`, `delete_entity`, plus the user-content (UGC) read trio `get_user_content`, `list_user_content_sections`, `get_user_content_section` and write hexad `create_user_content`, `edit_user_content_section`, `add_user_content_section`, `rename_user_content_section`, `delete_user_content_section`, `delete_user_content`, plus the workflow surface `workflow_list`, `workflow_discover`, `workflow_trigger` and task surface `task_list`, `task_load`, `task_resolve` (per ADR-0024 §"Agent surface").
 
 ## Mental model — the graph yaad-index builds
 
@@ -263,6 +263,40 @@ Replace one section's body. **The `etag` parameter is REQUIRED** — read it fro
 - `error: "author_mismatch"` (403) — JWT claim doesn't match the entity's author/operator. Operator-on-behalf is allowed when the JWT operator equals the entity's stored operator.
 
 5xx still throws (transient infrastructure failures).
+
+### `add_user_content_section(id, heading, body, after_sec?, depth?, etag)`
+
+Insert a new section into an existing UGC entity. THE ETAG IS REQUIRED (same If-Match concurrency as `edit_user_content_section`). Inserts AFTER the section addressed by `after_sec`; omit / null to append at end, pass `"-1"` (or `""`) to prepend.
+
+**Arguments:**
+
+- `heading` — required, the new section's heading text.
+- `body` — optional, empty allowed. Daemon normalizes trailing newline so the next section's heading parses on its own line.
+- `after_sec` — optional. Heading slug or positional index of the section to insert AFTER. `"-1"` or empty string prepends (lands after the pre-heading body if there is one). Omit / null appends at end.
+- `depth` — optional `1..6`. Defaults to the after-section's depth (or the last existing headed section's depth when appending; falls back to `1` if no headed section yet).
+- `etag` — required, same If-Match contract as section-replace.
+
+Returns the inserted section's envelope + a fresh `etag`. Same error envelopes as `edit_user_content_section`, plus:
+
+- `error: "conflict"` (409) — the new heading slugifies to an existing same-depth sibling's slug. Pick a different heading or rename the existing sibling first.
+
+### `rename_user_content_section(id, sec, new_heading, etag)`
+
+Rename a UGC section's heading. THE ETAG IS REQUIRED. Body + nested headings preserved verbatim — only the heading line is rewritten. Depth (`#`-count) preserved. Use this when an agent wants to change a section title without rewriting its content (no more archive+recreate-the-entity path for renames).
+
+Returns the renamed section's envelope + a fresh `etag`. Same error envelopes as `edit_user_content_section`, plus:
+
+- `error: "conflict"` (409) — the new heading slugifies to a sibling's existing slug at the same depth.
+- `error: "invalid_argument"` (400) — attempted to rename the pre-heading section (index 0 with depth 0). That section has no heading line; use `add_user_content_section` to introduce one.
+
+### `delete_user_content_section(id, sec, etag)`
+
+Remove a UGC section AND every nested heading textually contained within it (containment model). THE ETAG IS REQUIRED. Returns `{ok, id, removed_idx}` + a fresh `etag`. Use the leaf-most addressable depth when you want to remove a single sub-section without taking the whole subtree.
+
+Same error envelopes as `edit_user_content_section`, plus:
+
+- `error: "not_found"` (404) — the section address doesn't resolve (or is a duplicate slug; use positional index in that case).
+- `error: "invalid_argument"` (400) — attempted to delete the pre-heading section (index 0). Use `edit_user_content_section` with empty `body` to clear it instead.
 
 ### `set_operator_fill(id, fields)`
 

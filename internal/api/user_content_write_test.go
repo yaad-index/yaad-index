@@ -505,3 +505,469 @@ func TestUserContent_Create_ProvenanceTimestamp(t *testing.T) {
 	require.True(t, v.Provenance[0].FetchedAt.After(before) && v.Provenance[0].FetchedAt.Before(after),
 		"FetchedAt must be a stamped timestamp inside the test window; got %v", v.Provenance[0].FetchedAt)
 }
+
+// --- Section add (#299) --------------------------------------------------
+
+func createUGCWithBody(t *testing.T, h http.Handler, tok, title, body string) string {
+	t.Helper()
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content", tok, map[string]any{
+		"title": title,
+		"body":  body,
+		"tags":  []string{"x"},
+	}, nil)
+	require.Equal(t, http.StatusCreated, rec.Code, "create body=%s", rec.Body.String())
+	etag := rec.Header().Get("ETag")
+	require.NotEmpty(t, etag)
+	return etag
+}
+
+func TestUserContent_SectionAdd_AppendsAtEnd(t *testing.T) {
+	t.Parallel()
+	h, _, root, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Add1", "## First\nfirst\n")
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/user-content:add1/sections", tok,
+		map[string]any{"heading": "Second", "body": "second body\n"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusCreated, rec.Code, "body=%s", rec.Body.String())
+	newETag := rec.Header().Get("ETag")
+	require.NotEqual(t, etag, newETag, "etag must advance")
+
+	var got userContentSectionResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	require.True(t, got.OK)
+	require.Equal(t, "Second", got.Section.Heading)
+
+	v := readVaultByID(t, root, "user-content", "user-content:add1")
+	require.Contains(t, v.CleanContent, "## First")
+	require.Contains(t, v.CleanContent, "## Second")
+	require.Contains(t, v.CleanContent, "second body")
+}
+
+func TestUserContent_SectionAdd_AfterSpecificSection(t *testing.T) {
+	t.Parallel()
+	h, _, root, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Add2", "## A\na\n## C\nc\n")
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/user-content:add2/sections", tok,
+		map[string]any{"after_sec": "a", "heading": "B", "body": "b body\n"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusCreated, rec.Code, "body=%s", rec.Body.String())
+
+	v := readVaultByID(t, root, "user-content", "user-content:add2")
+	// Order in file: A, B, C.
+	aPos := strings.Index(v.CleanContent, "## A")
+	bPos := strings.Index(v.CleanContent, "## B")
+	cPos := strings.Index(v.CleanContent, "## C")
+	require.True(t, aPos < bPos && bPos < cPos, "expected A < B < C ordering; got positions A=%d B=%d C=%d", aPos, bPos, cPos)
+}
+
+func TestUserContent_SectionAdd_PrependWithAfterSecNegativeOne(t *testing.T) {
+	t.Parallel()
+	h, _, root, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Add3", "## Existing\nx\n")
+
+	negOne := "-1"
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/user-content:add3/sections", tok,
+		map[string]any{"after_sec": negOne, "heading": "New", "body": "n\n"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusCreated, rec.Code, "body=%s", rec.Body.String())
+
+	v := readVaultByID(t, root, "user-content", "user-content:add3")
+	newPos := strings.Index(v.CleanContent, "## New")
+	existingPos := strings.Index(v.CleanContent, "## Existing")
+	require.True(t, newPos < existingPos, "New must precede Existing")
+}
+
+func TestUserContent_SectionAdd_412OnStaleEtag(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	createUGCWithBody(t, h, tok, "Add4", "## A\na\n")
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/user-content:add4/sections", tok,
+		map[string]any{"heading": "B", "body": "b\n"},
+		map[string]string{"If-Match": `"stale"`},
+	)
+	require.Equal(t, http.StatusPreconditionFailed, rec.Code, "body=%s", rec.Body.String())
+	require.NotEmpty(t, rec.Header().Get("ETag"))
+}
+
+func TestUserContent_SectionAdd_428WhenIfMatchMissing(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	createUGCWithBody(t, h, tok, "Add5", "## A\na\n")
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/user-content:add5/sections", tok,
+		map[string]any{"heading": "B", "body": "b\n"}, nil,
+	)
+	require.Equal(t, http.StatusPreconditionRequired, rec.Code, "body=%s", rec.Body.String())
+}
+
+func TestUserContent_SectionAdd_403OnCrossAuthor(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	forgeTok := mintToken(t, signer, "the implementer", "alice")
+	intruderTok := mintToken(t, signer, "stranger", "different-op")
+	etag := createUGCWithBody(t, h, forgeTok, "Add6", "## A\na\n")
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/user-content:add6/sections", intruderTok,
+		map[string]any{"heading": "B", "body": "b\n"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
+	require.Contains(t, rec.Body.String(), "author_mismatch")
+}
+
+// Pin the containment-aware sibling check: same slug at the same
+// depth under DIFFERENT parents is legal per the containment
+// model — they aren't siblings of each other. Adding a
+// `### Notes` under `## B` must succeed even when `## A` already
+// contains `### Notes`. The response must echo the NEW section
+// (located by byte offset), not the pre-existing same-slug
+// section under the other parent.
+func TestUserContent_SectionAdd_AllowsSameSlugUnderDifferentParents(t *testing.T) {
+	t.Parallel()
+	h, _, root, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Add9", "## A\nA body\n### Notes\nan note\n## B\nB body\n")
+
+	// Add `### Notes` under ## B (afterSec=b → parent ## B at depth 2).
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/user-content:add9/sections", tok,
+		map[string]any{"after_sec": "b", "heading": "Notes", "body": "another note\n", "depth": 3},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusCreated, rec.Code,
+		"adding `### Notes` under ## B must NOT collide with `### Notes` under ## A — body=%s", rec.Body.String())
+
+	v := readVaultByID(t, root, "user-content", "user-content:add9")
+	// Both `### Notes` headings now present (one under each parent).
+	require.Equal(t, 2, strings.Count(v.CleanContent, "### Notes"),
+		"two `### Notes` headings, one under each parent")
+
+	// Response must echo the NEW section, not the pre-existing
+	// same-slug one under ## A. Locate ## B's heading byte offset
+	// in the post-write body and assert the returned section's
+	// ByteOffset is AFTER it.
+	bHeadingPos := strings.Index(v.CleanContent, "## B")
+	require.GreaterOrEqual(t, bHeadingPos, 0)
+
+	var got userContentSectionResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	require.True(t, got.OK)
+	require.Equal(t, "Notes", got.Section.Heading)
+	require.Greater(t, got.Section.ByteOffset, bHeadingPos,
+		"response must echo the newly-inserted ### Notes under ## B, not the pre-existing one under ## A")
+	require.Equal(t, "another note\n", got.Section.Body,
+		"response body must be the new section's body, not the old one's")
+}
+
+// Pin the containment-aware sibling check for the same-parent
+// collision path stays — adding `### Notes` AGAIN under ## A must
+// still 409.
+func TestUserContent_SectionAdd_RejectsSameSlugUnderSameParent(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Add10", "## A\nA body\n### Notes\nan note\n## B\nB body\n")
+
+	// Add `### Notes` after the existing `### Notes` (after_sec=notes)
+	// — same parent ## A, must reject.
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/user-content:add10/sections", tok,
+		map[string]any{"after_sec": "notes", "heading": "Notes", "body": "dup\n", "depth": 3},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
+}
+
+func TestUserContent_SectionAdd_409OnSlugCollision(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Add7", "## Same\nx\n")
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/user-content:add7/sections", tok,
+		map[string]any{"heading": "Same", "body": "y\n"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
+	require.Contains(t, rec.Body.String(), "conflict")
+}
+
+func TestUserContent_SectionAdd_400OnMissingHeading(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Add8", "## A\na\n")
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/user-content:add8/sections", tok,
+		map[string]any{"body": "b\n"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+}
+
+// --- Section rename (#299) ----------------------------------------------
+
+func TestUserContent_SectionRename_HappyPath(t *testing.T) {
+	t.Parallel()
+	h, _, root, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Rn1", "## Old\nbody A\n### nested\nx\n## B\nb\n")
+
+	rec := ugcReq(t, h, http.MethodPatch, "/v1/user-content/user-content:rn1/sections/old/heading", tok,
+		map[string]any{"new_heading": "New"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	newETag := rec.Header().Get("ETag")
+	require.NotEqual(t, etag, newETag)
+
+	var got userContentSectionResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	require.Equal(t, "New", got.Section.Heading)
+
+	v := readVaultByID(t, root, "user-content", "user-content:rn1")
+	require.Contains(t, v.CleanContent, "## New\nbody A")
+	require.NotContains(t, v.CleanContent, "## Old\n", "old heading line removed")
+	require.Contains(t, v.CleanContent, "### nested\nx", "nested heading preserved")
+	require.Contains(t, v.CleanContent, "## B\nb", "sibling preserved")
+}
+
+func TestUserContent_SectionRename_412OnStaleEtag(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	createUGCWithBody(t, h, tok, "Rn2", "## A\nx\n")
+
+	rec := ugcReq(t, h, http.MethodPatch, "/v1/user-content/user-content:rn2/sections/a/heading", tok,
+		map[string]any{"new_heading": "B"},
+		map[string]string{"If-Match": `"stale"`},
+	)
+	require.Equal(t, http.StatusPreconditionFailed, rec.Code, "body=%s", rec.Body.String())
+}
+
+func TestUserContent_SectionRename_403OnCrossAuthor(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	forgeTok := mintToken(t, signer, "the implementer", "alice")
+	intruderTok := mintToken(t, signer, "stranger", "different-op")
+	etag := createUGCWithBody(t, h, forgeTok, "Rn3", "## A\nx\n")
+
+	rec := ugcReq(t, h, http.MethodPatch, "/v1/user-content/user-content:rn3/sections/a/heading", intruderTok,
+		map[string]any{"new_heading": "B"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+// Pin the containment-aware sibling check on the rename path: the
+// new heading-slug can match a section under a DIFFERENT parent
+// without colliding (they aren't siblings).
+func TestUserContent_SectionRename_AllowsSameSlugUnderDifferentParents(t *testing.T) {
+	t.Parallel()
+	h, _, root, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Rn7",
+		"## A\nA body\n### Notes\nan note\n## B\nB body\n### Other\nother\n")
+
+	// Rename ### Other (under ## B) to "Notes". The other ### Notes
+	// is under ## A — different parent, so no collision.
+	rec := ugcReq(t, h, http.MethodPatch, "/v1/user-content/user-content:rn7/sections/other/heading", tok,
+		map[string]any{"new_heading": "Notes"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusOK, rec.Code,
+		"renaming ### Other under ## B to ### Notes must NOT collide with ### Notes under ## A — body=%s", rec.Body.String())
+
+	v := readVaultByID(t, root, "user-content", "user-content:rn7")
+	require.Equal(t, 2, strings.Count(v.CleanContent, "### Notes"),
+		"both `### Notes` headings present, one under each parent")
+}
+
+func TestUserContent_SectionRename_409OnSiblingCollision(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Rn4", "## A\na\n## B\nb\n")
+
+	rec := ugcReq(t, h, http.MethodPatch, "/v1/user-content/user-content:rn4/sections/a/heading", tok,
+		map[string]any{"new_heading": "B"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
+	require.Contains(t, rec.Body.String(), "conflict")
+}
+
+func TestUserContent_SectionRename_404OnUnknownSection(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Rn5", "## A\nx\n")
+
+	rec := ugcReq(t, h, http.MethodPatch, "/v1/user-content/user-content:rn5/sections/missing/heading", tok,
+		map[string]any{"new_heading": "X"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusNotFound, rec.Code, "body=%s", rec.Body.String())
+}
+
+func TestUserContent_SectionRename_400OnPreHeadingSection(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Rn6", "intro\n## A\nx\n")
+
+	rec := ugcReq(t, h, http.MethodPatch, "/v1/user-content/user-content:rn6/sections/0/heading", tok,
+		map[string]any{"new_heading": "X"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+}
+
+// --- Section delete (#299) ----------------------------------------------
+
+func TestUserContent_SectionDelete_HappyPath(t *testing.T) {
+	t.Parallel()
+	h, _, root, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Dl1", "## A\na\n## B\nb\n## C\nc\n")
+
+	rec := ugcReq(t, h, http.MethodDelete, "/v1/user-content/user-content:dl1/sections/b", tok, nil,
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	newETag := rec.Header().Get("ETag")
+	require.NotEqual(t, etag, newETag)
+
+	var got userContentSectionDeleteResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	require.True(t, got.OK)
+	require.Equal(t, 1, got.RemovedIdx, "## B was at positional index 1 in the original parse")
+
+	v := readVaultByID(t, root, "user-content", "user-content:dl1")
+	require.NotContains(t, v.CleanContent, "## B")
+	require.Contains(t, v.CleanContent, "## A")
+	require.Contains(t, v.CleanContent, "## C")
+}
+
+func TestUserContent_SectionDelete_RemovesNestedSubtree(t *testing.T) {
+	t.Parallel()
+	h, _, root, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Dl2", "## Parent\np\n### Child\nc\n## Sib\ns\n")
+
+	rec := ugcReq(t, h, http.MethodDelete, "/v1/user-content/user-content:dl2/sections/parent", tok, nil,
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	v := readVaultByID(t, root, "user-content", "user-content:dl2")
+	require.NotContains(t, v.CleanContent, "## Parent")
+	require.NotContains(t, v.CleanContent, "### Child", "nested heading deleted with parent")
+	require.Contains(t, v.CleanContent, "## Sib")
+}
+
+func TestUserContent_SectionDelete_412OnStaleEtag(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	createUGCWithBody(t, h, tok, "Dl3", "## A\na\n")
+
+	rec := ugcReq(t, h, http.MethodDelete, "/v1/user-content/user-content:dl3/sections/a", tok, nil,
+		map[string]string{"If-Match": `"stale"`},
+	)
+	require.Equal(t, http.StatusPreconditionFailed, rec.Code, "body=%s", rec.Body.String())
+}
+
+func TestUserContent_SectionDelete_428WhenIfMatchMissing(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	createUGCWithBody(t, h, tok, "Dl4", "## A\na\n")
+
+	rec := ugcReq(t, h, http.MethodDelete, "/v1/user-content/user-content:dl4/sections/a", tok, nil, nil)
+	require.Equal(t, http.StatusPreconditionRequired, rec.Code, "body=%s", rec.Body.String())
+}
+
+func TestUserContent_SectionDelete_403OnCrossAuthor(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	forgeTok := mintToken(t, signer, "the implementer", "alice")
+	intruderTok := mintToken(t, signer, "stranger", "different-op")
+	etag := createUGCWithBody(t, h, forgeTok, "Dl5", "## A\na\n")
+
+	rec := ugcReq(t, h, http.MethodDelete, "/v1/user-content/user-content:dl5/sections/a", intruderTok, nil,
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
+}
+
+func TestUserContent_SectionDelete_404OnUnknownSection(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Dl6", "## A\na\n")
+
+	rec := ugcReq(t, h, http.MethodDelete, "/v1/user-content/user-content:dl6/sections/missing", tok, nil,
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusNotFound, rec.Code, "body=%s", rec.Body.String())
+}
+
+func TestUserContent_SectionDelete_400OnPreHeadingSection(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Dl7", "intro\n## A\nx\n")
+
+	rec := ugcReq(t, h, http.MethodDelete, "/v1/user-content/user-content:dl7/sections/0", tok, nil,
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+}
+
+// --- Round-trip (#299 acceptance) --------------------------------------
+
+func TestUserContent_Section_RoundTrip_GetAddGetDeleteGet(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Rt1", "## A\na\n")
+
+	// GET — section B not present.
+	rec := ugcReq(t, h, http.MethodGet, "/v1/user-content/user-content:rt1/sections", tok, nil, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotContains(t, rec.Body.String(), `"heading":"B"`)
+
+	// ADD B.
+	rec = ugcReq(t, h, http.MethodPost, "/v1/user-content/user-content:rt1/sections", tok,
+		map[string]any{"heading": "B", "body": "b\n"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusCreated, rec.Code, "body=%s", rec.Body.String())
+	etag = rec.Header().Get("ETag")
+
+	// GET — section B present.
+	rec = ugcReq(t, h, http.MethodGet, "/v1/user-content/user-content:rt1/sections", tok, nil, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"heading":"B"`)
+
+	// DELETE B.
+	rec = ugcReq(t, h, http.MethodDelete, "/v1/user-content/user-content:rt1/sections/b", tok, nil,
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	// GET — section B absent again.
+	rec = ugcReq(t, h, http.MethodGet, "/v1/user-content/user-content:rt1/sections", tok, nil, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotContains(t, rec.Body.String(), `"heading":"B"`)
+}
