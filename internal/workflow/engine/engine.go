@@ -367,6 +367,14 @@ type registeredWorkflow struct {
 	// here for fast partitioning into pass-1 (regular,
 	// catchAll=false) vs pass-2 (fallback, catchAll=true).
 	catchAll bool
+	// contentHash mirrors parser.Workflow.ContentHash per #280.
+	// Reconcile's no-op gate compares this against the incoming
+	// workflow's hash to skip the unregister/re-register cycle
+	// when the loader's poll re-saw an unchanged file. Empty
+	// when a test-built Workflow had no hash to stamp; the gate
+	// degrades to always-re-register for that path, matching
+	// pre-#280 behavior.
+	contentHash string
 }
 
 // compiledBinding ties a workflow's context entry to its
@@ -551,9 +559,20 @@ func (e *Engine) WaitForIdle() {
 //     (compile programs + subscribe to bus).
 //   - workflows registered but not in `want` → unregister
 //     (unsubscribe + release).
-//   - workflows in both with same identity (Name) but
-//     potentially-changed shape → re-register (drop old + add
-//     new) so a hot-reload edit picks up the new compile.
+//   - workflows in both with the same ContentHash → skip
+//     (no-op; the loader's poll re-saw an unchanged file).
+//   - workflows in both with a different ContentHash → re-
+//     register (drop old + add new) so a hot-reload edit picks
+//     up the new compile.
+//
+// The no-op gate per #280 is what eliminates the 15s log churn
+// the loader's pre-fix poll produced — every reconcile cycle
+// used to unregister + re-register every workflow regardless of
+// whether content changed, which drowned operator logs in flap
+// lines and risked mid-event consistency under load. Workflows
+// built inline by tests without ContentHash stamped fall
+// through to always-re-register, matching the legacy behavior
+// for that path.
 //
 // Per-workflow compile failures log a WARN line + skip the
 // registration (the workflow stays out of the active set
@@ -570,24 +589,31 @@ func (e *Engine) Reconcile(workflows []*parser.Workflow) error {
 		want[wf.Name] = wf
 	}
 
-	// Unregister workflows no longer present (or about to be
-	// re-registered with new shape).
+	// Unregister workflows no longer present, OR registered
+	// under a different content hash (about to be re-registered).
+	// Workflows with the matching hash drop out of `want` so
+	// the register-everything-remaining loop below skips them.
 	for name, reg := range e.workflows {
-		if _, kept := want[name]; !kept {
+		wf, kept := want[name]
+		if !kept {
 			e.unregisterLocked(name, reg)
 			continue
 		}
-		// Always treat re-Reconcile as a fresh registration
-		// for simplicity — the cost is bounded (compile is
-		// cheap + cached at the Evaluator level for repeated
-		// expressions). This handles mtime-bumped re-loads
-		// without diff-tracking the workflow's internal
-		// shape.
+		if wf.ContentHash != "" && wf.ContentHash == reg.contentHash {
+			// No-op skip per #280: parser-stamped hash matches
+			// the registered workflow's hash, so the file
+			// content didn't change since last registration.
+			// Drop from want so the register loop below
+			// doesn't re-process it.
+			delete(want, name)
+			continue
+		}
 		e.unregisterLocked(name, reg)
 	}
 
 	// Register everything in want (the loop above cleared
-	// any prior entries for the same Name).
+	// any prior entries for the same Name OR skipped them as
+	// no-ops).
 	for name, wf := range want {
 		if err := e.registerLocked(wf); err != nil {
 			e.logger.Warn("workflow engine: registration failed; skipping",
@@ -615,10 +641,11 @@ func (e *Engine) registerLocked(wf *parser.Workflow) error {
 	}
 
 	reg := &registeredWorkflow{
-		workflow:  wf,
-		evaluator: ev,
-		filename:  wf.Filename,
-		catchAll:  wf.CatchAll,
+		workflow:    wf,
+		evaluator:   ev,
+		filename:    wf.Filename,
+		catchAll:    wf.CatchAll,
+		contentHash: wf.ContentHash,
 	}
 
 	if wf.Condition != "" {
