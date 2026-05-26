@@ -209,6 +209,7 @@ type actionShape struct {
 	ArchiveEntity    *archiveEntityShape    `yaml:"archive_entity"`
 	RestoreEntity    *restoreEntityShape    `yaml:"restore_entity"`
 	ClaimEntity      *claimEntityShape      `yaml:"claim_entity"`
+	TaskResolve      *taskResolveShape      `yaml:"task_resolve"`
 }
 
 type claimEntityShape struct{}
@@ -239,6 +240,14 @@ type taskAppendShape struct {
 	Section          string `yaml:"section"`
 	Content          string `yaml:"content"`
 	IfAlreadyPresent string `yaml:"if_already_present"`
+}
+
+type taskResolveShape struct {
+	Workflow string `yaml:"workflow"`
+	Subject  string `yaml:"subject"`
+	Section  string `yaml:"section"`
+	MatchKey string `yaml:"match_key"`
+	Mode     string `yaml:"mode"`
 }
 
 type addNoteShape struct {
@@ -419,6 +428,7 @@ func actionsFromShape(entries []actionShape) []Action {
 			ArchiveEntity:    archiveEntityFromShape(e.ArchiveEntity),
 			RestoreEntity:    restoreEntityFromShape(e.RestoreEntity),
 			ClaimEntity:      claimEntityFromShape(e.ClaimEntity),
+			TaskResolve:      taskResolveFromShape(e.TaskResolve),
 		}
 	}
 	return out
@@ -432,6 +442,19 @@ func taskAppendFromShape(s *taskAppendShape) *TaskAppendAction {
 		Section:          strings.TrimSpace(s.Section),
 		Content:          s.Content,
 		IfAlreadyPresent: strings.TrimSpace(s.IfAlreadyPresent),
+	}
+}
+
+func taskResolveFromShape(s *taskResolveShape) *TaskResolveAction {
+	if s == nil {
+		return nil
+	}
+	return &TaskResolveAction{
+		Workflow: strings.TrimSpace(s.Workflow),
+		Subject:  s.Subject,
+		Section:  strings.TrimSpace(s.Section),
+		MatchKey: s.MatchKey,
+		Mode:     strings.TrimSpace(s.Mode),
 	}
 }
 

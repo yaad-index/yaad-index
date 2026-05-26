@@ -300,8 +300,11 @@ func validateActions(wf *Workflow) error {
 		if a.ClaimEntity != nil {
 			set++
 		}
+		if a.TaskResolve != nil {
+			set++
+		}
 		if set == 0 {
-			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_note / plugin_dispatch / add_gap / set_property / add_canonical_edge / archive_entity / restore_entity / claim_entity)", i)
+			return fmt.Errorf("workflow: actions[%d] sets no primitive (expected exactly one of task_append / add_note / plugin_dispatch / add_gap / set_property / add_canonical_edge / archive_entity / restore_entity / claim_entity / task_resolve)", i)
 		}
 		if set > 1 {
 			return fmt.Errorf("workflow: actions[%d] sets %d primitives (expected exactly one)", i, set)
@@ -343,6 +346,10 @@ func validateActions(wf *Workflow) error {
 			// claim_entity is a bare flag — no fields to validate
 			// per #169 v1. The engine reads the action presence
 			// and halts the per-event chain when fired.
+		case a.TaskResolve != nil:
+			if err := validateTaskResolve(a.TaskResolve); err != nil {
+				return fmt.Errorf("workflow: actions[%d].task_resolve: %w", i, err)
+			}
 		}
 	}
 	return nil
@@ -380,6 +387,28 @@ func validateTaskAppend(a *TaskAppendAction) error {
 		return nil
 	}
 	return fmt.Errorf("if_already_present %q is not one of {skip, replace, append-anyway}", a.IfAlreadyPresent)
+}
+
+func validateTaskResolve(a *TaskResolveAction) error {
+	if a.Workflow == "" {
+		return fmt.Errorf("workflow is required")
+	}
+	if strings.TrimSpace(a.Subject) == "" {
+		return fmt.Errorf("subject is required")
+	}
+	if a.Section == "" {
+		return fmt.Errorf("section is required")
+	}
+	if strings.TrimSpace(a.MatchKey) == "" {
+		return fmt.Errorf("match_key is required")
+	}
+	switch a.Mode {
+	case TaskResolveModeCheck, TaskResolveModeRemove:
+		return nil
+	case "":
+		return fmt.Errorf("mode is required (one of {check, remove})")
+	}
+	return fmt.Errorf("mode %q is not one of {check, remove}", a.Mode)
 }
 
 func validateAddNote(a *AddNoteAction) error {

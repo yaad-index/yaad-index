@@ -143,6 +143,51 @@ func TestParse_TaskAppendIfAlreadyPresentDefault(t *testing.T) {
 		"if_already_present defaults to skip when operator omits it")
 }
 
+// TestParse_TaskResolveHappyPath pins #266 parse shape: a
+// task_resolve action with all required fields parses + lands
+// on Action.TaskResolve.
+func TestParse_TaskResolveHappyPath(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: cross-resolve\n---\n\n```yaml\nallowed_plugins: []\ntrigger:\n  type: manual\nactions:\n  - task_resolve:\n      workflow: gmail-github-mentions\n      subject: to-refetch\n      section: pending-refetch\n      match_key: 'acme/repo#42'\n      mode: check\n```\n"
+	wf, err := Parse([]byte(md))
+	require.NoError(t, err)
+	require.Len(t, wf.Actions, 1)
+	require.NotNil(t, wf.Actions[0].TaskResolve)
+	tr := wf.Actions[0].TaskResolve
+	assert.Equal(t, "gmail-github-mentions", tr.Workflow)
+	assert.Equal(t, "to-refetch", tr.Subject)
+	assert.Equal(t, "pending-refetch", tr.Section)
+	assert.Equal(t, "acme/repo#42", tr.MatchKey)
+	assert.Equal(t, TaskResolveModeCheck, tr.Mode)
+}
+
+// TestValidate_TaskResolveRejectsUnknownMode pins #266
+// validation shape: a non-{check,remove} mode rejects at
+// workflow load.
+func TestValidate_TaskResolveRejectsUnknownMode(t *testing.T) {
+	t.Parallel()
+	md := "---\nname: bad-mode\n---\n\n```yaml\nallowed_plugins: []\ntrigger:\n  type: manual\nactions:\n  - task_resolve:\n      workflow: x\n      subject: y\n      section: s\n      match_key: k\n      mode: archive\n```\n"
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mode")
+}
+
+// TestValidate_TaskResolveRequiresAllFields pins the
+// required-field set: missing workflow / subject / section /
+// match_key / mode each reject.
+func TestValidate_TaskResolveRequiresAllFields(t *testing.T) {
+	t.Parallel()
+	missingWorkflow := "---\nname: x\n---\n\n```yaml\nallowed_plugins: []\ntrigger: {type: manual}\nactions:\n  - task_resolve:\n      subject: s\n      section: sec\n      match_key: k\n      mode: check\n```\n"
+	_, err := Parse([]byte(missingWorkflow))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workflow")
+
+	missingMode := "---\nname: x\n---\n\n```yaml\nallowed_plugins: []\ntrigger: {type: manual}\nactions:\n  - task_resolve:\n      workflow: w\n      subject: s\n      section: sec\n      match_key: k\n```\n"
+	_, err = Parse([]byte(missingMode))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mode")
+}
+
 // TestParse_TaskAppendIfAlreadyPresentExplicit: when the
 // operator sets a non-empty value, the parser preserves it
 // verbatim (no overwrite to default).

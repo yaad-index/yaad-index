@@ -823,6 +823,10 @@ func (*noopTaskWriter) EnsureMissingRefsSection(_ context.Context, _, _ string, 
 	return nil
 }
 
+func (*noopTaskWriter) ResolveTaskLine(_ context.Context, _, _, _, _, _ string) error {
+	return nil
+}
+
 // fakeErrTaskWriter records every AppendErrTask invocation
 // so engine-level tests can assert the err-task pattern
 // fired with the right workflow / entity / error message.

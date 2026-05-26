@@ -270,6 +270,7 @@ type Action struct {
 	ArchiveEntity     *ArchiveEntityAction
 	RestoreEntity     *RestoreEntityAction
 	ClaimEntity       *ClaimEntityAction
+	TaskResolve       *TaskResolveAction
 }
 
 // TaskAppendAction is the `task_append` primitive per ADR-0024
@@ -295,6 +296,55 @@ type TaskAppendAction struct {
 	//   - "append-anyway" — write a duplicate line regardless.
 	IfAlreadyPresent string
 }
+
+// TaskResolveAction is the `task_resolve` primitive per #266 —
+// the cross-workflow line-resolve surface. Targets a line in
+// ANOTHER workflow's task file (the bare `task_resolve` action
+// is for cross-workflow resolve; the operator-side MCP tool of
+// the same name resolves an entire task by id, separate path).
+// Modes: `check` flips `- [ ]` → `- [x]` on the matched line;
+// `remove` strips the line entirely. Missing file / no-match
+// resolves to a no-op (idempotent end-state-driver semantics).
+type TaskResolveAction struct {
+	// Workflow names the owning workflow whose task file
+	// carries the line being resolved. Required non-empty.
+	// Static string (not a CEL template) — the owning
+	// workflow identity is a workflow-author fact, not a
+	// per-fire runtime value.
+	Workflow string
+
+	// Subject is the CEL template that renders to the target
+	// task file's `<subject>` slot. Required non-empty so the
+	// `<workflow>-<subject>.md` path resolves deterministically.
+	Subject string
+
+	// Section names the section under which the target line
+	// lives in the owning workflow's task file. Required
+	// non-empty.
+	Section string
+
+	// MatchKey is the CEL template that renders to the
+	// content-prefix used to identify the target line.
+	// Required non-empty. The first line in Section whose
+	// content matches this prefix wins.
+	MatchKey string
+
+	// Mode governs the resolve action:
+	//   - "check" — flip the matched line from `- [ ]` to
+	//     `- [x]`. No-op when already checked.
+	//   - "remove" — strip the matched line from Section.
+	// Required; rejected at parse if any other value.
+	Mode string
+}
+
+// TaskResolveModeCheck is the value `Mode` carries when the
+// action flips an unchecked checkbox to a checked one. Held as
+// a const so parser + runner + writer all speak the same vocab.
+const TaskResolveModeCheck = "check"
+
+// TaskResolveModeRemove is the value `Mode` carries when the
+// action strips the matched line from the section.
+const TaskResolveModeRemove = "remove"
 
 // AddNoteAction is the `add_note` primitive — attaches a
 // note to an existing entity via the standard notes

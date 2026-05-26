@@ -53,6 +53,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/workflow/parser"
 )
 
 // FileTaskWriter writes task files under the given vault
@@ -356,6 +357,140 @@ func (w *FileTaskWriter) appendWithVia(existing string, entry viaEntry, section,
 // to Obsidian as plain text.
 func (w *FileTaskWriter) formatViaEntity(id string) string {
 	return maybeWrapEntity(id, w.kinds)
+}
+
+// ResolveTaskLine flips or removes the first line within
+// `section` of `<vault>/tasks/<workflow>-<subject>.md` whose
+// content prefix matches `matchKey` per #266. Modes:
+//
+//   - TaskResolveModeCheck — flip `- [ ] <rest>` →
+//     `- [x] <rest>` on the matched line. Already-checked
+//     lines are left in place (idempotent end-state).
+//   - TaskResolveModeRemove — strip the matched line from the
+//     section entirely.
+//
+// Missing file → no-op (returns nil). The caller may log a
+// WARN; the writer itself doesn't because the cross-workflow
+// resolve target may not exist if the originating workflow
+// never fired. No-match within an existing file → no-op.
+//
+// Match is strict content-prefix: a line's content (everything
+// after the markdown bullet/checkbox prefix) must START with
+// matchKey. The first matching line wins; later matches stay
+// untouched. Workflow authors use a discriminating prefix
+// shape (e.g. `<owner>/<repo>#<n>`) to avoid accidental
+// collisions.
+func (w *FileTaskWriter) ResolveTaskLine(_ context.Context, workflow, subject, section, matchKey, mode string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if strings.TrimSpace(workflow) == "" {
+		return fmt.Errorf("FileTaskWriter: workflow is empty")
+	}
+	if strings.TrimSpace(section) == "" {
+		return fmt.Errorf("FileTaskWriter: section is empty")
+	}
+	if matchKey == "" {
+		return fmt.Errorf("FileTaskWriter: match_key is empty")
+	}
+	switch mode {
+	case parser.TaskResolveModeCheck, parser.TaskResolveModeRemove:
+		// accepted
+	default:
+		return fmt.Errorf("FileTaskWriter: unknown task_resolve mode %q (expected check or remove)", mode)
+	}
+
+	path := w.taskPath(workflow, subject)
+	existing, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		// Cross-workflow target task file doesn't exist — the
+		// originating workflow never fired, or the file was
+		// archived. No-op per the issue's idempotence rule;
+		// the caller WARNs.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read existing task %q: %w", path, err)
+	}
+
+	body, err := resolveTaskLineInBody(string(existing), section, matchKey, mode)
+	if err != nil {
+		return err
+	}
+	if body == string(existing) {
+		// No-match or already-resolved — leave the file alone.
+		return nil
+	}
+	return w.writeFile(path, []byte(body))
+}
+
+// resolveTaskLineInBody is the pure-string transform under
+// ResolveTaskLine — separated for unit-testability without
+// filesystem fixtures. Walks the named section line-by-line;
+// the first line whose checkbox/bullet content starts with
+// matchKey gets the mode transform applied. Returns the
+// (possibly mutated) body. Returns the original body verbatim
+// when no line matches OR the matched line is already in the
+// target state (idempotent end-state semantics).
+func resolveTaskLineInBody(body, section, matchKey, mode string) (string, error) {
+	lines := strings.Split(body, "\n")
+	sectionHeader := "## " + section
+	inSection := false
+	mutated := false
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if !mutated && inSection && !strings.HasPrefix(line, "## ") {
+			content, prefix, ok := splitBulletContent(line)
+			if ok && strings.HasPrefix(content, matchKey) {
+				switch mode {
+				case parser.TaskResolveModeCheck:
+					if strings.HasPrefix(prefix, "- [ ]") {
+						line = "- [x]" + strings.TrimPrefix(prefix, "- [ ]") + content
+						mutated = true
+					}
+					// already `- [x]` or bare bullet — no-op
+				case parser.TaskResolveModeRemove:
+					mutated = true
+					continue
+				}
+			}
+		}
+		if strings.HasPrefix(line, "## ") {
+			inSection = line == sectionHeader
+		}
+		out = append(out, line)
+	}
+	if !mutated {
+		return body, nil
+	}
+	return strings.Join(out, "\n"), nil
+}
+
+// splitBulletContent splits a markdown bullet/checkbox line
+// into (content, prefix, ok). prefix carries the bullet shape
+// + any trailing space up to the content start; content is
+// everything after. Returns ok=false for non-bullet lines.
+//
+// Recognized prefixes:
+//   - `- [ ] ` (unchecked checkbox)
+//   - `- [x] ` / `- [X] ` (checked checkbox)
+//   - `- ` (bare bullet)
+//
+// Tab + multi-space-indented variants pass through unchanged
+// (the workflow-emitted lines come through the canonical
+// task_append shape — flat, no leading whitespace).
+func splitBulletContent(line string) (content, prefix string, ok bool) {
+	switch {
+	case strings.HasPrefix(line, "- [ ] "):
+		return line[len("- [ ] "):], "- [ ] ", true
+	case strings.HasPrefix(line, "- [x] "):
+		return line[len("- [x] "):], "- [x] ", true
+	case strings.HasPrefix(line, "- [X] "):
+		return line[len("- [X] "):], "- [X] ", true
+	case strings.HasPrefix(line, "- "):
+		return line[len("- "):], "- ", true
+	}
+	return "", "", false
 }
 
 // EnsureMissingRefsSection idempotently rewrites the task
