@@ -1261,6 +1261,68 @@ func TestValidateInstances_DataDirEmpty_OK(t *testing.T) {
 	require.NoError(t, validateInstances("github", in))
 }
 
+// TestValidateInstances_StagingDirEnvShadow_Rejected pins #286:
+// YAAD_PLUGIN_STAGING_DIR in instance.Env rejects at config-load
+// with a pointed error directing the operator at the daemon-level
+// plugin_staging_dir.
+func TestValidateInstances_StagingDirEnvShadow_Rejected(t *testing.T) {
+	t.Parallel()
+	in := []InstanceEntry{
+		{
+			Name: "personal",
+			Env: map[string]string{
+				"YAAD_PLUGIN_STAGING_DIR": "/operator/attempted/shadow",
+			},
+		},
+	}
+	err := validateInstances("github", in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "YAAD_PLUGIN_STAGING_DIR")
+	assert.Contains(t, err.Error(), "reserved")
+	assert.Contains(t, err.Error(), "plugin_staging_dir")
+}
+
+// TestValidateInstances_TimezoneEnvShadow_Rejected pins #286:
+// YAAD_TIMEZONE in instance.Env rejects at config-load. Timezone
+// is daemon-global; the error tells the operator there's no
+// per-instance override.
+func TestValidateInstances_TimezoneEnvShadow_Rejected(t *testing.T) {
+	t.Parallel()
+	in := []InstanceEntry{
+		{
+			Name: "personal",
+			Env: map[string]string{
+				"YAAD_TIMEZONE": "America/Los_Angeles",
+			},
+		},
+	}
+	err := validateInstances("github", in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "YAAD_TIMEZONE")
+	assert.Contains(t, err.Error(), "reserved")
+	assert.Contains(t, err.Error(), "daemon-global")
+}
+
+// TestValidateInstances_PluginConfigEnv_StillAllowed pins #286's
+// explicit carve-out: YAAD_PLUGIN_CONFIG is intentionally NOT
+// reserved. Operator env wins over the daemon-stamped value per
+// the existing comment at instance_routing.go buildInstanceEnv;
+// this test prevents a future change to the reserved-key set
+// from accidentally locking out the env-only-instance use case.
+func TestValidateInstances_PluginConfigEnv_StillAllowed(t *testing.T) {
+	t.Parallel()
+	in := []InstanceEntry{
+		{
+			Name: "personal",
+			Env: map[string]string{
+				"YAAD_PLUGIN_CONFIG": "{}",
+			},
+		},
+	}
+	require.NoError(t, validateInstances("github", in),
+		"YAAD_PLUGIN_CONFIG must stay operator-overridable per the existing env-only-instance design")
+}
+
 // TestValidateInstances_DataDirEnvShadow_Rejected pins the
 // shadow-rejection contract: an operator who writes a colliding
 // `env: { YAAD_PLUGIN_DATA_DIR: ... }` entry is rejected at

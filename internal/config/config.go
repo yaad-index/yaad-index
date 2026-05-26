@@ -885,17 +885,16 @@ func validateInstances(pluginName string, instances []InstanceEntry) error {
 			return fmt.Errorf("plugin %q: instances[%d].data_dir %q is not absolute (ADR-0028 + #284: operator-override data_dir must be an absolute path)",
 				pluginName, i, inst.DataDir)
 		}
-		// #284: YAAD_PLUGIN_DATA_DIR is daemon-owned — the
-		// daemon resolves + provisions the dir at boot, then
-		// stamps it on the subprocess env. An operator env entry
-		// with the same key would shadow the daemon value via
-		// exec.Cmd's last-wins duplicate-key semantics, handing
-		// the plugin a path the daemon didn't MkdirAll 0700 for.
-		// Reject at load time so the operator sees the misuse
-		// pointed at the right config knob (`data_dir:`).
-		if _, shadowed := inst.Env["YAAD_PLUGIN_DATA_DIR"]; shadowed {
-			return fmt.Errorf("plugin %q: instances[%d].env[YAAD_PLUGIN_DATA_DIR] is reserved (daemon-owned per #284 — use instances[%d].data_dir for an operator override path instead)",
-				pluginName, i, i)
+		// #286: reject any operator env entry that would shadow
+		// a daemon-stamped key per #284's last-wins-shadow
+		// semantics. ReservedInstanceEnvKeys is the single
+		// source of truth; the hint text routes the operator to
+		// the correct structured knob.
+		for key, hint := range ReservedInstanceEnvKeys {
+			if _, shadowed := inst.Env[key]; shadowed {
+				return fmt.Errorf("plugin %q: instances[%d].env[%s] is reserved (daemon-owned per #286 — %s)",
+					pluginName, i, key, hint)
+			}
 		}
 	}
 	return nil

@@ -224,7 +224,15 @@ Each instance has:
 - `supports_instances: false` plugin + the sole instance disabled → reject (the plugin would silently never run).
 - Multi-instance plugin with EVERY instance disabled → WARN (likely operator mistake but not load-fatal; dispatch returns `no_enabled_instances` per call).
 - `data_dir` (when set) → must be an absolute path; reject otherwise.
-- `env[YAAD_PLUGIN_DATA_DIR]` → reject. The key is daemon-owned per #284 — letting an operator env entry through would shadow the daemon-provisioned directory via exec.Cmd's last-wins duplicate-key semantics. Use `instances[*].data_dir` for the override.
+- `env[<reserved key>]` → reject. Daemon-stamped keys can't be set in `instances[*].env` because exec.Cmd's last-wins duplicate-key semantics would let an operator entry shadow the daemon value. The current reserved set (per #286):
+
+  | Reserved key | Route the operator to |
+  |---|---|
+  | `YAAD_PLUGIN_DATA_DIR` | `instances[*].data_dir` (#284) |
+  | `YAAD_PLUGIN_STAGING_DIR` | daemon-level `plugin_staging_dir` (no per-instance override today) |
+  | `YAAD_TIMEZONE` | daemon-global setting; no per-instance override |
+
+  `YAAD_PLUGIN_CONFIG` is intentionally NOT reserved — operator env wins over the daemon-stamped value to support env-only instances.
 
 **Per-instance `config:` validation.** When the plugin declares a `config_schema` in `--init`, the daemon validates each instance's `config:` block against it at startup. Validation errors name the offending plugin + instance + index for diagnostics.
 
