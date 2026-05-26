@@ -626,6 +626,49 @@ func TestUserContent_SectionAdd_403OnCrossAuthor(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "author_mismatch")
 }
 
+// Pin the containment-aware sibling check: same slug at the same
+// depth under DIFFERENT parents is legal per the containment
+// model — they aren't siblings of each other. Adding a
+// `### Notes` under `## B` must succeed even when `## A` already
+// contains `### Notes`.
+func TestUserContent_SectionAdd_AllowsSameSlugUnderDifferentParents(t *testing.T) {
+	t.Parallel()
+	h, _, root, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Add9", "## A\nA body\n### Notes\nan note\n## B\nB body\n")
+
+	// Add `### Notes` under ## B (afterSec=b → parent ## B at depth 2).
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/user-content:add9/sections", tok,
+		map[string]any{"after_sec": "b", "heading": "Notes", "body": "another note\n", "depth": 3},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusCreated, rec.Code,
+		"adding `### Notes` under ## B must NOT collide with `### Notes` under ## A — body=%s", rec.Body.String())
+
+	v := readVaultByID(t, root, "user-content", "user-content:add9")
+	// Both `### Notes` headings now present (one under each parent).
+	require.Equal(t, 2, strings.Count(v.CleanContent, "### Notes"),
+		"two `### Notes` headings, one under each parent")
+}
+
+// Pin the containment-aware sibling check for the same-parent
+// collision path stays — adding `### Notes` AGAIN under ## A must
+// still 409.
+func TestUserContent_SectionAdd_RejectsSameSlugUnderSameParent(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Add10", "## A\nA body\n### Notes\nan note\n## B\nB body\n")
+
+	// Add `### Notes` after the existing `### Notes` (after_sec=notes)
+	// — same parent ## A, must reject.
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/user-content:add10/sections", tok,
+		map[string]any{"after_sec": "notes", "heading": "Notes", "body": "dup\n", "depth": 3},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
+}
+
 func TestUserContent_SectionAdd_409OnSlugCollision(t *testing.T) {
 	t.Parallel()
 	h, _, _, signer := newAuthedUGCFixture(t)
@@ -705,6 +748,30 @@ func TestUserContent_SectionRename_403OnCrossAuthor(t *testing.T) {
 		map[string]string{"If-Match": etag},
 	)
 	require.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+// Pin the containment-aware sibling check on the rename path: the
+// new heading-slug can match a section under a DIFFERENT parent
+// without colliding (they aren't siblings).
+func TestUserContent_SectionRename_AllowsSameSlugUnderDifferentParents(t *testing.T) {
+	t.Parallel()
+	h, _, root, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "the implementer", "alice")
+	etag := createUGCWithBody(t, h, tok, "Rn7",
+		"## A\nA body\n### Notes\nan note\n## B\nB body\n### Other\nother\n")
+
+	// Rename ### Other (under ## B) to "Notes". The other ### Notes
+	// is under ## A — different parent, so no collision.
+	rec := ugcReq(t, h, http.MethodPatch, "/v1/user-content/user-content:rn7/sections/other/heading", tok,
+		map[string]any{"new_heading": "Notes"},
+		map[string]string{"If-Match": etag},
+	)
+	require.Equal(t, http.StatusOK, rec.Code,
+		"renaming ### Other under ## B to ### Notes must NOT collide with ### Notes under ## A — body=%s", rec.Body.String())
+
+	v := readVaultByID(t, root, "user-content", "user-content:rn7")
+	require.Equal(t, 2, strings.Count(v.CleanContent, "### Notes"),
+		"both `### Notes` headings present, one under each parent")
 }
 
 func TestUserContent_SectionRename_409OnSiblingCollision(t *testing.T) {

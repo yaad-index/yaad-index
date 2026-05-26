@@ -547,34 +547,115 @@ func defaultInsertDepth(sections []Section, afterIdx int) int {
 	return 1
 }
 
-// SectionSlugConflicts reports whether `wantSlug` would collide with
-// an existing sibling section's slug at the same depth as `at`.
-// Used by the add + rename handlers to surface 409 conflict_error
-// before a successful write, per #299's heading-slug-collision
-// semantics.
+// SectionSlugConflicts reports whether `wantSlug` would collide
+// with the slug of any same-parent same-depth sibling of the
+// section at `idx`. Used by the rename handler per #299.
 //
-// "Sibling" here means a section at the same depth in the same
-// containment range (between any two same-or-shallower headings).
-// `excludeIdx` lets the caller skip the section being renamed
-// itself so a no-op rename doesn't self-collide.
-func SectionSlugConflicts(sections []Section, at, excludeIdx int, wantSlug string) bool {
+// "Sibling" is strict containment-aware: a section is a sibling
+// of another only when they share the same nearest enclosing
+// shallower-depth section as parent — `## A / ### Notes` and
+// `## B / ### Notes` are NOT siblings of each other and may
+// coexist. The function excludes `idx` itself so a no-op rename
+// doesn't self-collide.
+func SectionSlugConflicts(sections []Section, idx int, wantSlug string) bool {
 	if wantSlug == "" {
 		return false
 	}
-	if at < 0 || at >= len(sections) {
+	if idx < 0 || idx >= len(sections) {
 		return false
 	}
-	depth := sections[at].Depth
-	if depth == 0 {
+	target := sections[idx]
+	if target.Depth == 0 {
 		return false
 	}
-	for i, s := range sections {
-		if i == excludeIdx || i == at {
+	start, end := sameParentRange(sections, idx, target.Depth)
+	for i := start; i < end; i++ {
+		if i == idx {
 			continue
 		}
-		if s.Depth == depth && s.HeadingSlug() == wantSlug {
+		if sections[i].Depth == target.Depth && sections[i].HeadingSlug() == wantSlug {
 			return true
 		}
 	}
 	return false
+}
+
+// SectionSlugConflictsAtInsertion reports whether inserting a new
+// section with depth `newDepth` AFTER the section at `afterIdx`
+// would slug-collide with an existing same-parent same-depth
+// sibling. Used by the add handler per #299 so the containment-
+// aware sibling check is applied to the insertion slot, not the
+// global document.
+//
+// `afterIdx` follows InsertSection's conventions: -1 prepends
+// (at byte 0 or right after the pre-heading body); values ≥
+// len(sections) append at end. Same parent-resolution rule as
+// SectionSlugConflicts: parent = nearest preceding section with
+// depth < newDepth at-or-before the insertion slot.
+func SectionSlugConflictsAtInsertion(sections []Section, afterIdx, newDepth int, wantSlug string) bool {
+	if wantSlug == "" || newDepth < 1 {
+		return false
+	}
+	if len(sections) == 0 {
+		return false
+	}
+	// Treat "after the last section" as scanning from index len-1
+	// backward; "prepend" (-1) as scanning from before everything.
+	slot := afterIdx
+	if slot >= len(sections) {
+		slot = len(sections) - 1
+	}
+	parentDepth := 0
+	start := 0
+	for i := slot; i >= 0; i-- {
+		if sections[i].Depth > 0 && sections[i].Depth < newDepth {
+			parentDepth = sections[i].Depth
+			start = i + 1
+			break
+		}
+	}
+	// Range end: first section AFTER the insertion slot whose depth
+	// closes the parent containment (≤ parentDepth, > 0). When no
+	// parent (parentDepth == 0), the range runs to end-of-list.
+	end := len(sections)
+	scanFrom := slot + 1
+	if scanFrom < 0 {
+		scanFrom = 0
+	}
+	for i := scanFrom; i < len(sections); i++ {
+		if sections[i].Depth > 0 && parentDepth > 0 && sections[i].Depth <= parentDepth {
+			end = i
+			break
+		}
+	}
+	for i := start; i < end; i++ {
+		if sections[i].Depth == newDepth && sections[i].HeadingSlug() == wantSlug {
+			return true
+		}
+	}
+	return false
+}
+
+// sameParentRange returns the half-open [start, end) range of
+// section indices that share the containment-parent of the
+// section at `idx` (which has depth `depth`). Used by the slug-
+// collision helpers to scope sibling checks to one parent range
+// instead of the whole document.
+func sameParentRange(sections []Section, idx, depth int) (start, end int) {
+	parentDepth := 0
+	for i := idx - 1; i >= 0; i-- {
+		if sections[i].Depth > 0 && sections[i].Depth < depth {
+			parentDepth = sections[i].Depth
+			start = i + 1
+			break
+		}
+	}
+	end = len(sections)
+	for i := idx + 1; i < len(sections); i++ {
+		if sections[i].Depth > 0 && parentDepth > 0 && sections[i].Depth <= parentDepth {
+			end = i
+			break
+		}
+	}
+	return
 }

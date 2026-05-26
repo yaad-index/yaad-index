@@ -657,20 +657,21 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 			}
 		}
 
-		// Slug-collision pre-check at the same depth among siblings.
-		// Mirror vault.InsertSection's depth default so the collision
-		// check uses the same depth the writer will pick.
+		// Slug-collision pre-check restricted to the SAME containment
+		// parent as the insertion slot. Two `### Notes` under
+		// different `## A` and `## B` parents are legal — they're not
+		// siblings of each other under the containment model. Mirror
+		// vault.InsertSection's depth default so the check uses the
+		// same depth the writer will pick.
 		depth := req.Depth
 		if depth <= 0 {
 			depth = vault.DefaultInsertDepth(sections, afterIdx)
 		}
 		newSlug := vault.SlugifyHeading(req.Heading)
-		for _, s := range sections {
-			if s.Depth == depth && s.HeadingSlug() == newSlug && newSlug != "" {
-				writeError(w, http.StatusConflict, "conflict",
-					fmt.Sprintf("section heading %q would slugify to %q which already exists at depth %d", req.Heading, newSlug, depth))
-				return
-			}
+		if newSlug != "" && vault.SectionSlugConflictsAtInsertion(sections, afterIdx, depth, newSlug) {
+			writeError(w, http.StatusConflict, "conflict",
+				fmt.Sprintf("section heading %q would slugify to %q which already exists as a same-depth sibling under the same parent", req.Heading, newSlug))
+			return
 		}
 
 		// Section-scoped write-lock keyed on a synthetic "add" marker so
@@ -832,12 +833,14 @@ func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, 
 			return
 		}
 
-		// Slug-collision pre-check among siblings (excluding the
-		// section being renamed itself).
+		// Slug-collision pre-check restricted to same-parent
+		// siblings of the renamed section. `## A / ### Notes` and
+		// `## B / ### Notes` are legal — only colliding with
+		// sections sharing the same containment-parent rejects.
 		newSlug := vault.SlugifyHeading(req.NewHeading)
-		if newSlug != "" && vault.SectionSlugConflicts(sections, idx, idx, newSlug) {
+		if newSlug != "" && vault.SectionSlugConflicts(sections, idx, newSlug) {
 			writeError(w, http.StatusConflict, "conflict",
-				fmt.Sprintf("new heading %q would slugify to %q which already exists at depth %d", req.NewHeading, newSlug, sections[idx].Depth))
+				fmt.Sprintf("new heading %q would slugify to %q which already exists as a same-depth sibling under the same parent", req.NewHeading, newSlug))
 			return
 		}
 

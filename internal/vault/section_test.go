@@ -583,24 +583,93 @@ func TestDeleteSection_OutOfRange(t *testing.T) {
 
 // --- SectionSlugConflicts (#299) -----------------------------------------
 
-func TestSectionSlugConflicts_DetectsSiblingCollision(t *testing.T) {
+func TestSectionSlugConflicts_DetectsSameParentSiblingCollision(t *testing.T) {
 	body := "## A\nx\n## B\ny\n"
 	sections := vault.ParseSections(body)
-	// Renaming B to "A" would slug-collide with the existing A.
-	require.True(t, vault.SectionSlugConflicts(sections, 1, 1, "a"))
+	// Renaming B (idx 1) to "A" would slug-collide with the existing
+	// top-level A (no parent, so siblings span the whole doc).
+	require.True(t, vault.SectionSlugConflicts(sections, 1, "a"))
 }
 
-func TestSectionSlugConflicts_AllowsSameSectionRename(t *testing.T) {
+func TestSectionSlugConflicts_AllowsRenameToOwnSlug(t *testing.T) {
 	body := "## A\nx\n## B\ny\n"
 	sections := vault.ParseSections(body)
-	// excludeIdx == at should always return false (renaming a
-	// section to its own current slug is a no-op).
-	require.False(t, vault.SectionSlugConflicts(sections, 0, 0, "a"))
+	// idx is excluded from its own sibling scan — renaming to the
+	// current slug is a no-op, not a collision.
+	require.False(t, vault.SectionSlugConflicts(sections, 0, "a"))
 }
 
 func TestSectionSlugConflicts_AllowsDifferentDepth(t *testing.T) {
 	body := "## A\nx\n### Subsection\ny\n"
 	sections := vault.ParseSections(body)
-	// New `## Subsection` doesn't collide with existing `### Subsection`.
-	require.False(t, vault.SectionSlugConflicts(sections, 0, -1, "subsection"))
+	// Renaming `## A` (idx 0) to "subsection" doesn't collide with
+	// `### Subsection` (idx 1) — different depth.
+	require.False(t, vault.SectionSlugConflicts(sections, 0, "subsection"))
+}
+
+// Pin the containment-model invariant: same slug at the same
+// depth under DIFFERENT parents is a legal document state.
+// Renaming the nested heading must NOT collide with another
+// parent's nested heading of the same name.
+func TestSectionSlugConflicts_AllowsSameSlugUnderDifferentParents(t *testing.T) {
+	body := "## A\nA body\n### Notes\nan note\n## B\nB body\n### Other\nother\n"
+	sections := vault.ParseSections(body)
+	// idx 3 is `### Other` under `## B`. Renaming it to "Notes"
+	// must NOT collide with `### Notes` under `## A` — they have
+	// different parents.
+	require.False(t, vault.SectionSlugConflicts(sections, 3, "notes"),
+		"`### Notes` under `## A` is not a sibling of `### Other` under `## B`")
+}
+
+func TestSectionSlugConflicts_RejectsSameSlugUnderSameParent(t *testing.T) {
+	body := "## A\nA body\n### Notes\nfirst\n### Other\nx\n## B\ny\n"
+	sections := vault.ParseSections(body)
+	// idx 2 is `### Other` under `## A`. Renaming to "Notes"
+	// COLLIDES with the other `### Notes` under the same `## A`.
+	require.True(t, vault.SectionSlugConflicts(sections, 2, "notes"))
+}
+
+// --- SectionSlugConflictsAtInsertion (#299) ------------------------------
+
+func TestSectionSlugConflictsAtInsertion_DetectsTopLevelCollision(t *testing.T) {
+	body := "## A\nx\n## B\ny\n"
+	sections := vault.ParseSections(body)
+	// Adding a new ## A after idx 1 (## B) — top-level, no parent —
+	// collides with existing ## A.
+	require.True(t, vault.SectionSlugConflictsAtInsertion(sections, 1, 2, "a"))
+}
+
+func TestSectionSlugConflictsAtInsertion_AllowsSameSlugDifferentParents(t *testing.T) {
+	body := "## A\nA body\n### Notes\nan note\n## B\nB body\n"
+	sections := vault.ParseSections(body)
+	// Adding ### Notes after idx 2 (## B) — parent is ## B, which
+	// has no children yet. ### Notes under ## A is a different
+	// parent, so no collision.
+	require.False(t, vault.SectionSlugConflictsAtInsertion(sections, 2, 3, "notes"),
+		"adding ### Notes under ## B doesn't collide with ### Notes under ## A")
+}
+
+func TestSectionSlugConflictsAtInsertion_DetectsSameParentCollision(t *testing.T) {
+	body := "## A\nA body\n### Notes\nan note\n## B\nB body\n"
+	sections := vault.ParseSections(body)
+	// Adding ### Notes after idx 1 (### Notes under ## A) — same
+	// parent (## A), collides with itself.
+	require.True(t, vault.SectionSlugConflictsAtInsertion(sections, 1, 3, "notes"))
+}
+
+func TestSectionSlugConflictsAtInsertion_AppendAtEnd(t *testing.T) {
+	body := "## A\nx\n"
+	sections := vault.ParseSections(body)
+	// afterIdx == len(sections) means append; top-level depth 2
+	// "A" would collide.
+	require.True(t, vault.SectionSlugConflictsAtInsertion(sections, len(sections), 2, "a"))
+	require.False(t, vault.SectionSlugConflictsAtInsertion(sections, len(sections), 2, "b"))
+}
+
+func TestSectionSlugConflictsAtInsertion_PrependDoesntCollideWithChildParent(t *testing.T) {
+	// Prepending ## A when an existing nested ### a exists under
+	// some other heading — different depth, no collision.
+	body := "## X\nx\n### a\ny\n"
+	sections := vault.ParseSections(body)
+	require.False(t, vault.SectionSlugConflictsAtInsertion(sections, -1, 2, "a"))
 }
