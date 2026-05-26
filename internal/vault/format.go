@@ -248,6 +248,21 @@ func Unmarshal(b []byte) (*Entity, error) {
 	return e, nil
 }
 
+// MergedAliasesFor returns the alias list `Marshal` would write for
+// an entity with the given identity and plugin-emitted aliases.
+// Mirror of the merge `Marshal` performs internally
+// (title-synthesized + plugin entries, synth first, dedup) without
+// round-tripping through a full marshal cycle.
+//
+// Callers outside the vault package (notably the daemon's ingest
+// tracker per #3) use this to mirror the vault frontmatter into the
+// DB `entity_aliases` index — keeping search-index reads and vault
+// frontmatter in lockstep without re-encoding the YAML.
+func MergedAliasesFor(id, kind string, data map[string]any, pluginAliases []string, canonicalKinds []string) []string {
+	e := &Entity{ID: id, Kind: kind, Data: data, Aliases: pluginAliases}
+	return mergeAliases(synthesizeAliases(e, canonicalKinds), e.Aliases)
+}
+
 // synthesizeAliases derives the `aliases:` frontmatter list from the
 // entity's title (per ADR-0011). Source-shape entities (Kind not in
 // the operator's canonical_kinds set) use `data.title`; canonical-

@@ -79,11 +79,12 @@ func NewSyncIngester(
 	pluginInstances map[string][]string,
 	pluginInstanceConfigs map[string][]config.InstanceEntry,
 	canonicalEdgeTypes []string,
+	canonicalKinds []string,
 ) SyncIngester {
 	return &syncIngester{
 		logger:                logger,
 		registry:              registry,
-		tracker:               newIngestTracker(logger, st, vaultWriter, vaultReader, canonicalGuard, cacheTTLSeconds, dispatcher, writeLocks, bus, pluginInstances, canonicalEdgeTypes),
+		tracker:               newIngestTracker(logger, st, vaultWriter, vaultReader, canonicalGuard, cacheTTLSeconds, dispatcher, writeLocks, bus, pluginInstances, canonicalEdgeTypes, canonicalKinds),
 		pluginInstanceConfigs: pluginInstanceConfigs,
 	}
 }

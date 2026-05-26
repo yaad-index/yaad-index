@@ -251,6 +251,16 @@ type ingestTracker struct {
 	// degrades to "everything is bare" which is the right
 	// shape for the no-canonical-layer case.
 	canonicalEdgeTypes []string
+
+	// canonicalKinds is the operator-enabled canonical-kind set
+	// (same value vault.Writer holds) so the ingest path can
+	// compute the title-synthesized-merged alias list per
+	// ADR-0011 without round-tripping through vault.Marshal. The
+	// merged list is what gets mirrored into entity_aliases —
+	// matching the vault frontmatter the writer is about to
+	// produce, so `/v1/search` sees the title-alias on first
+	// ingest instead of only after the next reindex.
+	canonicalKinds []string
 }
 
 // preUpsertSnapshot fetches the entity's pre-upsert state so the
@@ -452,7 +462,7 @@ func (t *ingestTracker) publishEntityEdgeAdded(ctx context.Context, e *store.Edg
 // constructs a guard from the keys of cfg.CanonicalKinds (the
 // registry map per ADR-0013 §1) plus cfg.CanonicalEdgeTypes; tests
 // typically pass nil unless they exercise the canonical path.
-func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer, reader *vault.Reader, guard *config.CanonicalGuard, globalCacheTTLSeconds int, dispatcher *attachments.Dispatcher, writeLocks *writelocks.Manager, bus eventbus.Bus, pluginInstances map[string][]string, canonicalEdgeTypes []string) *ingestTracker {
+func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer, reader *vault.Reader, guard *config.CanonicalGuard, globalCacheTTLSeconds int, dispatcher *attachments.Dispatcher, writeLocks *writelocks.Manager, bus eventbus.Bus, pluginInstances map[string][]string, canonicalEdgeTypes []string, canonicalKinds []string) *ingestTracker {
 	if (writer == nil) != (reader == nil) {
 		panic("newIngestTracker: vault writer and reader must both be set or both be nil")
 	}
@@ -473,6 +483,7 @@ func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer,
 		bus:                   bus,
 		pluginInstances:       pluginInstances,
 		canonicalEdgeTypes:    canonicalEdgeTypes,
+		canonicalKinds:        canonicalKinds,
 	}
 }
 
@@ -1082,10 +1093,19 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 	// #3: persist aliases to the queryable entity_aliases table so
 	// `/v1/search?q=<term>` matches against alternate labels too.
 	// Replace-not-append matches the vault-is-source-of-truth
-	// contract (per ADR-0008 / ADR-0011): the latest fetch's aliases
-	// are the current set. Empty result.Aliases clears the entity's
-	// alias rows.
-	aliasEntries := buildAliasEntries(result.Entity.ID, result.Aliases, t.canonicalEdgeTypes)
+	// contract (per ADR-0008 / ADR-0011): the latest fetch's
+	// aliases are the current set. The list mirrored into the DB
+	// MUST match what vault.Marshal wrote to disk — that's the
+	// plugin slice merged with the ADR-0011 title-synthesized
+	// alias. Without the merge, a plugin emitting zero aliases
+	// would write `aliases: [<title>]` to the vault frontmatter
+	// but clear `entity_aliases` in the DB, and the title alias
+	// would only surface in `/v1/search` after the next reindex.
+	mergedAliases := vault.MergedAliasesFor(
+		result.Entity.ID, result.Entity.Kind, result.Entity.Data,
+		result.Aliases, t.canonicalKinds,
+	)
+	aliasEntries := buildAliasEntries(result.Entity.ID, mergedAliases, t.canonicalEdgeTypes)
 	if err := t.store.ReplaceAliases(ctx, result.Entity.ID, aliasEntries); err != nil {
 		t.logger.Error("ingest simulator: ReplaceAliases failed",
 			"err", err, "id", result.Entity.ID,

@@ -159,6 +159,14 @@ The split is recorded for future readers (filters, callers that want only typed 
 
 The vault file remains canonical per ADR-0008. On reindex, `entity_aliases` rows are reconciled to the vault frontmatter `aliases:` list via the same DELETE + INSERT shape `ReplaceNotations` uses for `entity_notations` and `ReplaceProvenance` uses for provenance. Orphan rows the vault no longer carries are dropped. Operator hand-edits to the `aliases:` block are preserved (they become the new vault truth on the next reindex pass).
 
+### Ingest mirrors what Marshal writes
+
+The DB `entity_aliases` rows MUST match the alias list the vault writer puts on disk on the same pass — not just the raw plugin slice. Concretely, the ingest path passes the plugin-emitted aliases through `vault.MergedAliasesFor` (same merge `vault.Marshal` performs internally — title-synthesized alias first, plugin entries after, dedup) before calling `store.ReplaceAliases`. Without this, a plugin emitting zero aliases would write `aliases: [<title>]` to the vault frontmatter but clear the DB index, and the title alias would only surface in `/v1/search` after the next reindex.
+
+### Classifier symmetry across ingest + reindex
+
+`alias_kind` derivation reads the same enabled-edge-type set on both paths — `enabledEdgeTypes` = `cfg.CanonicalEdgeTypes ∪ collectPluginEmittedEdgeTypes(registry)`. Plugin-auto-activated prefixes (declared by a plugin's `--init` output without an operator-side `canonical_edge_types:` entry) classify as `typed` on first ingest, not bare-then-typed-after-reindex.
+
 ### What didn't change
 
 - Title-synthesized aliases are still written by `vault.Writer` exactly as v1 did — the test cohort for §Decision behaviors is unchanged.
