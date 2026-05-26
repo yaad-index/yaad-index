@@ -388,8 +388,9 @@ func buildInstanceEnv(pluginName string, instance config.InstanceEntry) ([]strin
 		// fail-fast with a wrapped ErrUnresolvedEnvReference
 		// naming the missing variable. Empty-resolution refs
 		// are non-fatal and dropped on the floor here — the
-		// startup validation pass (config.ValidateInstanceEnv)
-		// surfaces the warning at daemon boot. Per-dispatch
+		// startup validation pass (cmd/yaad-index's
+		// validatePluginInstanceEnvReferences) surfaces the
+		// warning at daemon boot. Per-dispatch
 		// re-expansion would warn-spam the operator log; that's
 		// for startup.
 		expanded, _, err := config.ExpandEnvReferences(v)
