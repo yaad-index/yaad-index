@@ -91,3 +91,66 @@ func TestEnsure_RejectsNonDirAtPath(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a directory")
 }
+
+// TestResolve_PluginDataRootWinsOverEnv pins #287 step 2 of the
+// precedence chain: when SetRoot is called with a non-empty
+// value, Resolve uses it (joined with yaad-<plugin>/<instance>/)
+// regardless of $STATE_DIRECTORY or UserCacheDir.
+//
+// Tests that touch package globals (SetRoot) must NOT t.Parallel
+// because they mutate process-wide state.
+func TestResolve_PluginDataRootWinsOverEnv(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", "/should-not-be-used")
+	t.Setenv("STATE_DIRECTORY", "/should-not-be-used-either")
+	root := "/srv/yaad/plugin-data"
+	SetRoot(root)
+	t.Cleanup(func() { SetRoot("") })
+
+	got, err := Resolve("github", "personal", "")
+	require.NoError(t, err)
+	assert.Equal(t, "/srv/yaad/plugin-data/yaad-github/personal", got)
+}
+
+// TestResolve_StateDirectoryUsedWhenRootEmpty pins #287 step 3:
+// systemd-managed `StateDirectory=` exports $STATE_DIRECTORY,
+// and Resolve picks it up (joined with
+// `plugin-data/yaad-<plugin>/<instance>/`) when no
+// plugin_data_root is configured.
+func TestResolve_StateDirectoryUsedWhenRootEmpty(t *testing.T) {
+	SetRoot("")
+	t.Setenv("XDG_CACHE_HOME", "/should-not-be-used")
+	t.Setenv("STATE_DIRECTORY", "/var/lib/yaad-index")
+
+	got, err := Resolve("github", "personal", "")
+	require.NoError(t, err)
+	assert.Equal(t, "/var/lib/yaad-index/plugin-data/yaad-github/personal", got)
+}
+
+// TestResolve_UserCacheDirFallback pins #287 step 4: when neither
+// plugin_data_root nor $STATE_DIRECTORY is set, Resolve falls
+// back to os.UserCacheDir() (XDG default).
+func TestResolve_UserCacheDirFallback(t *testing.T) {
+	SetRoot("")
+	t.Setenv("STATE_DIRECTORY", "")
+	tmp := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmp)
+
+	got, err := Resolve("github", "personal", "")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(tmp, "yaad-github", "personal"), got)
+}
+
+// TestResolve_InstanceOverrideAlwaysWins pins the precedence
+// invariant: an explicit `instances[*].data_dir` override beats
+// every layer below it. Regression guard against a future
+// refactor that re-orders the chain.
+func TestResolve_InstanceOverrideAlwaysWins(t *testing.T) {
+	SetRoot("/srv/yaad/plugin-data")
+	t.Cleanup(func() { SetRoot("") })
+	t.Setenv("STATE_DIRECTORY", "/var/lib/yaad-index")
+	t.Setenv("XDG_CACHE_HOME", "/should-not-be-used")
+
+	got, err := Resolve("github", "personal", "/custom/operator/path")
+	require.NoError(t, err)
+	assert.Equal(t, "/custom/operator/path", got)
+}

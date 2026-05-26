@@ -230,14 +230,18 @@ Each instance has:
 
 **Config changes take effect at next daemon restart** in v1. The §8 hot-reload mechanics (file watcher, mtime/hash diff, runtime cache invalidation, instance-removal archival) are deferred — see [#254](https://github.com/yaad-index/yaad-index/issues/254). Restart the daemon after editing `instances:` to pick up the change.
 
-**Per-instance persistent state directory** (per #284). The daemon stamps `YAAD_PLUGIN_DATA_DIR=<abs-path>` on every subprocess invocation. Plugins that need durable per-instance state (cookie jars, refresh tokens, plugin-managed caches) write under this path; the plugin SDK helper at `github.com/yaad-index/yaad-index/pkg/plugin/data.DataDir()` reads the env value. Path resolution:
+**Per-instance persistent state directory** (per #284 + #287). The daemon stamps `YAAD_PLUGIN_DATA_DIR=<abs-path>` on every subprocess invocation. Plugins that need durable per-instance state (cookie jars, refresh tokens, plugin-managed caches) write under this path; the plugin SDK helper at `github.com/yaad-index/yaad-index/pkg/plugin/data.DataDir()` reads the env value. Path resolution (highest priority first):
 
-- Operator override → `instances[*].data_dir: /custom/abs/path` (absolute required).
-- Default → `<userCacheDir>/yaad-<plugin>/<instance>/` where `userCacheDir` follows XDG semantics (`$XDG_CACHE_HOME` if set, otherwise `~/.cache`).
+1. **`instances[*].data_dir: /custom/abs/path`** — per-instance operator override. Absolute path required, validated at config-load.
+2. **Top-level `plugin_data_root: /abs/path`** — operator-configured base directory for all plugins. Joined with `yaad-<plugin>/<instance>/` per instance. Absolute path required.
+3. **`$STATE_DIRECTORY` env** — systemd-managed when the unit sets `StateDirectory=<unit>`; systemd auto-creates `/var/lib/<unit>/` and exports the path here. The daemon joins it with `plugin-data/yaad-<plugin>/<instance>/` so the plugin subtree stays distinct from any other state under the same root.
+4. **`<userCacheDir>/yaad-<plugin>/<instance>/`** — XDG fallback for dev hosts (`$XDG_CACHE_HOME` or `~/.cache`). Useful when running the daemon by hand outside systemd.
 
 The directory is created with `0700` perms at daemon startup before any plugin subprocess spawns. Permission posture matches the env-file secret model (#256) — contents are credential-equivalent in practice. The daemon does NOT enumerate, read, delete, or re-perm files under the dir; lifecycle is plugin-owned. A non-directory at the resolved path fails fast at boot.
 
 Multi-instance isolation: each `<plugin>/<instance>` resolves to a distinct path, so e.g. `gmail/personal` and `gmail/work` get separate cookie jars.
+
+**Production hardened-systemd unit setup.** Units that apply `ProtectHome=read-only` can't write under `os.UserCacheDir()` (it resolves under an unwritable `$HOME`). Set `StateDirectory=yaad-index` on the unit and the daemon picks the resolved path up from `$STATE_DIRECTORY` automatically with no yaml changes. For non-systemd deployments or operators who want the root elsewhere, set `plugin_data_root: /abs/path` at the top level of `config.yaml`.
 
 **Secret references in `env` values** (per #256). `instances[*].env` values support `${NAME}` reference expansion at instance-env-build time. The daemon walks each value and substitutes any `${NAME}` literal with the corresponding entry from its own process environment — typically populated by systemd's `EnvironmentFile=/etc/yaad-index/yaad-index.env` directive. The intended split:
 

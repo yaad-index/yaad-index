@@ -277,6 +277,29 @@ type Config struct {
 	// PR-D).
 	PluginStagingDir string `yaml:"plugin_staging_dir"`
 
+	// PluginDataRoot is the operator-configured base directory
+	// under which the daemon provisions per-(plugin,instance)
+	// persistent-state dirs per #284 + #287. When set, the
+	// resolver joins it with `yaad-<plugin>/<instance>/` for each
+	// instance. When empty, the resolver falls through the
+	// environment-driven chain at `internal/plugins/datadir`:
+	// `$STATE_DIRECTORY` (systemd `StateDirectory=`-aware) →
+	// `os.UserCacheDir()` (XDG default).
+	//
+	// Production deployments under hardened systemd units
+	// (`ProtectHome=read-only`) need this knob because
+	// `os.UserCacheDir()` resolves under an unwritable `$HOME`.
+	// Operators of those units typically set `StateDirectory=`
+	// on the unit (which auto-creates `/var/lib/<unit>/` +
+	// exports `$STATE_DIRECTORY`) and the daemon picks it up
+	// without yaml changes; this field is the explicit override
+	// for deployments that want the root somewhere else.
+	//
+	// Validate ensures the value (when non-empty) is absolute.
+	// The path doesn't have to exist at Load time — the daemon
+	// `MkdirAll`s under it at boot per the #284 lifecycle.
+	PluginDataRoot string `yaml:"plugin_data_root"`
+
 	// FillInstruction is operator-supplied prose injected verbatim onto
 	// every `needs_fill` ingest response under the `instruction` wire
 	// field (per ADR-0013 §2). The intent is to give the agent's AI a
@@ -726,6 +749,13 @@ func (c *Config) Validate() error {
 		if !info.IsDir() {
 			return fmt.Errorf("plugin_staging_dir %s is not a directory", c.PluginStagingDir)
 		}
+	}
+	if c.PluginDataRoot != "" && !filepath.IsAbs(c.PluginDataRoot) {
+		// #287: don't stat — the daemon MkdirAll's under this
+		// root at boot per #284's lifecycle, so the path may
+		// legitimately not exist at Load time. Only enforce
+		// absolute-path.
+		return fmt.Errorf("plugin_data_root %q is not absolute", c.PluginDataRoot)
 	}
 	if err := validateUserContentFrontmatterEdges(c.UserContentFrontmatterEdges); err != nil {
 		return err

@@ -1286,3 +1286,59 @@ func TestValidateInstances_DataDirEnvShadow_Rejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "reserved")
 	assert.Contains(t, err.Error(), "data_dir")
 }
+
+// TestLoad_PluginDataRoot_AbsoluteOK pins #287's absolute-path
+// validation happy path: an absolute `plugin_data_root` parses
+// cleanly + lands on the Config struct.
+func TestLoad_PluginDataRoot_AbsoluteOK(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-wikipedia")
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: wikipedia
+    path: `+bin+`
+plugin_data_root: /var/lib/yaad-index/plugin-data
+`)
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, "/var/lib/yaad-index/plugin-data", cfg.PluginDataRoot)
+}
+
+// TestLoad_PluginDataRoot_RelativeRejected pins the fail-fast on
+// a relative `plugin_data_root` — symmetric with the
+// `plugin_staging_dir` absolute-path validation. Unlike the
+// staging-dir check, the data-root path is NOT stat'd because
+// the daemon MkdirAlls under it at boot per #284's lifecycle.
+func TestLoad_PluginDataRoot_RelativeRejected(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-wikipedia")
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: wikipedia
+    path: `+bin+`
+plugin_data_root: relative/path
+`)
+	_, err := Load(cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plugin_data_root")
+	assert.Contains(t, err.Error(), "not absolute")
+}
+
+// TestLoad_PluginDataRoot_AbsentOK pins the back-compat path:
+// an absent `plugin_data_root` field parses cleanly + the
+// resolver falls through the env-driven chain at runtime.
+func TestLoad_PluginDataRoot_AbsentOK(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	bin := makeExecutable(t, tmp, "yaad-wikipedia")
+	cfgPath := writeConfig(t, `
+plugins:
+  - name: wikipedia
+    path: `+bin+`
+`)
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.PluginDataRoot)
+}

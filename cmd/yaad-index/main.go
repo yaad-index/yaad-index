@@ -650,6 +650,16 @@ func (s *ServeCmd) Run() error {
 		subprocess.SetStagingDir(stagingDir)
 		logger.Info("attachments dispatcher active", "plugin_staging_dir", stagingDir)
 
+		// #287: stamp the operator's `plugin_data_root` (if any) on
+		// the datadir resolver. Empty leaves the resolver on the
+		// env-driven precedence chain ($STATE_DIRECTORY →
+		// UserCacheDir). Set-once at boot; same plumbing pattern as
+		// SetStagingDir.
+		datadir.SetRoot(cfg.PluginDataRoot)
+		if cfg.PluginDataRoot != "" {
+			logger.Info("plugin data dir root configured", "plugin_data_root", cfg.PluginDataRoot)
+		}
+
 		// Workflow loader (per ADR-0024 Phase 1.B). Scans
 		// <vault>/workflows/ for operator-authored workflow files,
 		// validates them, builds an in-memory registry, and
