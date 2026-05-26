@@ -792,6 +792,11 @@ func (s *ServeCmd) Run() error {
 			}
 		}()
 		handlerOpts = append(handlerOpts, api.WithWorkflowEngine(wfEngine))
+		// #277: per-workflow CRUD surface. workflowDir is the
+		// same on-disk path the loader polls; mutations write the
+		// file, the loader reconciles engine state on the next
+		// poll (vault-as-truth per ADR-0008).
+		handlerOpts = append(handlerOpts, api.WithWorkflowDir(workflowDir))
 		// Phase 6.B/C task surface — filesystem-walk reader +
 		// writer rooted at the same vault path the action
 		// runners write tasks under. Registers GET /v1/tasks

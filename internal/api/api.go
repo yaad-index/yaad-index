@@ -159,6 +159,14 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 		mux.Handle("GET /v1/workflows/discover", protect(http.HandlerFunc(handleWorkflowDiscover(logger, cfg.workflowEngine))))
 		mux.Handle("POST /v1/workflows/trigger", protect(http.HandlerFunc(handleWorkflowTrigger(logger, cfg.workflowEngine))))
 	}
+	if cfg.workflowDir != "" {
+		// Per-workflow CRUD per #277. Vault-as-truth: PUT/DELETE
+		// touch the file; the loader's mtime poll reconciles
+		// engine state on the next pass.
+		mux.Handle("GET /v1/workflows/{name}", protect(http.HandlerFunc(handleWorkflowGet(logger, cfg.workflowDir))))
+		mux.Handle("PUT /v1/workflows/{name}", protect(http.HandlerFunc(handleWorkflowDefine(logger, cfg.workflowDir))))
+		mux.Handle("DELETE /v1/workflows/{name}", protect(http.HandlerFunc(handleWorkflowDelete(logger, cfg.workflowDir))))
+	}
 	if cfg.tasksReader != nil {
 		mux.Handle("GET /v1/tasks", protect(http.HandlerFunc(handleTaskList(logger, cfg.tasksReader))))
 		mux.Handle("GET /v1/tasks/{id}", protect(http.HandlerFunc(handleTaskLoad(logger, cfg.tasksReader))))
@@ -271,6 +279,20 @@ type handlerConfig struct {
 	// option isn't wired — useful for tests + dev binaries
 	// without a vault, where no workflow engine runs.
 	workflowEngine *engine.Engine
+
+	// workflowDir, when non-empty, registers the per-workflow
+	// CRUD routes per #277:
+	//
+	//   - GET    /v1/workflows/{name}
+	//   - PUT    /v1/workflows/{name}
+	//   - DELETE /v1/workflows/{name}
+	//
+	// Wired to the same on-disk directory the workflow loader
+	// polls (per cmd/yaad-index/main.go: <vault>/workflows/).
+	// The directory MUST exist + be writable; the handlers
+	// fail-fast at write time if not. Omitting this option
+	// leaves the CRUD routes unregistered (404).
+	workflowDir string
 
 	// syncIngester, when non-nil, supplies the shared ingest
 	// tracker the /v1/ingest HTTP handler should use. The
@@ -562,6 +584,21 @@ func WithEventBus(b eventbus.Bus) HandlerOption {
 // gating used for the loader + reconcile loop).
 func WithWorkflowEngine(eng *engine.Engine) HandlerOption {
 	return func(c *handlerConfig) { c.workflowEngine = eng }
+}
+
+// WithWorkflowDir wires the on-disk workflow directory (per
+// #277) so the per-workflow CRUD routes register:
+//
+//   - GET    /v1/workflows/{name} — returns the markdown body
+//   - PUT    /v1/workflows/{name} — pre-validates + atomic-writes
+//   - DELETE /v1/workflows/{name} — idempotent remove
+//
+// MUST be an absolute path to an existing directory (the same
+// `<vault>/workflows/` the loader polls). Omitting this option
+// leaves the CRUD routes unregistered — appropriate for tests
+// + dev binaries without a vault.
+func WithWorkflowDir(dir string) HandlerOption {
+	return func(c *handlerConfig) { c.workflowDir = dir }
 }
 
 // WithTasksReader wires a workflow tasks reader so the
