@@ -630,7 +630,9 @@ func TestUserContent_SectionAdd_403OnCrossAuthor(t *testing.T) {
 // depth under DIFFERENT parents is legal per the containment
 // model — they aren't siblings of each other. Adding a
 // `### Notes` under `## B` must succeed even when `## A` already
-// contains `### Notes`.
+// contains `### Notes`. The response must echo the NEW section
+// (located by byte offset), not the pre-existing same-slug
+// section under the other parent.
 func TestUserContent_SectionAdd_AllowsSameSlugUnderDifferentParents(t *testing.T) {
 	t.Parallel()
 	h, _, root, signer := newAuthedUGCFixture(t)
@@ -649,6 +651,22 @@ func TestUserContent_SectionAdd_AllowsSameSlugUnderDifferentParents(t *testing.T
 	// Both `### Notes` headings now present (one under each parent).
 	require.Equal(t, 2, strings.Count(v.CleanContent, "### Notes"),
 		"two `### Notes` headings, one under each parent")
+
+	// Response must echo the NEW section, not the pre-existing
+	// same-slug one under ## A. Locate ## B's heading byte offset
+	// in the post-write body and assert the returned section's
+	// ByteOffset is AFTER it.
+	bHeadingPos := strings.Index(v.CleanContent, "## B")
+	require.GreaterOrEqual(t, bHeadingPos, 0)
+
+	var got userContentSectionResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	require.True(t, got.OK)
+	require.Equal(t, "Notes", got.Section.Heading)
+	require.Greater(t, got.Section.ByteOffset, bHeadingPos,
+		"response must echo the newly-inserted ### Notes under ## B, not the pre-existing one under ## A")
+	require.Equal(t, "another note\n", got.Section.Body,
+		"response body must be the new section's body, not the old one's")
 }
 
 // Pin the containment-aware sibling check for the same-parent

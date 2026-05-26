@@ -348,8 +348,12 @@ func allDigits(s string) bool {
 }
 
 // InsertSection returns a new whole-document body with a new section
-// (heading + body) inserted AFTER the section at afterIdx. Used by
-// the POST /v1/user-content/{id}/sections handler per #299.
+// (heading + body) inserted AFTER the section at afterIdx, along
+// with the byte offset of the inserted heading line in the new
+// body so callers can unambiguously locate the new section in a
+// post-write re-parse — the heading slug alone isn't unique when
+// a same-named section already lives under a different parent.
+// Used by the POST /v1/user-content/{id}/sections handler per #299.
 //
 // afterIdx semantics:
 //
@@ -377,9 +381,12 @@ func allDigits(s string) bool {
 // when body is non-empty + doesn't end in one, so the next section's
 // heading won't fold onto the same line.
 //
-// Returns the new whole-document body and the index the new section
-// occupies in the post-insert parse. The caller re-parses the new
-// body to refresh its section list.
+// Returns the new whole-document body and the byte offset of the
+// inserted heading line within that new body. Callers locate the
+// new section in a post-write re-parse by matching ByteOffset
+// against the returned value — the heading slug alone isn't
+// unique because the containment model allows same-named
+// siblings under different parents.
 func InsertSection(body string, sections []Section, afterIdx int, depth int, heading, sectionBody string) (string, int, error) {
 	if heading == "" {
 		return "", 0, fmt.Errorf("InsertSection: heading is required (use the section-0 pre-heading body shape for headless content)")
@@ -391,7 +398,7 @@ func InsertSection(body string, sections []Section, afterIdx int, depth int, hea
 		return "", 0, fmt.Errorf("InsertSection: depth %d out of range [1, 6]", depth)
 	}
 
-	insertAt, newIdx := computeInsertOffset(body, sections, afterIdx)
+	insertAt, _ := computeInsertOffset(body, sections, afterIdx)
 	pad := ""
 	// Ensure the slice we splice in starts on a new line.
 	if insertAt > 0 && (insertAt > len(body) || body[insertAt-1] != '\n') {
@@ -403,7 +410,11 @@ func InsertSection(body string, sections []Section, afterIdx int, depth int, hea
 		bodyChunk += "\n"
 	}
 	insertion := pad + headingLine + bodyChunk
-	return body[:insertAt] + insertion + body[insertAt:], newIdx, nil
+	newBody := body[:insertAt] + insertion + body[insertAt:]
+	// Byte offset of the new heading line in the new body: insertAt
+	// plus the optional leading newline pad.
+	newOffset := insertAt + len(pad)
+	return newBody, newOffset, nil
 }
 
 // computeInsertOffset returns the byte offset to splice a new

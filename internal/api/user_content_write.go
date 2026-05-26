@@ -684,7 +684,7 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 		}
 		defer release()
 
-		newBody, _, err := vault.InsertSection(ve.CleanContent, sections, afterIdx, depth, req.Heading, req.Body)
+		newBody, insertedOffset, err := vault.InsertSection(ve.CleanContent, sections, afterIdx, depth, req.Heading, req.Body)
 		if err != nil {
 			logger.ErrorContext(r.Context(), "vault.InsertSection", "err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",
@@ -727,12 +727,14 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 		}
 
 		// Re-parse so the response echoes the section's final
-		// post-insert index. Find it by heading slug match at the
-		// chosen depth.
+		// post-insert index. Slug + depth alone aren't unique under
+		// the containment model — a same-slug sibling can legally
+		// live under a different parent — so we locate the new
+		// section by the byte offset returned from InsertSection.
 		newSections := vault.ParseSections(ve.CleanContent)
 		newIdx := 0
 		for i, s := range newSections {
-			if s.Depth == depth && s.HeadingSlug() == newSlug {
+			if s.ByteOffset == insertedOffset && s.Depth == depth {
 				newIdx = i
 				break
 			}
