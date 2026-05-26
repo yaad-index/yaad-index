@@ -401,6 +401,23 @@ The root-level defaults merge into every per-kind block per ADR-0016 §3's four-
 
 Later layers override earlier ones on key collision. The merged result is what `/v1/needs-fill`, `/v1/structure`, and the AI-fill prompt surface read.
 
+### 5.3a Daemon-shipped Layer 1.5 defaults (per #48 slice 2)
+
+The daemon binary ships per-kind default gap-sets at "Layer 1.5" of the merge — between the universal `DefaultGaps()` (Layer 1) and plugin-extras (Layer 2). They give operators a sensible starter pool for common canonical kinds without having to invent gap-sets from scratch or wait for a plugin to ship extras.
+
+| Kind | Layer 1.5 gaps |
+|---|---|
+| `boardgame` | `rating` (int 1-10, operator), `owned`, `want`, `played`, `knows_how_to_play` (all bool, operator) |
+| `person` | `birth_date`, `death_date`, `occupation` (all string) |
+| `place` | `country` (string), `type` (enum: city / country / region / landmark / neighborhood / other) |
+| `book` | `author`, `year` (int), `rating` (int 1-10, operator), `read` (bool, operator) |
+| `article` | `author`, `publication`, `published_date` (all string) |
+| `recipe` | `cuisine`, `prep_time_minutes` (int 0-1440), `servings` (int 1-100) |
+
+**Dormant until activation.** Layer 1.5 is a *starter pool*, not auto-on. A kind's built-in gap-set surfaces only when the kind activates in the merged registry — either via a plugin's `canonical_kinds_emitted` (Layer 2 plugin-driven activation, see §5.4) or via explicit operator config (`canonical_kinds: { book: {} }`). An operator running with no plugins + no `book` in operator config sees NO `book` entry in the merged registry, even though Layer 1.5 ships defaults for it. This preserves ADR-0013's opt-in canonical-kind contract.
+
+**Operator overrides win.** Layer 1.5 defaults can be overridden field-by-field by operator config (Layer 3 / Layer 4). To disable a Layer 1.5 default, the operator declares the field under `canonical_kinds:` with an empty `description:` — the merge's last-write-wins clobbers the built-in.
+
 ### 5.4 Plugin-driven activation (ADR-0016 §plugin-driven-activation)
 
 A plugin that declares `canonical_kinds_emitted: [person, boardgame]` in `--init` **auto-activates** those kinds in the merged registry — operators do NOT need to re-declare them in `canonical_kinds:` to enable. The operator block ADDS to the merged set; it never REMOVES plugin-emitted kinds.
