@@ -126,6 +126,50 @@ Field semantics per the slim plugin-author reference at [`docs/plugin-flow.md`](
 
 `BGG_API_KEY` is the env var operators set to supply the BoardGameGeek API key. yaad-bgg spawns subprocess-per-request and inherits the daemon's environment, so the env var is the natural integration point. The plugin fails closed when the key is empty (no anonymous-BGG fallback).
 
+### Optional per-game collection enrichment (#282)
+
+When `BGG_USERNAME` + `BGG_PASSWORD` are both set, the plugin additionally calls `/xmlapi2/collection?id=<game>&stats=1&showprivate=1` after the public `/thing` fetch and merges the operator's per-game collection fields onto the canonical row:
+
+| `data` field | Source |
+|---|---|
+| `operator_status` | `<status>` flags as a flat list (`["own"]`, `["own", "played"]`, etc.) |
+| `operator_rating` | `<stats><rating value=...>` rounded to int 1-10; absent when unrated |
+| `operator_num_plays` | `<numplays>` when > 0 |
+| `operator_comment` | `<comment>` when non-empty |
+| `operator_price_paid` + `operator_price_currency` | `<privateinfo>` `pricepaid` + `pp_currency` |
+| `operator_acquisition_date` | `<privateinfo>` `acquisitiondate` (ISO date) |
+| `operator_acquired_from` | `<privateinfo>` `acquiredfrom` |
+| `operator_inventory_location` | `<privateinfo>` `inventorylocation` |
+| `operator_private_comment` | `<privatecomment>` child element |
+
+If either env var is missing, enrichment is silently off and the plugin behaves as the `/thing`-only legacy path. The credentials path also requires `YAAD_PLUGIN_DATA_DIR` (the daemon-managed per-instance dir from [#284](https://github.com/yaad-index/yaad-index/issues/284)) — the plugin persists a session-cookie jar at `<dataDir>/session.json` so subsequent subprocess invocations skip the Login round-trip. Without the data dir the cookie jar can't persist, so enrichment falls back off with a stderr WARN.
+
+**Recommended operator setup** with [#256](https://github.com/yaad-index/yaad-index/issues/256) `${NAME}` expansion:
+
+```yaml
+# /etc/yaad-index/yaad-index.env (mode 0600)
+BGG_API_KEY=ghp_xxx
+BGG_USERNAME=operator-handle
+BGG_PASSWORD=operator-secret
+
+# config.yaml (mode 0644)
+plugins:
+  - name: bgg
+    path: /opt/yaad/yaad-bgg
+    instances:
+      - name: default
+        env:
+          BGG_USERNAME: ${BGG_USERNAME}
+          BGG_PASSWORD: ${BGG_PASSWORD}
+```
+
+**Failure modes:**
+
+- Bad credentials at Login → stderr WARN, fall back to `/thing`-only result for this fetch and for the rest of the subprocess lifetime.
+- Mid-session 401 (server-side session invalidation while the client-side cookie `Expires` is in the future) → silent re-login + retry once; one WARN log line. If the retry also fails, fall back to `/thing`-only for this fetch.
+- Game not in operator's collection → `/thing` result lands unchanged, no `operator_*` fields.
+- Network / transport error on `/xmlapi2/collection` → stderr WARN, fall back to `/thing`-only for this fetch.
+
 ## Development
 
 From the monorepo root:

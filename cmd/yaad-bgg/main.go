@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/yaad-index/yaad-index/pkg/plugin/attach"
+	"github.com/yaad-index/yaad-index/pkg/plugin/data"
 
 	"github.com/yaad-index/yaad-index/internal/bgg"
 )
@@ -55,6 +56,17 @@ import (
 // rather than falling back to anonymous BGG access (the anonymous
 // path is rate-limited + missing fields per the operator's spec).
 const EnvAPIKey = "BGG_API_KEY"
+
+// EnvUsername / EnvPassword are the optional BGG credential env
+// vars per #282. Both empty → per-game collection enrichment is
+// silently off (the legacy /thing-only behavior). Both non-empty
+// + YAAD_PLUGIN_DATA_DIR set → enrichment on. Operators source
+// these from yaad-index.env via systemd's EnvironmentFile +
+// reference them in config.yaml via #256's `${NAME}` expansion.
+const (
+	EnvUsername = "BGG_USERNAME"
+	EnvPassword = "BGG_PASSWORD"
+)
 
 // thumbDownloadTimeout caps the wall-clock budget for the thumbnail
 // staging download. Separate from the BGG-API budget so a slow
@@ -373,7 +385,37 @@ func runFetch(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) er
 		return errors.New("request missing `url`")
 	}
 
-	plugin, err := bgg.New(apiKey)
+	// #282: optional per-game collection enrichment credentials.
+	// Both empty → silent off, behaves as today. Both non-empty
+	// + YAAD_PLUGIN_DATA_DIR set → enrichment on.
+	username := strings.TrimSpace(os.Getenv(EnvUsername))
+	password := os.Getenv(EnvPassword) // raw — passwords can carry leading/trailing spaces
+
+	pluginOpts := []bgg.Option{
+		bgg.WithWarnLogger(func(format string, args ...any) {
+			_, _ = fmt.Fprintf(stderr, "yaad-bgg WARN: "+format+"\n", args...)
+		}),
+	}
+	if username != "" && password != "" {
+		pluginOpts = append(pluginOpts, bgg.WithCredentials(username, password))
+		// #284: daemon-managed per-instance data dir. Read via
+		// pkg/plugin/data.DataDir() so the plugin honors the
+		// daemon's resolved + provisioned path.
+		if dir := data.DataDir(); dir != "" {
+			pluginOpts = append(pluginOpts, bgg.WithDataDir(dir))
+		} else {
+			// Creds without a data dir means the plugin is
+			// running outside yaad-index (or against a daemon
+			// predating #284). Per #282 acceptance "if either
+			// is missing, enrichment is silently off" — the
+			// data-dir is required for cookie-jar persistence,
+			// so missing it disables enrichment without an
+			// error. WARN to stderr so the operator notices.
+			_, _ = fmt.Fprintln(stderr, "yaad-bgg WARN: BGG_USERNAME + BGG_PASSWORD set but YAAD_PLUGIN_DATA_DIR is empty; per-game collection enrichment disabled (cookie-jar persistence requires the daemon-managed data dir from #284)")
+		}
+	}
+
+	plugin, err := bgg.New(apiKey, pluginOpts...)
 	if err != nil {
 		return err
 	}
