@@ -743,8 +743,8 @@ const InstructionProvenanceKey = "_instruction"
 func BuiltinKindGapsList() []string {
 	return []string{
 		"article",
-		"book",
 		"boardgame",
+		"book",
 		"person",
 		"place",
 		"recipe",

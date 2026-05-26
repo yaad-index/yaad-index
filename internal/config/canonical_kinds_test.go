@@ -808,8 +808,8 @@ func TestMergeCanonicalRegistryWithProvenance_InstructionFallsThroughLayers(t *t
 func TestBuiltinKindGapsList_DeterministicOrder(t *testing.T) {
 	t.Parallel()
 	got := BuiltinKindGapsList()
-	want := []string{"article", "book", "boardgame", "person", "place", "recipe"}
-	assert.Equal(t, want, got)
+	want := []string{"article", "boardgame", "book", "person", "place", "recipe"}
+	assert.Equal(t, want, got, "boardgame < book lexicographically (b-o-a < b-o-o)")
 }
 
 // TestBuiltinKindGaps_DormantUntilActivation pins the #48 slice
