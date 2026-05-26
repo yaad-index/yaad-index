@@ -142,6 +142,20 @@ plugins:
 
 **Source-shape kinds** (`wikipedia-article`, `bgg-designer`, etc.) are NOT in `canonical_kinds` and don't need to be — they're owned by the emitting plugin and always present. The config gates only the canonical / cross-source layer.
 
+**Per-kind `resolver_plugin:` (per #276).** Each `canonical_kinds:` entry MAY name a `resolver_plugin:` — the plugin authoritative for entities of that kind. When set, `canonical_type` gap fills (agent-fill via `POST /v1/entities/{id}/fill` and operator-fill via `POST /v1/entities/{id}/operator-fill`) targeting that kind require the canonical id to already exist in the store; the agent should have ingested through the named plugin first. Fills against an unresolved target return 422 `unresolved_target` with a suggested-action hint naming the resolver. Kinds without `resolver_plugin:` set fall through to the existing auto-materialize path — agents / operators add new entries freely. Plugin-emit edge paths are unaffected (the plugin IS the resolver when it emits its own canonical-edge targets).
+
+Operator-fill can bypass the gate per-call with `?allow_unresolved=true` — useful for legitimately registering homebrew / custom entities that aren't in the resolver plugin's index. The bypass is stamped into the commit message (`... (allow_unresolved)`) so the vault history shows the override was intentional. Agent-fill has no bypass: the whole point of `resolver_plugin:` is to block phantom-entity creation from agent typos.
+
+```yaml
+canonical_kinds:
+  boardgame:
+    resolver_plugin: bgg
+  github-pr:
+    resolver_plugin: github
+  person: {}            # no resolver — free creation OK
+  book: {}              # no resolver yet
+```
+
 ### Callback ID = entity ID
 
 ADR-0002's `fill_token` (described as `ft_abc123` with a short expiry) becomes the entity ID itself. No in-memory token registry; nothing to lose on server restart; agent can fill at any later time.

@@ -219,6 +219,21 @@ func handleEntityOperatorFill(
 			return
 		}
 
+		// #276 resolver-plugin gate: when any target kind has a
+		// `resolver_plugin:` config set, require the canonical id
+		// to already exist in the store. Operator can override
+		// per-call by passing `?allow_unresolved=true` — useful
+		// for registering homebrew / custom entities that
+		// legitimately aren't in the resolver plugin's index.
+		// The bypass is recorded in provenance via the commit
+		// message suffix below so the audit trail shows the
+		// override was intentional.
+		allowUnresolved := r.URL.Query().Get("allow_unresolved") == "true"
+		if perr := checkCanonicalTypeResolverPlugins(r.Context(), st, canonicalKindReg, ops, allowUnresolved); perr != nil {
+			writeError(w, perr.status, perr.code, perr.message)
+			return
+		}
+
 		// Defer-on-unfilled precondition: a defer op against a
 		// currently-filled field rejects with 409 per ADR-0019. We
 		// vet here (not in parseOperatorFillOps) because the check
@@ -239,6 +254,12 @@ func handleEntityOperatorFill(
 		applied := applyOperatorFillOps(ve, ops, clock.Now(), effectiveGaps)
 
 		commitMsg := operatorFillCommitMessage(ve.ID, applied, claim.Subject)
+		if allowUnresolved {
+			// Stamp the bypass into the audit trail so a future
+			// reader of the vault history sees the override was
+			// intentional. #276.
+			commitMsg += " (allow_unresolved)"
+		}
 		commitAuthor := agentAuthorRef(claim.Subject)
 		// ADR-0021 amendment ( phase D): canonical-label
 		// auto-materialize lands the vault file at

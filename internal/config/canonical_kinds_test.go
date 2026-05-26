@@ -208,6 +208,61 @@ func TestMergeCanonicalRegistry_OperatorPerKindActivatesNonPluginKind(t *testing
 	assert.Equal(t, "[]string", k.Gaps["tags"].Type)
 }
 
+// TestMergeCanonicalRegistry_ResolverPluginSurvivesMerge pins
+// #276: the operator-declared `resolver_plugin:` on a per-kind
+// entry survives MergeCanonicalRegistry into the merged output.
+// Without this, the resolver gate in the fill handlers reads
+// an empty string at runtime and the validation is silently
+// disabled. Covers both bound (resolver set) and unbound (no
+// resolver) cases.
+func TestMergeCanonicalRegistry_ResolverPluginSurvivesMerge(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	merged := MergeCanonicalRegistry(
+		nil,
+		[]string{"boardgame", "person"},
+		CanonicalKindConfig{},
+		map[string]CanonicalKindConfig{
+			"boardgame": {
+				ResolverPlugin: "bgg",
+			},
+			"person": {}, // no resolver — operator-managed
+		},
+		logger,
+	)
+
+	require.Contains(t, merged, "boardgame")
+	assert.Equal(t, "bgg", merged["boardgame"].ResolverPlugin,
+		"resolver_plugin must survive merge so the fill-time gate sees it")
+
+	require.Contains(t, merged, "person")
+	assert.Equal(t, "", merged["person"].ResolverPlugin,
+		"unbound kind retains an empty ResolverPlugin (gate falls through)")
+}
+
+// TestMergeCanonicalRegistry_ResolverPluginNotInheritedFromPlugins
+// pins that pulgins can't declare resolver_plugin for their
+// emitted kinds (only operator config sources the field). A
+// kind that ONLY appears in pluginEmittedKinds (no operator
+// override) gets an empty ResolverPlugin.
+func TestMergeCanonicalRegistry_ResolverPluginNotInheritedFromPlugins(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	merged := MergeCanonicalRegistry(
+		nil,
+		[]string{"boardgame"},
+		CanonicalKindConfig{},
+		nil, // no operator overrides
+		logger,
+	)
+
+	require.Contains(t, merged, "boardgame")
+	assert.Equal(t, "", merged["boardgame"].ResolverPlugin,
+		"plugin-emitted kinds without an operator override get an empty ResolverPlugin")
+}
+
 // TestGapSpec_UnmarshalYAML pins ADR-0016 §7's two-shape decode:
 // shorthand string and long-form struct. Both produce equivalent
 // GapSpec values.

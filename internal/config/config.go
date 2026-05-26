@@ -363,8 +363,25 @@ type AuthEntry struct {
 // operator config (root + per-kind) feeds Instruction into the
 // merged effective registry.
 type CanonicalKindConfig struct {
-	Gaps map[string]GapSpec `yaml:"gaps,omitempty" json:"gaps,omitempty"`
-	Instruction *InstructionSpec `yaml:"instruction,omitempty" json:"instruction,omitempty"`
+	Gaps        map[string]GapSpec `yaml:"gaps,omitempty" json:"gaps,omitempty"`
+	Instruction *InstructionSpec   `yaml:"instruction,omitempty" json:"instruction,omitempty"`
+	// ResolverPlugin names the plugin authoritative for entities
+	// of this kind, per #276. When set, canonical_type gap fills
+	// targeting this kind require the named canonical-id to
+	// already exist in the store (the agent should have ingested
+	// through the plugin first); fills against an unresolved
+	// target return 422 `unresolved_target` with a suggested-
+	// action hint naming the resolver plugin. When unset, fills
+	// auto-materialize a thin row as today.
+	//
+	// Operator-fill can bypass the check by passing
+	// `?allow_unresolved=true` on the POST /v1/entities/{id}/
+	// operator-fill request; the bypass is stamped into the
+	// commit message (`... (allow_unresolved)`) for audit.
+	// Plugin-emit edge paths are unaffected — the plugin IS
+	// the resolver when it emits its own canonical-edge
+	// targets.
+	ResolverPlugin string `yaml:"resolver_plugin,omitempty" json:"resolver_plugin,omitempty"`
 }
 
 // VaultEntry is the `vault:` block of the config document.

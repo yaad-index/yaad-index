@@ -244,6 +244,18 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 			return canonicalTypeOps[i].Field < canonicalTypeOps[j].Field
 		})
 
+		// #276 resolver-plugin gate: when any target kind has a
+		// `resolver_plugin:` config set, require the canonical id
+		// to already exist in the store. Agent-fill never opts
+		// out — the whole point of resolver_plugin is to block
+		// phantom-entity creation from agent typos. Reject with
+		// 422 unresolved_target on the first violation, suggesting
+		// the resolver plugin to ingest through first.
+		if perr := checkCanonicalTypeResolverPlugins(r.Context(), st, canonicalKindReg, canonicalTypeOps, false); perr != nil {
+			writeError(w, perr.status, perr.code, perr.message)
+			return
+		}
+
 		// Apply both buckets to the vault entity. Canonical_type
 		// ops land their []string of canonical-label ids in
 		// ve.Data[<field>]; legacy fields land per

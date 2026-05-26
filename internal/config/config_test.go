@@ -410,6 +410,39 @@ canonical_edge_types:
 	assert.Equal(t, []string{"is_about", "lives_in"}, cfg.CanonicalEdgeTypes)
 }
 
+// TestLoad_CanonicalKinds_ResolverPlugin pins the end-to-end
+// load path for #276: an operator-yaml entry naming
+// `resolver_plugin: <name>` decodes into
+// CanonicalKindConfig.ResolverPlugin and is preserved by the
+// loader. Companion to TestMergeCanonicalRegistry_Resolver-
+// PluginSurvivesMerge which pins the merge-side preservation;
+// the two together close the parse → merge → handler chain.
+func TestLoad_CanonicalKinds_ResolverPlugin(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeConfig(t, `
+plugins: []
+canonical_kinds:
+  boardgame:
+    resolver_plugin: bgg
+    gaps:
+      rating: "your 1-10 rating"
+  person:
+    gaps:
+      name: "Full name."
+`)
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+
+	bg, ok := cfg.CanonicalKinds["boardgame"]
+	require.True(t, ok)
+	assert.Equal(t, "bgg", bg.ResolverPlugin, "resolver_plugin must round-trip through YAML decode")
+
+	person, ok := cfg.CanonicalKinds["person"]
+	require.True(t, ok)
+	assert.Equal(t, "", person.ResolverPlugin, "absent resolver_plugin decodes as empty")
+}
+
 func TestLoad_CanonicalKindsAbsent(t *testing.T) {
 	t.Parallel()
 

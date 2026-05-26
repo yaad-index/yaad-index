@@ -631,9 +631,20 @@ func MergeCanonicalRegistry(
 			instr = *perKind.Instruction
 		}
 
+		// ResolverPlugin per #276 — operator-only field; plugins
+		// don't declare a resolver for their own emitted kinds
+		// (the plugin IS the resolver when it emits canonical-
+		// edge targets, so there's no separate field to set on
+		// the plugin side). Pulled from opPerKind only.
+		var resolverPlugin string
+		if perKind, ok := opPerKind[kind]; ok {
+			resolverPlugin = perKind.ResolverPlugin
+		}
+
 		out[kind] = CanonicalKindConfig{
-			Gaps: gaps,
-			Instruction: &instr,
+			Gaps:           gaps,
+			Instruction:    &instr,
+			ResolverPlugin: resolverPlugin,
 		}
 	}
 	return out
