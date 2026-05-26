@@ -133,6 +133,19 @@ type Workflow struct {
 	// in that case.
 	Filename string
 
+	// ContentHash is the SHA-256 of the raw bytes Parse decoded
+	// from, per #280. The engine's Reconcile compares this
+	// against the previously-registered workflow's hash to skip
+	// no-op unregister/re-register cycles when the loader's
+	// 15s poll re-reads an unchanged file. Stamped by Parse
+	// itself so every code path that produces a Workflow gets
+	// a stable identity (ParseFile + the loader's reload path
+	// both flow through Parse). Tests that build a Workflow
+	// inline can leave this empty; the no-op gate just
+	// degrades to "always re-register" for those, matching the
+	// pre-#280 behavior.
+	ContentHash string
+
 	// CatchAll marks the workflow as a pass-2 fallback per #169.
 	// Regular workflows (CatchAll=false) run in the per-event
 	// pass-1 chain; catch_all workflows run in pass-2 only when

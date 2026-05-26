@@ -9,6 +9,8 @@ package parser
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -55,7 +57,9 @@ func ParseFile(path string) (*Workflow, error) {
 // Parse parses the raw bytes of a workflow file into a validated
 // Workflow. Used directly by tests + by the loader's
 // reload-on-mtime-bump path (where the bytes are already in
-// memory).
+// memory). Stamps ContentHash on the result per #280 so the
+// engine's Reconcile no-op gate sees a stable identity for
+// unchanged content across reload cycles.
 func Parse(data []byte) (*Workflow, error) {
 	frontmatter, body, err := splitFrontmatter(data)
 	if err != nil {
@@ -72,6 +76,8 @@ func Parse(data []byte) (*Workflow, error) {
 	if err := Validate(wf); err != nil {
 		return nil, err
 	}
+	sum := sha256.Sum256(data)
+	wf.ContentHash = hex.EncodeToString(sum[:])
 	return wf, nil
 }
 

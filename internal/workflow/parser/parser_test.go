@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1375,4 +1376,38 @@ func TestValidate_ClaimEntityRejectsMultiplePrimitives(t *testing.T) {
 	err := Validate(wf)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sets 2 primitives")
+}
+
+// TestParse_ContentHashStampedDeterministic pins #280: Parse
+// stamps a stable SHA-256 of the input bytes on every Workflow
+// it produces. Identical input → identical hash; modified
+// input → different hash. The engine's Reconcile no-op gate
+// reads this field to skip re-registering unchanged workflows
+// across the loader's 15s poll cycles.
+func TestParse_ContentHashStampedDeterministic(t *testing.T) {
+	t.Parallel()
+	body := []byte(`---
+name: alpha
+version: 1
+status: active
+---
+
+` + "```yaml\nallowed_plugins: [yaad-gmail]\ntrigger:\n  type: manual\nsubject: 'entity.id'\nactions:\n  - add_note:\n      content: \"'x'\"\n```")
+
+	wf1, err := Parse(body)
+	require.NoError(t, err)
+	require.NotEmpty(t, wf1.ContentHash, "ContentHash must be stamped on Parse")
+	assert.Len(t, wf1.ContentHash, 64, "SHA-256 hex digest is 64 chars")
+
+	wf2, err := Parse(body)
+	require.NoError(t, err)
+	assert.Equal(t, wf1.ContentHash, wf2.ContentHash,
+		"identical input bytes produce identical ContentHash (deterministic)")
+
+	// Modify one byte — flip the version from 1 to 2.
+	modified := bytes.Replace(body, []byte("version: 1"), []byte("version: 2"), 1)
+	wf3, err := Parse(modified)
+	require.NoError(t, err)
+	assert.NotEqual(t, wf1.ContentHash, wf3.ContentHash,
+		"different input bytes produce different ContentHash")
 }

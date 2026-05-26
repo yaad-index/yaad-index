@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1000,4 +1001,130 @@ func TestEngine_TriggerSourceFallsBackToEntityWhenCauseUnset(t *testing.T) {
 	decs := eng.Decisions()
 	require.Len(t, decs, 1)
 	assert.True(t, decs[0].Fired, "trigger.source must resolve to the entity itself when CausedByEntityID is empty")
+}
+
+// reconcileLogCounter captures structured log output so the
+// Reconcile no-op tests can count `workflow registered` /
+// `workflow unregistered` lines emitted across reconcile
+// cycles.
+type reconcileLogCounter struct {
+	buf strings.Builder
+}
+
+func (c *reconcileLogCounter) countRegistered() int {
+	return strings.Count(c.buf.String(), `"msg":"workflow registered"`)
+}
+
+func (c *reconcileLogCounter) countUnregistered() int {
+	return strings.Count(c.buf.String(), `"msg":"workflow unregistered"`)
+}
+
+func newEngineWithLogCounter(t *testing.T) (*Engine, *reconcileLogCounter) {
+	t.Helper()
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(nil)
+	var c reconcileLogCounter
+	eng, err := New(Options{
+		Bus:      bus,
+		Resolver: resolver,
+		Logger:   slog.New(slog.NewJSONHandler(&c.buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	})
+	require.NoError(t, err)
+	return eng, &c
+}
+
+// TestEngine_Reconcile_NoOpWhenContentHashMatches pins #280:
+// the loader's 15s poll re-presents the same Workflow values
+// to Reconcile every cycle. When ContentHash matches the
+// already-registered entry's hash, no unregister + re-register
+// happens — log lines stay quiet.
+func TestEngine_Reconcile_NoOpWhenContentHashMatches(t *testing.T) {
+	t.Parallel()
+	eng, c := newEngineWithLogCounter(t)
+
+	wf := &parser.Workflow{
+		Name:           "alpha",
+		Version:        1,
+		Status:         parser.StatusActive,
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Subject:        "entity.id",
+		Actions:        []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
+		ContentHash:    "hash-v1",
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+	assert.Equal(t, 1, c.countRegistered(), "initial reconcile registers once")
+	assert.Equal(t, 0, c.countUnregistered())
+
+	// Simulate the loader's 15s poll re-presenting the SAME
+	// Workflow (same name, same content hash). Pre-#280 this
+	// produced unregister + re-register per cycle; post-#280
+	// it must be a no-op.
+	for i := 0; i < 4; i++ {
+		require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+	}
+	assert.Equal(t, 1, c.countRegistered(),
+		"unchanged content across 4 reconciles must NOT re-register (steady-state quiet)")
+	assert.Equal(t, 0, c.countUnregistered(),
+		"unchanged content across 4 reconciles must NOT unregister")
+}
+
+// TestEngine_Reconcile_ReRegistersOnContentHashChange pins the
+// hot-reload path: when the operator edits a workflow file
+// and the loader re-parses to a new ContentHash, the engine
+// unregisters the old + registers the new (one of each log
+// line per cycle).
+func TestEngine_Reconcile_ReRegistersOnContentHashChange(t *testing.T) {
+	t.Parallel()
+	eng, c := newEngineWithLogCounter(t)
+
+	v1 := &parser.Workflow{
+		Name:           "alpha",
+		Version:        1,
+		Status:         parser.StatusActive,
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Subject:        "entity.id",
+		Actions:        []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
+		ContentHash:    "hash-v1",
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{v1}))
+
+	v2 := *v1
+	v2.ContentHash = "hash-v2" // operator edited the file
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{&v2}))
+
+	assert.Equal(t, 2, c.countRegistered(),
+		"hash change → re-register (initial + post-edit)")
+	assert.Equal(t, 1, c.countUnregistered(),
+		"hash change → unregister the old entry exactly once")
+}
+
+// TestEngine_Reconcile_NoHashAlwaysReRegisters pins the
+// test-friendly degradation: a Workflow built inline without
+// a ContentHash stamped (empty string) falls through to
+// always-re-register, matching pre-#280 behavior for that
+// path. Loader-produced Workflows always carry a hash (Parse
+// stamps it); only inline-test constructions hit this branch.
+func TestEngine_Reconcile_NoHashAlwaysReRegisters(t *testing.T) {
+	t.Parallel()
+	eng, c := newEngineWithLogCounter(t)
+
+	wf := &parser.Workflow{
+		Name:           "alpha",
+		Version:        1,
+		Status:         parser.StatusActive,
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Subject:        "entity.id",
+		Actions:        []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
+		// ContentHash intentionally empty.
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	// No-hash → always re-register; second reconcile emits
+	// both an unregister + a fresh register.
+	assert.Equal(t, 2, c.countRegistered())
+	assert.Equal(t, 1, c.countUnregistered())
 }
