@@ -525,7 +525,35 @@ What happens at runtime:
 
 Subsequent emails about the same repo append additional dataview paragraphs (different `reference` / `type` accumulates; identical content dedups via the sorted-key hash).
 
-## 12. Where to look when a workflow misbehaves
+## 12. HTTP + MCP surface
+
+Per ADR-0024 §"Agent surface" + #277. All routes are gated by the standard daemon auth model.
+
+### List + discover + trigger (already in tree)
+
+| HTTP | MCP tool | Returns |
+|---|---|---|
+| `GET /v1/workflows` | `workflow_list` | summary list (name, version, status, trigger_type, dedup_policy) |
+| `GET /v1/workflows/discover?entity=<id>` | `workflow_discover` | names of workflows whose condition matches the entity |
+| `POST /v1/workflows/trigger` | `workflow_trigger` | manual-trigger entry point; returns the Decision envelope |
+
+### Per-workflow CRUD (#277)
+
+| HTTP | MCP tool | Returns / semantics |
+|---|---|---|
+| `GET /v1/workflows/{name}` | `workflow_get(name)` | raw markdown body as `text/markdown; charset=utf-8`. 404 when missing. |
+| `PUT /v1/workflows/{name}` | `workflow_define(name, content)` | pre-validates via the parser; atomic-writes via tmpfile + rename. 422 on body error (nothing written); 400 when path name ≠ frontmatter `name`; 200 with `{ok, name, path}` on success. Idempotent (overwrites in place). |
+| `DELETE /v1/workflows/{name}` | `workflow_delete(name)` | removes the file. 200 with `{ok, name, existed}` (idempotent — `existed: false` when the file was already absent). |
+
+**Vault-as-truth** (per ADR-0008): every mutation writes the file on disk first; the loader's mtime poll reconciles engine state on the next pass (default 15s). Plan for this latency in workflows that define + trigger in a single sequence.
+
+**Name shape.** Path-segment names must match `[a-z0-9]+([_-][a-z0-9]+)*` — same regex as plugin instance names. Path traversal is closed by the shape check before any filesystem access.
+
+**Atomic write.** PUT writes to `<vault>/workflows/.<name>.md.tmp.<rand>` then renames to `<vault>/workflows/<name>.md`. The loader's mtime poll can never observe a partial-write state.
+
+**Size cap.** PUT body bounded at 256 KiB; over-the-cap requests return 413.
+
+## 13. Where to look when a workflow misbehaves
 
 | Symptom                                              | First look                                                                                              |
 |------------------------------------------------------|---------------------------------------------------------------------------------------------------------|
@@ -539,7 +567,7 @@ Subsequent emails about the same repo append additional dataview paragraphs (dif
 | `add_canonical_edge` slug doesn't match what you expect | `slug.Slug` is the deterministic clean-slug rule per ADR-0017 / ADR-0021 §1. Strip punctuation + lowercase. |
 | Two writes to the same entity conflict               | Per-entity write-lock acquired by another writer (workflow + UGC + operator). 409 conflict; rejected caller retries. |
 
-## 13. ADRs + companion issues
+## 14. ADRs + companion issues
 
 - [ADR-0024](../adr/0024-workflows-and-tasks.md) — Workflows + Tasks.
 - [ADR-0019](../adr/0019-operator-fill.md) — fill-gap surface + audience filter.

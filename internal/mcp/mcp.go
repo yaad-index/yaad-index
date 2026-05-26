@@ -130,6 +130,9 @@ func registerAll(s *server.MCPServer, b *bridge) {
 	registerWorkflowList(s, b)
 	registerWorkflowDiscover(s, b)
 	registerWorkflowTrigger(s, b)
+	registerWorkflowGet(s, b)
+	registerWorkflowDefine(s, b)
+	registerWorkflowDelete(s, b)
 
 	// Tasks.
 	registerTaskList(s, b)

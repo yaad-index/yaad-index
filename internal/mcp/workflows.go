@@ -56,6 +56,90 @@ func registerWorkflowDiscover(s *server.MCPServer, b *bridge) {
 	})
 }
 
+func registerWorkflowGet(s *server.MCPServer, b *bridge) {
+	tool := mcp.NewTool("workflow_get",
+		mcp.WithDescription(
+			"Fetch the full markdown body of a single workflow by name. "+
+				"Returns the raw file content (frontmatter + prose + YAML "+
+				"fence) verbatim from `GET /v1/workflows/<name>`. Use this "+
+				"to read the current definition before editing via "+
+				"`workflow_define`. Unknown workflow → 404; invalid name "+
+				"(must match `[a-z0-9]+([_-][a-z0-9]+)*`) → 400.",
+		),
+		mcp.WithString("name",
+			mcp.Required(),
+			mcp.Description("Workflow name (matches frontmatter `name:` on vault/workflows/<name>.md)."),
+		),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		name := req.GetString("name", "")
+		if name == "" {
+			return mcp.NewToolResultError("`name` is required"), nil
+		}
+		return b.callTool(ctx, "GET", "/v1/workflows/"+url.PathEscape(name), nil)
+	})
+}
+
+func registerWorkflowDefine(s *server.MCPServer, b *bridge) {
+	tool := mcp.NewTool("workflow_define",
+		mcp.WithDescription(
+			"Define (create or overwrite) a workflow by writing its full "+
+				"markdown content to the vault. The body MUST be a complete "+
+				"workflow file (frontmatter + prose + one ```yaml fence). "+
+				"Pre-validated server-side via the parser; an invalid body "+
+				"returns 422 with the rule violation + nothing is written. "+
+				"Mismatch between the `name` argument and the body's "+
+				"frontmatter `name:` field returns 400. Idempotent: a "+
+				"successful PUT overwrites any existing file at the path. "+
+				"The loader's mtime poll reconciles engine state on the "+
+				"next pass.",
+		),
+		mcp.WithString("name",
+			mcp.Required(),
+			mcp.Description("Workflow name (must match the frontmatter `name:` field in `content`)."),
+		),
+		mcp.WithString("content",
+			mcp.Required(),
+			mcp.Description("Full markdown body: frontmatter (`---` envelope), prose, and one ```yaml code-fence with the workflow rules."),
+		),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		name := req.GetString("name", "")
+		if name == "" {
+			return mcp.NewToolResultError("`name` is required"), nil
+		}
+		content := req.GetString("content", "")
+		if content == "" {
+			return mcp.NewToolResultError("`content` is required"), nil
+		}
+		return b.callTool(ctx, "PUT", "/v1/workflows/"+url.PathEscape(name), bytes.NewReader([]byte(content)))
+	})
+}
+
+func registerWorkflowDelete(s *server.MCPServer, b *bridge) {
+	tool := mcp.NewTool("workflow_delete",
+		mcp.WithDescription(
+			"Remove a workflow file from the vault. Idempotent: a missing "+
+				"file returns `{ok, name, existed: false}`. The loader's "+
+				"mtime poll unregisters the workflow from the engine on the "+
+				"next pass. Use this to retire a workflow definition; "+
+				"in-flight workflow runs that already fired are unaffected "+
+				"(they live in the engine's run history, not the file).",
+		),
+		mcp.WithString("name",
+			mcp.Required(),
+			mcp.Description("Workflow name to remove."),
+		),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		name := req.GetString("name", "")
+		if name == "" {
+			return mcp.NewToolResultError("`name` is required"), nil
+		}
+		return b.callTool(ctx, "DELETE", "/v1/workflows/"+url.PathEscape(name), nil)
+	})
+}
+
 func registerWorkflowTrigger(s *server.MCPServer, b *bridge) {
 	tool := mcp.NewTool("workflow_trigger",
 		mcp.WithDescription(

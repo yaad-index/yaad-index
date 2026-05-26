@@ -792,6 +792,20 @@ func (s *ServeCmd) Run() error {
 			}
 		}()
 		handlerOpts = append(handlerOpts, api.WithWorkflowEngine(wfEngine))
+		// #277: per-workflow CRUD surface. workflowDir is the
+		// same on-disk path the loader polls; mutations write the
+		// file, the loader reconciles engine state on the next
+		// poll (vault-as-truth per ADR-0008). MkdirAll here so
+		// the first PUT in a vault without a pre-existing
+		// `workflows/` subdir succeeds — the loader is happy with
+		// a missing dir (treats it as "no workflows") but
+		// atomicWriteFile's tmpfile path is not. Boot-time
+		// fail-fast at uncreatable paths matches the #284 plugin
+		// data-dir pattern.
+		if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+			return fmt.Errorf("ensure workflow dir %s: %w", workflowDir, err)
+		}
+		handlerOpts = append(handlerOpts, api.WithWorkflowDir(workflowDir))
 		// Phase 6.B/C task surface — filesystem-walk reader +
 		// writer rooted at the same vault path the action
 		// runners write tasks under. Registers GET /v1/tasks
