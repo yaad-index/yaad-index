@@ -446,10 +446,16 @@ func DefaultInstruction() InstructionSpec {
 // is a starter pool, not auto-on (preserves ADR-0013's opt-in
 // canonical-kind contract).
 //
-// Operator config can override any of these (Layer 3-4 in the
-// merge). Operator can also disable a built-in by declaring the
-// field with an empty Description in operator yaml — the merge's
-// last-write-wins wipes the built-in.
+// Operator config can override any field of a built-in by
+// declaring it under `canonical_kinds.<kind>.gaps.<field>` with
+// new type / description / range / etc. — the merge's last-
+// write-wins replaces the built-in's spec with the operator's.
+// Per-gap disable (drop the built-in entirely without supplying
+// a replacement spec) is NOT supported in v1 — the validator
+// rejects empty / whitespace-only Description, so the "declare
+// with empty description to wipe" pattern fails config-load
+// rather than disabling. Disable lands in a follow-up if real
+// operator pain surfaces.
 func BuiltinKindGaps(kind string) map[string]GapSpec {
 	switch kind {
 	case "boardgame":

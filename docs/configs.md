@@ -416,7 +416,9 @@ The daemon binary ships per-kind default gap-sets at "Layer 1.5" of the merge �
 
 **Dormant until activation.** Layer 1.5 is a *starter pool*, not auto-on. A kind's built-in gap-set surfaces only when the kind activates in the merged registry — either via a plugin's `canonical_kinds_emitted` (Layer 2 plugin-driven activation, see §5.4) or via explicit operator config (`canonical_kinds: { book: {} }`). An operator running with no plugins + no `book` in operator config sees NO `book` entry in the merged registry, even though Layer 1.5 ships defaults for it. This preserves ADR-0013's opt-in canonical-kind contract.
 
-**Operator overrides win.** Layer 1.5 defaults can be overridden field-by-field by operator config (Layer 3 / Layer 4). To disable a Layer 1.5 default, the operator declares the field under `canonical_kinds:` with an empty `description:` — the merge's last-write-wins clobbers the built-in.
+**Operator overrides win.** Layer 1.5 defaults can be overridden field-by-field by operator config (Layer 3 / Layer 4). The operator redeclares the field under `canonical_kinds.<kind>.gaps.<field>` with new `type` / `description` / `range` / etc.; the merge's last-write-wins replaces the built-in's spec with the operator's.
+
+**Per-gap disable is not supported in v1.** There is no "drop this built-in entirely without supplying a replacement" mechanism today. The validator rejects empty / whitespace-only `description:`, so a config that tries to wipe a built-in by setting an empty description fails config-load rather than disabling it. Operators who want a kind without a particular Layer 1.5 gap can override the field with their own minimal spec; a true disable marker (`disabled: true` or null) lands in a follow-up if operator pain surfaces.
 
 ### 5.4 Plugin-driven activation (ADR-0016 §plugin-driven-activation)
 
