@@ -168,6 +168,186 @@ func registerGetUserContentSection(s *server.MCPServer, b *bridge) {
 	})
 }
 
+func registerAddUserContentSection(s *server.MCPServer, b *bridge) {
+	tool := mcp.NewTool("add_user_content_section",
+		mcp.WithDescription(
+			"Insert a new section into an existing UGC entity. THE "+
+				"ETAG IS REQUIRED (same If-Match concurrency as "+
+				"`edit_user_content_section`). `after_sec` accepts the "+
+				"heading-slug or positional index of the section to "+
+				"insert AFTER; pass `\"-1\"` (or empty) to prepend; "+
+				"omit / null to append at end. `heading` is required. "+
+				"`depth` defaults to the after-section's depth (or 1 "+
+				"when appending to an empty doc); pass an explicit "+
+				"value (1..6) to override. `body` is taken verbatim "+
+				"(daemon normalizes trailing newline so the next "+
+				"section's heading parses cleanly). Returns the "+
+				"inserted section's index + a fresh `etag`. Error "+
+				"envelopes: `precondition_failed` (412, stale etag), "+
+				"`precondition_required` (428, missing etag), "+
+				"`author_mismatch` (403), `conflict` (409 when the "+
+				"new heading slugifies to an existing sibling at the "+
+				"same depth).",
+		),
+		mcp.WithString("id",
+			mcp.Required(),
+			mcp.Description("UGC entity id."),
+		),
+		mcp.WithString("after_sec",
+			mcp.Description("Section address to insert after (slug or positional index). `\"-1\"` or empty to prepend; omit to append."),
+		),
+		mcp.WithString("heading",
+			mcp.Required(),
+			mcp.Description("Heading text of the new section."),
+		),
+		mcp.WithString("body",
+			mcp.Description("Body of the new section. Empty allowed."),
+		),
+		mcp.WithNumber("depth",
+			mcp.Description("Heading depth (1..6). Defaults to the after-section's depth."),
+		),
+		mcp.WithString("etag",
+			mcp.Required(),
+			mcp.Description("If-Match etag from a prior read of this entity."),
+		),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id := req.GetString("id", "")
+		if id == "" {
+			return mcp.NewToolResultError("`id` is required"), nil
+		}
+		heading := req.GetString("heading", "")
+		if heading == "" {
+			return mcp.NewToolResultError("`heading` is required"), nil
+		}
+		etag := req.GetString("etag", "")
+		if etag == "" {
+			return mcp.NewToolResultError("`etag` is required"), nil
+		}
+		args := map[string]any{
+			"heading": heading,
+			"body":    req.GetString("body", ""),
+		}
+		if v, ok := req.GetArguments()["after_sec"]; ok && v != nil {
+			if s, isStr := v.(string); isStr {
+				args["after_sec"] = s
+			}
+		}
+		if d := req.GetFloat("depth", 0); d > 0 {
+			args["depth"] = int(d)
+		}
+		bodyBytes, err := json.Marshal(args)
+		if err != nil {
+			return mcp.NewToolResultError("encode args: " + err.Error()), nil
+		}
+		headers := map[string]string{"If-Match": etag}
+		return b.callToolWithEtagLift(ctx, "POST", "/v1/user-content/"+url.PathEscape(id)+"/sections", bytes.NewReader(bodyBytes), headers)
+	})
+}
+
+func registerRenameUserContentSection(s *server.MCPServer, b *bridge) {
+	tool := mcp.NewTool("rename_user_content_section",
+		mcp.WithDescription(
+			"Rename a UGC section's heading. THE ETAG IS REQUIRED "+
+				"(same If-Match contract as `edit_user_content_section`). "+
+				"Body + nested headings preserved verbatim — this only "+
+				"rewrites the heading line. The depth (`#`-count) is "+
+				"preserved. Returns the renamed section + a fresh "+
+				"`etag`. Error envelopes: `precondition_failed` (412), "+
+				"`precondition_required` (428), `author_mismatch` "+
+				"(403), `conflict` (409 when the new heading slugifies "+
+				"to a sibling's existing slug), `invalid_argument` "+
+				"(400 for renaming the pre-heading section).",
+		),
+		mcp.WithString("id",
+			mcp.Required(),
+			mcp.Description("UGC entity id."),
+		),
+		mcp.WithString("sec",
+			mcp.Required(),
+			mcp.Description("Section address: heading slug or positional index."),
+		),
+		mcp.WithString("new_heading",
+			mcp.Required(),
+			mcp.Description("New heading text."),
+		),
+		mcp.WithString("etag",
+			mcp.Required(),
+			mcp.Description("If-Match etag from a prior read of this entity."),
+		),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id := req.GetString("id", "")
+		if id == "" {
+			return mcp.NewToolResultError("`id` is required"), nil
+		}
+		sec := req.GetString("sec", "")
+		if sec == "" {
+			return mcp.NewToolResultError("`sec` is required"), nil
+		}
+		newHeading := req.GetString("new_heading", "")
+		if newHeading == "" {
+			return mcp.NewToolResultError("`new_heading` is required"), nil
+		}
+		etag := req.GetString("etag", "")
+		if etag == "" {
+			return mcp.NewToolResultError("`etag` is required"), nil
+		}
+		args := map[string]any{"new_heading": newHeading}
+		bodyBytes, err := json.Marshal(args)
+		if err != nil {
+			return mcp.NewToolResultError("encode args: " + err.Error()), nil
+		}
+		headers := map[string]string{"If-Match": etag}
+		return b.callToolWithEtagLift(ctx, "PATCH", fmt.Sprintf("/v1/user-content/%s/sections/%s/heading", url.PathEscape(id), url.PathEscape(sec)), bytes.NewReader(bodyBytes), headers)
+	})
+}
+
+func registerDeleteUserContentSection(s *server.MCPServer, b *bridge) {
+	tool := mcp.NewTool("delete_user_content_section",
+		mcp.WithDescription(
+			"Remove a UGC section + every nested heading textually "+
+				"contained within it (containment model). THE ETAG IS "+
+				"REQUIRED (same If-Match contract as "+
+				"`edit_user_content_section`). Returns the entity's "+
+				"new etag + the removed section's old index. Error "+
+				"envelopes: `precondition_failed` (412), "+
+				"`precondition_required` (428), `author_mismatch` "+
+				"(403), `not_found` (404), `invalid_argument` (400 "+
+				"for deleting the pre-heading section — clear it via "+
+				"`edit_user_content_section` with empty body instead).",
+		),
+		mcp.WithString("id",
+			mcp.Required(),
+			mcp.Description("UGC entity id."),
+		),
+		mcp.WithString("sec",
+			mcp.Required(),
+			mcp.Description("Section address: heading slug or positional index."),
+		),
+		mcp.WithString("etag",
+			mcp.Required(),
+			mcp.Description("If-Match etag from a prior read of this entity."),
+		),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id := req.GetString("id", "")
+		if id == "" {
+			return mcp.NewToolResultError("`id` is required"), nil
+		}
+		sec := req.GetString("sec", "")
+		if sec == "" {
+			return mcp.NewToolResultError("`sec` is required"), nil
+		}
+		etag := req.GetString("etag", "")
+		if etag == "" {
+			return mcp.NewToolResultError("`etag` is required"), nil
+		}
+		headers := map[string]string{"If-Match": etag}
+		return b.callToolWithEtagLift(ctx, "DELETE", fmt.Sprintf("/v1/user-content/%s/sections/%s", url.PathEscape(id), url.PathEscape(sec)), nil, headers)
+	})
+}
+
 func registerEditUserContentSection(s *server.MCPServer, b *bridge) {
 	tool := mcp.NewTool("edit_user_content_section",
 		mcp.WithDescription(

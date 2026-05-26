@@ -127,6 +127,9 @@ func registerAll(s *server.MCPServer, b *bridge) {
 	registerListUserContentSections(s, b)
 	registerGetUserContentSection(s, b)
 	registerEditUserContentSection(s, b)
+	registerAddUserContentSection(s, b)
+	registerRenameUserContentSection(s, b)
+	registerDeleteUserContentSection(s, b)
 
 	// Workflows.
 	registerWorkflowList(s, b)

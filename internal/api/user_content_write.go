@@ -546,6 +546,512 @@ func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultR
 	}
 }
 
+// userContentSectionAddRequest is the POST
+// /v1/user-content/{id}/sections body per #299.
+//
+// after_sec is the address to insert AFTER:
+//   - heading slug or positional index → new section lands as the
+//     next sibling of that section.
+//   - "-1" or "" → prepend at document start (after any pre-heading
+//     body section).
+//   - omitted/null → append at end (vault.InsertSection's
+//     len(sections) shape).
+//
+// depth (1..6) overrides the heading depth; 0/omitted falls back to
+// the after-section's depth (or 1 if appending to an empty doc).
+type userContentSectionAddRequest struct {
+	AfterSec *string `json:"after_sec,omitempty"`
+	Depth    int     `json:"depth,omitempty"`
+	Heading  string  `json:"heading"`
+	Body     string  `json:"body"`
+}
+
+// userContentSectionRenameRequest is the PATCH
+// /v1/user-content/{id}/sections/{sec}/heading body per #299.
+// `new_heading` replaces the addressed section's heading text;
+// body + nested headings are preserved verbatim.
+type userContentSectionRenameRequest struct {
+	NewHeading string `json:"new_heading"`
+}
+
+// handleUserContentSectionAdd implements POST
+// /v1/user-content/{id}/sections per #299. Inserts a new section
+// at the address resolved from `after_sec`. Etag-gated (same
+// If-Match contract as section-replace); author/operator gated.
+//
+// Slug-collision (409 conflict): if the new heading's slug
+// matches an existing same-depth sibling's slug at the same
+// containment level, reject before write so the agent picks a
+// different heading rather than addressing-by-slug-now-ambiguous.
+func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if vaultWriter == nil {
+			writeError(w, http.StatusServiceUnavailable, "vault_required",
+				"user-content endpoints require vault.path configuration; the body lives in vault files")
+			return
+		}
+		ve, status, errCode, errMsg := loadUserContentVaultEntity(logger, r, st, vaultReader, id)
+		if status != 0 {
+			writeError(w, status, errCode, errMsg)
+			return
+		}
+
+		claim, ok := ClaimFromContext(r.Context())
+		if !ok || claim == nil {
+			logger.ErrorContext(r.Context(),
+				"user-content section-add reached without an auth claim", "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"auth claim missing on request — server misconfiguration")
+			return
+		}
+		if !canEditUserContent(claim, ve) {
+			writeError(w, http.StatusForbidden, "author_mismatch",
+				"only the original author or the entity's operator may edit this user-content entity")
+			return
+		}
+
+		ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
+		if ifMatch == "" {
+			writeError(w, http.StatusPreconditionRequired, "precondition_required",
+				"If-Match header is required on user-content section edits (per yaad-index)")
+			return
+		}
+		current := userContentEtag(ve.CleanContent)
+		if ifMatch != current {
+			w.Header().Set("ETag", current)
+			writeError(w, http.StatusPreconditionFailed, "precondition_failed",
+				"If-Match etag does not match current entity body; re-GET and retry with the fresh etag")
+			return
+		}
+
+		var req userContentSectionAddRequest
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				fmt.Sprintf("request body is not valid JSON: %v", err))
+			return
+		}
+		if req.Heading == "" {
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				"`heading` is required")
+			return
+		}
+
+		sections := vault.ParseSections(ve.CleanContent)
+		afterIdx := len(sections) // default: append at end
+		if req.AfterSec != nil {
+			addr := *req.AfterSec
+			switch {
+			case addr == "" || addr == "-1":
+				afterIdx = -1
+			default:
+				idx, ok := vault.ResolveSectionAddr(sections, addr)
+				if !ok {
+					writeError(w, http.StatusNotFound, "not_found",
+						fmt.Sprintf("no section %q on %s (or duplicate-slug, in which case use positional index)", addr, id))
+					return
+				}
+				afterIdx = idx
+			}
+		}
+
+		// Slug-collision pre-check at the same depth among siblings.
+		// Mirror vault.InsertSection's depth default so the collision
+		// check uses the same depth the writer will pick.
+		depth := req.Depth
+		if depth <= 0 {
+			depth = vault.DefaultInsertDepth(sections, afterIdx)
+		}
+		newSlug := vault.SlugifyHeading(req.Heading)
+		for _, s := range sections {
+			if s.Depth == depth && s.HeadingSlug() == newSlug && newSlug != "" {
+				writeError(w, http.StatusConflict, "conflict",
+					fmt.Sprintf("section heading %q would slugify to %q which already exists at depth %d", req.Heading, newSlug, depth))
+				return
+			}
+		}
+
+		// Section-scoped write-lock keyed on a synthetic "add" marker so
+		// concurrent adds to the same entity serialize. Other section
+		// edits on different sections still proceed in parallel.
+		artifactKey := fmt.Sprintf("%s#add", id)
+		release, lockOK := acquireWriteLock(w, r, writeLocks, artifactKey)
+		if !lockOK {
+			return
+		}
+		defer release()
+
+		newBody, _, err := vault.InsertSection(ve.CleanContent, sections, afterIdx, depth, req.Heading, req.Body)
+		if err != nil {
+			logger.ErrorContext(r.Context(), "vault.InsertSection", "err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to assemble new entity body")
+			return
+		}
+		ve.CleanContent = newBody
+
+		now := clock.Now().Truncate(time.Second)
+		ve.Provenance = append(ve.Provenance, vault.ProvenanceEntry{
+			Source:   "user",
+			FilledAt: &now,
+			OK:       true,
+		})
+
+		var author string
+		if !IsAnonymousClaim(claim) {
+			author = claim.Subject
+		}
+		commitMsg := userContentSectionAddCommitMessage(id, req.Heading, author)
+		commitAuthor := agentAuthorRef(author)
+		if err := vaultWriter.WriteWithCommit(r.Context(), ve, commitMsg, commitAuthor); err != nil {
+			logger.ErrorContext(r.Context(), "vault.Writer.WriteWithCommit from user-content section-add",
+				"err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to write vault file")
+			return
+		}
+
+		if err := st.UpsertEntity(r.Context(), &store.Entity{
+			ID:   id,
+			Kind: userContentKind,
+			Data: ve.Data,
+		}); err != nil {
+			logger.ErrorContext(r.Context(), "store.UpsertEntity from user-content section-add",
+				"err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to mirror entity to DB")
+			return
+		}
+
+		// Re-parse so the response echoes the section's final
+		// post-insert index. Find it by heading slug match at the
+		// chosen depth.
+		newSections := vault.ParseSections(ve.CleanContent)
+		newIdx := 0
+		for i, s := range newSections {
+			if s.Depth == depth && s.HeadingSlug() == newSlug {
+				newIdx = i
+				break
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", userContentEtag(ve.CleanContent))
+		w.WriteHeader(http.StatusCreated)
+		if err := json.NewEncoder(w).Encode(userContentSectionResponse{
+			OK:      true,
+			ID:      id,
+			Section: vaultSectionToAPI(newSections[newIdx]),
+		}); err != nil {
+			logger.ErrorContext(r.Context(),
+				"encode /v1/user-content/{id}/sections (POST) response",
+				"err", err, "id", id)
+		}
+	}
+}
+
+// handleUserContentSectionRenameHeading implements PATCH
+// /v1/user-content/{id}/sections/{sec}/heading per #299.
+// Rewrites only the heading line of the addressed section; body
+// + nested headings preserved verbatim. Etag-gated. 409 conflict
+// when the new slug collides with a sibling.
+func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if vaultWriter == nil {
+			writeError(w, http.StatusServiceUnavailable, "vault_required",
+				"user-content endpoints require vault.path configuration; the body lives in vault files")
+			return
+		}
+		ve, status, errCode, errMsg := loadUserContentVaultEntity(logger, r, st, vaultReader, id)
+		if status != 0 {
+			writeError(w, status, errCode, errMsg)
+			return
+		}
+
+		claim, ok := ClaimFromContext(r.Context())
+		if !ok || claim == nil {
+			logger.ErrorContext(r.Context(),
+				"user-content section-rename reached without an auth claim", "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"auth claim missing on request — server misconfiguration")
+			return
+		}
+		if !canEditUserContent(claim, ve) {
+			writeError(w, http.StatusForbidden, "author_mismatch",
+				"only the original author or the entity's operator may edit this user-content entity")
+			return
+		}
+
+		ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
+		if ifMatch == "" {
+			writeError(w, http.StatusPreconditionRequired, "precondition_required",
+				"If-Match header is required on user-content section edits (per yaad-index)")
+			return
+		}
+		current := userContentEtag(ve.CleanContent)
+		if ifMatch != current {
+			w.Header().Set("ETag", current)
+			writeError(w, http.StatusPreconditionFailed, "precondition_failed",
+				"If-Match etag does not match current entity body; re-GET and retry with the fresh etag")
+			return
+		}
+
+		var req userContentSectionRenameRequest
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				fmt.Sprintf("request body is not valid JSON: %v", err))
+			return
+		}
+		if req.NewHeading == "" {
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				"`new_heading` is required")
+			return
+		}
+
+		addr := r.PathValue("sec")
+		if addr == "" {
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				"section address is required")
+			return
+		}
+		sections := vault.ParseSections(ve.CleanContent)
+		idx, ok := vault.ResolveSectionAddr(sections, addr)
+		if !ok {
+			writeError(w, http.StatusNotFound, "not_found",
+				fmt.Sprintf("no section %q on %s (or duplicate-slug, in which case use positional index)", addr, id))
+			return
+		}
+		if sections[idx].Depth == 0 {
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				"the pre-heading section (index 0) has no heading to rename; use add+delete to introduce one")
+			return
+		}
+
+		// Slug-collision pre-check among siblings (excluding the
+		// section being renamed itself).
+		newSlug := vault.SlugifyHeading(req.NewHeading)
+		if newSlug != "" && vault.SectionSlugConflicts(sections, idx, idx, newSlug) {
+			writeError(w, http.StatusConflict, "conflict",
+				fmt.Sprintf("new heading %q would slugify to %q which already exists at depth %d", req.NewHeading, newSlug, sections[idx].Depth))
+			return
+		}
+
+		artifactKey := fmt.Sprintf("%s#%d", id, idx)
+		release, lockOK := acquireWriteLock(w, r, writeLocks, artifactKey)
+		if !lockOK {
+			return
+		}
+		defer release()
+
+		oldHeading := sections[idx].Heading
+		newBody, err := vault.RenameSectionHeading(ve.CleanContent, sections, idx, req.NewHeading)
+		if err != nil {
+			logger.ErrorContext(r.Context(), "vault.RenameSectionHeading", "err", err, "id", id, "sec", addr)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to assemble new entity body")
+			return
+		}
+		ve.CleanContent = newBody
+
+		now := clock.Now().Truncate(time.Second)
+		ve.Provenance = append(ve.Provenance, vault.ProvenanceEntry{
+			Source:   "user",
+			FilledAt: &now,
+			OK:       true,
+		})
+
+		var author string
+		if !IsAnonymousClaim(claim) {
+			author = claim.Subject
+		}
+		commitMsg := userContentSectionRenameCommitMessage(id, oldHeading, req.NewHeading, author)
+		commitAuthor := agentAuthorRef(author)
+		if err := vaultWriter.WriteWithCommit(r.Context(), ve, commitMsg, commitAuthor); err != nil {
+			logger.ErrorContext(r.Context(), "vault.Writer.WriteWithCommit from user-content section-rename",
+				"err", err, "id", id, "sec", addr)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to write vault file")
+			return
+		}
+
+		if err := st.UpsertEntity(r.Context(), &store.Entity{
+			ID:   id,
+			Kind: userContentKind,
+			Data: ve.Data,
+		}); err != nil {
+			logger.ErrorContext(r.Context(), "store.UpsertEntity from user-content section-rename",
+				"err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to mirror entity to DB")
+			return
+		}
+
+		newSections := vault.ParseSections(ve.CleanContent)
+		if idx >= len(newSections) {
+			idx = len(newSections) - 1
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", userContentEtag(ve.CleanContent))
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(userContentSectionResponse{
+			OK:      true,
+			ID:      id,
+			Section: vaultSectionToAPI(newSections[idx]),
+		}); err != nil {
+			logger.ErrorContext(r.Context(),
+				"encode /v1/user-content/{id}/sections/{sec}/heading (PATCH) response",
+				"err", err, "id", id, "sec", addr)
+		}
+	}
+}
+
+// handleUserContentSectionDelete implements DELETE
+// /v1/user-content/{id}/sections/{sec} per #299. Removes the
+// addressed section and every textually contained nested section
+// (containment model). Etag-gated. Returns the entity's new etag
+// + the removed section's old index.
+func handleUserContentSectionDelete(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if vaultWriter == nil {
+			writeError(w, http.StatusServiceUnavailable, "vault_required",
+				"user-content endpoints require vault.path configuration; the body lives in vault files")
+			return
+		}
+		ve, status, errCode, errMsg := loadUserContentVaultEntity(logger, r, st, vaultReader, id)
+		if status != 0 {
+			writeError(w, status, errCode, errMsg)
+			return
+		}
+
+		claim, ok := ClaimFromContext(r.Context())
+		if !ok || claim == nil {
+			logger.ErrorContext(r.Context(),
+				"user-content section-delete reached without an auth claim", "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"auth claim missing on request — server misconfiguration")
+			return
+		}
+		if !canEditUserContent(claim, ve) {
+			writeError(w, http.StatusForbidden, "author_mismatch",
+				"only the original author or the entity's operator may edit this user-content entity")
+			return
+		}
+
+		ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
+		if ifMatch == "" {
+			writeError(w, http.StatusPreconditionRequired, "precondition_required",
+				"If-Match header is required on user-content section edits (per yaad-index)")
+			return
+		}
+		current := userContentEtag(ve.CleanContent)
+		if ifMatch != current {
+			w.Header().Set("ETag", current)
+			writeError(w, http.StatusPreconditionFailed, "precondition_failed",
+				"If-Match etag does not match current entity body; re-GET and retry with the fresh etag")
+			return
+		}
+
+		addr := r.PathValue("sec")
+		if addr == "" {
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				"section address is required")
+			return
+		}
+		sections := vault.ParseSections(ve.CleanContent)
+		idx, ok := vault.ResolveSectionAddr(sections, addr)
+		if !ok {
+			writeError(w, http.StatusNotFound, "not_found",
+				fmt.Sprintf("no section %q on %s (or duplicate-slug, in which case use positional index)", addr, id))
+			return
+		}
+		if sections[idx].Depth == 0 {
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				"the pre-heading section (index 0) cannot be deleted; use PUT /sections/0 with body \"\" to clear it instead")
+			return
+		}
+
+		artifactKey := fmt.Sprintf("%s#%d", id, idx)
+		release, lockOK := acquireWriteLock(w, r, writeLocks, artifactKey)
+		if !lockOK {
+			return
+		}
+		defer release()
+
+		removedHeading := sections[idx].Heading
+		removedIdx := sections[idx].Index
+		newBody, err := vault.DeleteSection(ve.CleanContent, sections, idx)
+		if err != nil {
+			logger.ErrorContext(r.Context(), "vault.DeleteSection", "err", err, "id", id, "sec", addr)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to assemble new entity body")
+			return
+		}
+		ve.CleanContent = newBody
+
+		now := clock.Now().Truncate(time.Second)
+		ve.Provenance = append(ve.Provenance, vault.ProvenanceEntry{
+			Source:   "user",
+			FilledAt: &now,
+			OK:       true,
+		})
+
+		var author string
+		if !IsAnonymousClaim(claim) {
+			author = claim.Subject
+		}
+		commitMsg := userContentSectionDeleteCommitMessage(id, removedHeading, author)
+		commitAuthor := agentAuthorRef(author)
+		if err := vaultWriter.WriteWithCommit(r.Context(), ve, commitMsg, commitAuthor); err != nil {
+			logger.ErrorContext(r.Context(), "vault.Writer.WriteWithCommit from user-content section-delete",
+				"err", err, "id", id, "sec", addr)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to write vault file")
+			return
+		}
+
+		if err := st.UpsertEntity(r.Context(), &store.Entity{
+			ID:   id,
+			Kind: userContentKind,
+			Data: ve.Data,
+		}); err != nil {
+			logger.ErrorContext(r.Context(), "store.UpsertEntity from user-content section-delete",
+				"err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to mirror entity to DB")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", userContentEtag(ve.CleanContent))
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(userContentSectionDeleteResponse{
+			OK:         true,
+			ID:         id,
+			RemovedIdx: removedIdx,
+		}); err != nil {
+			logger.ErrorContext(r.Context(),
+				"encode /v1/user-content/{id}/sections/{sec} (DELETE) response",
+				"err", err, "id", id, "sec", addr)
+		}
+	}
+}
+
+// userContentSectionDeleteResponse is the 200 envelope returned by
+// DELETE /v1/user-content/{id}/sections/{sec}. Echoes the removed
+// section's index so the agent's audit log shows what was deleted.
+type userContentSectionDeleteResponse struct {
+	OK         bool   `json:"ok"`
+	ID         string `json:"id"`
+	RemovedIdx int    `json:"removed_idx"`
+}
+
 // handleUserContentFrontmatterEdit implements PUT
 // /v1/user-content/{id}/frontmatter per yaad-index. Replaces
 // the entity's `data` map (full replacement, not patch) and

@@ -71,6 +71,42 @@ func userContentEditCommitMessage(entityID, secAddr, author string) string {
 	return fmt.Sprintf("edit: %s [section %s] by %s", entityID, secAddr, author)
 }
 
+// userContentSectionAddCommitMessage produces the audit line for a
+// UGC section-insert write per #299.
+//
+// Template (with author): add-section: <entity-id> [<heading>] by <author>
+// Template (no author): add-section: <entity-id> [<heading>]
+func userContentSectionAddCommitMessage(entityID, heading, author string) string {
+	if author == "" {
+		return fmt.Sprintf("add-section: %s [%s]", entityID, heading)
+	}
+	return fmt.Sprintf("add-section: %s [%s] by %s", entityID, heading, author)
+}
+
+// userContentSectionRenameCommitMessage produces the audit line for
+// a UGC section-heading rename per #299.
+//
+// Template (with author): rename-section: <entity-id> [<old> → <new>] by <author>
+// Template (no author): rename-section: <entity-id> [<old> → <new>]
+func userContentSectionRenameCommitMessage(entityID, oldHeading, newHeading, author string) string {
+	if author == "" {
+		return fmt.Sprintf("rename-section: %s [%s → %s]", entityID, oldHeading, newHeading)
+	}
+	return fmt.Sprintf("rename-section: %s [%s → %s] by %s", entityID, oldHeading, newHeading, author)
+}
+
+// userContentSectionDeleteCommitMessage produces the audit line for
+// a UGC section-delete per #299.
+//
+// Template (with author): delete-section: <entity-id> [<heading>] by <author>
+// Template (no author): delete-section: <entity-id> [<heading>]
+func userContentSectionDeleteCommitMessage(entityID, heading, author string) string {
+	if author == "" {
+		return fmt.Sprintf("delete-section: %s [%s]", entityID, heading)
+	}
+	return fmt.Sprintf("delete-section: %s [%s] by %s", entityID, heading, author)
+}
+
 // userContentFrontmatterEditCommitMessage produces the audit line
 // for a UGC frontmatter-replace write per yaad-index. Distinct
 // prefix `edit-frontmatter:` so a `git log` scan distinguishes
