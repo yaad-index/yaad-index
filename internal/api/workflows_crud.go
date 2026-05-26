@@ -14,6 +14,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -122,8 +123,16 @@ func handleWorkflowDefine(logger *slog.Logger, workflowDir string) http.HandlerF
 		}
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, workflowDefineMaxBytes))
 		if err != nil {
-			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large",
-				fmt.Sprintf("request body exceeds %d bytes", workflowDefineMaxBytes))
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large",
+					fmt.Sprintf("request body exceeds %d bytes", workflowDefineMaxBytes))
+				return
+			}
+			logger.ErrorContext(r.Context(), "workflow define: read body",
+				"err", err, "name", name)
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				fmt.Sprintf("failed to read request body: %v", err))
 			return
 		}
 		wf, err := parser.Parse(body)
