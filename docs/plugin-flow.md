@@ -113,12 +113,12 @@ Every input form the plugin knows resolves to this entity — full URL, mobile-s
 
 ### `aliases`
 
-Alternative-label list per ADR-0011 + #3. Two coexisting shapes:
+Alternative-label list per ADR-0011 (incl. §"Generalization (#3)"). Two coexisting shapes:
 
 - Bare strings (`"S. Clarke"`) — Obsidian wikilink targets.
 - Typed prefixes (`"author: Piranesi"`) — agent reverse-lookup hints, `<edge-type>: <label>` shape.
 
-Order doesn't matter; the daemon merges with ADR-0011's title-synthesized alias at vault-write time and dedupes.
+Order doesn't matter; the daemon merges with ADR-0011's title-synthesized alias at vault-write time, dedupes, and mirrors the merged list into `entity_aliases` via `store.ReplaceAliases`. `alias_kind` is derived at write time from the operator's `canonical_edge_types:` registry — entries whose `<prefix>` is a registered edge type land as `typed`; the rest land as `bare`. `/v1/search` queries against this table so substring-matches on alias text surface the owning entity.
 
 ### `attachments`
 

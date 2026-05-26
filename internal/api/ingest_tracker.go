@@ -242,6 +242,15 @@ type ingestTracker struct {
 	// test paths that don't supply a registry still produce a
 	// valid slash-form source.
 	pluginInstances map[string][]string
+
+	// canonicalEdgeTypes is the operator's enabled-edge-type
+	// set per ADR-0013. Used by buildAliasEntries (per #3) to
+	// derive AliasKindTyped vs AliasKindBare from a candidate
+	// alias's `<prefix>: <label>` shape — only prefixes that
+	// match an enabled edge type land as 'typed'. Empty / nil
+	// degrades to "everything is bare" which is the right
+	// shape for the no-canonical-layer case.
+	canonicalEdgeTypes []string
 }
 
 // preUpsertSnapshot fetches the entity's pre-upsert state so the
@@ -443,7 +452,7 @@ func (t *ingestTracker) publishEntityEdgeAdded(ctx context.Context, e *store.Edg
 // constructs a guard from the keys of cfg.CanonicalKinds (the
 // registry map per ADR-0013 §1) plus cfg.CanonicalEdgeTypes; tests
 // typically pass nil unless they exercise the canonical path.
-func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer, reader *vault.Reader, guard *config.CanonicalGuard, globalCacheTTLSeconds int, dispatcher *attachments.Dispatcher, writeLocks *writelocks.Manager, bus eventbus.Bus, pluginInstances map[string][]string) *ingestTracker {
+func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer, reader *vault.Reader, guard *config.CanonicalGuard, globalCacheTTLSeconds int, dispatcher *attachments.Dispatcher, writeLocks *writelocks.Manager, bus eventbus.Bus, pluginInstances map[string][]string, canonicalEdgeTypes []string) *ingestTracker {
 	if (writer == nil) != (reader == nil) {
 		panic("newIngestTracker: vault writer and reader must both be set or both be nil")
 	}
@@ -463,6 +472,7 @@ func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer,
 		writeLocks:            writeLocks,
 		bus:                   bus,
 		pluginInstances:       pluginInstances,
+		canonicalEdgeTypes:    canonicalEdgeTypes,
 	}
 }
 
@@ -1069,6 +1079,20 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 		}
 	}
 
+	// #3: persist aliases to the queryable entity_aliases table so
+	// `/v1/search?q=<term>` matches against alternate labels too.
+	// Replace-not-append matches the vault-is-source-of-truth
+	// contract (per ADR-0008 / ADR-0011): the latest fetch's aliases
+	// are the current set. Empty result.Aliases clears the entity's
+	// alias rows.
+	aliasEntries := buildAliasEntries(result.Entity.ID, result.Aliases, t.canonicalEdgeTypes)
+	if err := t.store.ReplaceAliases(ctx, result.Entity.ID, aliasEntries); err != nil {
+		t.logger.Error("ingest simulator: ReplaceAliases failed",
+			"err", err, "id", result.Entity.ID,
+			"aliases", result.Aliases)
+		return fmt.Errorf("failed to persist aliases: %w", err)
+	}
+
 	if len(result.CanonicalEdges) > 0 {
 		t.materializeThinLabelRowsFromEdges(ctx, &pending, result.CanonicalEdges, att.simulation.plugin.Name())
 	}
@@ -1654,4 +1678,45 @@ func (t *ingestTracker) wait(ctx context.Context, rec *ingestRecord, timeout tim
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// buildAliasEntries converts a plugin-emitted alias slice into
+// the store.Alias rows ReplaceAliases consumes per #3. Derives
+// AliasKindTyped when the alias has the `<prefix>: <label>` shape
+// AND the prefix matches an entry in canonicalEdgeTypes; bare
+// otherwise. Empty / nil aliases returns nil (clears the entity's
+// rows). Duplicates are de-duplicated (first occurrence wins);
+// empty alias strings are skipped (defensive — the parser should
+// have rejected them, but skip rather than fail the ingest).
+func buildAliasEntries(entityID string, aliases []string, canonicalEdgeTypes []string) []store.Alias {
+	if len(aliases) == 0 {
+		return nil
+	}
+	edgeSet := make(map[string]struct{}, len(canonicalEdgeTypes))
+	for _, t := range canonicalEdgeTypes {
+		edgeSet[t] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(aliases))
+	out := make([]store.Alias, 0, len(aliases))
+	for _, a := range aliases {
+		if a == "" {
+			continue
+		}
+		if _, dup := seen[a]; dup {
+			continue
+		}
+		seen[a] = struct{}{}
+		kind := store.AliasKindBare
+		if prefix, _, ok := store.TypedAliasPrefix(a); ok {
+			if _, registered := edgeSet[prefix]; registered {
+				kind = store.AliasKindTyped
+			}
+		}
+		out = append(out, store.Alias{
+			Alias:    a,
+			EntityID: entityID,
+			Kind:     kind,
+		})
+	}
+	return out
 }

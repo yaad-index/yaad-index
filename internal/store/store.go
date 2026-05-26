@@ -10,6 +10,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -288,6 +289,61 @@ const (
 	NotationKindShorthand = "shorthand"
 )
 
+// Alias is the persisted shape for a single entity_aliases row
+// per #3. Same axis as Notation but for outbound display labels
+// rather than inbound input forms.
+//
+//   - Alias    — the full alias text (including any `<edge-type>:`
+//                prefix for typed aliases). Operator + agent see
+//                this verbatim in search hits.
+//   - EntityID — slug the alias points at (FK on entities,
+//                ON DELETE CASCADE).
+//   - Kind     — discriminator in {'bare', 'typed'} per #3. 'bare'
+//                is the Obsidian wikilink target shape; 'typed'
+//                marks `<edge-type>: <label>` strings agents
+//                reverse-lookup-filter on.
+type Alias struct {
+	Alias    string
+	EntityID string
+	Kind     string
+}
+
+// AliasKind* are the canonical discriminator values entity_aliases
+// uses per #3. The orchestrator derives 'typed' when an alias
+// matches the `<edge-type>: <label>` shape AND the prefix is in
+// the operator's canonical_edge_types; everything else lands as
+// 'bare'.
+const (
+	AliasKindBare  = "bare"
+	AliasKindTyped = "typed"
+)
+
+// TypedAliasPrefix splits a candidate typed-alias string into its
+// edge-type prefix + label half per #3 §"Bare-string AND typed-
+// prefix shapes". Returns (prefix, label, true) for inputs that
+// match the `<prefix>: <label>` shape with a single colon-space
+// separator; (-, -, false) for inputs without that shape OR with
+// a prefix containing whitespace / colons. The caller is
+// responsible for validating the prefix against the operator's
+// canonical_edge_types registry — the store doesn't see the
+// registry. Bare aliases that happen to contain `: ` (e.g. a
+// title like "Brass: Birmingham") aren't typed and the caller's
+// registry check rejects them; this split is purely a shape
+// gate.
+func TypedAliasPrefix(alias string) (prefix, label string, ok bool) {
+	idx := strings.Index(alias, ": ")
+	if idx <= 0 || idx+2 >= len(alias) {
+		return "", "", false
+	}
+	prefix = alias[:idx]
+	for _, r := range prefix {
+		if r == ':' || r == ' ' || r == '\t' || r == '\n' {
+			return "", "", false
+		}
+	}
+	return prefix, alias[idx+2:], true
+}
+
 // Store is the persistence interface used by the API handlers.
 //
 // Implementations must be safe for concurrent use. Methods take a context
@@ -474,6 +530,22 @@ type Store interface {
 	UpsertNotation(ctx context.Context, n Notation) error
 	DeleteNotationsForEntity(ctx context.Context, entityID string) (int, error)
 	ReplaceNotations(ctx context.Context, entityID string, entries []Notation) error
+
+	// Alias lookup per #3. entity_aliases is the alternative-label
+	// index used by /v1/search (LEFT JOIN at query time so a
+	// `q` LIKE-matches alias text alongside id + data) and
+	// reindex re-derive. Methods mirror the notation surface
+	// — same DELETE-then-INSERT pattern under ReplaceAliases;
+	// same FK ON DELETE CASCADE.
+	//
+	//   - ListAliasesForEntity returns every alias pointing at
+	//     a given entity (ordered by alias for stable output).
+	//   - ReplaceAliases transactionally wipes + rewrites the
+	//     entity's alias rows. Empty entries permitted — clears
+	//     the entity's aliases. Called by the ingest path after
+	//     vault write + by reindex re-derive.
+	ListAliasesForEntity(ctx context.Context, entityID string) ([]Alias, error)
+	ReplaceAliases(ctx context.Context, entityID string, entries []Alias) error
 
 	// Plugin capabilities cache . Operator-only — these
 	// methods aren't reachable from the agent-facing /v1 API surface;

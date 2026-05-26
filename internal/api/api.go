@@ -84,7 +84,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 		tracker = si.trackerHandle()
 	}
 	if tracker == nil {
-		tracker = newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks, cfg.eventBus, cfg.pluginInstances)
+		tracker = newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks, cfg.eventBus, cfg.pluginInstances, cfg.canonicalEdgeTypes)
 	}
 
 	// Per yaad-index a prior PR: the protect wrapper enforces Bearer-JWT

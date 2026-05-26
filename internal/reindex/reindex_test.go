@@ -443,3 +443,129 @@ func listRows(t *testing.T, st store.Store) []store.ReindexFile {
 	require.NoError(t, err)
 	return rows
 }
+
+// TestReindex_ReplacesAliasesFromVaultFrontmatter pins the #3
+// re-derive contract: the vault is the canonical source for
+// entity_aliases. A reindex pass drops orphan rows the vault no
+// longer carries and inserts the current frontmatter list. Typed
+// vs bare classification flows from canonicalEdgeTypes — entries
+// matching `<edge>: <label>` where `<edge>` is registered land as
+// typed; the rest stay bare.
+func TestReindex_ReplacesAliasesFromVaultFrontmatter(t *testing.T) {
+	t.Parallel()
+
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	vaultRoot := t.TempDir()
+	w, err := vault.NewWriter(vaultRoot)
+	require.NoError(t, err)
+	r, err := NewWithOptions(st, vaultRoot, nil, nil, []string{"author"})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, st.UpsertEntity(ctx, &store.Entity{
+		ID: "book:piranesi",
+		Kind: "book",
+		Data: map[string]any{"title": "Piranesi"},
+	}))
+	// Stale alias in the store that the vault doesn't carry —
+	// reindex must drop it.
+	require.NoError(t, st.ReplaceAliases(ctx, "book:piranesi", []store.Alias{
+		{Alias: "stale alias"},
+	}))
+
+	want := newEntity(t, "book:piranesi", "book")
+	// Match the slug exactly so the vault writer's
+	// title-synthesized alias path (ADR-0011) doesn't add an extra
+	// row — we want the test to assert only on the explicit
+	// frontmatter list.
+	want.Data["title"] = "piranesi"
+	want.Aliases = []string{
+		"Piranesi",
+		"author: Susanna Clarke",  // typed (author registered)
+		"unknown: prefix",         // bare (prefix not registered)
+	}
+	require.NoError(t, w.Write(want))
+
+	_, err = r.Run(ctx, Incremental)
+	require.NoError(t, err)
+
+	got, err := st.ListAliasesForEntity(ctx, "book:piranesi")
+	require.NoError(t, err)
+	require.Len(t, got, 3, "stale alias dropped + 3 vault aliases land")
+
+	// ORDER BY alias ASC.
+	assert.Equal(t, "Piranesi", got[0].Alias)
+	assert.Equal(t, store.AliasKindBare, got[0].Kind)
+	assert.Equal(t, "author: Susanna Clarke", got[1].Alias)
+	assert.Equal(t, store.AliasKindTyped, got[1].Kind,
+		"registered edge prefix → typed")
+	assert.Equal(t, "unknown: prefix", got[2].Alias)
+	assert.Equal(t, store.AliasKindBare, got[2].Kind,
+		"unregistered prefix → bare even with `: ` shape")
+}
+
+// TestReindex_VaultAliasesEmptyDropsAllStoreRows pins the
+// vault-as-truth shape: a vault file with no aliases drops every
+// prior alias row for that entity.
+func TestReindex_VaultAliasesEmptyDropsAllStoreRows(t *testing.T) {
+	t.Parallel()
+
+	r, st, w, _ := newTestEnv(t)
+	ctx := context.Background()
+
+	require.NoError(t, st.UpsertEntity(ctx, &store.Entity{
+		ID: "book:no-aliases",
+		Kind: "book",
+		Data: map[string]any{"title": "Anonymous"},
+	}))
+	require.NoError(t, st.ReplaceAliases(ctx, "book:no-aliases", []store.Alias{
+		{Alias: "stale"},
+	}))
+
+	// Vault entity carries no aliases. Match slug to suppress
+	// title-synthesized alias too.
+	want := newEntity(t, "book:no-aliases", "book")
+	want.Data["title"] = "no-aliases"
+	want.Aliases = nil
+	require.NoError(t, w.Write(want))
+
+	_, err := r.Run(ctx, Incremental)
+	require.NoError(t, err)
+
+	got, err := st.ListAliasesForEntity(ctx, "book:no-aliases")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+// TestReindex_VaultAliasesPermissiveWithoutEdgeTypes pins the
+// dev-binary shape: reindex.New (vs NewWithOptions) passes no
+// edge-type registry, so every alias lands as bare — the
+// classify-as-typed branch never fires.
+func TestReindex_VaultAliasesPermissiveWithoutEdgeTypes(t *testing.T) {
+	t.Parallel()
+
+	r, st, w, _ := newTestEnv(t) // built with New, not NewWithOptions
+	ctx := context.Background()
+
+	want := newEntity(t, "book:permissive", "book")
+	want.Data["title"] = "permissive"
+	want.Aliases = []string{
+		"Piranesi",
+		"author: Susanna Clarke", // would-be typed under the daemon path
+	}
+	require.NoError(t, w.Write(want))
+
+	_, err := r.Run(ctx, Incremental)
+	require.NoError(t, err)
+
+	got, err := st.ListAliasesForEntity(ctx, "book:permissive")
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	for _, a := range got {
+		assert.Equal(t, store.AliasKindBare, a.Kind,
+			"nil canonicalEdgeTypes → every alias bare")
+	}
+}
