@@ -9,6 +9,7 @@ import (
 
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/plugins"
+	"github.com/yaad-index/yaad-index/internal/plugins/datadir"
 )
 
 // ErrUnroutedURL surfaces from pickInstance when no enabled
@@ -379,6 +380,19 @@ func buildInstanceEnv(pluginName string, instance config.InstanceEntry) ([]strin
 			pluginName, instance.Name, err)
 	}
 	out := append([]string(nil), configEnv...)
+	// #284: stamp YAAD_PLUGIN_DATA_DIR with the resolved per-
+	// (plugin,instance) persistent-state directory. Operator
+	// override (instance.DataDir) wins; otherwise the default
+	// `<userCacheDir>/yaad-<plugin>/<instance>/` resolves the
+	// same way the startup-time Ensure pass populated. The dir
+	// is created with 0700 perms at boot — buildInstanceEnv
+	// only stamps the path, doesn't touch the FS.
+	dataDir, err := datadir.Resolve(pluginName, instance.Name, instance.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve data dir for plugin %q instance %q: %w",
+			pluginName, instance.Name, err)
+	}
+	out = append(out, "YAAD_PLUGIN_DATA_DIR="+dataDir)
 	for k, v := range instance.Env {
 		// #256: expand `${NAME}` references from the daemon's
 		// process env (populated from yaad-index.env via

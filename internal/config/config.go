@@ -508,6 +508,14 @@ type InstanceEntry struct {
 	Env     map[string]string `yaml:"env,omitempty"`
 	Config  map[string]any    `yaml:"config,omitempty"`
 	Enabled *bool             `yaml:"enabled,omitempty"`
+	// DataDir is the operator override for this instance's
+	// per-(plugin,instance) persistent-state directory per #284.
+	// When set, MUST be an absolute path; the daemon stamps it on
+	// YAAD_PLUGIN_DATA_DIR for every subprocess invocation. When
+	// empty, the daemon resolves the default
+	// `<userCacheDir>/yaad-<plugin>/<instance>/` (see
+	// internal/plugins/datadir.Resolve). Validated at Load time.
+	DataDir string `yaml:"data_dir,omitempty"`
 }
 
 // IsEnabled returns true when this instance is operator-enabled
@@ -843,6 +851,10 @@ func validateInstances(pluginName string, instances []InstanceEntry) error {
 				pluginName, i, inst.Name, prev)
 		}
 		seen[inst.Name] = i
+		if inst.DataDir != "" && !filepath.IsAbs(inst.DataDir) {
+			return fmt.Errorf("plugin %q: instances[%d].data_dir %q is not absolute (ADR-0028 + #284: operator-override data_dir must be an absolute path)",
+				pluginName, i, inst.DataDir)
+		}
 	}
 	return nil
 }

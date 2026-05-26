@@ -201,6 +201,7 @@ Each instance has:
 - `env` (optional) — env-var entries spliced into the subprocess at spawn time for THIS instance's invocations.
 - `config` (optional) — the per-instance structured config, delivered as `YAAD_PLUGIN_CONFIG` (same surface as the legacy plugin-level `config:` block).
 - `enabled` (optional, default `true`) — operator on/off flag per ADR-0028 §7. When `false`: invisible to URL routing + command dispatch + scheduled refresh; config + runtime state retained for easy re-enable.
+- `data_dir` (optional) — absolute path to this instance's persistent-state directory per #284. Stamped on `YAAD_PLUGIN_DATA_DIR` for every subprocess invocation; plugin writes durable state (cookie jars, refresh tokens, plugin-managed caches) under it. Default `<userCacheDir>/yaad-<plugin>/<instance>/` (XDG-style, picks up `$XDG_CACHE_HOME`). Created with `0700` perms at daemon startup; daemon never deletes the dir.
 
 **Implicit single-instance.** A plugin entry without an `instances:` block synthesizes a single implicit instance named `default` — the operator never has to write `instances: [{name: default}]`. The synthesized default's `config:` inherits the legacy plugin-level `config:` block so existing single-instance configs flow through the new per-instance dispatch unchanged.
 
@@ -222,10 +223,20 @@ Each instance has:
 - `supports_instances: false` plugin + 2+ instance entries → reject.
 - `supports_instances: false` plugin + the sole instance disabled → reject (the plugin would silently never run).
 - Multi-instance plugin with EVERY instance disabled → WARN (likely operator mistake but not load-fatal; dispatch returns `no_enabled_instances` per call).
+- `data_dir` (when set) → must be an absolute path; reject otherwise.
 
 **Per-instance `config:` validation.** When the plugin declares a `config_schema` in `--init`, the daemon validates each instance's `config:` block against it at startup. Validation errors name the offending plugin + instance + index for diagnostics.
 
 **Config changes take effect at next daemon restart** in v1. The §8 hot-reload mechanics (file watcher, mtime/hash diff, runtime cache invalidation, instance-removal archival) are deferred — see [#254](https://github.com/yaad-index/yaad-index/issues/254). Restart the daemon after editing `instances:` to pick up the change.
+
+**Per-instance persistent state directory** (per #284). The daemon stamps `YAAD_PLUGIN_DATA_DIR=<abs-path>` on every subprocess invocation. Plugins that need durable per-instance state (cookie jars, refresh tokens, plugin-managed caches) write under this path; the plugin SDK helper at `github.com/yaad-index/yaad-index/pkg/plugin/data.DataDir()` reads the env value. Path resolution:
+
+- Operator override → `instances[*].data_dir: /custom/abs/path` (absolute required).
+- Default → `<userCacheDir>/yaad-<plugin>/<instance>/` where `userCacheDir` follows XDG semantics (`$XDG_CACHE_HOME` if set, otherwise `~/.cache`).
+
+The directory is created with `0700` perms at daemon startup before any plugin subprocess spawns. Permission posture matches the env-file secret model (#256) — contents are credential-equivalent in practice. The daemon does NOT enumerate, read, delete, or re-perm files under the dir; lifecycle is plugin-owned. A non-directory at the resolved path fails fast at boot.
+
+Multi-instance isolation: each `<plugin>/<instance>` resolves to a distinct path, so e.g. `gmail/personal` and `gmail/work` get separate cookie jars.
 
 **Secret references in `env` values** (per #256). `instances[*].env` values support `${NAME}` reference expansion at instance-env-build time. The daemon walks each value and substitutes any `${NAME}` literal with the corresponding entry from its own process environment — typically populated by systemd's `EnvironmentFile=/etc/yaad-index/yaad-index.env` directive. The intended split:
 
