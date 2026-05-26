@@ -122,10 +122,14 @@ func TestMergeCanonicalRegistry_PluginAutoActivation(t *testing.T) {
 		assert.Empty(t, k.Instruction.Text)
 	}
 
-	// person: only the 3 universal defaults (no kind-specific
-	// built-ins).
-	assert.Len(t, merged["person"].Gaps, 3,
-		"person has only the 3 universal code-default gaps")
+	// person: 3 universal defaults + 3 #48 slice 2 Layer 1.5
+	// built-ins (birth_date / death_date / occupation).
+	assert.Len(t, merged["person"].Gaps, 6,
+		"person carries 3 universal + 3 Layer 1.5 built-ins (birth_date, death_date, occupation)")
+	for _, field := range []string{"birth_date", "death_date", "occupation"} {
+		assert.Contains(t, merged["person"].Gaps, field,
+			"person Layer 1.5 gap %s present", field)
+	}
 
 	// boardgame: 3 universal defaults + 5 ADR-0019 step 4 built-ins
 	// (rating/owned/want/played/knows_how_to_play). All five carry
@@ -636,6 +640,92 @@ func TestBuiltinKindGaps_BoardgameSurface(t *testing.T) {
 		assert.Equal(t, "bool", got[field].Type, "%s.type", field)
 		assert.Equal(t, "operator", got[field].FillStrategy, "%s.fill_strategy", field)
 		assert.NotEmpty(t, got[field].Description, "%s.description", field)
+	}
+}
+
+// TestBuiltinKindGaps_PersonSurface pins #48 slice 2: person
+// carries birth_date / death_date / occupation as Layer 1.5
+// starter-pool gaps. All three default to FillStrategy=""
+// (agent-then-operator) since dates + occupation are typically
+// agent-derivable from upstream content.
+func TestBuiltinKindGaps_PersonSurface(t *testing.T) {
+	t.Parallel()
+	got := BuiltinKindGaps("person")
+	require.Len(t, got, 3)
+	for _, field := range []string{"birth_date", "death_date", "occupation"} {
+		require.Contains(t, got, field, "missing built-in %q", field)
+		assert.NotEmpty(t, got[field].Description, "%s.description", field)
+	}
+	assert.Equal(t, "string", got["birth_date"].Type)
+}
+
+// TestBuiltinKindGaps_PlaceSurface pins #48 slice 2: place
+// carries country (string) + type (enum). The enum gates the
+// value-shape at fill time.
+func TestBuiltinKindGaps_PlaceSurface(t *testing.T) {
+	t.Parallel()
+	got := BuiltinKindGaps("place")
+	require.Len(t, got, 2)
+	assert.Equal(t, "string", got["country"].Type)
+	require.Equal(t, "enum", got["type"].Type)
+	assert.Contains(t, got["type"].Values, "city")
+	assert.Contains(t, got["type"].Values, "landmark")
+}
+
+// TestBuiltinKindGaps_BookSurface pins #48 slice 2: book carries
+// author + year + the operator-judgment pair (rating, read).
+// rating mirrors boardgame's int 1-10 shape so operators can
+// lean the same way.
+func TestBuiltinKindGaps_BookSurface(t *testing.T) {
+	t.Parallel()
+	got := BuiltinKindGaps("book")
+	require.Len(t, got, 4)
+	assert.Equal(t, "int", got["year"].Type)
+	assert.Equal(t, "int", got["rating"].Type)
+	assert.Equal(t, []int{1, 10}, got["rating"].Range)
+	assert.Equal(t, "operator", got["rating"].FillStrategy)
+	assert.Equal(t, "operator", got["read"].FillStrategy)
+}
+
+// TestBuiltinKindGaps_ArticleSurface pins #48 slice 2: article
+// carries author + publication + published_date — bibliographic
+// anchors agent-derivable from upstream metadata.
+func TestBuiltinKindGaps_ArticleSurface(t *testing.T) {
+	t.Parallel()
+	got := BuiltinKindGaps("article")
+	require.Len(t, got, 3)
+	for _, field := range []string{"author", "publication", "published_date"} {
+		require.Contains(t, got, field, "missing built-in %q", field)
+		assert.NotEmpty(t, got[field].Description)
+	}
+}
+
+// TestBuiltinKindGaps_RecipeSurface pins #48 slice 2: recipe
+// carries cuisine + prep_time_minutes + servings as cooking-card
+// anchors.
+func TestBuiltinKindGaps_RecipeSurface(t *testing.T) {
+	t.Parallel()
+	got := BuiltinKindGaps("recipe")
+	require.Len(t, got, 3)
+	assert.Equal(t, "int", got["prep_time_minutes"].Type)
+	assert.Equal(t, []int{0, 1440}, got["prep_time_minutes"].Range)
+	assert.Equal(t, "int", got["servings"].Type)
+	assert.Equal(t, []int{1, 100}, got["servings"].Range)
+}
+
+// TestBuiltinKindGaps_DormantUntilActivation pins the #48 slice
+// 2 contract: shipping a built-in gap-set for a kind does NOT
+// auto-activate that kind. The merged registry only carries a
+// kind when a plugin's canonical_kinds_emitted or operator
+// config triggers it. Operators running with no plugin + no
+// `book` in operator config see no `book` entry in the merged
+// registry, even though Layer 1.5 defines defaults for it.
+func TestBuiltinKindGaps_DormantUntilActivation(t *testing.T) {
+	t.Parallel()
+	merged := MergeCanonicalRegistry(nil, nil, CanonicalKindConfig{}, nil, nil)
+	for _, kind := range []string{"person", "place", "book", "article", "recipe"} {
+		assert.NotContains(t, merged, kind,
+			"kind %q must NOT auto-activate from Layer 1.5 alone (no plugin emit, no operator config)", kind)
 	}
 }
 

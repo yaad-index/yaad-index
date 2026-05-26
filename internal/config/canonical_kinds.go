@@ -417,37 +417,45 @@ func DefaultInstruction() InstructionSpec {
 }
 
 // BuiltinKindGaps returns kind-specific built-in gap defaults per
-// ADR-0019 step 4. Layered between the universal DefaultGaps() and
-// plugin extras during merge — a slot reserved for gaps that
-// belong to the canonical-kind shape itself (e.g. an operator's
-// rating/owned/want/played for boardgame), shipped with the daemon
-// rather than the plugin so an operator running with no BGG plugin
-// still gets the right gap surface on a boardgame entity.
+// ADR-0019 step 4 + #48 slice 2. Layered between the universal
+// DefaultGaps() and plugin extras during merge — a slot reserved
+// for gaps that belong to the canonical-kind shape itself (e.g.
+// an operator's rating/owned/want/played for boardgame), shipped
+// with the daemon rather than the plugin so an operator running
+// with no BGG plugin still gets the right gap surface on a
+// boardgame entity.
 //
 // Returns a fresh copy so callers can mutate without aliasing.
 // Empty map for kinds with no built-in extras.
 //
-// Boardgame's five operator-strategy gaps come from the 2026-05-08
-// concerns meeting (per ADR-0019 §Decision):
+// Built-in shapes shipped today (per #48 slice 2 starter-pool):
 //
-// - rating (int 1..10) — operator rates this game.
-// - owned (bool) — operator owns this game.
-// - want (bool) — operator wants this game.
-// - played (bool) — operator has played this game.
-// - knows_how_to_play (bool) — operator knows the rules. Distinct
-// from played: an operator can know the rules without having
-// played in years; an operator can have played without
-// remembering the rules cleanly.
+//   - boardgame: rating / owned / want / played / knows_how_to_play
+//     (per ADR-0019 §Decision).
+//   - person: birth_date / death_date / occupation.
+//   - place: country / type (enum: city / country / region /
+//     landmark / neighborhood / other).
+//   - book: author / year / rating / read.
+//   - article: author / publication / published_date.
+//   - recipe: cuisine / prep_time_minutes / servings.
 //
-// All five carry FillStrategy="operator". The agent-fill path won't
-// attempt them; they surface to the operator-fill path when
-// /v1/needs-fill lands (step 6) and the operator-fill endpoint
-// (step 5) lets the operator answer them.
+// **Dormant-until-active.** A kind's built-in gaps surface only
+// when the kind activates in the merged registry — either a
+// plugin's `canonical_kinds_emitted` triggers it or operator
+// config explicitly lists it under `canonical_kinds:`. Layer 1.5
+// is a starter pool, not auto-on (preserves ADR-0013's opt-in
+// canonical-kind contract).
 //
-// Operator config can override any of these (Layer 3-4 in the
-// merge). Operator can also disable a built-in by declaring the
-// field with an empty Description in operator yaml — the merge's
-// last-write-wins wipes the built-in.
+// Operator config can override any field of a built-in by
+// declaring it under `canonical_kinds.<kind>.gaps.<field>` with
+// new type / description / range / etc. — the merge's last-
+// write-wins replaces the built-in's spec with the operator's.
+// Per-gap disable (drop the built-in entirely without supplying
+// a replacement spec) is NOT supported in v1 — the validator
+// rejects empty / whitespace-only Description, so the "declare
+// with empty description to wipe" pattern fails config-load
+// rather than disabling. Disable lands in a follow-up if real
+// operator pain surfaces.
 func BuiltinKindGaps(kind string) map[string]GapSpec {
 	switch kind {
 	case "boardgame":
@@ -477,6 +485,111 @@ func BuiltinKindGaps(kind string) map[string]GapSpec {
 				Type: "bool",
 				Description: "Do you know how to play this?",
 				FillStrategy: "operator",
+			},
+		}
+	case "person":
+		// Identity + biographical anchors. agent fills are
+		// derived from clean_content when present; operator
+		// picks up empty fills.
+		return map[string]GapSpec{
+			"birth_date": {
+				Type:        "string",
+				Description: "Date of birth (YYYY-MM-DD when known, year-only otherwise).",
+				MaxLength:   32,
+			},
+			"death_date": {
+				Type:        "string",
+				Description: "Date of death (YYYY-MM-DD when known, year-only otherwise). Empty for living people.",
+				MaxLength:   32,
+			},
+			"occupation": {
+				Type:        "string",
+				Description: "Primary occupation or role.",
+				MaxLength:   128,
+			},
+		}
+	case "place":
+		// Geographic anchors. Both fields are agent-derivable
+		// from clean_content when an upstream source includes
+		// location prose.
+		return map[string]GapSpec{
+			"country": {
+				Type:        "string",
+				Description: "Country this place is in.",
+				MaxLength:   64,
+			},
+			"type": {
+				Type:        "enum",
+				Description: "Kind of place.",
+				Values:      []string{"city", "country", "region", "landmark", "neighborhood", "other"},
+			},
+		}
+	case "book":
+		// Bibliographic identity + the operator-judgment pair
+		// for read-state tracking. rating mirrors boardgame's
+		// shape so operators can lean the same way.
+		return map[string]GapSpec{
+			"author": {
+				Type:        "string",
+				Description: "Primary author.",
+				MaxLength:   128,
+			},
+			"year": {
+				Type:        "int",
+				Description: "Year of first publication.",
+				Range:       []int{0, 9999},
+			},
+			"rating": {
+				Type:         "int",
+				Description:  "How do you rate this on a 1-10 scale?",
+				Range:        []int{1, 10},
+				FillStrategy: "operator",
+			},
+			"read": {
+				Type:         "bool",
+				Description:  "Have you read this?",
+				FillStrategy: "operator",
+			},
+		}
+	case "article":
+		// Bibliographic anchors for written pieces. All three
+		// agent-derive cleanly from upstream metadata when
+		// present (e.g. yaad-wikipedia, gmail newsletters).
+		return map[string]GapSpec{
+			"author": {
+				Type:        "string",
+				Description: "Primary author.",
+				MaxLength:   128,
+			},
+			"publication": {
+				Type:        "string",
+				Description: "Publication or outlet.",
+				MaxLength:   128,
+			},
+			"published_date": {
+				Type:        "string",
+				Description: "Publication date (YYYY-MM-DD when known).",
+				MaxLength:   32,
+			},
+		}
+	case "recipe":
+		// Cooking-card anchors. Agent fills from upstream
+		// content; operator can override per their household.
+		return map[string]GapSpec{
+			"cuisine": {
+				Type:        "string",
+				Description: "Cuisine type.",
+				MaxLength:   64,
+			},
+			"prep_time_minutes": {
+				Type:        "int",
+				Description: "Preparation time in minutes.",
+				Range:       []int{0, 1440},
+			},
+			"servings": {
+				Type:        "int",
+				Description: "Number of servings.",
+				Range:       []int{1, 100},
 			},
 		}
 	default:
