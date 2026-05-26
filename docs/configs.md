@@ -513,6 +513,14 @@ The daemon's runtime registries do NOT equal the config file 1:1. Three transfor
 
 Inspect the resolved state at runtime via `/v1/structure` (operator-facing snapshot) or `/v1/cv-status` (canonical-validation drift counter — surfaces plugin-emitted kinds / edges the operator hasn't declared, when relevant).
 
+**Drift-signal surfacing** (per #48 slice 1). `/v1/cv-status` is the **canonical drift surface** — it returns per-(plugin, kind) and per-(plugin, edge_type) drop counts since the last `POST /v1/reindex`. In parallel, the daemon emits a one-shot `WARN` log line at the first observed drop of each (plugin, kind|edge_type) tuple in the current process lifetime so operators see the problem in the boot/run log without having to poll the endpoint. Sample log line:
+
+```
+canonical kind dropped by config filter (first occurrence this process); aggregate counts at /v1/cv-status plugin=yaad-github kind=pull_request
+```
+
+The aggregate counter answers "how many drops since last reindex"; the WARN-once answers "did anything start dropping silently right now". Subsequent drops of the same key are silent (the counter ticks; the log doesn't repeat). A `POST /v1/reindex` resets the durable counter but does NOT reset the in-process WARN gate — operators wanting to re-WARN restart the daemon.
+
 ## 11. Where to look when config fails to validate
 
 | Symptom                                                | First look                                                                                              |

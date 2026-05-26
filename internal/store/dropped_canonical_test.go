@@ -1,7 +1,10 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -217,4 +220,116 @@ func TestDroppedCanonical_SeparateTablesNoCrossContamination(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, edges, 1)
 	assert.Equal(t, "is_about", edges[0].EdgeType)
+}
+
+// captureSlogDefault redirects slog.Default to a buffer-backed
+// JSON handler for the duration of t and returns the buffer.
+// Tests that touch the package-global warn gate also reset it +
+// the slog default on cleanup so they don't bleed into siblings.
+//
+// Tests that touch the warn gate MUST NOT t.Parallel — the gate
+// is package-global mutable state.
+func captureSlogDefault(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prior := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() {
+		slog.SetDefault(prior)
+		resetDroppedWarnGate()
+	})
+	resetDroppedWarnGate()
+	return &buf
+}
+
+// TestDroppedCanonicalKind_WarnOnceLogsOnFirstHit pins the #48
+// slice 1 contract: the first IncDroppedCanonicalKind for a
+// given (plugin, kind) in this process emits a WARN log naming
+// the plugin + kind + the /v1/cv-status pointer. The aggregate
+// counter row is unaffected (that's tested independently above).
+func TestDroppedCanonicalKind_WarnOnceLogsOnFirstHit(t *testing.T) {
+	buf := captureSlogDefault(t)
+	st := newStore(t)
+
+	require.NoError(t, st.IncDroppedCanonicalKind(context.Background(), "wikipedia", "person"))
+
+	logged := buf.String()
+	assert.Contains(t, logged, `"level":"WARN"`)
+	assert.Contains(t, logged, "wikipedia")
+	assert.Contains(t, logged, "person")
+	assert.Contains(t, logged, "/v1/cv-status")
+	assert.Contains(t, logged, "kind")
+}
+
+// TestDroppedCanonicalKind_WarnOnceSkipsRepeatHits pins the
+// "once per process" half: subsequent IncDroppedCanonicalKind
+// calls for the same (plugin, kind) do NOT log. The aggregate
+// counter still increments; the WARN doesn't repeat.
+func TestDroppedCanonicalKind_WarnOnceSkipsRepeatHits(t *testing.T) {
+	buf := captureSlogDefault(t)
+	st := newStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, st.IncDroppedCanonicalKind(ctx, "wikipedia", "person"))
+	firstLen := buf.Len()
+	require.NoError(t, st.IncDroppedCanonicalKind(ctx, "wikipedia", "person"))
+	require.NoError(t, st.IncDroppedCanonicalKind(ctx, "wikipedia", "person"))
+
+	assert.Equal(t, firstLen, buf.Len(), "repeat drops for the same (plugin, kind) MUST NOT re-log")
+
+	// Aggregate counter still ticks — that's the cv-status surface.
+	rows, err := st.ListDroppedCanonicalKinds(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, int64(3), rows[0].Count)
+}
+
+// TestDroppedCanonicalKind_WarnOnceKeyedByPluginAndKind pins the
+// composite-key dedup: different plugins + different kinds each
+// log independently. Three first-hits = three WARN lines.
+func TestDroppedCanonicalKind_WarnOnceKeyedByPluginAndKind(t *testing.T) {
+	buf := captureSlogDefault(t)
+	st := newStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, st.IncDroppedCanonicalKind(ctx, "wikipedia", "person"))
+	require.NoError(t, st.IncDroppedCanonicalKind(ctx, "wikipedia", "place"))
+	require.NoError(t, st.IncDroppedCanonicalKind(ctx, "bgg", "person"))
+
+	lines := strings.Count(buf.String(), `"level":"WARN"`)
+	assert.Equal(t, 3, lines, "each distinct (plugin, kind) MUST WARN once; got %d lines, body=%s", lines, buf.String())
+}
+
+// TestDroppedCanonicalEdge_WarnOnceLogsOnFirstHit mirrors the
+// kind-side test for the edge_type counterpart. The axis label
+// in the message is "edge_type" so operators can correlate to
+// the right `/v1/cv-status` drift section.
+func TestDroppedCanonicalEdge_WarnOnceLogsOnFirstHit(t *testing.T) {
+	buf := captureSlogDefault(t)
+	st := newStore(t)
+
+	require.NoError(t, st.IncDroppedCanonicalEdge(context.Background(), "wikipedia", "is_about"))
+
+	logged := buf.String()
+	assert.Contains(t, logged, `"level":"WARN"`)
+	assert.Contains(t, logged, "wikipedia")
+	assert.Contains(t, logged, "is_about")
+	assert.Contains(t, logged, "edge_type")
+}
+
+// TestDroppedCanonical_KindAndEdgeWarnIndependently pins that
+// the same key in both axes (e.g. a plugin's `is_about` kind
+// AND `is_about` edge_type — both unlikely-but-expressible)
+// each WARN once. The axis prefix in the gate key prevents
+// kind/edge cross-collision.
+func TestDroppedCanonical_KindAndEdgeWarnIndependently(t *testing.T) {
+	buf := captureSlogDefault(t)
+	st := newStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, st.IncDroppedCanonicalKind(ctx, "wikipedia", "is_about"))
+	require.NoError(t, st.IncDroppedCanonicalEdge(ctx, "wikipedia", "is_about"))
+
+	lines := strings.Count(buf.String(), `"level":"WARN"`)
+	assert.Equal(t, 2, lines, "axis prefix in the dedup key prevents kind/edge collision; both axes MUST WARN once each")
 }

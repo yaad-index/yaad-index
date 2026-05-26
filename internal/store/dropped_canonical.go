@@ -4,6 +4,14 @@
 // drop site (the startup-WARN site) so operators see an aggregate
 // count of "you would have materialized N more entities" rather
 // than scrolling logs.
+//
+// Per #48 slice 1 the increment also fires a per-(plugin,
+// kind|edge_type) WARN-once at the first hit in this process
+// lifetime. The aggregate counter in `/v1/cv-status` answers
+// "how many drops since last reindex"; the WARN-once answers
+// "did anything start dropping silently this process" so the
+// operator sees the problem in their startup log without having
+// to poll the endpoint.
 
 package store
 
@@ -11,8 +19,52 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sync"
 	"time"
 )
+
+// droppedWarnGate dedups the per-(plugin, kind|edge_type) WARN-
+// once log per process lifetime. The aggregate counter rows
+// already live in the `dropped_canonical_kinds` /
+// `dropped_canonical_edges` tables; this in-memory gate exists
+// purely to prevent log spam on the second + later drops of the
+// same key.
+//
+// Composite-key shape: `<axis>|<plugin>|<kind|edge_type>` where
+// axis is `kind` or `edge`. The axis prefix prevents collision
+// between a plugin's kind and edge_type that happen to share a
+// name (defensive — the two carry independent vocabularies in
+// practice).
+var droppedWarnGate sync.Map // map[string]struct{}
+
+// warnDroppedOnce logs a WARN at the first observation of the
+// (axis, plugin, key) tuple per process lifetime. Subsequent
+// calls with the same key are silent — the counter table is the
+// per-event-count surface, this gate is the at-least-once log
+// surface. The caller's `axisName` is included in the message so
+// operators can correlate to the right `/v1/cv-status` drift
+// section without ambiguity.
+func warnDroppedOnce(axis, plugin, key, axisName string) {
+	gateKey := axis + "|" + plugin + "|" + key
+	if _, loaded := droppedWarnGate.LoadOrStore(gateKey, struct{}{}); loaded {
+		return
+	}
+	slog.Default().Warn("canonical "+axisName+" dropped by config filter (first occurrence this process); aggregate counts at /v1/cv-status",
+		"plugin", plugin,
+		axisName, key,
+	)
+}
+
+// resetDroppedWarnGate clears the WARN-once dedup map. Test-only
+// hook — production never resets in-process (a reindex would
+// reset the durable counter, not this in-memory gate).
+func resetDroppedWarnGate() {
+	droppedWarnGate.Range(func(k, _ any) bool {
+		droppedWarnGate.Delete(k)
+		return true
+	})
+}
 
 // IncDroppedCanonicalKind upserts the (plugin, kind) row in the
 // drop counter table — first call inserts count=1; subsequent
@@ -30,6 +82,7 @@ func (s *sqliteStore) IncDroppedCanonicalKind(ctx context.Context, plugin, kind 
 	if kind == "" {
 		return errors.New("IncDroppedCanonicalKind: empty kind")
 	}
+	warnDroppedOnce("kind", plugin, kind, "kind")
 	now := time.Now().UTC().Format(sqliteTimeFormat)
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO dropped_canonical_kinds (plugin, kind, count, first_seen_at, last_seen_at)
@@ -52,6 +105,7 @@ func (s *sqliteStore) IncDroppedCanonicalEdge(ctx context.Context, plugin, edgeT
 	if edgeType == "" {
 		return errors.New("IncDroppedCanonicalEdge: empty edge_type")
 	}
+	warnDroppedOnce("edge", plugin, edgeType, "edge_type")
 	now := time.Now().UTC().Format(sqliteTimeFormat)
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO dropped_canonical_edges (plugin, edge_type, count, first_seen_at, last_seen_at)
