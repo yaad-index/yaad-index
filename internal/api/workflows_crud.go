@@ -206,8 +206,14 @@ func handleWorkflowDelete(logger *slog.Logger, workflowDir string) http.HandlerF
 // or the new file, never a partial-write. tmp file lives in the
 // same dir so the rename stays on the same filesystem.
 //
-// On any error the tmp file is removed; the target path is left
-// untouched.
+// The parent dir MUST exist at call time. Provisioning happens
+// at daemon boot in `cmd/yaad-index/main.go` via the
+// `ensureWorkflowDir` helper — single source of dir creation,
+// fail-fast at start if the path is uncreatable. Mirrors the
+// #284 plugin data-dir pattern.
+//
+// On any error after the tmp file is created, the tmp file is
+// removed; the target path is left untouched.
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp.*")

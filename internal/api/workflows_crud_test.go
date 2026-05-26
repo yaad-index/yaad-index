@@ -226,6 +226,38 @@ func TestWorkflowDelete_IdempotentOnMissing(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), `"existed":false`)
 }
 
+// TestWorkflowDefine_MissingWorkflowDirReturns500 pins the
+// non-existent-dir contract from #277 review feedback: when the
+// configured workflowDir does NOT exist at PUT time (operator
+// pointed the daemon at the wrong path, or boot-time MkdirAll
+// was skipped), the define returns 500 with a structured error
+// rather than silently writing to an unexpected location.
+//
+// In production, cmd/yaad-index/main.go MkdirAlls the dir at
+// boot before passing it to WithWorkflowDir, so this 500 path
+// only fires when the dir is removed mid-runtime — operators
+// see a clear error in the response + the log.
+func TestWorkflowDefine_MissingWorkflowDirReturns500(t *testing.T) {
+	t.Parallel()
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	parent := t.TempDir()
+	missing := filepath.Join(parent, "does-not-exist")
+	// NOT MkdirAll'd — simulates the operator pointing at an
+	// uncreated path, or the dir being removed mid-runtime.
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	h := NewHandlerWithRegistry(logger, st, nil, WithWorkflowDir(missing))
+
+	body := validWorkflowMarkdown("orphan-flow")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/v1/workflows/orphan-flow", strings.NewReader(body))
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusInternalServerError, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "internal_error")
+}
+
 // TestWorkflowCRUD_UnregisteredWithoutWorkflowDir pins the
 // opt-in shape: a Handler built WITHOUT WithWorkflowDir leaves
 // the per-workflow routes unregistered (404). Existing list /
