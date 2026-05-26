@@ -135,19 +135,29 @@ func registerNeedsFill(s *server.MCPServer, b *bridge) {
 		mcp.WithDescription(
 			"Browse the open-gap queue: entities with unfilled gaps that "+
 				"haven't been gap-called for the current fetch-cycle. Returns "+
-				"`{ok, entities, next_cursor?}` verbatim from "+
-				"`GET /v1/needs-fill`. Each entry carries the full gap-call "+
-				"payload (id, kind, gaps, clean_content, instruction, "+
-				"canonical_vocabulary). Optional `limit` (server clamps; "+
-				"default 50, cap 200) and `cursor` (opaque, from a prior "+
-				"call's `next_cursor`) drive pagination. The caller decides "+
-				"whether to keep paginating or stop.",
+				"`{ok, entities, next_cursor?, canonical_vocabulary?}` verbatim "+
+				"from `GET /v1/needs-fill`. `canonical_vocabulary` lives at the "+
+				"response root (per #275 — one copy per response, not one per "+
+				"entry) and is included by default. Each entry carries the "+
+				"per-gap-call payload (id, kind, gaps, gap_metadata, "+
+				"clean_content, instruction). Optional `limit` (server clamps; "+
+				"default 50, cap 200) and `cursor` (opaque, from a prior call's "+
+				"`next_cursor`) drive pagination. Optional `exclude` is a comma-"+
+				"separated list of fields to strip from the response — supports "+
+				"`canonical_vocabulary` (drops the top-level registry block when "+
+				"the agent has already cached it from /v1/structure or /v1/kinds) "+
+				"and `clean_content` (drops the per-entry body when the agent "+
+				"has cached it from /v1/entities). The caller decides whether to "+
+				"keep paginating or stop.",
 		),
 		mcp.WithNumber("limit",
 			mcp.Description("Page size. Server clamps; default 50, cap 200."),
 		),
 		mcp.WithString("cursor",
 			mcp.Description("Opaque base64 cursor from a prior call's `next_cursor`."),
+		),
+		mcp.WithString("exclude",
+			mcp.Description("Comma-separated field names to strip from the response. Supported: `canonical_vocabulary`, `clean_content`. Default empty (include everything)."),
 		),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -157,6 +167,9 @@ func registerNeedsFill(s *server.MCPServer, b *bridge) {
 		}
 		if cursor := req.GetString("cursor", ""); cursor != "" {
 			q.Set("cursor", cursor)
+		}
+		if exclude := req.GetString("exclude", ""); exclude != "" {
+			q.Set("exclude", exclude)
 		}
 		path := "/v1/needs-fill"
 		if encoded := q.Encode(); encoded != "" {

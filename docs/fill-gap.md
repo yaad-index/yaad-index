@@ -119,14 +119,17 @@ Pull-based batch endpoint. Returns up to `limit` entities (default 50, max 200) 
 Request:
 
 ```
-GET /v1/needs-fill?limit=50&cursor=<base64>
+GET /v1/needs-fill?limit=50&cursor=<base64>&exclude=canonical_vocabulary,clean_content
 ```
 
-Response (per entity):
+`exclude` is optional (default empty — include everything); see "Caching agents" below.
+
+Response:
 
 ```json
 {
   "ok": true,
+  "canonical_vocabulary": { "person": { ... } },
   "entities": [
     {
       "id": "boardgame:caverna",
@@ -159,8 +162,7 @@ Response (per entity):
       },
       "clean_content": "...article body...",
       "clean_content_truncated": false,
-      "instruction": "extract structured fields per the schema",
-      "canonical_vocabulary": { "person": { ... } }
+      "instruction": "extract structured fields per the schema"
     }
   ],
   "next_cursor": "..."
@@ -169,6 +171,7 @@ Response (per entity):
 
 Field roles:
 
+- `canonical_vocabulary` (response-root, per #275) — the operator's `canonical_kinds:` registry shape, surfaced once per response so the agent's UI sees the kind allowlist for `kinds: ["*"]` gaps at fill-prompt time. Pre-#275 this field was repeated per-entry, which blew agent-context windows when the kind set grew.
 - `gaps` — name → fill-prompt map. The agent's per-field LLM call uses each value as the extraction instruction.
 - `gap_metadata` — typed metadata sibling. Same key set as `gaps`. Drives prompt construction beyond the bare prompt string:
   - `type` / `fill_strategy` / `range` / `max_length` / `values` — gap-spec mirror from `canonical_kinds:`.
@@ -176,9 +179,16 @@ Field roles:
   - `data_schema` — for `canonical_type` gaps with per-entry data, the workflow-injected per-key extraction guidance (#117). Surfaces only when a workflow's `add_gap` action injected the schema; gaps without it omit the field.
 - `clean_content` — the source body the agent extracts from. The plugin's `raw_content` after marker stripping.
 - `instruction` — top-level fill instruction (operator-configured per-kind override + global fallback).
-- `canonical_vocabulary` — the operator's `canonical_kinds:` registry shape, surfaced so the agent's UI sees the kind allowlist for `kinds: ["*"]` gaps at fill-prompt time.
 
-The MCP tool `needs_fill(limit?, cursor?)` returns this verbatim — no client-side filtering, no auto-pagination.
+**Caching agents** can opt out of receiving fields they've already cached:
+
+- `?exclude=canonical_vocabulary` — drop the top-level registry block (re-fetch once from `/v1/structure` or `/v1/kinds` at session start instead).
+- `?exclude=clean_content` — drop the per-entry body (fetch on demand from `/v1/entities/<id>` per entity).
+- `?exclude=canonical_vocabulary,clean_content` — both.
+
+Unknown field names are silently ignored (forward-compatible with future fields).
+
+The MCP tool `needs_fill(limit?, cursor?, exclude?)` returns this verbatim — no client-side filtering, no auto-pagination.
 
 ADR refs: [ADR-0002](../adr/0002-api-surface.md) §"Pull-based batch endpoints", [ADR-0013](../adr/0013-canonical-kind-owns-gap-contract.md), [ADR-0019](../adr/0019-operator-fill.md).
 

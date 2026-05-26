@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/store"
@@ -110,13 +111,21 @@ type needsFillEntry struct {
 	CleanContent string `json:"clean_content"`
 	CleanContentTruncated bool `json:"clean_content_truncated"`
 	Instruction string `json:"instruction,omitempty"`
-	CanonicalVocabulary map[string]config.LegacyCanonicalKindConfig `json:"canonical_vocabulary,omitempty"`
+	// CanonicalVocabulary moved to the response-root per #275; the
+	// per-entity field used to repeat the full operator config on
+	// every entry, blowing agent-context windows when the kind set
+	// grew past a handful. omitempty keeps the wire surface clean
+	// for the now-default empty case.
 }
 
 type needsFillResponse struct {
-	OK bool `json:"ok"`
-	Entities []needsFillEntry `json:"entities"`
-	NextCursor string `json:"next_cursor,omitempty"`
+	OK         bool             `json:"ok"`
+	Entities   []needsFillEntry `json:"entities"`
+	NextCursor string           `json:"next_cursor,omitempty"`
+	// CanonicalVocabulary lives at response-root per #275: one
+	// copy per response rather than one per entry. Omitted when
+	// the operator's request strips it via `?exclude=canonical_vocabulary`.
+	CanonicalVocabulary map[string]config.LegacyCanonicalKindConfig `json:"canonical_vocabulary,omitempty"`
 }
 
 func handleNeedsFill(
@@ -146,10 +155,20 @@ func handleNeedsFill(
 		if vaultReader == nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			if err := json.NewEncoder(w).Encode(needsFillResponse{
-				OK: true,
+			// No vault = no entries; canonical_vocabulary still
+			// surfaces at top level so callers can read the
+			// operator config off this endpoint when /v1/structure
+			// isn't wired. Honors `?exclude=` the same way the
+			// happy path does.
+			noVaultExcluded := parseNeedsFillExclude(r.URL.Query().Get("exclude"))
+			noVaultResp := needsFillResponse{
+				OK:       true,
 				Entities: []needsFillEntry{},
-			}); err != nil {
+			}
+			if !noVaultExcluded[needsFillFieldCanonicalVocabulary] {
+				noVaultResp.CanonicalVocabulary = config.LegacyRegistryWireShape(canonicalKindReg)
+			}
+			if err := json.NewEncoder(w).Encode(noVaultResp); err != nil {
 				logger.ErrorContext(r.Context(), "encode /v1/needs-fill (no-vault) response", "err", err)
 			}
 			return
@@ -263,16 +282,65 @@ func handleNeedsFill(
 			nextCursor = encodeNeedsFillCursor(lastConsidered)
 		}
 
+		// #275: build the top-level response with canonical_vocabulary
+		// included by default unless the caller passed
+		// `?exclude=canonical_vocabulary`. Same opt-out shape covers
+		// per-entry `clean_content` for callers that already cached
+		// the body.
+		excluded := parseNeedsFillExclude(r.URL.Query().Get("exclude"))
+		if excluded[needsFillFieldCleanContent] {
+			for i := range entries {
+				entries[i].CleanContent = ""
+			}
+		}
+		resp := needsFillResponse{
+			OK:         true,
+			Entities:   entries,
+			NextCursor: nextCursor,
+		}
+		if !excluded[needsFillFieldCanonicalVocabulary] {
+			resp.CanonicalVocabulary = config.LegacyRegistryWireShape(canonicalKindReg)
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		if err := json.NewEncoder(w).Encode(needsFillResponse{
-			OK: true,
-			Entities: entries,
-			NextCursor: nextCursor,
-		}); err != nil {
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
 			logger.ErrorContext(r.Context(), "encode /v1/needs-fill response", "err", err)
 		}
 	}
+}
+
+// needsFillFieldCanonicalVocabulary and needsFillFieldCleanContent
+// are the two field-names `?exclude=` accepts per #275. Centralized
+// as constants so the parser + the ingest cache-hit emit point speak
+// the same vocabulary.
+const (
+	needsFillFieldCanonicalVocabulary = "canonical_vocabulary"
+	needsFillFieldCleanContent        = "clean_content"
+)
+
+// parseNeedsFillExclude decodes the `?exclude=field1,field2` query
+// param value into a set of field names the caller wants stripped
+// from the response. Unknown / unsupported field names are silently
+// ignored (forward-compatible with future fields). Empty input
+// returns an empty set — default behavior is to include everything.
+//
+// Used by `/v1/needs-fill` and `/v1/ingest` (cache-hit needs-fill
+// response) so caching agents can opt out of receiving the
+// `canonical_vocabulary` registry on every page when they've already
+// fetched it via `/v1/structure` or `/v1/kinds`, and / or the
+// `clean_content` body when they've cached it via
+// `/v1/entities/<id>`.
+func parseNeedsFillExclude(raw string) map[string]bool {
+	out := map[string]bool{}
+	for _, name := range strings.Split(raw, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out[name] = true
+	}
+	return out
 }
 
 // buildNeedsFillEntry shapes a single entity's gap-call payload.
@@ -390,14 +458,13 @@ func buildNeedsFillEntry(
 	// ever has to relax (e.g., config hot-reload). The cold-reviewer's a prior PR
 	// review note pre-emptively confirmed this is non-regression.
 	return needsFillEntry{
-		ID: id,
-		Kind: kind,
-		Gaps: gaps,
-		GapMetadata: meta,
-		CleanContent: ve.CleanContent,
+		ID:                    id,
+		Kind:                  kind,
+		Gaps:                  gaps,
+		GapMetadata:           meta,
+		CleanContent:          ve.CleanContent,
 		CleanContentTruncated: false,
-		Instruction: resolveInstruction(kind, fillInstruction, reg),
-		CanonicalVocabulary: config.LegacyRegistryWireShape(reg),
+		Instruction:           resolveInstruction(kind, fillInstruction, reg),
 	}, true
 }
 
