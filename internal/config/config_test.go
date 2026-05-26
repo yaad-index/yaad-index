@@ -1225,3 +1225,64 @@ func TestValidateInstances_NilSlice_OK(t *testing.T) {
 	// slice (different from nil) is the error case.
 	require.NoError(t, validateInstances("anything", nil))
 }
+
+// TestValidateInstances_DataDirAbsolute_OK pins the #284
+// happy path: an operator-provided absolute data_dir passes
+// validation.
+func TestValidateInstances_DataDirAbsolute_OK(t *testing.T) {
+	t.Parallel()
+	in := []InstanceEntry{
+		{Name: "personal", DataDir: "/var/lib/yaad/github-personal"},
+	}
+	require.NoError(t, validateInstances("github", in))
+}
+
+// TestValidateInstances_DataDirRelative_Rejected pins the #284
+// fail-fast path: a relative data_dir is rejected at config-load
+// rather than letting the daemon resolve it to a confusing path
+// at runtime.
+func TestValidateInstances_DataDirRelative_Rejected(t *testing.T) {
+	t.Parallel()
+	in := []InstanceEntry{
+		{Name: "personal", DataDir: "./state"},
+	}
+	err := validateInstances("github", in)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "data_dir")
+	require.Contains(t, err.Error(), "not absolute")
+}
+
+// TestValidateInstances_DataDirEmpty_OK pins that omitting
+// data_dir is fine — the daemon resolves the default
+// `<userCacheDir>/yaad-<plugin>/<instance>/` at startup.
+func TestValidateInstances_DataDirEmpty_OK(t *testing.T) {
+	t.Parallel()
+	in := []InstanceEntry{{Name: "personal"}}
+	require.NoError(t, validateInstances("github", in))
+}
+
+// TestValidateInstances_DataDirEnvShadow_Rejected pins the
+// shadow-rejection contract: an operator who writes a colliding
+// `env: { YAAD_PLUGIN_DATA_DIR: ... }` entry is rejected at
+// config-load. The key is daemon-owned per #284 — letting it
+// through would shadow the daemon-provisioned directory via
+// exec.Cmd's last-wins duplicate-key semantics and hand the
+// plugin a path the daemon didn't MkdirAll 0700 for. The error
+// points the operator at `instances[*].data_dir` (the right
+// knob for override).
+func TestValidateInstances_DataDirEnvShadow_Rejected(t *testing.T) {
+	t.Parallel()
+	in := []InstanceEntry{
+		{
+			Name: "personal",
+			Env: map[string]string{
+				"YAAD_PLUGIN_DATA_DIR": "/operator/attempted/shadow",
+			},
+		},
+	}
+	err := validateInstances("github", in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "YAAD_PLUGIN_DATA_DIR")
+	assert.Contains(t, err.Error(), "reserved")
+	assert.Contains(t, err.Error(), "data_dir")
+}

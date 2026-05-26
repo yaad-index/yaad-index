@@ -31,6 +31,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/plugins"
+	"github.com/yaad-index/yaad-index/internal/plugins/datadir"
 	"github.com/yaad-index/yaad-index/internal/plugins/subprocess"
 	"github.com/yaad-index/yaad-index/internal/reindex"
 	"github.com/yaad-index/yaad-index/internal/store"
@@ -419,6 +420,16 @@ func (s *ServeCmd) Run() error {
 		// dispatch. Empty-resolution refs warn but proceed.
 		if err := validatePluginInstanceEnvReferences(pluginInstanceConfigs, logger); err != nil {
 			return fmt.Errorf("validate plugin instance env: %w", err)
+		}
+		// #284: provision per-(plugin,instance) persistent-state
+		// directories with 0700 perms before any plugin subprocess
+		// spawns. Resolves operator override / default, MkdirAll
+		// the path, fails fast if a non-dir squats the resolved
+		// path. buildInstanceEnv stamps the same resolved path on
+		// YAAD_PLUGIN_DATA_DIR for every per-call invocation; both
+		// resolve from the same Resolve() so paths match.
+		if err := ensurePluginInstanceDataDirs(pluginInstanceConfigs); err != nil {
+			return fmt.Errorf("ensure plugin instance data dirs: %w", err)
 		}
 	}
 
@@ -1943,6 +1954,32 @@ func unionEdgeTypes(a, b []string) []string {
 // (`os.LookupEnv` is the same source either way) so a change to
 // `yaad-index.env` between dispatches isn't picked up without a
 // daemon restart — by design per the issue body.
+// ensurePluginInstanceDataDirs walks every configured plugin
+// instance, resolves its per-(plugin,instance) persistent-state
+// directory (operator override or
+// `<userCacheDir>/yaad-<plugin>/<instance>/` default), and
+// MkdirAll-creates it at 0700 perms per #284. Idempotent — an
+// existing dir is left in place (operator-owned state is never
+// re-permed or deleted by the daemon). Fails fast when a
+// non-directory squats the resolved path so the operator sees
+// the misconfig at boot.
+func ensurePluginInstanceDataDirs(pluginInstanceConfigs map[string][]config.InstanceEntry) error {
+	for pluginName, instances := range pluginInstanceConfigs {
+		for _, instance := range instances {
+			resolved, err := datadir.Resolve(pluginName, instance.Name, instance.DataDir)
+			if err != nil {
+				return fmt.Errorf("resolve data dir for plugin %q instance %q: %w",
+					pluginName, instance.Name, err)
+			}
+			if err := datadir.Ensure(resolved); err != nil {
+				return fmt.Errorf("ensure data dir for plugin %q instance %q: %w",
+					pluginName, instance.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
 func validatePluginInstanceEnvReferences(pluginInstanceConfigs map[string][]config.InstanceEntry, logger *slog.Logger) error {
 	for pluginName, instances := range pluginInstanceConfigs {
 		for _, instance := range instances {

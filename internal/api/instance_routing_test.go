@@ -499,3 +499,34 @@ func TestBuildInstanceEnv_MixedLiteralAndReference(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "YAAD_KEY=prefix-MIDDLE-suffix")
 }
+
+// TestBuildInstanceEnv_StampsDataDirDefault pins the #284
+// happy path: with no operator override, YAAD_PLUGIN_DATA_DIR
+// resolves to `<XDG_CACHE_HOME>/yaad-<plugin>/<instance>` and
+// reaches the subprocess.
+//
+// t.Setenv-using tests intentionally don't call t.Parallel.
+func TestBuildInstanceEnv_StampsDataDirDefault(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmp)
+	inst := config.InstanceEntry{Name: "personal"}
+	out, err := buildInstanceEnv("github", inst)
+	require.NoError(t, err)
+	want := "YAAD_PLUGIN_DATA_DIR=" + tmp + "/yaad-github/personal"
+	assert.Contains(t, out, want)
+}
+
+// TestBuildInstanceEnv_StampsDataDirOperatorOverride pins that
+// an explicit `instances[*].data_dir` reaches the subprocess
+// verbatim (no userCacheDir join).
+func TestBuildInstanceEnv_StampsDataDirOperatorOverride(t *testing.T) {
+	t.Parallel()
+	inst := config.InstanceEntry{
+		Name:    "personal",
+		DataDir: "/srv/yaad/state/github-personal",
+	}
+	out, err := buildInstanceEnv("github", inst)
+	require.NoError(t, err)
+	assert.Contains(t, out, "YAAD_PLUGIN_DATA_DIR=/srv/yaad/state/github-personal")
+}
+
