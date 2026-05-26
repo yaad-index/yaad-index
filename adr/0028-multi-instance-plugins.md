@@ -77,6 +77,33 @@ plugins:
 
 `instances[*].enabled: bool` (default `true`) controls per-instance activation — see §7.
 
+**`${NAME}` reference expansion in env values (per #256).** `instances[*].env` values support `${NAME}` reference expansion at instance-env-build time. The daemon walks each value and substitutes any `${NAME}` literal with the corresponding entry from its own process environment (typically populated by systemd's `EnvironmentFile=/etc/yaad-index/yaad-index.env` directive). Operators put per-instance secrets in `yaad-index.env` (`0600` permissions) and reference them from `config.yaml` (`0644`), keeping the operator config secret-free and shareable.
+
+```yaml
+# yaad-index.env (0600, systemd EnvironmentFile)
+YAAD_GITHUB_TOKEN_PERSONAL=ghp_xxx_personal
+YAAD_GITHUB_TOKEN_ACME=ghp_xxx_acme
+
+# config.yaml (0644)
+plugins:
+  - name: github
+    instances:
+      - name: personal
+        env:
+          YAAD_GITHUB_TOKEN: ${YAAD_GITHUB_TOKEN_PERSONAL}
+      - name: acme-org
+        env:
+          YAAD_GITHUB_TOKEN: ${YAAD_GITHUB_TOKEN_ACME}
+```
+
+**Resolution rules:**
+
+- Syntax: strict `${NAME}` only. Bare `$NAME` (shell shorthand) passes through unchanged so PATs / API keys containing literal `$` work. The `${VAR:-default}` shell-fallback shape and any literal-dollar-brace escape sequence are explicitly **out of v1 scope** — operators get one expansion shape, no edge cases.
+- Source: `os.LookupEnv` (the daemon's own process env). Stable across a single daemon run; environment-file edits require a daemon restart to take effect.
+- Timing: expansion happens at instance-env-build time (per dispatch), not at config-load time. A startup validation pass probes every configured `instances[*].env` value once at daemon boot and fail-fasts with a clear error naming the plugin + instance + missing variable if any reference is unresolved — operators see the gap at boot rather than at first dispatch.
+- Empty resolution (env var present but value is `""`) warns at startup but proceeds — useful for placeholder values during setup.
+- Nested expansion (resolved value itself containing `${...}`) is out of v1 scope; one-level only. The resolved value passes through verbatim.
+
 ### 2. Plugin loader — `--init` once per plugin
 
 `--init` runs **once per plugin binary**, NOT per instance. The capability cache key in `plugins.capabilities_cache` stays `(plugin name)` — no schema change to that table.

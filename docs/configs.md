@@ -227,6 +227,42 @@ Each instance has:
 
 **Config changes take effect at next daemon restart** in v1. The §8 hot-reload mechanics (file watcher, mtime/hash diff, runtime cache invalidation, instance-removal archival) are deferred — see [#254](https://github.com/yaad-index/yaad-index/issues/254). Restart the daemon after editing `instances:` to pick up the change.
 
+**Secret references in `env` values** (per #256). `instances[*].env` values support `${NAME}` reference expansion at instance-env-build time. The daemon walks each value and substitutes any `${NAME}` literal with the corresponding entry from its own process environment — typically populated by systemd's `EnvironmentFile=/etc/yaad-index/yaad-index.env` directive. The intended split:
+
+- `/etc/yaad-index/yaad-index.env` (mode `0600`, secret store) — holds the actual secret values, one per env var name.
+- `config.yaml` (mode `0644`, operator-config) — references them via `${...}` literals, no secrets inline.
+
+```yaml
+# /etc/yaad-index/yaad-index.env
+YAAD_GITHUB_TOKEN_PERSONAL=ghp_xxx_personal
+YAAD_GITHUB_TOKEN_ACME=ghp_xxx_acme
+```
+
+```yaml
+# config.yaml
+plugins:
+  - name: github
+    instances:
+      - name: personal
+        env:
+          YAAD_GITHUB_TOKEN: ${YAAD_GITHUB_TOKEN_PERSONAL}
+      - name: acme-org
+        env:
+          YAAD_GITHUB_TOKEN: ${YAAD_GITHUB_TOKEN_ACME}
+```
+
+**Syntax rules** (strict, v1 scope):
+
+- `${NAME}` substitution only. Bare `$NAME` (shell shorthand) passes through unchanged so PATs / API keys containing literal `$` work.
+- `${VAR:-default}` shell-fallback shape and any literal-dollar-brace escape sequence are **out of v1 scope**.
+- Literal text + references compose in a single value (`prefix-${VAR}-suffix`).
+- Multiple references in one value all expand in order.
+- One-level only: if a referenced env var's value itself contains `${...}`, no second pass — the value passes through verbatim.
+
+**Resolution timing.** Lookup happens at instance-env-build time (per dispatch), not at config-load time. A startup validation pass probes every configured `instances[*].env` value at daemon boot and fail-fasts with `validate plugin instance env: plugin <name> instance <name> env[<key>]: config: unresolved env reference: ${<missing>}` if any reference is unresolved — operators see the gap at boot, not at first dispatch. Environment-file edits require a daemon restart to take effect.
+
+**Empty references** (env var present but value is `""`) emit a WARN log line at startup but proceed — useful for placeholder values during setup. The dispatch path replays the resolution on every call but doesn't re-warn (the startup warning is the audit point).
+
 **Relationship to `_name`.** The daemon-injected `_name` field documented under §3.1 continues to carry the plugin's `name:` value. ADR-0028's per-instance shape adds the `<plugin>/<instance>` slash-form on the `source:` field (§5) and per-instance `env:` splice on the subprocess (§4 + §3); the existing `_name` semantic is unchanged.
 
 ## 4. `vault:` — the source-of-truth root (ADR-0008)

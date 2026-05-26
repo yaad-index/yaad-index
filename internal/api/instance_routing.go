@@ -380,7 +380,24 @@ func buildInstanceEnv(pluginName string, instance config.InstanceEntry) ([]strin
 	}
 	out := append([]string(nil), configEnv...)
 	for k, v := range instance.Env {
-		out = append(out, k+"="+v)
+		// #256: expand `${NAME}` references from the daemon's
+		// process env (populated from yaad-index.env via
+		// systemd's EnvironmentFile or equivalent) before
+		// emitting the KEY=VALUE entry. Literal values pass
+		// through unchanged; references that don't resolve
+		// fail-fast with a wrapped ErrUnresolvedEnvReference
+		// naming the missing variable. Empty-resolution refs
+		// are non-fatal and dropped on the floor here — the
+		// startup validation pass (config.ValidateInstanceEnv)
+		// surfaces the warning at daemon boot. Per-dispatch
+		// re-expansion would warn-spam the operator log; that's
+		// for startup.
+		expanded, _, err := config.ExpandEnvReferences(v)
+		if err != nil {
+			return nil, fmt.Errorf("plugin %q instance %q env[%s]: %w",
+				pluginName, instance.Name, k, err)
+		}
+		out = append(out, k+"="+expanded)
 	}
 	if len(out) == 0 {
 		return nil, nil
