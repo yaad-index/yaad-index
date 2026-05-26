@@ -413,6 +413,13 @@ func (s *ServeCmd) Run() error {
 			capsByName[p.Name()] = p.Capabilities()
 		}
 		api.WarnInstanceRoutingOverlap(logger, pluginInstanceConfigs, capsByName)
+		// #256: fail-fast on any unresolved `${NAME}` reference
+		// inside an instance.env value so the operator sees the
+		// missing-secret error at boot rather than at first
+		// dispatch. Empty-resolution refs warn but proceed.
+		if err := validatePluginInstanceEnvReferences(pluginInstanceConfigs, logger); err != nil {
+			return fmt.Errorf("validate plugin instance env: %w", err)
+		}
 	}
 
 	// Construct the daemon-internal event bus (per ADR-0024
@@ -1921,5 +1928,40 @@ func unionEdgeTypes(a, b []string) []string {
 		out = append(out, t)
 	}
 	return out
+}
+
+// validatePluginInstanceEnvReferences walks every configured
+// plugin instance's env map and probes each value for
+// `${NAME}` reference resolution against the daemon's process
+// env per #256. Missing references → fail-fast error naming the
+// plugin + instance + key so the operator sees the gap at boot;
+// empty references (env var present but value is "") warn but
+// proceed so the operator can intentionally have a placeholder
+// during setup.
+//
+// The probe re-runs in `buildInstanceEnv` at dispatch time
+// (`os.LookupEnv` is the same source either way) so a change to
+// `yaad-index.env` between dispatches isn't picked up without a
+// daemon restart — by design per the issue body.
+func validatePluginInstanceEnvReferences(pluginInstanceConfigs map[string][]config.InstanceEntry, logger *slog.Logger) error {
+	for pluginName, instances := range pluginInstanceConfigs {
+		for _, instance := range instances {
+			for k, v := range instance.Env {
+				_, emptyRefs, err := config.ExpandEnvReferences(v)
+				if err != nil {
+					return fmt.Errorf("plugin %q instance %q env[%s]: %w",
+						pluginName, instance.Name, k, err)
+				}
+				for _, refName := range emptyRefs {
+					logger.Warn("plugin instance env: reference resolved to empty value",
+						"plugin", pluginName,
+						"instance", instance.Name,
+						"env_key", k,
+						"reference", refName)
+				}
+			}
+		}
+	}
+	return nil
 }
 

@@ -410,3 +410,92 @@ func TestEnabledInstances_FiltersDisabled(t *testing.T) {
 	assert.Equal(t, "default-on", out[0].Name)
 	assert.Equal(t, "explicit-on", out[1].Name)
 }
+
+// TestBuildInstanceEnv_LiteralValuesPassThrough pins the no-op
+// path for #256: env values with no `${...}` reference reach the
+// subprocess verbatim. Guards against accidental side-effects on
+// literal tokens (PATs / API keys commonly carry `$` chars).
+//
+// t.Setenv-using tests intentionally don't call t.Parallel.
+func TestBuildInstanceEnv_LiteralValuesPassThrough(t *testing.T) {
+	inst := config.InstanceEntry{
+		Name: "literal",
+		Env: map[string]string{
+			"YAAD_LITERAL_KEY": "ghp$with$dollars",
+		},
+	}
+	out, err := buildInstanceEnv("github", inst)
+	require.NoError(t, err)
+	assert.Contains(t, out, "YAAD_LITERAL_KEY=ghp$with$dollars")
+}
+
+// TestBuildInstanceEnv_ExpandsReferences pins the happy path for
+// #256: `${NAME}` references in instance env values are
+// substituted from the daemon's process env before reaching the
+// subprocess.
+func TestBuildInstanceEnv_ExpandsReferences(t *testing.T) {
+	t.Setenv("YAAD_TEST_TOKEN_PERSONAL", "secret-personal-token")
+	inst := config.InstanceEntry{
+		Name: "personal",
+		Env: map[string]string{
+			"YAAD_GITHUB_TOKEN": "${YAAD_TEST_TOKEN_PERSONAL}",
+		},
+	}
+	out, err := buildInstanceEnv("github", inst)
+	require.NoError(t, err)
+	assert.Contains(t, out, "YAAD_GITHUB_TOKEN=secret-personal-token")
+}
+
+// TestBuildInstanceEnv_MissingReferenceFailsFast pins the
+// fail-fast contract: an unresolved `${NAME}` returns a wrapped
+// ErrUnresolvedEnvReference + names plugin + instance + key in
+// the error so the operator can correlate to the offending
+// config block.
+func TestBuildInstanceEnv_MissingReferenceFailsFast(t *testing.T) {
+	t.Parallel()
+	inst := config.InstanceEntry{
+		Name: "personal",
+		Env: map[string]string{
+			"YAAD_GITHUB_TOKEN": "${YAAD_TEST_NEVER_SET}",
+		},
+	}
+	_, err := buildInstanceEnv("github", inst)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, config.ErrUnresolvedEnvReference)
+	assert.Contains(t, err.Error(), "github")
+	assert.Contains(t, err.Error(), "personal")
+	assert.Contains(t, err.Error(), "YAAD_GITHUB_TOKEN")
+}
+
+// TestBuildInstanceEnv_EmptyReferenceProceeds pins that an env
+// var that exists but resolves to empty string substitutes the
+// empty value and proceeds — startup validation surfaces the
+// warning at boot, the per-dispatch path stays quiet.
+func TestBuildInstanceEnv_EmptyReferenceProceeds(t *testing.T) {
+	t.Setenv("YAAD_TEST_EMPTY_VAR", "")
+	inst := config.InstanceEntry{
+		Name: "personal",
+		Env: map[string]string{
+			"YAAD_GITHUB_TOKEN": "prefix-${YAAD_TEST_EMPTY_VAR}-suffix",
+		},
+	}
+	out, err := buildInstanceEnv("github", inst)
+	require.NoError(t, err)
+	assert.Contains(t, out, "YAAD_GITHUB_TOKEN=prefix--suffix")
+}
+
+// TestBuildInstanceEnv_MixedLiteralAndReference pins that
+// literal + reference combinations within a single value compose
+// correctly through the buildInstanceEnv integration path.
+func TestBuildInstanceEnv_MixedLiteralAndReference(t *testing.T) {
+	t.Setenv("YAAD_TEST_MIXED", "MIDDLE")
+	inst := config.InstanceEntry{
+		Name: "mixed",
+		Env: map[string]string{
+			"YAAD_KEY": "prefix-${YAAD_TEST_MIXED}-suffix",
+		},
+	}
+	out, err := buildInstanceEnv("github", inst)
+	require.NoError(t, err)
+	assert.Contains(t, out, "YAAD_KEY=prefix-MIDDLE-suffix")
+}
