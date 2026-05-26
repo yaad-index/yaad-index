@@ -550,6 +550,20 @@ Inspect the resolved state at runtime via `/v1/structure` (operator-facing snaps
 
 Both routes have MCP parity tools (`canonical_registry_effective`, `canonical_registry_available`) for agent-side discovery.
 
+**Boot-time merge audit** (per #48 slice 4). At startup the daemon emits one structured `INFO` log line per kind whose merge produced at least one non-default layer contribution (plugin extras, operator defaults, or operator per-kind). Vanilla installs with only code/builtin defaults stay silent at `INFO`. Sample line:
+
+```
+level=INFO msg="canonical-kind merge" kind=boardgame plugin_extras=2 operator_defaults=0 operator=3 instruction_layer=operator
+```
+
+A single `DEBUG` line dumps the full per-(kind, field) provenance trail as a structured attribute for operators piping through jq:
+
+```
+level=DEBUG msg="canonical-kind merge audit (full registry)" kinds_total=4 kinds_with_overrides=2 provenance=[boardgame.bgg_id=plugin_extras, boardgame.rating=operator, ...]
+```
+
+The audit fires once per daemon process. Operators wanting fresh audit after a config edit restart the daemon (canonical-kinds config is read once at startup per ADR-0013).
+
 **Drift-signal surfacing** (per #48 slice 1). `/v1/cv-status` is the **canonical drift surface** — it returns per-(plugin, kind) and per-(plugin, edge_type) drop counts since the last `POST /v1/reindex`. In parallel, the daemon emits a one-shot `WARN` log line at the first observed drop of each (plugin, kind|edge_type) tuple in the current process lifetime so operators see the problem in the boot/run log without having to poll the endpoint. Sample log line:
 
 ```

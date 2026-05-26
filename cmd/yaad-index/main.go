@@ -489,6 +489,12 @@ func (s *ServeCmd) Run() error {
 			cfg.CanonicalKinds,
 			logger,
 		)
+		// #48 slice 4 — boot-time signal-only audit: one INFO line
+		// per kind whose merge produced at least one plugin /
+		// operator / operator-defaults layer contribution; full
+		// per-(kind, field) provenance dumped at DEBUG. Vanilla
+		// install with code/builtin defaults only stays silent.
+		config.LogCanonicalRegistryBootAudit(logger, mergedRegistry, canonicalKindProvenance)
 
 		// Per ADR-0013 §1: the canonical-kinds set drives the
 		// CanonicalGuard. After ADR-0016, "kinds set" is the keys
