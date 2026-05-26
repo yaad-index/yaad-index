@@ -643,10 +643,9 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 		afterIdx := len(sections) // default: append at end
 		if req.AfterSec != nil {
 			addr := *req.AfterSec
-			switch {
-			case addr == "" || addr == "-1":
+			if addr == "" || addr == "-1" {
 				afterIdx = -1
-			default:
+			} else {
 				idx, ok := vault.ResolveSectionAddr(sections, addr)
 				if !ok {
 					writeError(w, http.StatusNotFound, "not_found",
