@@ -18,14 +18,17 @@ func registerCanonicalRegistryEffective(s *server.MCPServer, b *bridge) {
 		mcp.WithDescription(
 			"Return the merged canonical_kinds registry the daemon "+
 				"is currently using, annotated with per-(kind, field) "+
-				"source_layer provenance (one of: code_defaults / "+
-				"builtin_kind / plugin_extras / operator_defaults / "+
-				"operator) so callers can tell which layer of the "+
-				"4-layer merge supplied each gap spec. Verbatim from "+
-				"`GET /v1/canonical_registry/effective`. Use this to "+
-				"answer 'what's actually active for kind X right now, "+
-				"and which gaps are operator-overridden vs riding "+
-				"plugin or daemon defaults?'.",
+				"source_layer provenance naming which layer of the "+
+				"canonical-kinds merge supplied each gap spec. Layer "+
+				"vocabulary: code_defaults (universal Layer 1), "+
+				"builtin_kind (daemon-shipped per-kind starter Layer "+
+				"1.5), plugin_extras (plugin --init Layer 2), "+
+				"operator_defaults (operator canonical_kinds_defaults "+
+				"Layer 3), operator (operator per-kind Layer 4). "+
+				"Verbatim from `GET /v1/canonical_registry/effective`. "+
+				"Use this to answer 'what's actually active for kind X "+
+				"right now, and which gaps are operator-overridden vs "+
+				"riding plugin or daemon defaults?'.",
 		),
 	)
 	s.AddTool(tool, func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
