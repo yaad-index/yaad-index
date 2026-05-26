@@ -530,7 +530,25 @@ The daemon's runtime registries do NOT equal the config file 1:1. Three transfor
 - **`enabledEdgeTypes`** = `canonical_edge_types ∪ plugin_emitted_edge_types`. The CanonicalGuard's edge-allowlist.
 - **`canonicalKindNames(mergedRegistry)`** — the set of kind names the system accepts. The CanonicalGuard rejects edge creates to unknown kinds.
 
-Inspect the resolved state at runtime via `/v1/structure` (operator-facing snapshot) or `/v1/cv-status` (canonical-validation drift counter — surfaces plugin-emitted kinds / edges the operator hasn't declared, when relevant).
+Inspect the resolved state at runtime via `/v1/structure` (operator-facing snapshot), `/v1/cv-status` (canonical-validation drift counter — surfaces plugin-emitted kinds / edges the operator hasn't declared, when relevant), or the per-#48-slice-3 `canonical_registry/*` routes documented below.
+
+**Per-kind effective view + starter pool** (per #48 slice 3):
+
+- `GET /v1/canonical_registry/effective` — returns the merged registry, annotated with per-(kind, field) `source_layer` provenance. Each gap entry carries one of:
+
+  | `source_layer` value | Meaning |
+  |---|---|
+  | `code_defaults` | Layer 1 — universal `DefaultGaps()` (name / summary / tags) |
+  | `builtin_kind` | Layer 1.5 — `BuiltinKindGaps(kind)` daemon-shipped starter (#48 slice 2) |
+  | `plugin_extras` | Layer 2 — plugin's `canonical_kinds_extras` from `--init` |
+  | `operator_defaults` | Layer 3 — operator's `canonical_kinds_defaults` block |
+  | `operator` | Layer 4 — operator's per-kind `canonical_kinds.<kind>` block |
+
+  Operators answer "did I actually override this gap, or am I riding plugin / daemon defaults?" without re-reading config + plugin source.
+
+- `GET /v1/canonical_registry/available` — returns Layer 1.5 daemon-shipped kinds that are NOT currently active in the merged registry. Operators inspect "what could I opt into?" before writing config. A kind leaves this list once a plugin's `canonical_kinds_emitted` triggers it OR the operator explicitly lists it under `canonical_kinds:`.
+
+Both routes have MCP parity tools (`canonical_registry_effective`, `canonical_registry_available`) for agent-side discovery.
 
 **Drift-signal surfacing** (per #48 slice 1). `/v1/cv-status` is the **canonical drift surface** — it returns per-(plugin, kind) and per-(plugin, edge_type) drop counts since the last `POST /v1/reindex`. In parallel, the daemon emits a one-shot `WARN` log line at the first observed drop of each (plugin, kind|edge_type) tuple in the current process lifetime so operators see the problem in the boot/run log without having to poll the endpoint. Sample log line:
 

@@ -103,6 +103,8 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.HandleFunc("GET /v1/health", handleHealth(logger))
 	mux.HandleFunc("GET /v1/structure", handleStructure(logger, registry, cfg.canonicalKindReg, cfg.canonicalEdgeTypes))
 	mux.HandleFunc("GET /v1/cv-status", handleCVStatus(logger, st, cfg.canonicalKindReg, cfg.canonicalEdgeTypes))
+	mux.HandleFunc("GET /v1/canonical_registry/effective", handleCanonicalRegistryEffective(logger, cfg.canonicalKindReg, cfg.canonicalKindProvenance))
+	mux.HandleFunc("GET /v1/canonical_registry/available", handleCanonicalRegistryAvailable(logger, cfg.canonicalKindReg))
 	if len(cfg.jwks) > 0 {
 		mux.HandleFunc("GET /v1/jwks", handleJWKS(logger, cfg.jwks))
 	}
@@ -231,6 +233,13 @@ type handlerConfig struct {
 	cacheTTLSeconds int
 	fillInstruction string
 	canonicalKindReg map[string]config.CanonicalKindConfig
+	// canonicalKindProvenance carries the per-(kind, field)
+	// source-layer trail emitted by
+	// `MergeCanonicalRegistryWithProvenance` per #48 slice 3.
+	// Used only by `/v1/canonical_registry/effective`. Nil when
+	// the option isn't wired — the effective route then returns
+	// every gap with an empty source_layer (degraded but valid).
+	canonicalKindProvenance config.RegistryProvenance
 	canonicalEdgeTypes []string
 	userContentFrontmatterEdges map[string]config.UserContentFrontmatterEdgeMapping
 	authVerifier auth.Verifier
@@ -452,6 +461,20 @@ func WithCanonicalEdgeTypes(edgeTypes []string) HandlerOption {
 func WithCanonicalKindRegistry(reg map[string]config.CanonicalKindConfig) HandlerOption {
 	return func(c *handlerConfig) {
 		c.canonicalKindReg = reg
+	}
+}
+
+// WithCanonicalKindProvenance wires the per-(kind, field)
+// source-layer trail emitted by
+// `config.MergeCanonicalRegistryWithProvenance` per #48 slice 3.
+// Used only by `GET /v1/canonical_registry/effective`. When
+// omitted, the effective route still serves the merged registry
+// but every gap's `source_layer` field is empty — the route
+// stays useful for catalog inspection even without the
+// provenance trail.
+func WithCanonicalKindProvenance(prov config.RegistryProvenance) HandlerOption {
+	return func(c *handlerConfig) {
+		c.canonicalKindProvenance = prov
 	}
 }
 

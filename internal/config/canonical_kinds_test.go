@@ -713,6 +713,105 @@ func TestBuiltinKindGaps_RecipeSurface(t *testing.T) {
 	assert.Equal(t, []int{1, 100}, got["servings"].Range)
 }
 
+// TestMergeCanonicalRegistryWithProvenance_TracksEveryLayer pins
+// #48 slice 3: the provenance return tracks the layer that
+// supplied each gap. Universal defaults vs Layer 1.5 vs plugin
+// extras vs operator-defaults vs operator-per-kind each
+// surface under the right LayerProvenance constant.
+func TestMergeCanonicalRegistryWithProvenance_TracksEveryLayer(t *testing.T) {
+	t.Parallel()
+	pluginGaps := map[string]map[string]GapSpec{
+		"boardgame": {
+			"bgg_id": {Type: "string", Description: "BGG identifier."},
+		},
+	}
+	opDefaults := CanonicalKindConfig{
+		Gaps: map[string]GapSpec{
+			"external_url": {Type: "string", Description: "Authoritative URL."},
+		},
+	}
+	opPerKind := map[string]CanonicalKindConfig{
+		"boardgame": {
+			Gaps: map[string]GapSpec{
+				"rating": {Type: "int", Description: "Operator override.", Range: []int{1, 5}},
+				"custom": {Type: "string", Description: "Operator-only field."},
+			},
+			Instruction: &InstructionSpec{Enabled: true, Text: "Be brief."},
+		},
+	}
+	merged, prov := MergeCanonicalRegistryWithProvenance(
+		pluginGaps, []string{"boardgame"}, opDefaults, opPerKind, nil,
+	)
+	require.Contains(t, merged, "boardgame")
+	bg := prov["boardgame"]
+
+	// Layer 1 (universal): name / summary / tags
+	assert.Equal(t, LayerUniversalDefaults, bg["name"])
+	assert.Equal(t, LayerUniversalDefaults, bg["summary"])
+
+	// Layer 1.5 (builtin_kind): boardgame's owned/want/played etc.
+	for _, field := range []string{"owned", "want", "played", "knows_how_to_play"} {
+		assert.Equal(t, LayerBuiltinKindGaps, bg[field],
+			"%s: layer 1.5 boardgame default", field)
+	}
+
+	// Layer 2 (plugin_extras): bgg_id
+	assert.Equal(t, LayerPluginExtras, bg["bgg_id"])
+
+	// Layer 3 (operator_defaults): external_url
+	assert.Equal(t, LayerOperatorDefaults, bg["external_url"])
+
+	// Layer 4 (operator): rating (overrode Layer 1.5) + custom (new)
+	assert.Equal(t, LayerOperatorPerKind, bg["rating"],
+		"operator override on rating wins over Layer 1.5 builtin")
+	assert.Equal(t, LayerOperatorPerKind, bg["custom"])
+
+	// Instruction provenance under reserved key.
+	assert.Equal(t, LayerOperatorPerKind, bg[InstructionProvenanceKey])
+}
+
+// TestMergeCanonicalRegistryWithProvenance_InstructionFallsThroughLayers
+// pins the instruction-layer chain: operator-per-kind > operator-
+// defaults > universal default (Enabled=false, Text="").
+func TestMergeCanonicalRegistryWithProvenance_InstructionFallsThroughLayers(t *testing.T) {
+	t.Parallel()
+
+	// (1) Universal default: no operator instruction at any layer.
+	_, prov := MergeCanonicalRegistryWithProvenance(
+		nil, []string{"boardgame"}, CanonicalKindConfig{}, nil, nil,
+	)
+	assert.Equal(t, LayerUniversalDefaults, prov["boardgame"][InstructionProvenanceKey])
+
+	// (2) Operator-defaults: opDefaults supplies instruction;
+	// per-kind doesn't override.
+	_, prov = MergeCanonicalRegistryWithProvenance(
+		nil, []string{"boardgame"},
+		CanonicalKindConfig{Instruction: &InstructionSpec{Enabled: true, Text: "default"}},
+		nil, nil,
+	)
+	assert.Equal(t, LayerOperatorDefaults, prov["boardgame"][InstructionProvenanceKey])
+
+	// (3) Operator-per-kind: overrides operator-defaults.
+	_, prov = MergeCanonicalRegistryWithProvenance(
+		nil, []string{"boardgame"},
+		CanonicalKindConfig{Instruction: &InstructionSpec{Enabled: true, Text: "default"}},
+		map[string]CanonicalKindConfig{
+			"boardgame": {Instruction: &InstructionSpec{Enabled: true, Text: "per-kind"}},
+		}, nil,
+	)
+	assert.Equal(t, LayerOperatorPerKind, prov["boardgame"][InstructionProvenanceKey])
+}
+
+// TestBuiltinKindGapsList_DeterministicOrder pins that the
+// exported list of Layer 1.5 kinds is lexicographically sorted
+// for stable MCP / CLI output via /v1/canonical_registry/available.
+func TestBuiltinKindGapsList_DeterministicOrder(t *testing.T) {
+	t.Parallel()
+	got := BuiltinKindGapsList()
+	want := []string{"article", "book", "boardgame", "person", "place", "recipe"}
+	assert.Equal(t, want, got)
+}
+
 // TestBuiltinKindGaps_DormantUntilActivation pins the #48 slice
 // 2 contract: shipping a built-in gap-set for a kind does NOT
 // auto-activate that kind. The merged registry only carries a
