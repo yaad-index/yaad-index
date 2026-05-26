@@ -1570,6 +1570,28 @@ func compileActionTemplates(ev *decision.Evaluator, a parser.Action) (map[string
 			}
 			tpls["reason"] = tpl
 		}
+	case a.TaskResolve != nil:
+		// task_resolve.subject + task_resolve.match_key are CEL
+		// templates per #266. Compile both here so the runner's
+		// d.rendered() call resolves to the engine-evaluated
+		// values rather than falling back to the raw template
+		// source (which would target the wrong file + never
+		// match). The remaining task_resolve fields (workflow,
+		// section, mode) are static strings.
+		if a.TaskResolve.Subject != "" {
+			tpl, err := template.Compile(a.TaskResolve.Subject, ev)
+			if err != nil {
+				return nil, fmt.Errorf("task_resolve.subject: %w", err)
+			}
+			tpls["subject"] = tpl
+		}
+		if a.TaskResolve.MatchKey != "" {
+			tpl, err := template.Compile(a.TaskResolve.MatchKey, ev)
+			if err != nil {
+				return nil, fmt.Errorf("task_resolve.match_key: %w", err)
+			}
+			tpls["match_key"] = tpl
+		}
 	}
 	return tpls, nil
 }
