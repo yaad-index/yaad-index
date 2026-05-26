@@ -202,6 +202,22 @@ type TaskWriter interface {
 		subject string,
 		refs []string,
 	) error
+
+	// ResolveTaskLine flips or removes the first line within
+	// `section` of `<vault>/tasks/<workflow>-<subject>.md`
+	// whose content prefix matches `matchKey` per #266 — the
+	// cross-workflow task_resolve primitive. Modes: "check"
+	// flips `- [ ]` → `- [x]`; "remove" strips the line.
+	// Missing file resolves to a no-op (the originating
+	// workflow may not have fired yet; the caller WARNs).
+	ResolveTaskLine(
+		ctx context.Context,
+		workflow string,
+		subject string,
+		section string,
+		matchKey string,
+		mode string,
+	) error
 }
 
 // Options configures a Runner. Each writer field is
@@ -397,6 +413,8 @@ func (d *dispatcher) runOne(ctx context.Context, idx int, wf *parser.Workflow, a
 		return d.runRestoreEntity(ctx, idx, wf, a.RestoreEntity, dec, act)
 	case a.ClaimEntity != nil:
 		return d.runClaimEntity(idx)
+	case a.TaskResolve != nil:
+		return d.runTaskResolve(ctx, idx, wf, a.TaskResolve, dec, act)
 	default:
 		return ActionResult{
 			ActionIdx: idx, Type: "unknown",
@@ -438,6 +456,8 @@ func (NopRunner) Run(_ context.Context, wf *parser.Workflow, _ Decision, _ Activ
 			t = "archive_entity"
 		case a.ClaimEntity != nil:
 			t = "claim_entity"
+		case a.TaskResolve != nil:
+			t = "task_resolve"
 		}
 		out[i] = ActionResult{ActionIdx: i, Type: t}
 	}

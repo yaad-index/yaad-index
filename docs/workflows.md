@@ -307,6 +307,34 @@ Append a line to a named section of `tasks/<workflow>-<subject>.md`. `<subject>`
 
 **Tasks are first-class entities** (per ADR-0024 §Task / #268). First-create also upserts a `task:<workflow>-<subject>` row into the entity store (kind=task) and — when the trigger carries a source entity — emits a `triggered_by` edge from the task to that source. So `/v1/entities/task:<slug>` resolves, `set_property` can target the task id, and `graph.in_neighbors(source_id, "triggered_by")` answers "which tasks did this source spawn?" queries. Subsequent appends to the same task file leave the store row + edge alone — operator / cross-workflow mutations on the row survive. Pre-#268 task files already on disk won't have rows backfilled automatically; operators wanting the full entity surface on a pre-existing task recreate it.
 
+### 5.1a `task_resolve` (#266)
+
+```yaml
+- task_resolve:
+    workflow: gmail-github-mentions
+    subject: to-refetch
+    section: pending-refetch
+    match_key: '{{ regex_capture(entity.id, "github:[^_]+_([^_]+)_(?:pr|issue)_([0-9]+)", 1) }}#{{ regex_capture(entity.id, "_([0-9]+)$", 1) }}'
+    mode: check
+```
+
+Flip or remove a single line in **another** workflow's task file. Cross-workflow line-resolve: one workflow records a pending state (via `task_append`); a second workflow fires on the underlying entity's lifecycle transition and resolves the corresponding line. Common shape: a `gmail-github-mentions` workflow appends `- [ ] acme/repo#42 — last gmail subject: ...` to `tasks/gmail-github-mentions-to-refetch.md`; later an `entity.updated` event on the github source fires a sibling workflow that flips the box.
+
+- `workflow` (required) — the OWNING workflow whose task file is being resolved. Static string (not a CEL template).
+- `subject` (required) — CEL template; renders to the target task file's `<subject>` slot.
+- `section` (required) — non-empty. The named section under which the target line lives.
+- `match_key` (required) — CEL template; renders to a content-prefix that identifies the target line. The first line in `section` whose content starts with the rendered match_key wins.
+- `mode` (required) — `check` flips `- [ ] ...` → `- [x] ...` on the matched line; `remove` strips the line entirely.
+
+**Semantics:**
+
+- **Idempotent end-state.** A check-mode action that runs against an already-`- [x]` line is a no-op. A remove-mode action with no match is a no-op.
+- **Missing target file → no-op.** The originating workflow may not have fired (no pending state to resolve). The runner doesn't fail the workflow on this case.
+- **Section-scoped match.** A `match_key`-prefix-matched line in a different section is left untouched. Workflow authors are responsible for picking a discriminating prefix (e.g. `<owner>/<repo>#<n>`) so collisions don't fire false-positives.
+- **First match wins.** Multiple lines with the same prefix → only the first flips/removes. Use a more-discriminating `match_key` if that matters.
+
+The operator-side `task_resolve` MCP tool (resolves an entire task by id) is a separate path; this action operates at line granularity within a section.
+
 ### 5.2 `add_note`
 
 ```yaml

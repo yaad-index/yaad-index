@@ -23,7 +23,17 @@ type fakeTaskWriter struct {
 	mu           sync.Mutex
 	calls        []taskWriterCall
 	missingCalls []missingRefsCall
+	resolveCalls []taskResolveCall
 	writeErr     error
+	resolveErr   error
+}
+
+type taskResolveCall struct {
+	workflow string
+	subject  string
+	section  string
+	matchKey string
+	mode     string
 }
 
 type taskWriterCall struct {
@@ -66,6 +76,27 @@ func (f *fakeTaskWriter) EnsureMissingRefsSection(_ context.Context, workflow, s
 		refs:     append([]string(nil), refs...),
 	})
 	return nil
+}
+
+func (f *fakeTaskWriter) ResolveTaskLine(_ context.Context, workflow, subject, section, matchKey, mode string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolveCalls = append(f.resolveCalls, taskResolveCall{
+		workflow: workflow,
+		subject:  subject,
+		section:  section,
+		matchKey: matchKey,
+		mode:     mode,
+	})
+	return f.resolveErr
+}
+
+func (f *fakeTaskWriter) resolveSnapshot() []taskResolveCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]taskResolveCall, len(f.resolveCalls))
+	copy(out, f.resolveCalls)
+	return out
 }
 
 func (f *fakeTaskWriter) missingSnapshot() []missingRefsCall {
