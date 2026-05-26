@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/plugins/datadir"
 )
 
 // TestEnsurePluginInstanceDataDirs_CreatesDefault pins the
@@ -88,4 +89,31 @@ func TestEnsurePluginInstanceDataDirs_EmptyConfigOK(t *testing.T) {
 	t.Parallel()
 	require.NoError(t, ensurePluginInstanceDataDirs(nil))
 	require.NoError(t, ensurePluginInstanceDataDirs(map[string][]config.InstanceEntry{}))
+}
+
+// TestEnsurePluginInstanceDataDirs_HonorsPluginDataRoot pins the
+// PR-291 fold-in for #287: when SetRoot is called BEFORE the
+// ensure pass (the correct ordering in main.go's run loop), the
+// startup MkdirAll creates dirs under the operator-configured
+// `plugin_data_root`. The earlier ordering bug stamped a
+// different path on YAAD_PLUGIN_DATA_DIR per dispatch than the
+// daemon had MkdirAll'd at boot; this test pins the fix.
+func TestEnsurePluginInstanceDataDirs_HonorsPluginDataRoot(t *testing.T) {
+	// Mutates package-global datadir.pluginDataRoot; can't
+	// t.Parallel.
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "operator-plugin-data-root")
+	datadir.SetRoot(root)
+	t.Cleanup(func() { datadir.SetRoot("") })
+
+	cfg := map[string][]config.InstanceEntry{
+		"github": {{Name: "personal"}},
+	}
+	require.NoError(t, ensurePluginInstanceDataDirs(cfg))
+
+	want := filepath.Join(root, "yaad-github", "personal")
+	info, err := os.Stat(want)
+	require.NoError(t, err, "dir under plugin_data_root must exist after ensure pass; got SetRoot/ensure ordering bug if missing")
+	assert.True(t, info.IsDir())
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
 }

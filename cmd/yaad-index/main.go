@@ -421,6 +421,20 @@ func (s *ServeCmd) Run() error {
 		if err := validatePluginInstanceEnvReferences(pluginInstanceConfigs, logger); err != nil {
 			return fmt.Errorf("validate plugin instance env: %w", err)
 		}
+		// #287: stamp the operator's `plugin_data_root` (if any) on
+		// the datadir resolver BEFORE ensurePluginInstanceDataDirs
+		// so the startup MkdirAll and the per-dispatch
+		// buildInstanceEnv stamp the same resolved path. Calling
+		// SetRoot after ensure would create dirs at the env-driven
+		// fallback while subsequent buildInstanceEnv stamped the
+		// plugin_data_root-derived path — handing the plugin a
+		// path the daemon didn't MkdirAll. Empty leaves the
+		// resolver on the env-driven precedence chain
+		// ($STATE_DIRECTORY → UserCacheDir).
+		datadir.SetRoot(cfg.PluginDataRoot)
+		if cfg.PluginDataRoot != "" {
+			logger.Info("plugin data dir root configured", "plugin_data_root", cfg.PluginDataRoot)
+		}
 		// #284: provision per-(plugin,instance) persistent-state
 		// directories with 0700 perms before any plugin subprocess
 		// spawns. Resolves operator override / default, MkdirAll
@@ -649,6 +663,12 @@ func (s *ServeCmd) Run() error {
 		// boot, lock-free read on every subprocess spawn.
 		subprocess.SetStagingDir(stagingDir)
 		logger.Info("attachments dispatcher active", "plugin_staging_dir", stagingDir)
+
+		// (datadir.SetRoot is called earlier, before
+		// ensurePluginInstanceDataDirs, so the boot-time MkdirAll
+		// and the per-dispatch buildInstanceEnv stamp the same
+		// resolved path. See the SetRoot block above the
+		// validate/ensure pair.)
 
 		// Workflow loader (per ADR-0024 Phase 1.B). Scans
 		// <vault>/workflows/ for operator-authored workflow files,

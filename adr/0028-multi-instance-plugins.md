@@ -81,11 +81,14 @@ plugins:
 
 **`data_dir` per-instance persistent-state directory (per #284).** Each `(plugin, instance)` gets a daemon-managed durable directory the plugin writes durable state under (cookie jars, refresh tokens, plugin-managed caches). The daemon stamps the resolved absolute path on `YAAD_PLUGIN_DATA_DIR` for every subprocess invocation; plugins read it through the SDK helper at `github.com/yaad-index/yaad-index/pkg/plugin/data.DataDir()`.
 
-**Path resolution:**
+**Path resolution** (highest priority first; per #287):
 
-- Operator override: `instances[*].data_dir: /abs/path` — must be absolute, validated at config-load.
-- Default: `<userCacheDir>/yaad-<plugin>/<instance>/` where `userCacheDir` follows XDG semantics (`$XDG_CACHE_HOME` if set, otherwise `~/.cache`).
-- Multi-instance isolation by construction: `gmail/personal` and `gmail/work` resolve to different paths automatically.
+1. `instances[*].data_dir: /abs/path` — per-instance operator override (absolute path required).
+2. Top-level `plugin_data_root: /abs/path` — operator-configured base for all plugins (absolute, joined with `yaad-<plugin>/<instance>/`).
+3. `$STATE_DIRECTORY` env — systemd `StateDirectory=`-injected path (joined with `plugin-data/yaad-<plugin>/<instance>/`).
+4. `<userCacheDir>/yaad-<plugin>/<instance>/` — XDG fallback for dev hosts.
+
+Multi-instance isolation by construction: `gmail/personal` and `gmail/work` resolve to different paths automatically at every layer.
 
 **Lifecycle:**
 
