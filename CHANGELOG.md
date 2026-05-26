@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.12.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.11.0...yaad-index-v0.12.0) (2026-05-26)
+
+
+### Features
+
+* **api,mcp:** canonical_registry effective + available routes ([#48](https://github.com/yaad-index/yaad-index/issues/48) slice 3) ([#296](https://github.com/yaad-index/yaad-index/issues/296)) ([574a748](https://github.com/yaad-index/yaad-index/commit/574a748ad7c81632cf5b8c208cdebec341daf8ff))
+* **api,mcp:** workflow per-name CRUD surface ([#277](https://github.com/yaad-index/yaad-index/issues/277)) ([#292](https://github.com/yaad-index/yaad-index/issues/292)) ([430e19a](https://github.com/yaad-index/yaad-index/commit/430e19af7ba5ccbda32b92da2cc228081a64f9ef))
+* **config,api:** canonical_type fill resolver_plugin gate ([#278](https://github.com/yaad-index/yaad-index/issues/278)) ([72b2ba5](https://github.com/yaad-index/yaad-index/commit/72b2ba5c2e84ce624b56f4fe4939374d60afef45))
+* **config:** boot-time canonical-registry audit log ([#48](https://github.com/yaad-index/yaad-index/issues/48) slice 4) ([#297](https://github.com/yaad-index/yaad-index/issues/297)) ([17ae6b7](https://github.com/yaad-index/yaad-index/commit/17ae6b79cad2f1415ba5efc5f4363993504215e2))
+* **config:** expand ${NAME} env references in plugin instance env values ([#256](https://github.com/yaad-index/yaad-index/issues/256)) ([#283](https://github.com/yaad-index/yaad-index/issues/283)) ([1be1d54](https://github.com/yaad-index/yaad-index/commit/1be1d541d4f5fe665b4d14d1966acfe942f7c3fe))
+* **config:** Layer 1.5 daemon-shipped gap defaults for 5 common kinds ([#48](https://github.com/yaad-index/yaad-index/issues/48) slice 2) ([#295](https://github.com/yaad-index/yaad-index/issues/295)) ([a811e8e](https://github.com/yaad-index/yaad-index/commit/a811e8e7de8b8e9aab5c17c16051034c1b5bcb27))
+* **gmail,canonical:** surface from/to/cc/bcc on gmail data + daemon-manage gmail canonical vocabulary ([#273](https://github.com/yaad-index/yaad-index/issues/273)) ([95ef2b0](https://github.com/yaad-index/yaad-index/commit/95ef2b0b335b32e836fe96837ded1130f603d57e))
+* **needs-fill:** de-dup canonical_vocabulary to response root + ?exclude= opt-out ([#279](https://github.com/yaad-index/yaad-index/issues/279)) ([75d1de6](https://github.com/yaad-index/yaad-index/commit/75d1de637b93eb49c51a81c9e80fffe0e52778ca))
+* **plugins:** YAAD_PLUGIN_DATA_DIR per-instance persistent state ([#284](https://github.com/yaad-index/yaad-index/issues/284)) ([#285](https://github.com/yaad-index/yaad-index/issues/285)) ([ee47226](https://github.com/yaad-index/yaad-index/commit/ee47226e66e4f3a55546ff66d9db655e9e5fbb49))
+* **store,api,reindex:** DB-side aliases — index + search JOIN + reindex re-derive ([#3](https://github.com/yaad-index/yaad-index/issues/3)) ([#298](https://github.com/yaad-index/yaad-index/issues/298)) ([bf0061f](https://github.com/yaad-index/yaad-index/commit/bf0061fda0015f2ccb9ea7f7998e4073161ec8d4))
+* **store:** WARN-once at IncDroppedCanonicalKind/Edge first hit ([#48](https://github.com/yaad-index/yaad-index/issues/48) slice 1) ([#294](https://github.com/yaad-index/yaad-index/issues/294)) ([9812a30](https://github.com/yaad-index/yaad-index/commit/9812a306a41c9701eca24337a8e2ce86670739dc))
+* **tasks,day:** promote tasks to first-class entities + lazy-materialize days on edge-write ([#271](https://github.com/yaad-index/yaad-index/issues/271)) ([122d13e](https://github.com/yaad-index/yaad-index/commit/122d13ea66dc03e7262e38c06decc8cd0246e9a3))
+* **workflow:** cross-workflow task_resolve action ([#266](https://github.com/yaad-index/yaad-index/issues/266)) ([#293](https://github.com/yaad-index/yaad-index/issues/293)) ([5f96c0f](https://github.com/yaad-index/yaad-index/commit/5f96c0f72a1f7c26a5bff1143d3ef3ac1a00cb04))
+* **workflow:** expose trigger context to CEL env (source, event, timestamp, cause) ([#265](https://github.com/yaad-index/yaad-index/issues/265)) ([b0f4a34](https://github.com/yaad-index/yaad-index/commit/b0f4a341e57832b2a91095cc43f1efd430d39c80))
+* **yaad-bgg:** per-game collection enrichment via authenticated session ([#282](https://github.com/yaad-index/yaad-index/issues/282)) ([#288](https://github.com/yaad-index/yaad-index/issues/288)) ([ed22ba4](https://github.com/yaad-index/yaad-index/commit/ed22ba49aea7382e817f9d78674fb739b728965f))
+
+
+### Bug Fixes
+
+* **config:** extend env-key reservation to STAGING_DIR + TIMEZONE ([#286](https://github.com/yaad-index/yaad-index/issues/286)) ([#290](https://github.com/yaad-index/yaad-index/issues/290)) ([659cad1](https://github.com/yaad-index/yaad-index/commit/659cad1b8c4a5219a5689645e4d415b1c8d92ed0))
+* **github:** emit is_about edge to materialize github-pr / github-issue canonical entities ([#261](https://github.com/yaad-index/yaad-index/issues/261)) ([42d93aa](https://github.com/yaad-index/yaad-index/commit/42d93aa924237ea6f38bb4ac0839112b411b023e))
+* **plugins:** resolve data dir via plugin_data_root + STATE_DIRECTORY chain ([#287](https://github.com/yaad-index/yaad-index/issues/287)) ([#291](https://github.com/yaad-index/yaad-index/issues/291)) ([280d5da](https://github.com/yaad-index/yaad-index/commit/280d5da92a6b8875f623dc73d8ae701e7022a37a))
+* **workflow:** derive entity.slug in CEL env ([#269](https://github.com/yaad-index/yaad-index/issues/269)) ([cf7da16](https://github.com/yaad-index/yaad-index/commit/cf7da16dc544f85c2dd5bbeff1135bffc532113f))
+* **workflow:** skip Reconcile no-op via ContentHash to eliminate 15s log flap ([#281](https://github.com/yaad-index/yaad-index/issues/281)) ([85f17e5](https://github.com/yaad-index/yaad-index/commit/85f17e5d84dba297d85361f7a4c06dde254402bc))
+
 ## [0.11.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.10.0...yaad-index-v0.11.0) (2026-05-25)
 
 
