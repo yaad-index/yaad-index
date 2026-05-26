@@ -1,6 +1,6 @@
 # ADR-0011: Vault file `aliases:` synthesized from entity titles
 
-**Status:** Accepted (2026-05-03). Initial title-synthesized aliases shipped; generalization (multi-valued, typed-prefix, plugin-emittable, search-indexed) tracked in.
+**Status:** Accepted (2026-05-03). Initial title-synthesized aliases shipped; generalization (multi-valued, typed-prefix, plugin-emittable, search-indexed) landed per the §"Generalization (#3)" amendment below.
 
 ## Context
 
@@ -127,8 +127,57 @@ Accept that wikilinks need the slug.
 - Implementation lands as a follow-up issue/PR against `internal/vault/format.go`'s frontmatter writer.
 - Documentation note in the frontmatter-format section: `aliases:` is a yaad-index synthesized field; user edits are not preserved on reindex.
 
+## Generalization (#3)
+
+The v1 single-element `aliases:` list is now a multi-valued navigation overlay backed by a dedicated `entity_aliases` index table. Three orthogonal layers compose:
+
+1. **Title-synthesis (v1, unchanged).** `internal/vault/format.go` still synthesizes one entry from `data.title` / `data.name` per the rules in §Decision above.
+2. **Plugin emission.** Plugins return a `FetchResult.Aliases []string` slice; the daemon merges plugin entries with the synthesized one (synthesized first, dedup case-sensitive, see `mergeAliases`). Plugins that don't set the field stay equivalent to v1.
+3. **Search index.** A new SQLite table `entity_aliases (alias PRIMARY KEY, entity_id FK, alias_kind)` mirrors `entity_notations` on the outbound-label axis. `store.Search` ORs an EXISTS subquery against this table into its WHERE so a query that substring-matches an alias returns the owning entity even when neither id nor data carries the term.
+
+### Bare vs typed prefix
+
+An alias entry that matches `<prefix>: <label>` AND whose `<prefix>` is in the operator's `canonical_edge_types:` registry lands with `alias_kind = 'typed'`. Everything else — plain strings, prefixed entries whose prefix is not a registered edge type — lands as `alias_kind = 'bare'`. The classifier is `store.TypedAliasPrefix` and is shared between the ingest path (`buildAliasEntries`) and the reindex re-derive path (`vaultAliasesToStore`).
+
+Examples (with `canonical_edge_types: [author, isbn]`):
+
+| Alias | Classification |
+|---|---|
+| `Martin Wallace (designer)` | bare (no prefix) |
+| `author: Susanna Clarke` | typed (`author` registered) |
+| `isbn: 9781635575637` | typed (`isbn` registered) |
+| `unknown: prefix` | bare (`unknown` not registered) |
+| `nested:key: value` | bare (colon in prefix is rejected by the shape gate) |
+
+The split is recorded for future readers (filters, callers that want only typed entries); v1.x consumers can ignore it.
+
+### Primary key on `alias`
+
+`entity_aliases.alias` is the table's primary key — an alias points at exactly one entity at write time. The cross-entity collision question raised in §"Negative / open questions" #1 stays deferred; when two entities both want the same alias, the second write moves it to the second entity (via `INSERT … ON CONFLICT DO UPDATE`). v1.x acceptance: same trade-off `entity_notations` already accepted; revisit if user-friction surfaces.
+
+### Reindex contract
+
+The vault file remains canonical per ADR-0008. On reindex, `entity_aliases` rows are reconciled to the vault frontmatter `aliases:` list via the same DELETE + INSERT shape `ReplaceNotations` uses for `entity_notations` and `ReplaceProvenance` uses for provenance. Orphan rows the vault no longer carries are dropped. Operator hand-edits to the `aliases:` block are preserved (they become the new vault truth on the next reindex pass).
+
+### Ingest mirrors what Marshal writes
+
+The DB `entity_aliases` rows MUST match the alias list the vault writer puts on disk on the same pass — not just the raw plugin slice. Concretely, the ingest path passes the plugin-emitted aliases through `vault.MergedAliasesFor` (same merge `vault.Marshal` performs internally — title-synthesized alias first, plugin entries after, dedup) before calling `store.ReplaceAliases`. Without this, a plugin emitting zero aliases would write `aliases: [<title>]` to the vault frontmatter but clear the DB index, and the title alias would only surface in `/v1/search` after the next reindex.
+
+### Classifier symmetry across ingest + reindex
+
+`alias_kind` derivation reads the same enabled-edge-type set on both paths — `enabledEdgeTypes` = `cfg.CanonicalEdgeTypes ∪ collectPluginEmittedEdgeTypes(registry)`. Plugin-auto-activated prefixes (declared by a plugin's `--init` output without an operator-side `canonical_edge_types:` entry) classify as `typed` on first ingest, not bare-then-typed-after-reindex.
+
+### What didn't change
+
+- Title-synthesized aliases are still written by `vault.Writer` exactly as v1 did — the test cohort for §Decision behaviors is unchanged.
+- The Obsidian wikilink-resolution shape is unchanged. Aliases the vault writes still resolve in editors that read the YAML `aliases:` property.
+- Plugins that don't emit `Aliases` keep their v1 behavior.
+- The `data.title` / `data.name` selection rule in §Decision is unchanged.
+
 ## References
 
 - [ADR-0008](./0008-vault-as-source-of-truth.md) — vault as source of truth; yaad-index re-derives frontmatter from entity state on every write.
+- [ADR-0009](./0009-provenance-reconciliation.md) — re-derive pattern (DELETE + INSERT in one transaction); `ReplaceAliases` mirrors this shape.
+- [ADR-0010](./0010-row-level-idempotency-for-derived-tables.md) — table-as-cache discipline `entity_aliases` inherits.
 - yaad-mcp test session 2026-05-02 — surfaced the wikilink-resolution gap during the operator's manual end-to-end test.
 - Obsidian aliases documentation: aliases are a recognized property in Obsidian's link-resolution algorithm. https://help.obsidian.md/Linking+notes+and+files/Aliases

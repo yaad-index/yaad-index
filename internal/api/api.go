@@ -84,7 +84,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 		tracker = si.trackerHandle()
 	}
 	if tracker == nil {
-		tracker = newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks, cfg.eventBus, cfg.pluginInstances)
+		tracker = newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks, cfg.eventBus, cfg.pluginInstances, cfg.canonicalEdgeTypes, canonicalKindKeys(cfg.canonicalKindReg))
 	}
 
 	// Per yaad-index a prior PR: the protect wrapper enforces Bearer-JWT
@@ -664,4 +664,22 @@ func WithSyncIngester(s SyncIngester) HandlerOption {
 // is tolerated by the MCP library).
 func WithMCPServerVersion(v string) HandlerOption {
 	return func(c *handlerConfig) { c.mcpServerVersion = v }
+}
+
+// canonicalKindKeys returns the enabled-canonical-kinds slice the
+// ingest tracker needs for vault.MergedAliasesFor (per #3 fix-up).
+// Mirrors the keys-from-registry shape main.go uses for
+// guard.EnabledKinds() — same content, just derived from the
+// already-threaded canonicalKindReg field instead of taking a
+// second option. Returns nil for an empty / nil registry — the
+// permissive fallback the merger already tolerates.
+func canonicalKindKeys(reg map[string]config.CanonicalKindConfig) []string {
+	if len(reg) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(reg))
+	for k := range reg {
+		out = append(out, k)
+	}
+	return out
 }

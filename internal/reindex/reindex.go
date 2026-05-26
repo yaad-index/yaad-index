@@ -91,6 +91,14 @@ type Reindexer struct {
 	reader *vault.Reader
 	guard *config.CanonicalGuard
 	logger *slog.Logger
+	// canonicalEdgeTypes is the operator's enabled edge-type
+	// registry, threaded so reindex can classify each
+	// vault-frontmatter alias as bare or typed (`<edge>: <label>`
+	// → typed iff edge is registered). nil/empty preserves the
+	// permissive shape — every alias lands as bare, which is the
+	// right default for tests + dev binaries that don't load
+	// operator config.
+	canonicalEdgeTypes []string
 }
 
 // New constructs a Reindexer rooted at vaultRoot. The root must be an
@@ -109,6 +117,16 @@ type Reindexer struct {
 // lines. nil logger silences them; the reindex Summary still
 // accumulates errors.
 func New(st store.Store, vaultRoot string, guard *config.CanonicalGuard, logger *slog.Logger) (*Reindexer, error) {
+	return NewWithOptions(st, vaultRoot, guard, logger, nil)
+}
+
+// NewWithOptions constructs a Reindexer like New + threads the
+// operator's canonical_edge_types registry so the alias-rederive
+// step (#3) can classify each frontmatter entry as bare or
+// typed. main.go is the production caller that passes the
+// registry; tests + dev binaries that don't load operator config
+// keep using New for the permissive default.
+func NewWithOptions(st store.Store, vaultRoot string, guard *config.CanonicalGuard, logger *slog.Logger, canonicalEdgeTypes []string) (*Reindexer, error) {
 	r, err := vault.NewReader(vaultRoot)
 	if err != nil {
 		return nil, fmt.Errorf("init vault reader: %w", err)
@@ -116,7 +134,14 @@ func New(st store.Store, vaultRoot string, guard *config.CanonicalGuard, logger 
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Reindexer{store: st, vaultRoot: vaultRoot, reader: r, guard: guard, logger: logger}, nil
+	return &Reindexer{
+		store:              st,
+		vaultRoot:          vaultRoot,
+		reader:             r,
+		guard:              guard,
+		logger:             logger,
+		canonicalEdgeTypes: canonicalEdgeTypes,
+	}, nil
 }
 
 // Run executes one reindex pass and returns its Summary. Errors that
@@ -450,6 +475,15 @@ func (r *Reindexer) upsertEntity(ctx context.Context, e *vault.Entity) error {
 	if err := r.store.ReplaceNotations(ctx, e.ID, vaultNotationsToStore(e.ID, e.Notations)); err != nil {
 		return fmt.Errorf("ReplaceNotations %s: %w", e.ID, err)
 	}
+	// Aliases cache per #3. Same vault-wins reconcile shape as
+	// notations — DELETE+INSERT from the vault file's
+	// frontmatter `aliases:` list, drop orphans. alias_kind is
+	// derived from the `<prefix>: <label>` shape + the
+	// operator's canonical_edge_types registry (typed iff prefix
+	// is a known edge type; bare otherwise).
+	if err := r.store.ReplaceAliases(ctx, e.ID, vaultAliasesToStore(e.ID, e.Aliases, r.canonicalEdgeTypes)); err != nil {
+		return fmt.Errorf("ReplaceAliases %s: %w", e.ID, err)
+	}
 	return nil
 }
 
@@ -471,6 +505,44 @@ func vaultNotationsToStore(entityID string, in []string) []store.Notation {
 			EntityID: entityID,
 			Kind: store.NotationKindURL,
 		}
+	}
+	return out
+}
+
+// vaultAliasesToStore converts the vault-frontmatter aliases list
+// into store.Alias rows for ReplaceAliases per #3. alias_kind is
+// derived from the `<prefix>: <label>` shape + the operator's
+// canonical_edge_types registry — typed iff prefix is a known edge
+// type, bare otherwise. Empty / duplicate aliases are skipped.
+func vaultAliasesToStore(entityID string, in []string, canonicalEdgeTypes []string) []store.Alias {
+	if len(in) == 0 {
+		return nil
+	}
+	edgeSet := make(map[string]struct{}, len(canonicalEdgeTypes))
+	for _, t := range canonicalEdgeTypes {
+		edgeSet[t] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]store.Alias, 0, len(in))
+	for _, a := range in {
+		if a == "" {
+			continue
+		}
+		if _, dup := seen[a]; dup {
+			continue
+		}
+		seen[a] = struct{}{}
+		kind := store.AliasKindBare
+		if prefix, _, ok := store.TypedAliasPrefix(a); ok {
+			if _, registered := edgeSet[prefix]; registered {
+				kind = store.AliasKindTyped
+			}
+		}
+		out = append(out, store.Alias{
+			Alias:    a,
+			EntityID: entityID,
+			Kind:     kind,
+		})
 	}
 	return out
 }

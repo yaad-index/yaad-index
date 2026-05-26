@@ -276,3 +276,92 @@ func TestWriter_WithCanonicalKinds(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Martin Wallace"}, got.Aliases)
 }
+
+// TestMergedAliasesFor pins the contract that the ingest path
+// (per #3) uses to mirror what Marshal would write into
+// entity_aliases without re-encoding the YAML. The output must
+// match the merged list Marshal emits for the same inputs.
+func TestMergedAliasesFor(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name           string
+		id, kind       string
+		data           map[string]any
+		pluginAliases  []string
+		canonicalKinds []string
+		want           []string
+	}{
+		{
+			name: "plugin-empty source-shape: title alone",
+			id:   "wikipedia:foo", kind: "wikipedia-article",
+			data: map[string]any{"title": "Foo (article)"},
+			want: []string{"Foo (article)"},
+		},
+		{
+			name: "plugin-empty canonical-shape: name alone",
+			id:   "person:susanna-clarke", kind: "person",
+			data:           map[string]any{"name": "Susanna Clarke"},
+			canonicalKinds: []string{"person"},
+			want:           []string{"Susanna Clarke"},
+		},
+		{
+			name: "plugin-emits + title: synth first, plugin after",
+			id:   "wikipedia:foo", kind: "wikipedia-article",
+			data:          map[string]any{"title": "Foo (article)"},
+			pluginAliases: []string{"FooAlt", "author: Someone"},
+			want:          []string{"Foo (article)", "FooAlt", "author: Someone"},
+		},
+		{
+			name: "dedup: plugin-emits the synth value too",
+			id:   "wikipedia:foo", kind: "wikipedia-article",
+			data:          map[string]any{"title": "Foo"},
+			pluginAliases: []string{"Foo", "Foo (lowercase)"},
+			want:          []string{"Foo", "Foo (lowercase)"},
+		},
+		{
+			name: "title equals slug: synth suppressed, plugin alone",
+			id:   "wikipedia:foo", kind: "wikipedia-article",
+			data:          map[string]any{"title": "foo"},
+			pluginAliases: []string{"FooAlt"},
+			want:          []string{"FooAlt"},
+		},
+		{
+			name: "no title + no plugin entries: nil",
+			id:   "wikipedia:foo", kind: "wikipedia-article",
+			data: map[string]any{"summary": "x"},
+			want: nil,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := MergedAliasesFor(tc.id, tc.kind, tc.data, tc.pluginAliases, tc.canonicalKinds)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestMergedAliasesFor_MatchesMarshal pins the invariant that the
+// merger returns exactly the list Marshal would write — if
+// Marshal's alias-merge logic changes, this test fails alongside
+// any drift.
+func TestMergedAliasesFor_MatchesMarshal(t *testing.T) {
+	t.Parallel()
+
+	e := &Entity{
+		ID: "wikipedia:foo", Kind: "wikipedia-article",
+		Source:  []string{"wikipedia/default"},
+		Data:    map[string]any{"title": "Foo (article)"},
+		Aliases: []string{"FooAlt", "author: Someone"},
+	}
+	b, err := Marshal(e, nil)
+	require.NoError(t, err)
+	parsed, err := Unmarshal(b)
+	require.NoError(t, err)
+
+	got := MergedAliasesFor(e.ID, e.Kind, e.Data, e.Aliases, nil)
+	assert.Equal(t, parsed.Aliases, got,
+		"MergedAliasesFor output must equal vault.Marshal-then-Unmarshal aliases")
+}

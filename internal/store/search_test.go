@@ -232,3 +232,83 @@ func TestSearch_JournalOnlyFilter_KindAgnostic(t *testing.T) {
 	assert.Equal(t, 2, total)
 	assert.Len(t, hits, 2, "is_journal filter ignores kind by default")
 }
+
+// TestSearch_MatchesByAlias pins the #3 contract: a query that
+// substring-matches an entry in entity_aliases returns the owning
+// entity, even when neither id nor data carries the term.
+func TestSearch_MatchesByAlias(t *testing.T) {
+	t.Parallel()
+
+	s := newMemoryStore(t)
+	ctx := context.Background()
+	seedSearchableEntity(t, s, "book:piranesi", "book",
+		map[string]any{"title": "Piranesi", "year": float64(2020)})
+
+	require.NoError(t, s.ReplaceAliases(ctx, "book:piranesi", []Alias{
+		{Alias: "Susanna Clarke's labyrinth book"},
+		{Alias: "author: Susanna Clarke", Kind: AliasKindTyped},
+	}))
+
+	hits, total, err := s.Search(ctx, "labyrinth", "", 50, 0, ArchivedExclude, false)
+	require.NoError(t, err)
+	require.Len(t, hits, 1, "alias-only term must match via entity_aliases")
+	assert.Equal(t, "book:piranesi", hits[0].ID)
+	assert.Equal(t, 1, total)
+
+	// Same on a typed-prefix alias — the label portion is the
+	// substring being searched.
+	hits, total, err = s.Search(ctx, "Clarke", "", 50, 0, ArchivedExclude, false)
+	require.NoError(t, err)
+	require.Len(t, hits, 1, "typed-prefix alias label must match")
+	assert.Equal(t, "book:piranesi", hits[0].ID)
+	assert.Equal(t, 1, total)
+}
+
+// TestSearch_AliasMatchDoesNotDuplicate pins the EXISTS-shape
+// contract: an entity with multiple matching aliases returns one
+// row, not one per alias.
+func TestSearch_AliasMatchDoesNotDuplicate(t *testing.T) {
+	t.Parallel()
+
+	s := newMemoryStore(t)
+	ctx := context.Background()
+	seedSearchableEntity(t, s, "book:piranesi", "book",
+		map[string]any{"title": "Piranesi"})
+
+	require.NoError(t, s.ReplaceAliases(ctx, "book:piranesi", []Alias{
+		{Alias: "Piranesi-alt-1"},
+		{Alias: "Piranesi-alt-2"},
+		{Alias: "Piranesi-alt-3"},
+	}))
+
+	hits, total, err := s.Search(ctx, "Piranesi", "", 50, 0, ArchivedExclude, false)
+	require.NoError(t, err)
+	require.Len(t, hits, 1, "EXISTS subquery must not row-multiply")
+	assert.Equal(t, 1, total, "total must count entities, not alias matches")
+}
+
+// TestSearch_AliasMatchRespectsKindFilter pins that the alias
+// branch is OR'd into the WHERE but the kind filter still applies
+// as an AND on the outer query.
+func TestSearch_AliasMatchRespectsKindFilter(t *testing.T) {
+	t.Parallel()
+
+	s := newMemoryStore(t)
+	ctx := context.Background()
+	seedSearchableEntity(t, s, "book:piranesi", "book",
+		map[string]any{"title": "Piranesi"})
+	seedSearchableEntity(t, s, "person:susanna", "person",
+		map[string]any{"display_name": "S.C."})
+
+	require.NoError(t, s.ReplaceAliases(ctx, "book:piranesi", []Alias{
+		{Alias: "Clarke novel"},
+	}))
+	require.NoError(t, s.ReplaceAliases(ctx, "person:susanna", []Alias{
+		{Alias: "Clarke"},
+	}))
+
+	hits, _, err := s.Search(ctx, "Clarke", "book", 50, 0, ArchivedExclude, false)
+	require.NoError(t, err)
+	require.Len(t, hits, 1, "kind=book filters out the person hit")
+	assert.Equal(t, "book:piranesi", hits[0].ID)
+}

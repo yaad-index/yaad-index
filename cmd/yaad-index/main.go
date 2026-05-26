@@ -473,6 +473,12 @@ func (s *ServeCmd) Run() error {
 		mergedRegistry           map[string]config.CanonicalKindConfig
 		canonicalKindProvenance  config.RegistryProvenance
 		wfEngine       *engine.Engine
+		// enabledEdgeTypes is computed inside the `if cfg != nil`
+		// block (plugin+operator union) and re-used by the reindex
+		// wiring further below so the alias-rederive path can
+		// classify each frontmatter alias as bare vs typed (per
+		// #3). nil/empty stays permissive — every alias bare.
+		enabledEdgeTypes []string
 	)
 	if cfg != nil {
 		// ADR-0016 §4: build the merged effective canonical-kind
@@ -522,7 +528,7 @@ func (s *ServeCmd) Run() error {
 		// the kind-side has a kind-keyed config struct to bind gaps,
 		// so the edge path doesn't go through a merge intermediate.
 		// Effective enabled sets are symmetric.
-		enabledEdgeTypes := unionEdgeTypes(cfg.CanonicalEdgeTypes, collectPluginEmittedEdgeTypes(registry))
+		enabledEdgeTypes = unionEdgeTypes(cfg.CanonicalEdgeTypes, collectPluginEmittedEdgeTypes(registry))
 		guard = canonical.NewGuardWithDaemonDefaults(canonicalKindNames(mergedRegistry), enabledEdgeTypes)
 		handlerOpts = append(handlerOpts, api.WithCanonicalGuard(guard))
 		warnCanonicalEmissionGaps(logger, registry, guard)
@@ -597,7 +603,7 @@ func (s *ServeCmd) Run() error {
 			"keys", len(jwksKeys))
 	}
 	if cfg != nil && cfg.Vault.Path != "" {
-		reindexer, err := reindex.New(st, cfg.Vault.Path, guard, logger)
+		reindexer, err := reindex.NewWithOptions(st, cfg.Vault.Path, guard, logger, enabledEdgeTypes)
 		if err != nil {
 			return fmt.Errorf("init reindex (vault.path=%s): %w", cfg.Vault.Path, err)
 		}
@@ -657,11 +663,27 @@ func (s *ServeCmd) Run() error {
 		// input semantics". One tracker drives both /v1/ingest and
 		// the workflow engine's URL-shape input path so job-map
 		// dedup + cache-TTL gate coordinate across surfaces.
+		//
+		// canonicalEdgeTypes is the operator∪plugin-emitted union
+		// (same set the reindex re-derive path uses) — keeping the
+		// ingest classifier and the reindex classifier on one
+		// effective set prevents plugin-auto-activated prefixes
+		// from drifting bare→typed between fresh-write and
+		// reindex passes.
+		//
+		// canonicalKinds is the same set the vault writer holds
+		// (guard.EnabledKinds()) so the ingest path can compute the
+		// title-synthesized-merged alias list that vault.Marshal
+		// would write — mirroring the same merged list into
+		// entity_aliases keeps /v1/search and the vault frontmatter
+		// in lockstep on the first ingest pass.
 		syncIngester := api.NewSyncIngester(
 			logger, st, registry, writer, reader,
 			guard, cfg.CacheTTLSeconds, dispatcher, wfWriteLocks, bus,
 			pluginInstances,
 			pluginInstanceConfigs,
+			enabledEdgeTypes,
+			guard.EnabledKinds(),
 		)
 		handlerOpts = append(handlerOpts, api.WithSyncIngester(syncIngester))
 

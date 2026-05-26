@@ -1024,8 +1024,12 @@ func assertEntityExists(ctx context.Context, tx *sql.Tx, id, side string) error 
 func (s *sqliteStore) Search(ctx context.Context, query, kind string, limit, offset int, archived ArchivedFilter, journalOnly bool) ([]Hit, int, error) {
 	pattern := "%" + query + "%"
 
-	whereParts := []string{"(id LIKE ? OR data LIKE ?)"}
-	whereArgs := []any{pattern, pattern}
+	// Match on id, data, OR any of the entity's aliases per #3.
+	// The EXISTS subquery keeps the row count clean — a LEFT JOIN
+	// would duplicate rows when an entity carries multiple aliases
+	// that each match the pattern.
+	whereParts := []string{"(id LIKE ? OR data LIKE ? OR EXISTS (SELECT 1 FROM entity_aliases ea WHERE ea.entity_id = entities.id AND ea.alias LIKE ?))"}
+	whereArgs := []any{pattern, pattern, pattern}
 	if kind != "" {
 		whereParts = append(whereParts, "kind = ?")
 		whereArgs = append(whereArgs, kind)
