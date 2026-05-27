@@ -183,17 +183,19 @@ func TestVaultEdgeWriter_SourceFKError(t *testing.T) {
 	assert.Contains(t, err.Error(), "create edge")
 }
 
-// TestVaultEdgeWriter_EmptyTargetNameSlugError: the slug
-// derivation rejects names that slugify to the empty string
-// (just whitespace / punctuation). The error trace points at
-// the slug step so the operator can fix the workflow.
+// TestVaultEdgeWriter_EmptyTargetNameSlugError: whitespace-only
+// targetName rejects at the service boundary (Cut C2's
+// CreateCanonicalEdgeByName trims + validates before either
+// the auto-resolve or slugify branch fires). Pre-Cut-C2 the
+// rejection landed at slug.Slug returning ""; the
+// strict-boundary check is the new shape.
 func TestVaultEdgeWriter_EmptyTargetNameSlugError(t *testing.T) {
 	t.Parallel()
 	w, _, _, _ := newVaultEdgeWriterFixture(t)
 	err := w.AddCanonicalEdge(context.Background(), "wf",
 		"email:m1", "is_about", "github-repository", "   ", nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "empty slug")
+	assert.Contains(t, err.Error(), "targetName is required")
 }
 
 // TestVaultEdgeWriter_KindPrefixStrip_DayCanonicalID pins the

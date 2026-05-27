@@ -730,6 +730,14 @@ func (s *ServeCmd) Run() error {
 		)
 		handlerOpts = append(handlerOpts, api.WithSyncIngester(syncIngester))
 
+		// Wire the centralized edge-write service's
+		// NameResolver per #304 Cut C2: auto-mode edges
+		// targeting kinds with a registered resolver invoke
+		// the plugin via SyncIngester.IngestByName. The shim
+		// lives here (not in api) because api → edgewrite is
+		// the import direction; reversing it would cycle.
+		edgeService.SetNameResolver(&syncIngesterResolverShim{ingester: syncIngester, timeout: defaultResolverTimeout})
+
 		// Propagate the staging dir to subprocess plugins via
 		// YAAD_PLUGIN_STAGING_DIR (per ADR-0014 §6 PR-B). Mirrors
 		// clock.SetLocation's plumbing — package-level set-once at
@@ -2178,5 +2186,28 @@ func validatePluginInstanceEnvReferences(pluginInstanceConfigs map[string][]conf
 		}
 	}
 	return nil
+}
+
+// defaultResolverTimeout caps the wait on a single
+// SyncIngester.IngestByName call routed from edgewrite.Service
+// per #304 Cut C2. 60s matches subprocess.DefaultFetchTimeout
+// (the per-plugin fetch ceiling) — name-resolution is a
+// fetch-shape op + the upper bound is the same. Production
+// would only hit this in pathological cases (plugin
+// hanging); typical resolution is sub-second.
+const defaultResolverTimeout = 60 * time.Second
+
+// syncIngesterResolverShim adapts api.SyncIngester's
+// IngestByName method into edgewrite.NameResolver per #304
+// Cut C2. Lives in main.go to keep edgewrite from importing
+// api (api → edgewrite is the import direction; reversing
+// would cycle).
+type syncIngesterResolverShim struct {
+	ingester api.SyncIngester
+	timeout  time.Duration
+}
+
+func (s *syncIngesterResolverShim) ResolveCanonicalEntity(ctx context.Context, pluginName, targetKind, name string) (string, map[string]plugins.DisambiguationOption, error) {
+	return s.ingester.IngestByName(ctx, pluginName, targetKind, name, s.timeout)
 }
 
