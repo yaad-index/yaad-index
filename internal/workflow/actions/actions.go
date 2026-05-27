@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/workflow/parser"
 )
@@ -379,6 +380,16 @@ func (d *dispatcher) Run(ctx context.Context, wf *parser.Workflow, dec Decision,
 	if len(wf.Actions) == 0 {
 		return nil
 	}
+	// Cut C2: stamp Auto mode on every workflow-spawned
+	// action invocation. The edgewrite.Service reads this
+	// off the context to switch the auto-resolver branch on
+	// (raw name targeting a kind with a registered resolver
+	// → invoke the plugin's name-resolution; ambiguous →
+	// ResolutionDeferred sentinel; single match → edge with
+	// resolved id). Every other entry point (HTTP, MCP, CLI,
+	// fills) leaves the context at Interactive (the zero
+	// value) so their UX shape is preserved.
+	ctx = edgewrite.WithMode(ctx, edgewrite.Auto)
 	out := make([]ActionResult, len(wf.Actions))
 	for i, action := range wf.Actions {
 		out[i] = d.runOne(ctx, i, wf, action, dec, act)

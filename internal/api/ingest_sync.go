@@ -58,6 +58,29 @@ type SyncIngester interface {
 	// the in-flight record per the tracker's invocation-key
 	// dedup.
 	IngestURL(ctx context.Context, url string, timeout time.Duration) (entityID string, err error)
+
+	// IngestByName invokes the named resolver plugin's
+	// `<plugin>: <name>` shorthand path per #304 Cut C2.
+	// Mirror of IngestURL with one critical wire-shape
+	// difference: on disambiguation, the plugin's options
+	// map bubbles back instead of collapsing into an error
+	// string. The centralized edgewrite.Service consumes
+	// this on the auto-mode resolution branch — single match
+	// → edge with the resolved id, options → defer via
+	// ResolutionDeferred sentinel.
+	//
+	// Return-tuple semantics:
+	//
+	//   - (entityID, nil, nil) on single-match resolution.
+	//   - ("", options, nil) on disambiguation; len(options)
+	//     ≥ 2 (a single-match plugin doesn't return
+	//     options — it returns the entity).
+	//   - ("", nil, err) on transport / unresolvable failures
+	//     (plugin returns failed state, no plugin matches
+	//     the name, etc.).
+	//
+	// timeout cap is the same shape as IngestURL.
+	IngestByName(ctx context.Context, pluginName, name string, timeout time.Duration) (entityID string, options map[string]plugins.DisambiguationOption, err error)
 }
 
 // NewSyncIngester constructs a tracker-backed SyncIngester
@@ -169,6 +192,59 @@ func (s *syncIngester) IngestURL(ctx context.Context, url string, timeout time.D
 		return "", fmt.Errorf("ingest of %s failed: %s (%s)", url, snap.failureMessage, snap.failureCode)
 	default:
 		return "", fmt.Errorf("ingest of %s returned unexpected state %d", url, snap.state)
+	}
+}
+
+// IngestByName implements SyncIngester per #304 Cut C2. Wraps
+// the plugin's `<plugin>: <name>` shorthand input through the
+// shared ingest tracker, bubbling Options back on
+// disambiguation rather than collapsing into an error string
+// (the Cut C2 wire-shape contract).
+func (s *syncIngester) IngestByName(ctx context.Context, pluginName, name string, timeout time.Duration) (string, map[string]plugins.DisambiguationOption, error) {
+	if s.registry == nil {
+		return "", nil, fmt.Errorf("ingest_sync: registry not wired")
+	}
+	if pluginName == "" {
+		return "", nil, fmt.Errorf("ingest_sync: pluginName is required")
+	}
+	if name == "" {
+		return "", nil, fmt.Errorf("ingest_sync: name is required")
+	}
+	plugin, ok := s.registry.LookupByName(pluginName)
+	if !ok {
+		return "", nil, fmt.Errorf("no plugin named %q in registry", pluginName)
+	}
+	// Synthesize the URL-shape shorthand input the existing
+	// dispatch path consumes — `<plugin>: <name>`. The tracker
+	// + plugin take it from there; `ParseInvocation` recognizes
+	// the shape and routes to this plugin's pattern matcher
+	// (which the plugin's `url_patterns` is expected to accept
+	// for the shorthand prefix when it advertises resolver
+	// support).
+	shorthand := pluginName + ": " + name
+	att := ingestAttemptForPlugin(plugin, shorthand, "")
+	rec := s.tracker.beginAttempt(att)
+	snap, err := s.tracker.wait(ctx, rec, timeout)
+	if err != nil {
+		return "", nil, fmt.Errorf("ingest wait for %s: %w", shorthand, err)
+	}
+	switch snap.state {
+	case ingestStateComplete, ingestStateNeedsFill:
+		return snap.entityID, nil, nil
+	case ingestStateDisambiguation:
+		// Copy the map so callers can't accidentally mutate
+		// the tracker's stored slice. Cheap — disambiguation
+		// option counts are small (single-digit on every
+		// plugin observed in production).
+		out := make(map[string]plugins.DisambiguationOption, len(snap.options))
+		for k, v := range snap.options {
+			out[k] = v
+		}
+		return "", out, nil
+	case ingestStateFailed:
+		return "", nil, fmt.Errorf("ingest of %s failed: %s (%s)", shorthand, snap.failureMessage, snap.failureCode)
+	default:
+		return "", nil, fmt.Errorf("ingest of %s returned unexpected state %d", shorthand, snap.state)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"sort"
 
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/store"
 )
 
@@ -32,15 +33,6 @@ import (
 type DayRefStore interface {
 	GetEntity(ctx context.Context, id string) (*store.Entity, error)
 	UpsertEntity(ctx context.Context, e *store.Entity) error
-	CreateEdge(ctx context.Context, e *store.Edge) error
-}
-
-// DayRefEdgeWriter is the narrow edge-create surface the
-// EmitDayRefs helper uses per #304 Cut C1. Decoupled from
-// DayRefStore so callers can pass the centralized
-// edgewrite.Service (production) without dragging the broader
-// store.Store interface in.
-type DayRefEdgeWriter interface {
 	CreateEdge(ctx context.Context, e *store.Edge) error
 }
 
@@ -179,7 +171,7 @@ func ensureLabelRowFor(ctx context.Context, st DayRefStore, label string, logger
 func EmitDayRefs(
 	ctx context.Context,
 	st DayRefStore,
-	edgeWriter DayRefEdgeWriter,
+	edgeWriter edgewrite.EdgeWriter,
 	sourceID string,
 	data map[string]any,
 	dateFields map[string]string,

@@ -42,7 +42,6 @@ import (
 	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
-	"github.com/yaad-index/yaad-index/internal/slug"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
 	"github.com/yaad-index/yaad-index/internal/writelocks"
@@ -115,7 +114,7 @@ type VaultWriterBackend struct {
 	// per #304 Cut C1. Nil-safe — when unset, EmitDayRefs falls
 	// back to Store.CreateEdge (preserving legacy behavior for
 	// any test fixture that doesn't wire this).
-	EdgeWriter  canonical.DayRefEdgeWriter
+	EdgeWriter  edgewrite.EdgeWriter
 	VaultReader VaultEntityReader
 	VaultWriter VaultEntityWriter
 	WriteLocks  *writelocks.Manager
@@ -781,7 +780,14 @@ func cloneStringMap(in map[string]string) map[string]string {
 // EntityStore exposes.
 type VaultEdgeWriter struct {
 	store       store.Store
-	edgeWriter  edgewrite.EdgeWriter
+	// edgeWriter is the centralized edge-write service per
+	// #304 Cut C1 + Cut C2. Held as the broader
+	// CanonicalEdgeWriter interface so AddCanonicalEdge can
+	// reach the auto-resolver-aware CreateCanonicalEdgeByName
+	// entry point (the workflow path is the only edge-write
+	// site that carries a raw target name; everywhere else
+	// passes already-resolved ids through CreateEdge).
+	edgeWriter  edgewrite.CanonicalEdgeWriter
 	vaultReader *vault.Reader
 	vaultWriter *vault.Writer
 	writeLocks  *writelocks.Manager
@@ -797,7 +803,7 @@ type VaultEdgeWriter struct {
 // optional-deps convention).
 func NewVaultEdgeWriter(
 	st store.Store,
-	edgeWriter edgewrite.EdgeWriter,
+	edgeWriter edgewrite.CanonicalEdgeWriter,
 	vaultReader *vault.Reader,
 	vaultWriter *vault.Writer,
 	writeLocks *writelocks.Manager,
@@ -863,25 +869,39 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 	workflow, sourceID, edgeType, targetKind, targetName string,
 	data map[string]string,
 ) error {
-	// ADR-0027 cut 1 kind-prefix strip: when targetName is the
-	// canonical-ID form `<targetKind>:<slug>` (e.g. operator
-	// passes today() which returns "day:2026-11-11"), strip the
-	// leading "<targetKind>:" before slugifying so the slug.Slug
-	// pass doesn't mangle the colon into a hyphen. Bare
-	// targetName values (e.g. "My Daily Note") pass through
-	// unchanged. Conservative: only strip when the prefix
-	// exactly matches the declared target.kind — any other text
-	// is left alone.
-	stripped := strings.TrimPrefix(targetName, targetKind+":")
-	targetSlug := slug.Slug(stripped)
-	if targetSlug == "" {
-		return fmt.Errorf("slugify target name %q produced empty slug", targetName)
-	}
-	targetID := targetKind + ":" + targetSlug
-
 	source := eventbus.WorkflowSource(workflow)
 	chain := eventbus.WorkflowChainFromContext(ctx)
 
+	// Cut C2: route through the centralized edge-write
+	// service's auto-resolver-aware entry point. The service
+	// reads caller-mode from ctx + the kind→resolver map and
+	// either invokes the plugin to resolve the raw name
+	// (returns the resolved canonical id), or falls through
+	// to legacy slugify-then-CreateEdge. ADR-0027 cut 1
+	// canonical-ID prefix-strip lives inside the service now
+	// — every caller's path is consistent.
+	targetID, err := w.edgeWriter.CreateCanonicalEdgeByName(ctx, sourceID, edgeType, targetKind, targetName, nil)
+	if err != nil {
+		// ResolutionDeferred surfaces here when auto-mode +
+		// plugin returned ambiguous Options. Cut C2 bubbles
+		// the sentinel; Cut C3 catches it at the action
+		// runner level to create a structured resolution-
+		// task. No edge written, no events emitted.
+		if _, deferred := edgewrite.IsResolutionDeferred(err); deferred {
+			return err
+		}
+		return fmt.Errorf("create canonical edge %s -[%s]-> %s:%s: %w", sourceID, edgeType, targetKind, targetName, err)
+	}
+
+	// EnsureLabelRow + entity.created event fire AFTER the
+	// edge lands so the FK is guaranteed. The service path
+	// already creates the edge on success; calling
+	// EnsureLabelRow here is redundant for the resolved-by-
+	// plugin case (the plugin's ingest already materialized
+	// the entity), but cheap + idempotent for the legacy
+	// slugify path. Run it unconditionally to preserve the
+	// thin-row materialization semantics every existing test
+	// relies on.
 	created, err := canonical.EnsureLabelRow(ctx, w.store, targetID, w.logger)
 	if err != nil {
 		return fmt.Errorf("ensure label row %q: %w", targetID, err)
@@ -897,14 +917,6 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 			Chain:            chain,
 			CausedByEntityID: sourceID,
 		})
-	}
-
-	if err := w.edgeWriter.CreateEdge(ctx, &store.Edge{
-		Type: edgeType,
-		From: sourceID,
-		To:   targetID,
-	}); err != nil {
-		return fmt.Errorf("create edge %s -[%s]-> %s: %w", sourceID, edgeType, targetID, err)
 	}
 	if w.bus != nil {
 		w.bus.Publish(ctx, eventbus.EntityEdgeAddedEvent{

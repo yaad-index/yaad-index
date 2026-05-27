@@ -29,9 +29,12 @@ package edgewrite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
+	"github.com/yaad-index/yaad-index/internal/slug"
 	"github.com/yaad-index/yaad-index/internal/store"
 )
 
@@ -45,6 +48,17 @@ type EdgeWriter interface {
 	CreateEdge(ctx context.Context, e *store.Edge) error
 }
 
+// CanonicalEdgeWriter is the auto-resolver-aware extension
+// EdgeWriter callers reach for when the target is a raw name
+// (e.g. workflow `add_canonical_edge` per #304 Cut C2). Embeds
+// EdgeWriter so callers that need both methods don't carry
+// two fields; embedded so structural typing keeps tests
+// flexible.
+type CanonicalEdgeWriter interface {
+	EdgeWriter
+	CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeType, targetKind, targetName string, edgeMetadata map[string]any) (string, error)
+}
+
 // Service is the centralized edge-write entry point. Construct
 // via New; safe for concurrent use (each method delegates to the
 // underlying store, which is itself concurrency-safe).
@@ -54,10 +68,16 @@ type Service struct {
 	// resolvers is the kind → plugin-name ownership map per
 	// #304 Cut A. Validated at construction time (≤1 resolver
 	// per kind); Cut C2 reads it to route auto-mode edges to
-	// the resolver plugin. Cut C1 doesn't consume it for
-	// routing, but holds it for symmetry + so future cuts
-	// don't re-validate.
+	// the resolver plugin.
 	resolvers map[string]string
+
+	// resolver is the plugin-name-resolution surface per
+	// #304 Cut C2. nil disables the auto-mode resolution
+	// branch (every edge falls through to legacy
+	// CreateEdge); main.go wires a shim around
+	// api.SyncIngester. Tests that don't exercise auto-mode
+	// leave it unset.
+	resolver NameResolver
 }
 
 // New constructs a Service backed by the given store + the
@@ -92,13 +112,153 @@ func New(st store.Store, resolvers map[string][]string) (*Service, error) {
 }
 
 // CreateEdge routes through the centralized service. In Cut C1
-// this is a thin passthrough to store.CreateEdge — semantic
-// routing lands in Cut C2 + C3. Callers MUST go through the
-// service rather than calling store.CreateEdge directly so the
-// future-cut routing surfaces uniformly across every edge-write
-// entry point.
+// this was a thin passthrough; Cut C2 keeps it as a passthrough
+// because the auto-mode resolution path uses the separate
+// CreateCanonicalEdgeByName entry point (see Gap 1 in the
+// design comment). Callers with already-resolved canonical
+// IDs in their edge.To stay on this method; the workflow
+// `add_canonical_edge` path that carries a raw name uses
+// CreateCanonicalEdgeByName.
 func (s *Service) CreateEdge(ctx context.Context, e *store.Edge) error {
 	return s.store.CreateEdge(ctx, e)
+}
+
+// SetNameResolver wires the plugin-name-resolution surface per
+// #304 Cut C2. main.go calls this once at startup, after the
+// SyncIngester is constructed, to thread the shim. Subsequent
+// CreateCanonicalEdgeByName calls in auto-mode route through
+// it. Idempotent — setting nil is a no-op (the previous value
+// stays), so accidental re-wiring during boot doesn't blank
+// out the resolver mid-flight.
+func (s *Service) SetNameResolver(r NameResolver) {
+	if r != nil {
+		s.resolver = r
+	}
+}
+
+// CreateCanonicalEdgeByName is the auto-resolver-aware entry
+// point per #304 Cut C2. Callers supply the raw target name +
+// canonical kind; the Service decides whether to resolve via
+// a plugin (auto mode + resolver-for-kind + non-id name) or
+// fall through to legacy slugify-then-CreateEdge.
+//
+// Routing per Cut C2's framing:
+//
+//   - mode=Interactive OR no resolver-for-kind OR targetName
+//     already a `<kind>:<slug>` shape → slugify locally +
+//     CreateEdge with the slugged target id. Pre-#304
+//     behavior preserved.
+//   - mode=Auto + resolver-for-kind + non-id name → invoke
+//     NameResolver.ResolveCanonicalEntity. On single-match
+//     create the edge with the resolved id and return its
+//     entity id to the caller. On ambiguous-options return
+//     ResolutionDeferred (no edge created — Cut C3 picks up
+//     the sentinel and creates a task).
+//
+// Returns the final target entity id of the written edge on
+// success, the empty string + a *ResolutionDeferred sentinel
+// on deferred-resolution, or the empty string + a transport
+// error on resolution / write failures.
+//
+// edgeMetadata may be nil. Used by the workflow path's
+// AddCanonicalEdge metadata-passthrough; non-workflow callers
+// can leave it nil.
+func (s *Service) CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeType, targetKind, targetName string, edgeMetadata map[string]any) (string, error) {
+	switch {
+	case fromID == "":
+		return "", fmt.Errorf("CreateCanonicalEdgeByName: fromID is required")
+	case edgeType == "":
+		return "", fmt.Errorf("CreateCanonicalEdgeByName: edgeType is required")
+	case targetKind == "":
+		return "", fmt.Errorf("CreateCanonicalEdgeByName: targetKind is required")
+	case strings.TrimSpace(targetName) == "":
+		return "", fmt.Errorf("CreateCanonicalEdgeByName: targetName is required")
+	}
+
+	mode := ModeFromContext(ctx)
+	resolverPlugin := s.resolvers[targetKind]
+
+	// Strip the canonical-kind prefix when the caller passed
+	// the canonical-ID form (e.g. `boardgame:brass-birmingham`
+	// rather than the raw name "Brass"). Mirrors the existing
+	// workflow runner's prefix-strip pattern (ADR-0027 cut 1)
+	// so slug.Slug doesn't mangle the colon into a hyphen.
+	stripped := strings.TrimPrefix(targetName, targetKind+":")
+	alreadyResolved := stripped != targetName
+
+	if mode == Auto && resolverPlugin != "" && s.resolver != nil && !alreadyResolved {
+		entityID, options, err := s.resolver.ResolveCanonicalEntity(ctx, resolverPlugin, targetName)
+		if err != nil {
+			return "", fmt.Errorf("resolve %s via plugin %s: %w", targetName, resolverPlugin, err)
+		}
+		if len(options) > 0 {
+			return "", &ResolutionDeferred{
+				From:           fromID,
+				EdgeType:       edgeType,
+				TargetKind:     targetKind,
+				RawTarget:      targetName,
+				ResolverPlugin: resolverPlugin,
+				Options:        options,
+			}
+		}
+		if entityID == "" {
+			return "", fmt.Errorf("resolve %s via plugin %s: empty entity id without options", targetName, resolverPlugin)
+		}
+		if err := s.store.CreateEdge(ctx, &store.Edge{
+			Type:     edgeType,
+			From:     fromID,
+			To:       entityID,
+			Metadata: edgeMetadata,
+		}); err != nil {
+			return "", fmt.Errorf("create resolved edge %s -[%s]-> %s: %w", fromID, edgeType, entityID, err)
+		}
+		return entityID, nil
+	}
+
+	// Legacy slugify-then-CreateEdge path — preserved for
+	// every non-auto-mode call site + auto-mode kinds without
+	// a registered resolver (operator's "no resolver = legacy
+	// pass-through" clarification per the v1 cut framing).
+	targetSlug := slug.Slug(stripped)
+	if targetSlug == "" {
+		return "", fmt.Errorf("slugify target name %q produced empty slug", targetName)
+	}
+	targetID := targetKind + ":" + targetSlug
+	// Auto-materialize the thin canonical-label row so the
+	// CreateEdge FK holds. Mirrors canonical.EnsureLabelRow's
+	// existing shape — the duplication is intentional to
+	// keep edgewrite from importing canonical (cycle via the
+	// dayrefs DayRefEdgeWriter dedup landed earlier).
+	if err := s.ensureTargetRow(ctx, targetKind, targetID); err != nil {
+		return "", err
+	}
+	if err := s.store.CreateEdge(ctx, &store.Edge{
+		Type:     edgeType,
+		From:     fromID,
+		To:       targetID,
+		Metadata: edgeMetadata,
+	}); err != nil {
+		return "", fmt.Errorf("create edge %s -[%s]-> %s: %w", fromID, edgeType, targetID, err)
+	}
+	return targetID, nil
+}
+
+// ensureTargetRow probes the store for an entity at targetID
+// and creates a thin row (Kind only, no Data) when absent —
+// the same shape canonical.EnsureLabelRow produces, duplicated
+// here to keep edgewrite from importing canonical. Cycle
+// landed via the dayrefs DayRefEdgeWriter dedup. Idempotent:
+// pre-existing rows are reused without modification.
+func (s *Service) ensureTargetRow(ctx context.Context, kind, targetID string) error {
+	if _, err := s.store.GetEntity(ctx, targetID); err == nil {
+		return nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("probe target row %q: %w", targetID, err)
+	}
+	if err := s.store.UpsertEntity(ctx, &store.Entity{ID: targetID, Kind: kind}); err != nil {
+		return fmt.Errorf("upsert thin target row %q: %w", targetID, err)
+	}
+	return nil
 }
 
 // ResolverFor returns the plugin name that resolves the given
