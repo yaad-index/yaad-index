@@ -378,3 +378,114 @@ func TestIsLockContended_NotContendedOnGenericError(t *testing.T) {
 		t.Fatalf("close should not propagate context.Canceled, got %v", closeErr)
 	}
 }
+
+// gitStatusPorcelain returns the git status --porcelain output split
+// into lines (stripped of empty lines). Each line names a path with
+// its working-tree status; an empty result means a clean tree.
+func gitStatusPorcelain(t *testing.T, root string) []string {
+	t.Helper()
+	cmd := exec.Command("git", "-C", root, "status", "--porcelain")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git status: %s", out)
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return nil
+	}
+	return strings.Split(raw, "\n")
+}
+
+// writeEntitySidecar synthesizes the on-disk layout the daemon
+// produces for an entity carrying attachments: `<kind>/<slug>.md`
+// (the entity main file vault.Writer already writes) plus
+// `<kind>/<slug>/attachments/<file>` written outside the writer
+// path (mirrors the attachments package's direct os.WriteFile).
+func writeEntitySidecar(t *testing.T, root, kind, slug, attachmentName string, body []byte) {
+	t.Helper()
+	dir := filepath.Join(root, kind, slug, "attachments")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, attachmentName), body, 0o644))
+}
+
+// TestGitCommitter_StagesEntitySubtree_Single pins the #314 fix
+// for the per-operation commit path: when WriteWithCommit lands
+// an entity main file `<kind>/<slug>.md` AND a sibling sidecar
+// `<kind>/<slug>/attachments/<name>` exists on disk, the auto-
+// committer stages BOTH so git status comes back clean.
+func TestGitCommitter_StagesEntitySubtree_Single(t *testing.T) {
+	requireGit(t)
+	root := initGitVault(t)
+	committer, err := vault.NewGitCommitter(root, vault.GitCommitterOptions{Logger: newSilentLogger()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = committer.Close() })
+
+	w, err := vault.NewWriter(root, vault.WithCommitter(committer))
+	require.NoError(t, err)
+
+	// Drop a sidecar attachment BEFORE the WriteWithCommit so the
+	// committer sees both paths on its single staging pass — matches
+	// the production sequencing where attachments.Save writes the
+	// sidecar before the parent .md commits.
+	writeEntitySidecar(t, root, "wikipedia", "susanna-clarke", "raw.html", []byte("<html/>"))
+
+	ctx := context.Background()
+	require.NoError(t, w.WriteWithCommit(ctx, mkEntity("wikipedia:susanna-clarke", "wikipedia"),
+		"ingest: wikipedia:susanna-clarke", ""))
+
+	assert := require.New(t)
+	assert.Empty(gitStatusPorcelain(t, root),
+		"git status should be clean — both <kind>/<slug>.md and the attachments sidecar must commit together")
+}
+
+// TestGitCommitter_StagesEntitySubtree_Batch pins the same #314
+// contract on the debounced batch path: every pending write's
+// sibling subtree is included alongside the main file path.
+func TestGitCommitter_StagesEntitySubtree_Batch(t *testing.T) {
+	requireGit(t)
+	root := initGitVault(t)
+	committer, err := vault.NewGitCommitter(root, vault.GitCommitterOptions{
+		Logger:          newSilentLogger(),
+		DebounceSeconds: 1,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = committer.Close() })
+
+	w, err := vault.NewWriter(root, vault.WithCommitter(committer))
+	require.NoError(t, err)
+
+	writeEntitySidecar(t, root, "wikipedia", "a", "raw.html", []byte("<html/>a"))
+	writeEntitySidecar(t, root, "wikipedia", "b", "raw.html", []byte("<html/>b"))
+
+	ctx := context.Background()
+	require.NoError(t, w.WriteWithCommit(ctx, mkEntity("wikipedia:a", "wikipedia"), "ingest: wikipedia:a", ""))
+	require.NoError(t, w.WriteWithCommit(ctx, mkEntity("wikipedia:b", "wikipedia"), "ingest: wikipedia:b", ""))
+
+	// Wait past the debounce window for the flush goroutine to fire.
+	time.Sleep(1500 * time.Millisecond)
+
+	require.Empty(t, gitStatusPorcelain(t, root),
+		"git status should be clean — both entities' main files AND sidecars must batch-commit together")
+}
+
+// TestGitCommitter_StagesEntitySubtree_MissingSidecarIsNoOp pins
+// the defensive branch in stagePathsFor: when a write has no
+// sibling subtree on disk (the common case — entities without
+// attachments), the auto-committer falls back to the previous
+// single-path staging without tripping the `pathspec did not
+// match any files` failure mode.
+func TestGitCommitter_StagesEntitySubtree_MissingSidecarIsNoOp(t *testing.T) {
+	requireGit(t)
+	root := initGitVault(t)
+	committer, err := vault.NewGitCommitter(root, vault.GitCommitterOptions{Logger: newSilentLogger()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = committer.Close() })
+
+	w, err := vault.NewWriter(root, vault.WithCommitter(committer))
+	require.NoError(t, err)
+
+	// No sidecar — `<kind>/<slug>/` directory does NOT exist on disk.
+	ctx := context.Background()
+	require.NoError(t, w.WriteWithCommit(ctx, mkEntity("wikipedia:susanna-clarke", "wikipedia"),
+		"ingest: wikipedia:susanna-clarke", ""))
+	require.Equal(t, []string{"ingest: wikipedia:susanna-clarke", "init"}, gitLog(t, root))
+	require.Empty(t, gitStatusPorcelain(t, root))
+}

@@ -19,7 +19,7 @@ import (
 func TestFileErrTaskWriter_FirstFailureCreates(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileErrTaskWriter(vault, nil, nil)
+	w := NewFileErrTaskWriter(vault, nil, nil, nil)
 	when := time.Date(2026, 5, 16, 18, 0, 0, 0, time.UTC)
 
 	err := w.AppendErrTask(context.Background(), "classify", when,
@@ -43,7 +43,7 @@ func TestFileErrTaskWriter_FirstFailureCreates(t *testing.T) {
 func TestFileErrTaskWriter_SubsequentFailuresAppend(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileErrTaskWriter(vault, nil, nil)
+	w := NewFileErrTaskWriter(vault, nil, nil, nil)
 	t1 := time.Date(2026, 5, 16, 18, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 5, 16, 18, 5, 0, 0, time.UTC)
 
@@ -73,7 +73,7 @@ func TestFileErrTaskWriter_SubsequentFailuresAppend(t *testing.T) {
 func TestFileErrTaskWriter_OperatorResolved_NextFailureCreatesFresh(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileErrTaskWriter(vault, nil, nil)
+	w := NewFileErrTaskWriter(vault, nil, nil, nil)
 	t1 := time.Date(2026, 5, 16, 18, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 5, 16, 19, 0, 0, 0, time.UTC)
 
@@ -96,7 +96,7 @@ func TestFileErrTaskWriter_OperatorResolved_NextFailureCreatesFresh(t *testing.T
 func TestFileErrTaskWriter_EmptyEntityIDOmitsParens(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileErrTaskWriter(vault, nil, nil)
+	w := NewFileErrTaskWriter(vault, nil, nil, nil)
 	when := time.Date(2026, 5, 16, 18, 0, 0, 0, time.UTC)
 
 	require.NoError(t, w.AppendErrTask(context.Background(), "wf", when, "", "early failure"))
@@ -113,7 +113,7 @@ func TestFileErrTaskWriter_EmptyEntityIDOmitsParens(t *testing.T) {
 func TestFileErrTaskWriter_EmbeddedNewlinesCollapsed(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileErrTaskWriter(vault, nil, nil)
+	w := NewFileErrTaskWriter(vault, nil, nil, nil)
 	when := time.Date(2026, 5, 16, 18, 0, 0, 0, time.UTC)
 
 	multiline := "first line\nsecond line\nthird line"
@@ -133,7 +133,7 @@ func TestFileErrTaskWriter_EmbeddedNewlinesCollapsed(t *testing.T) {
 func TestFileErrTaskWriter_EmptyWorkflowRejected(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileErrTaskWriter(vault, nil, nil)
+	w := NewFileErrTaskWriter(vault, nil, nil, nil)
 	err := w.AppendErrTask(context.Background(), "", time.Now(), "", "x")
 	require.Error(t, err)
 }

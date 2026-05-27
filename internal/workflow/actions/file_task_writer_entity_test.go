@@ -37,7 +37,7 @@ func TestFileTaskWriter_FirstCreateMaterializesTaskRow(t *testing.T) {
 	t.Parallel()
 	st := newEntityTestStore(t)
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, st, nil, quietActionsLogger())
+	w := NewFileTaskWriter(vault, nil, st, nil, nil, quietActionsLogger())
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"my-workflow", "subject-1", "dedup-k", "", "Notes", "- line", ""))
@@ -65,7 +65,7 @@ func TestFileTaskWriter_FirstCreateEmitsTriggeredByEdge(t *testing.T) {
 		ID: "github-pr:acme-corp_widget_pr_42", Kind: "github-pr",
 	}))
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, st, nil, quietActionsLogger())
+	w := NewFileTaskWriter(vault, nil, st, nil, nil, quietActionsLogger())
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"pr-watcher", "acme-corp-widget-pr-42",
@@ -84,7 +84,7 @@ func TestFileTaskWriter_FirstCreateEmitsTriggeredByEdge(t *testing.T) {
 func TestFileTaskWriter_NoStoreDepIsFileOnly(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "sub", "", "", "Notes", "- line", ""))
@@ -99,7 +99,7 @@ func TestFileTaskWriter_SubsequentAppendLeavesStoreAlone(t *testing.T) {
 	t.Parallel()
 	st := newEntityTestStore(t)
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, st, nil, quietActionsLogger())
+	w := NewFileTaskWriter(vault, nil, st, nil, nil, quietActionsLogger())
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "s", "", "", "Notes", "- one", ""))

@@ -208,13 +208,15 @@ func (c *GitCommitter) Close() error {
 func (c *GitCommitter) commitSingle(ctx context.Context, relPath, message, author string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// `git add -A -- <path>` (instead of plain `add`) so this same code
-	// path stages create, modify, AND delete uniformly: a write call
-	// after Writer.DeleteWithCommit removed the file would otherwise
-	// fail with `pathspec did not match any files`. The `-- <path>`
-	// argument scopes the -A to just this entity's relPath, so we
-	// don't sweep unrelated working-tree changes into the commit.
-	if err := c.runGit(ctx, "add", "-A", "--", relPath); err != nil {
+	// `git add -A -- <paths...>` (instead of plain `add`) so this same
+	// code path stages create, modify, AND delete uniformly: a write
+	// call after Writer.DeleteWithCommit removed the file would
+	// otherwise fail with `pathspec did not match any files`. The
+	// `-- <paths...>` argument scopes the -A to just the entity's
+	// relPath + (per #314) its sibling subtree, so we don't sweep
+	// unrelated working-tree changes into the commit.
+	addArgs := append([]string{"add", "-A", "--"}, c.stagePathsFor(relPath)...)
+	if err := c.runGit(ctx, addArgs...); err != nil {
 		return fmt.Errorf("git add %s: %w", relPath, err)
 	}
 	args := []string{"commit", "-m", message}
@@ -272,15 +274,18 @@ func (c *GitCommitter) commitBatch(ctx context.Context, pending []pendingWrite) 
 
 	// `git add -A` so create / modify / delete all stage uniformly
 	// (mirrors the change in commitSingle). Path scoping via `--`
-	// keeps -A bounded to just the pending entries' relPaths.
+	// keeps -A bounded to just the pending entries' relPaths +
+	// (per #314) each entry's sibling subtree.
 	addArgs := []string{"add", "-A", "--"}
-	seen := make(map[string]struct{}, len(pending))
+	seen := make(map[string]struct{}, len(pending)*2)
 	for _, p := range pending {
-		if _, dup := seen[p.relPath]; dup {
-			continue
+		for _, candidate := range c.stagePathsFor(p.relPath) {
+			if _, dup := seen[candidate]; dup {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			addArgs = append(addArgs, candidate)
 		}
-		seen[p.relPath] = struct{}{}
-		addArgs = append(addArgs, p.relPath)
 	}
 	if err := c.runGit(ctx, addArgs...); err != nil {
 		return fmt.Errorf("git add (batch %d): %w", len(pending), err)
@@ -363,6 +368,61 @@ func (c *GitCommitter) execGit(ctx context.Context, args ...string) error {
 		}
 	}
 	return nil
+}
+
+// stagePathsFor returns the set of paths (relative to the vault
+// root) that `git add` must include to capture every on-disk
+// change associated with one logical entity write per #314. For
+// an entity main file `<kind>/<slug>.md`, that's the .md path
+// itself plus the sibling `<kind>/<slug>/` subtree where the
+// daemon writes attachments + other sidecars. The subtree is
+// only added when it exists on disk to avoid `pathspec did not
+// match any files` failures on writes without sidecars.
+//
+// For relPaths that don't look like an entity main file (e.g.
+// `tasks/<id>.md` from the workflow surface, or any non-.md
+// path), only the relPath itself is returned — the entity-subtree
+// convention is `<kind>/<slug>.md` paired with `<kind>/<slug>/`,
+// and broadening the rule beyond that shape risks staging
+// unrelated working-tree paths.
+func (c *GitCommitter) stagePathsFor(relPath string) []string {
+	paths := []string{relPath}
+	subtree := entitySubtreeFor(relPath)
+	if subtree == "" {
+		return paths
+	}
+	// Confirm the sibling subtree exists before staging; a missing
+	// subtree dir would trip the `pathspec did not match any files`
+	// failure mode `git add -A -- <missing>` produces.
+	info, err := os.Stat(filepath.Join(c.root, subtree))
+	if err != nil || !info.IsDir() {
+		return paths
+	}
+	return append(paths, subtree)
+}
+
+// entitySubtreeFor returns the entity-subtree path for an entity
+// main file relPath, or "" when relPath isn't of the
+// `<kind>/<slug>.md` shape. The pair `<kind>/<slug>.md` +
+// `<kind>/<slug>/` is the vault layout convention per
+// `internal/vault/entity.go` (KindDir + entity sidecar dirs).
+func entitySubtreeFor(relPath string) string {
+	const mdExt = ".md"
+	if !strings.HasSuffix(relPath, mdExt) {
+		return ""
+	}
+	base := strings.TrimSuffix(relPath, mdExt)
+	// Exactly one path separator → `<kind>/<slug>.md` shape. Zero
+	// separators (e.g. `README.md`) or two+ separators (e.g.
+	// `_archive/<kind>/<slug>.md`, `tasks/<workflow>-<id>.md`) are
+	// not in scope of #314's entity-attachments-sidecar rule. The
+	// _archive path mirrors the same layout but is touched via
+	// archive_entity which preserves the subtree via a directory-
+	// level mv, not a flush-through write.
+	if strings.Count(base, "/") != 1 {
+		return ""
+	}
+	return base
 }
 
 func (c *GitCommitter) formatAuthor(author string) string {

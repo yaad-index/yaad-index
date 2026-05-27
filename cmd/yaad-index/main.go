@@ -811,7 +811,10 @@ func (s *ServeCmd) Run() error {
 		// spawn (the WriteResolutionTask method lives on
 		// FileTaskWriter per Cut C3.1). Sharing avoids two
 		// independent mutexes on the same <vault>/tasks/ tree.
-		wfTaskWriter := actions.NewFileTaskWriter(cfg.Vault.Path, mergedRegistry, st, edgeService, logger)
+		// #314: pass the vault auto-committer so workflow-driven
+		// task-body writes (first-create + append + missing-refs +
+		// resolve-line + resolution-task) land git commits.
+		wfTaskWriter := actions.NewFileTaskWriter(cfg.Vault.Path, mergedRegistry, st, edgeService, committer, logger)
 		wfRunner := actions.New(actions.Options{
 			TaskWriter:           wfTaskWriter,
 			ResolutionTaskWriter: wfTaskWriter,
@@ -830,7 +833,7 @@ func (s *ServeCmd) Run() error {
 			// (condition-eval, subject-render, action-runner
 			// non-MissingRef errors) accumulate into the
 			// workflow's err task at tasks/<workflow>-err.md.
-			ErrTaskWriter: actions.NewFileErrTaskWriter(cfg.Vault.Path, st, logger),
+			ErrTaskWriter: actions.NewFileErrTaskWriter(cfg.Vault.Path, st, committer, logger),
 			// Receives the rendered-template drift Warn when
 			// the engine ships a non-nil RenderedTemplates map
 			// that lacks an expected (idx, field) entry —
@@ -901,7 +904,11 @@ func (s *ServeCmd) Run() error {
 		// + GET /v1/tasks/{id} + POST /v1/tasks/{id}/resolve
 		// per ADR-0024 §"Agent surface".
 		handlerOpts = append(handlerOpts, api.WithTasksReader(wftasks.NewReader(cfg.Vault.Path)))
-		handlerOpts = append(handlerOpts, api.WithTasksWriter(wftasks.NewWriter(cfg.Vault.Path)))
+		taskWriterOpts := []wftasks.WriterOption{wftasks.WithLogger(logger)}
+		if committer != nil {
+			taskWriterOpts = append(taskWriterOpts, wftasks.WithCommitter(committer))
+		}
+		handlerOpts = append(handlerOpts, api.WithTasksWriter(wftasks.NewWriter(cfg.Vault.Path, taskWriterOpts...)))
 		logger.Info("workflow engine active",
 			"reconcile_interval", loader.DefaultPollInterval.String(),
 			"http_trigger_path", "/v1/workflows/trigger")

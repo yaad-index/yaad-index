@@ -71,9 +71,14 @@ type FileErrTaskWriter struct {
 	// store mirrors first-create err-task files into entity
 	// rows (kind=task, errored=true). Nil-safe; see
 	// NewFileErrTaskWriter for semantics.
-	store  store.Store
-	logger *slog.Logger
-	mu     sync.Mutex
+	store store.Store
+	// committer hooks err-task writes into the vault auto-
+	// committer per #314 so workflow-driven append-to-existing-
+	// err-task mutations land in git alongside entity writes.
+	// Nil-safe — the on-disk write still lands.
+	committer vault.Committer
+	logger    *slog.Logger
+	mu        sync.Mutex
 }
 
 // NewFileErrTaskWriter constructs a writer rooted at the
@@ -81,12 +86,15 @@ type FileErrTaskWriter struct {
 // be nil for test fixtures that don't wire a backing store
 // (the on-disk file shape stays the same); production wires
 // a real store so err tasks land as first-class entities.
+// committer may be nil for test fixtures; production wires the
+// same vault.Committer the vault.Writer uses so every err-task
+// append lands a git commit.
 // logger may be nil; falls back to slog.Default().
-func NewFileErrTaskWriter(vaultRoot string, st store.Store, logger *slog.Logger) *FileErrTaskWriter {
+func NewFileErrTaskWriter(vaultRoot string, st store.Store, committer vault.Committer, logger *slog.Logger) *FileErrTaskWriter {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &FileErrTaskWriter{vaultRoot: vaultRoot, store: st, logger: logger}
+	return &FileErrTaskWriter{vaultRoot: vaultRoot, store: st, committer: committer, logger: logger}
 }
 
 // AppendErrTask implements ErrTaskWriter.
@@ -112,6 +120,7 @@ func (w *FileErrTaskWriter) AppendErrTask(ctx context.Context, workflow string, 
 		if err := w.writeAtomic(path, freshErrTaskBody(workflow, when, line)); err != nil {
 			return err
 		}
+		w.notifyCommit(ctx, path, taskCommitMessage(workflow, "", "err-create"), workflowAuthor(workflow))
 		w.materializeErrTaskEntity(ctx, workflow, when)
 		return nil
 	}
@@ -128,7 +137,28 @@ func (w *FileErrTaskWriter) AppendErrTask(ctx context.Context, workflow string, 
 	if err != nil {
 		return err
 	}
-	return w.writeAtomic(path, []byte(body))
+	if err := w.writeAtomic(path, []byte(body)); err != nil {
+		return err
+	}
+	w.notifyCommit(ctx, path, taskCommitMessage(workflow, "", "err-append"), workflowAuthor(workflow))
+	return nil
+}
+
+// notifyCommit mirrors FileTaskWriter.notifyCommit for the
+// err-task surface — best-effort auto-commit signal after
+// every successful write. Per #314.
+func (w *FileErrTaskWriter) notifyCommit(ctx context.Context, path, message, author string) {
+	if w.committer == nil {
+		return
+	}
+	rel, err := filepath.Rel(w.vaultRoot, path)
+	if err != nil {
+		w.logger.WarnContext(ctx, "err-task auto-commit relPath compute failed", "path", path, "err", err)
+		return
+	}
+	if err := w.committer.OnWrite(ctx, rel, message, author); err != nil {
+		w.logger.WarnContext(ctx, "err-task auto-commit OnWrite failed", "path", rel, "err", err)
+	}
 }
 
 // materializeErrTaskEntity mirrors the err-task into the

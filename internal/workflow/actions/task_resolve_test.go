@@ -120,7 +120,7 @@ func TestResolveTaskLineInBody_FirstMatchWins(t *testing.T) {
 func TestFileTaskWriter_ResolveTaskLine_MissingFileNoOp(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	w := NewFileTaskWriter(tmp, nil, nil, nil, nil)
+	w := NewFileTaskWriter(tmp, nil, nil, nil, nil, nil)
 
 	err := w.ResolveTaskLine(context.Background(), "never-fired", "no-subject", "pending-refetch", "key", parser.TaskResolveModeCheck)
 	require.NoError(t, err, "missing file MUST resolve to nil per the #266 idempotence rule")
@@ -139,7 +139,7 @@ func TestFileTaskWriter_ResolveTaskLine_FlipsAndPersists(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	tmp := t.TempDir()
-	w := NewFileTaskWriter(tmp, nil, nil, nil, nil)
+	w := NewFileTaskWriter(tmp, nil, nil, nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(ctx,
 		"gmail-github-mentions", "to-refetch", "", "github:example",
@@ -164,7 +164,7 @@ func TestFileTaskWriter_ResolveTaskLine_RemovePersists(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	tmp := t.TempDir()
-	w := NewFileTaskWriter(tmp, nil, nil, nil, nil)
+	w := NewFileTaskWriter(tmp, nil, nil, nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(ctx,
 		"gmail-github-mentions", "to-refetch", "", "github:example",
@@ -239,7 +239,7 @@ func TestRunner_TaskResolve_NoTaskWriterReturnsConfigError(t *testing.T) {
 func TestFileTaskWriter_ResolveTaskLine_RejectsUnknownMode(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	w := NewFileTaskWriter(tmp, nil, nil, nil, nil)
+	w := NewFileTaskWriter(tmp, nil, nil, nil, nil, nil)
 	err := w.ResolveTaskLine(context.Background(),
 		"any-workflow", "any-subject", "any-section", "any-key", "nonsense",
 	)
