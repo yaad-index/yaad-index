@@ -15,7 +15,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
+	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/workflow/actions"
 	"github.com/yaad-index/yaad-index/internal/workflow/parser"
 )
@@ -901,6 +903,96 @@ func TestEngine_SystemicFailure_AppendsErrTask(t *testing.T) {
 	assert.Equal(t, "fail-on-condition", calls[0].workflow)
 	assert.Equal(t, "e:1", calls[0].entityID)
 	assert.Contains(t, calls[0].errMsg, "condition")
+}
+
+// TestEngine_DeferredAction_SkipsErrTask pins the #304
+// Cut C3.2 contract: an ActionResult with Deferred=true
+// (the add_canonical_edge runner caught ResolutionDeferred
+// + spawned a structured resolution-task) does NOT trigger
+// the err-task append. The workflow's "paused on operator
+// pick" state is recorded on the resolution-task itself;
+// an err-task on top would mis-classify the deferral as a
+// fire-time failure.
+//
+// Wires a real actions.Runner so the engine's
+// actions.ErrTaskWriterFor extraction surfaces our fake
+// err writer; the EdgeWriter returns ResolutionDeferred so
+// the runner's C3.2 catch fires and the run-loop produces
+// the Deferred result the engine must skip.
+func TestEngine_DeferredAction_SkipsErrTask(t *testing.T) {
+	t.Parallel()
+	errWriter := &fakeErrTaskWriter{}
+	bus := eventbus.NewMemoryBus()
+	resolver := newFakeResolver(map[string]map[string]any{
+		"e:1": {"id": "e:1"},
+	})
+	edgeWriter := &deferredFakeEdgeWriter{
+		deferred: &edgewrite.ResolutionDeferred{
+			From: "e:1", EdgeType: "mentions",
+			TargetKind: "boardgame", RawTarget: "Brass",
+			ResolverPlugin: "yaad-bgg",
+			Options: map[string]plugins.DisambiguationOption{
+				"boardgame:brass-birmingham": {Label: "Brass: Birmingham"},
+				"boardgame:brass-lancashire": {Label: "Brass: Lancashire"},
+			},
+		},
+	}
+	taskWriter := &capturingResolutionTaskWriter{}
+	runner := actions.New(actions.Options{
+		EdgeWriter:           edgeWriter,
+		ResolutionTaskWriter: taskWriter,
+		ErrTaskWriter:        errWriter,
+	})
+	eng, err := New(Options{
+		Bus: bus, Resolver: resolver, Runner: runner, Logger: quietLogger(),
+	})
+	require.NoError(t, err)
+
+	wf := &parser.Workflow{
+		Name:           "deferred-resolve",
+		AllowedPlugins: []string{"yaad-gmail"},
+		Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+		Subject:        "entity.id",
+		Actions: []parser.Action{{AddCanonicalEdge: &parser.AddCanonicalEdgeAction{
+			EdgeType: "mentions", TargetKind: "boardgame", TargetName: "'Brass'",
+		}}},
+	}
+	require.NoError(t, eng.Reconcile([]*parser.Workflow{wf}))
+
+	_, err = eng.Dispatch(context.Background(), "deferred-resolve", "e:1")
+	require.NoError(t, err)
+
+	calls := errWriter.snapshot()
+	assert.Empty(t, calls, "deferred actions must NOT append to the err-task")
+	assert.Equal(t, 1, taskWriter.calls, "the resolution-task writer was invoked exactly once")
+}
+
+// deferredFakeEdgeWriter returns a wrapped
+// ResolutionDeferred from AddCanonicalEdge so engine-level
+// tests can exercise the full action-runner catch path
+// without spinning up a real edgewrite.Service +
+// NameResolver.
+type deferredFakeEdgeWriter struct {
+	deferred *edgewrite.ResolutionDeferred
+}
+
+func (f *deferredFakeEdgeWriter) AddCanonicalEdge(
+	_ context.Context,
+	_, _, _, _, _ string,
+	_ map[string]string,
+) error {
+	return fmt.Errorf("create canonical edge: %w", f.deferred)
+}
+
+type capturingResolutionTaskWriter struct {
+	calls int
+}
+
+func (c *capturingResolutionTaskWriter) WriteResolutionTask(
+	_ context.Context, _ *edgewrite.ResolutionDeferred,
+) (string, bool, error) {
+	c.calls++
+	return "task:boardgame-deadbeef", true, nil
 }
 
 // TestEngine_ActionFailure_AppendsErrTask: a per-action

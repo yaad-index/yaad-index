@@ -3,14 +3,63 @@ package actions
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
+	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/workflow/parser"
 )
+
+// fakeResolutionDeferredEdgeWriter returns a wrapped
+// ResolutionDeferred from AddCanonicalEdge so the action
+// runner's C3.2 catch site can be exercised in isolation.
+// The wrap is `fmt.Errorf("...: %w", deferred)` matching
+// VaultEdgeWriter's real return shape (errors.As must still
+// unwrap to the sentinel).
+type fakeResolutionDeferredEdgeWriter struct {
+	deferred *edgewrite.ResolutionDeferred
+	calls    int
+}
+
+func (f *fakeResolutionDeferredEdgeWriter) AddCanonicalEdge(
+	_ context.Context,
+	_, _, _, _, _ string,
+	_ map[string]string,
+) error {
+	f.calls++
+	return fmt.Errorf("create canonical edge: %w", f.deferred)
+}
+
+type fakeResolutionTaskWriter struct {
+	mu        sync.Mutex
+	calls     []*edgewrite.ResolutionDeferred
+	taskID    string
+	created   bool
+	writeErr  error
+}
+
+func (f *fakeResolutionTaskWriter) WriteResolutionTask(
+	_ context.Context, d *edgewrite.ResolutionDeferred,
+) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, d)
+	if f.writeErr != nil {
+		return "", false, f.writeErr
+	}
+	return f.taskID, f.created, nil
+}
+
+func (f *fakeResolutionTaskWriter) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
 
 type fakeEdgeWriter struct {
 	mu       sync.Mutex
@@ -291,4 +340,157 @@ func TestStubEdgeWriter_ReturnsNotImplemented(t *testing.T) {
 	assert.Contains(t, err.Error(), "email:m1")
 	assert.Contains(t, err.Error(), "is_about")
 	assert.Contains(t, err.Error(), "person:Uwe")
+}
+
+func newDeferredFixture() *edgewrite.ResolutionDeferred {
+	return &edgewrite.ResolutionDeferred{
+		From:           "email:m1",
+		EdgeType:       "mentions",
+		TargetKind:     "boardgame",
+		RawTarget:      "Brass",
+		ResolverPlugin: "yaad-bgg",
+		Options: map[string]plugins.DisambiguationOption{
+			"boardgame:brass-birmingham": {Label: "Brass: Birmingham"},
+			"boardgame:brass-lancashire": {Label: "Brass: Lancashire"},
+		},
+	}
+}
+
+// TestAddCanonicalEdge_ResolutionDeferredSpawnsTask is the
+// load-bearing C3.2 contract: the runner catches the
+// sentinel that VaultEdgeWriter wraps from the centralized
+// edge-write service, invokes the resolution-task writer,
+// and returns Err=nil + Deferred=true so the engine skips
+// the err-task append. The fake writer captures the
+// deferred payload so we can assert it propagates verbatim.
+func TestAddCanonicalEdge_ResolutionDeferredSpawnsTask(t *testing.T) {
+	t.Parallel()
+	deferred := newDeferredFixture()
+	edge := &fakeResolutionDeferredEdgeWriter{deferred: deferred}
+	tw := &fakeResolutionTaskWriter{taskID: "task:boardgame-deadbeef", created: true}
+	r := New(Options{EdgeWriter: edge, ResolutionTaskWriter: tw})
+
+	wf := wfWithActions("classify",
+		parser.Action{AddCanonicalEdge: &parser.AddCanonicalEdgeAction{
+			EdgeType: "mentions", TargetKind: "boardgame", TargetName: "Brass",
+		}},
+	)
+	results := r.Run(context.Background(), wf,
+		Decision{Workflow: "classify", EntityID: "email:m1"}, Activation{})
+	require.Len(t, results, 1)
+	assert.NoError(t, results[0].Err, "deferred resolves are NOT errors at the engine layer")
+	assert.True(t, results[0].Deferred, "deferred bit signals engine to skip err-task")
+	assert.Equal(t, "add_canonical_edge", results[0].Type)
+
+	require.Equal(t, 1, tw.callCount(), "resolution-task writer invoked exactly once")
+	assert.Equal(t, deferred, tw.calls[0], "sentinel payload propagates verbatim")
+}
+
+// TestAddCanonicalEdge_ResolutionDeferredCollapsesOnRetry
+// pins the idempotency-handoff contract: a second fire of
+// the same workflow over the same (source, edge, kind, raw)
+// hits the writer's filesystem idempotency probe; the
+// runner still reports Deferred=true (the workflow's
+// "paused, awaiting operator pick" state is unchanged).
+// `created=false` on the second call is the C3.1
+// writer-side guarantee — the action runner doesn't need
+// to gate on it.
+func TestAddCanonicalEdge_ResolutionDeferredCollapsesOnRetry(t *testing.T) {
+	t.Parallel()
+	deferred := newDeferredFixture()
+	edge := &fakeResolutionDeferredEdgeWriter{deferred: deferred}
+	tw := &fakeResolutionTaskWriter{taskID: "task:boardgame-deadbeef", created: true}
+	r := New(Options{EdgeWriter: edge, ResolutionTaskWriter: tw})
+	wf := wfWithActions("classify",
+		parser.Action{AddCanonicalEdge: &parser.AddCanonicalEdgeAction{
+			EdgeType: "mentions", TargetKind: "boardgame", TargetName: "Brass",
+		}},
+	)
+	dec := Decision{Workflow: "classify", EntityID: "email:m1"}
+
+	r1 := r.Run(context.Background(), wf, dec, Activation{})
+	require.Len(t, r1, 1)
+	assert.True(t, r1[0].Deferred)
+
+	// Second fire — the writer flips `created` to false to
+	// mirror C3.1's idempotency-probe shape.
+	tw.created = false
+	r2 := r.Run(context.Background(), wf, dec, Activation{})
+	require.Len(t, r2, 1)
+	assert.NoError(t, r2[0].Err)
+	assert.True(t, r2[0].Deferred, "deferred bit propagates regardless of created bool")
+	assert.Equal(t, 2, tw.callCount(), "every workflow fire invokes the writer; idempotency is writer-side")
+}
+
+// TestAddCanonicalEdge_ResolutionDeferredWriterErrorBubbles
+// pins that a writer-side failure (filesystem error, store
+// outage, etc.) DOES surface as an action error so the
+// err-task pattern catches it. Only the "writer landed the
+// task" path qualifies as a Deferred success.
+func TestAddCanonicalEdge_ResolutionDeferredWriterErrorBubbles(t *testing.T) {
+	t.Parallel()
+	edge := &fakeResolutionDeferredEdgeWriter{deferred: newDeferredFixture()}
+	tw := &fakeResolutionTaskWriter{writeErr: errors.New("disk full")}
+	r := New(Options{EdgeWriter: edge, ResolutionTaskWriter: tw})
+	wf := wfWithActions("classify",
+		parser.Action{AddCanonicalEdge: &parser.AddCanonicalEdgeAction{
+			EdgeType: "mentions", TargetKind: "boardgame", TargetName: "Brass",
+		}},
+	)
+	results := r.Run(context.Background(), wf,
+		Decision{Workflow: "classify", EntityID: "email:m1"}, Activation{})
+	require.Len(t, results, 1)
+	require.Error(t, results[0].Err)
+	assert.False(t, results[0].Deferred, "writer failure is NOT a successful deferral")
+	assert.Contains(t, results[0].Err.Error(), "spawn resolution-task")
+	assert.Contains(t, results[0].Err.Error(), "disk full")
+}
+
+// TestAddCanonicalEdge_ResolutionDeferredFallbackWithoutWriter
+// pins the legacy / dev-build path: when no
+// ResolutionTaskWriter is wired, the sentinel still surfaces
+// as an action error so the err-task pattern captures the
+// signal — silently dropping ResolutionDeferred would lose
+// the workflow's "paused on ambiguity" state entirely.
+func TestAddCanonicalEdge_ResolutionDeferredFallbackWithoutWriter(t *testing.T) {
+	t.Parallel()
+	deferred := newDeferredFixture()
+	edge := &fakeResolutionDeferredEdgeWriter{deferred: deferred}
+	r := New(Options{EdgeWriter: edge}) // no ResolutionTaskWriter
+	wf := wfWithActions("classify",
+		parser.Action{AddCanonicalEdge: &parser.AddCanonicalEdgeAction{
+			EdgeType: "mentions", TargetKind: "boardgame", TargetName: "Brass",
+		}},
+	)
+	results := r.Run(context.Background(), wf,
+		Decision{Workflow: "classify", EntityID: "email:m1"}, Activation{})
+	require.Len(t, results, 1)
+	require.Error(t, results[0].Err)
+	assert.False(t, results[0].Deferred)
+	var got *edgewrite.ResolutionDeferred
+	require.True(t, errors.As(results[0].Err, &got), "sentinel preserved through fallback")
+	assert.Equal(t, deferred, got)
+}
+
+// TestAddCanonicalEdge_NonDeferredErrorBubblesNormally pins
+// that the C3.2 catch is narrow — it triggers ONLY on
+// ResolutionDeferred. A plain edge-write failure still
+// goes through the err-task path.
+func TestAddCanonicalEdge_NonDeferredErrorBubblesNormally(t *testing.T) {
+	t.Parallel()
+	w := &fakeEdgeWriter{writeErr: errors.New("store offline")}
+	tw := &fakeResolutionTaskWriter{taskID: "task:should-not-fire"}
+	r := New(Options{EdgeWriter: w, ResolutionTaskWriter: tw})
+	wf := wfWithActions("classify",
+		parser.Action{AddCanonicalEdge: &parser.AddCanonicalEdgeAction{
+			EdgeType: "mentions", TargetKind: "boardgame", TargetName: "Brass",
+		}},
+	)
+	results := r.Run(context.Background(), wf,
+		Decision{Workflow: "classify", EntityID: "email:m1"}, Activation{})
+	require.Len(t, results, 1)
+	require.Error(t, results[0].Err)
+	assert.False(t, results[0].Deferred, "plain errors do NOT mark Deferred")
+	assert.Equal(t, 0, tw.callCount(), "resolution-task writer NOT invoked for non-deferred errors")
+	assert.Contains(t, results[0].Err.Error(), "store offline")
 }

@@ -1450,6 +1450,22 @@ func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec De
 			}
 			continue
 		}
+		if r.Deferred {
+			// #304 Cut C3.2: the runner spawned a structured
+			// resolution-task instead of erroring. The
+			// workflow's "paused, awaiting operator pick"
+			// state is recorded on the on-disk task; an
+			// err-task on top would mis-classify it as a
+			// failure. The runner already logged the
+			// deferred-spawn details at INFO; the engine
+			// records the workflow-level outcome at INFO too
+			// so chain inspection shows the deferral.
+			e.logger.Info("workflow action deferred (resolution-task spawned)",
+				"workflow", dec.Workflow,
+				"action_idx", r.ActionIdx,
+				"type", r.Type)
+			continue
+		}
 		e.logger.Info("workflow action executed",
 			"workflow", dec.Workflow,
 			"action_idx", r.ActionIdx,

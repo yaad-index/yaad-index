@@ -806,11 +806,18 @@ func (s *ServeCmd) Run() error {
 		if err != nil {
 			return fmt.Errorf("init workflow plugin dispatcher: %w", err)
 		}
+		// Single FileTaskWriter instance backs both task_append's
+		// text-task surface AND #304 Cut C3.2's resolution-task
+		// spawn (the WriteResolutionTask method lives on
+		// FileTaskWriter per Cut C3.1). Sharing avoids two
+		// independent mutexes on the same <vault>/tasks/ tree.
+		wfTaskWriter := actions.NewFileTaskWriter(cfg.Vault.Path, mergedRegistry, st, edgeService, logger)
 		wfRunner := actions.New(actions.Options{
-			TaskWriter:       actions.NewFileTaskWriter(cfg.Vault.Path, mergedRegistry, st, edgeService, logger),
-			NoteWriter:       actions.NewVaultNoteWriter(wfWriterBackend),
-			GapWriter:        actions.NewVaultGapWriter(wfWriterBackend),
-			PropertyWriter:   actions.NewVaultPropertyWriter(wfWriterBackend),
+			TaskWriter:           wfTaskWriter,
+			ResolutionTaskWriter: wfTaskWriter,
+			NoteWriter:           actions.NewVaultNoteWriter(wfWriterBackend),
+			GapWriter:            actions.NewVaultGapWriter(wfWriterBackend),
+			PropertyWriter:       actions.NewVaultPropertyWriter(wfWriterBackend),
 			EdgeWriter: actions.NewVaultEdgeWriter(
 				st, edgeService, reader, writer, wfWriteLocks,
 				mergedRegistry, bus, logger,
