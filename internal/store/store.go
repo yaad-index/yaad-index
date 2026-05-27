@@ -448,12 +448,18 @@ type Store interface {
 	// updated_at advances to the rewrite moment.
 	//
 	// Stale-safety per the v1 cut framing: returns ErrEdgeStale
-	// (handlers → 409) when the (fromID, edgeType, oldTargetID)
-	// tuple doesn't match a current row — the edge was already
-	// deleted, already resolved to a different target, or never
-	// existed. Concurrent rewrites collapse cleanly: the second
-	// caller sees ErrEdgeStale on the now-different tuple and
-	// re-reads state.
+	// (handlers → 409) when current state doesn't permit the
+	// rewrite. Two cases — both surface as ErrEdgeStale because
+	// both signal "your view of the edge graph is stale":
+	//
+	//   - Old tuple missing: (fromID, edgeType, oldTargetID)
+	//     doesn't match a current row.
+	//   - New tuple already exists: (fromID, edgeType,
+	//     newTargetID) is already a current row — rewriting
+	//     onto it would silently merge two distinct edges.
+	//
+	// Concurrent rewrites collapse cleanly: the loser sees
+	// ErrEdgeStale on one of the two checks and re-reads state.
 	//
 	// newTargetID must reference an existing entity; absent →
 	// ErrMissingEntity (handlers → 422). The metadata + edge type
@@ -597,12 +603,22 @@ var ErrNotFound = errors.New("not found")
 // processed because of a referential-integrity gap).
 var ErrMissingEntity = errors.New("missing entity")
 
-// ErrEdgeStale is returned by UpdateEdgeTarget when the (from_id,
-// edge_type, old_target_id) tuple no longer matches a current row
-// per #304 Cut B. Either the edge was already deleted, already
-// resolved to a different target, or never existed. Handlers map
-// to 409 conflict so callers re-read state + retry with the
-// fresh tuple.
+// ErrEdgeStale is returned by UpdateEdgeTarget when current state
+// doesn't permit the requested rewrite per #304 Cut B. Two failure
+// modes both map to this sentinel + the same 409 wire shape:
+//
+//   - **Old tuple missing.** (fromID, edgeType, oldTargetID)
+//     doesn't match a current row — the edge was already deleted,
+//     already resolved to a different target, or never existed.
+//   - **New tuple already exists.** (fromID, edgeType,
+//     newTargetID) is already a current row — rewriting onto it
+//     would silently merge two distinct edges (and the existing
+//     target's metadata + created_at would diverge from what the
+//     caller expects).
+//
+// Both surface "current state has moved on; the caller's view of
+// the edge graph is stale". Handlers map to 409 so callers
+// re-read state + retry with a fresh tuple.
 var ErrEdgeStale = errors.New("edge tuple does not match current state")
 
 // ErrNotImplemented is returned by stub methods until a follow-up PR

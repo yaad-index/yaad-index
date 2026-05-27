@@ -1011,6 +1011,25 @@ func (s *sqliteStore) UpdateEdgeTarget(ctx context.Context, fromID, edgeType, ol
 		return nil, err
 	}
 
+	// Reject when the new tuple already exists: rewriting onto it
+	// would silently merge two distinct edges + the ON CONFLICT
+	// branch would overwrite the existing target's metadata with
+	// the old placeholder's, while leaving its created_at intact
+	// (so the returned Edge.CreatedAt would diverge from DB
+	// state). Maps to 409 ErrEdgeStale — "current state doesn't
+	// permit this rewrite"; caller picks a different new_target
+	// (or merges the two edges intentionally via a separate
+	// surface).
+	var existing int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT 1 FROM edges
+		WHERE from_id = ? AND type = ? AND to_id = ?
+	`, fromID, edgeType, newTargetID).Scan(&existing); err == nil {
+		return nil, fmt.Errorf("%w: %s -[%s]-> %s already exists; rewriting would merge two edges", ErrEdgeStale, fromID, edgeType, newTargetID)
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("probe new tuple %s -[%s]-> %s: %w", fromID, edgeType, newTargetID, err)
+	}
+
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM edges
 		WHERE from_id = ? AND type = ? AND to_id = ?
@@ -1019,12 +1038,16 @@ func (s *sqliteStore) UpdateEdgeTarget(ctx context.Context, fromID, edgeType, ol
 	}
 
 	now := time.Now().UTC()
+	// Plain INSERT — the new-tuple collision was rejected above,
+	// so ON CONFLICT is no longer load-bearing for normal flows.
+	// FK violations on (from_id, to_id) still surface here as
+	// driver errors (defense in depth against the
+	// pre-check + tx-rollback race; SetMaxOpenConns(1) means
+	// there's no real race window, but the constraint is good
+	// hygiene).
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO edges (type, from_id, to_id, metadata, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(type, from_id, to_id) DO UPDATE SET
-			metadata = excluded.metadata,
-			updated_at = excluded.updated_at
 	`, edgeType, fromID, newTargetID,
 		nullableString(metadataJSON),
 		createdAt.Format(sqliteTimeFormat),

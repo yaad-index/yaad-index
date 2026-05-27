@@ -292,6 +292,56 @@ func TestUpdateEdgeTarget_StaleAfterConcurrentRewrite(t *testing.T) {
 		"concurrent rewrite collapses: loser sees ErrEdgeStale")
 }
 
+// TestUpdateEdgeTarget_NewTargetAlreadyExists pins the
+// collision-rejection contract per PR-306 review: when
+// (from, type, new_target) is already a current row, the
+// rewrite would silently merge two distinct edges and the
+// ON CONFLICT branch would overwrite the existing row's
+// metadata. Both DB state and the returned Edge would diverge
+// from the caller's intent. Reject as ErrEdgeStale → 409.
+func TestUpdateEdgeTarget_NewTargetAlreadyExists(t *testing.T) {
+	t.Parallel()
+
+	s := newMemoryStore(t)
+	ctx := context.Background()
+	seedEntityForEdges(t, s, "book:lotr", "book")
+	seedEntityForEdges(t, s, "person:placeholder", "person")
+	seedEntityForEdges(t, s, "person:tolkien", "person")
+
+	// Pre-existing rows: a "placeholder" edge AND an
+	// already-resolved edge to the same canonical target the
+	// agent now wants to rewrite to.
+	require.NoError(t, s.CreateEdge(ctx, &Edge{
+		Type: "authored_by", From: "book:lotr", To: "person:placeholder",
+		Metadata: map[string]any{"role": "placeholder"},
+	}))
+	require.NoError(t, s.CreateEdge(ctx, &Edge{
+		Type: "authored_by", From: "book:lotr", To: "person:tolkien",
+		Metadata: map[string]any{"role": "primary"},
+	}))
+
+	_, err := s.UpdateEdgeTarget(ctx, "book:lotr", "authored_by", "person:placeholder", "person:tolkien")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEdgeStale,
+		"new tuple already exists → ErrEdgeStale so handlers map to 409")
+	assert.Contains(t, err.Error(), "already exists",
+		"error message names the collision so the agent knows the failure mode")
+
+	// DB state must be unchanged — both pre-existing rows
+	// preserved with original metadata.
+	got, err := s.GetEdgesFor(ctx, "book:lotr", nil)
+	require.NoError(t, err)
+	require.Len(t, got, 2, "no merge: both rows survive the rejected rewrite")
+	byTarget := make(map[string]map[string]any, 2)
+	for _, e := range got {
+		byTarget[e.To] = e.Metadata
+	}
+	assert.Equal(t, "placeholder", byTarget["person:placeholder"]["role"],
+		"placeholder row metadata preserved (no overwrite from rejected merge)")
+	assert.Equal(t, "primary", byTarget["person:tolkien"]["role"],
+		"resolved row metadata preserved")
+}
+
 func TestUpdateEdgeTarget_MissingNewTarget(t *testing.T) {
 	t.Parallel()
 

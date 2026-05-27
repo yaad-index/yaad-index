@@ -290,6 +290,44 @@ func Test_UpdateEdgeTarget_MissingNewTargetReturns422(t *testing.T) {
 		"person:does-not-exist")
 }
 
+// Test_UpdateEdgeTarget_NewTargetAlreadyExists pins the
+// HTTP-level mapping of the collision case surfaced in PR-306
+// review: (from, type, new_target) already a current row →
+// 409 edge_stale (not a silent merge).
+func Test_UpdateEdgeTarget_NewTargetAlreadyExists(t *testing.T) {
+	t.Parallel()
+
+	h, st := newAPIWithStore(t)
+	seedEntity(t, st, "book:lotr", "book")
+	seedEntity(t, st, "person:placeholder", "person")
+	seedEntity(t, st, "person:tolkien", "person")
+
+	createPlaceholder := edgeRequestBody(t, edgeRequest{
+		Type: "authored_by", From: "book:lotr", To: "person:placeholder",
+	})
+	r1 := httptest.NewRecorder()
+	h.ServeHTTP(r1, httptest.NewRequest(http.MethodPost, "/v1/edges", createPlaceholder))
+	require.Equal(t, http.StatusOK, r1.Code)
+
+	createResolved := edgeRequestBody(t, edgeRequest{
+		Type: "authored_by", From: "book:lotr", To: "person:tolkien",
+	})
+	r2 := httptest.NewRecorder()
+	h.ServeHTTP(r2, httptest.NewRequest(http.MethodPost, "/v1/edges", createResolved))
+	require.Equal(t, http.StatusOK, r2.Code)
+
+	body := updateEdgeTargetBody(t, updateEdgeTargetRequest{
+		From: "book:lotr", Type: "authored_by",
+		OldTarget: "person:placeholder", NewTarget: "person:tolkien",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges/update-target", body)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assertErrorEnvelope(t, rec, http.StatusConflict, "edge_stale",
+		"does not match a current edge")
+}
+
 func Test_UpdateEdgeTarget_RejectsNoop(t *testing.T) {
 	t.Parallel()
 
