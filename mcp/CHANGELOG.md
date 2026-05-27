@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/yaad-index/yaad-index/compare/yaad-mcp-v0.3.0...yaad-mcp-v0.4.0) (2026-05-27)
+
+
+### Features
+
+* **api,mcp,vault:** UGC section-level CRUD — add + rename + delete ([#299](https://github.com/yaad-index/yaad-index/issues/299)) ([#300](https://github.com/yaad-index/yaad-index/issues/300)) ([be216fb](https://github.com/yaad-index/yaad-index/commit/be216fb51afa5eaecef2f0681914d856028d367e))
+* **store,api,mcp:** update_edge_target primitive — transactional edge rewrite ([#304](https://github.com/yaad-index/yaad-index/issues/304) Cut B) ([#306](https://github.com/yaad-index/yaad-index/issues/306)) ([e5160ac](https://github.com/yaad-index/yaad-index/commit/e5160ac873b92281b7310a39a8cf50cffed485bd))
+
 ## [0.3.0](https://github.com/yaad-index/yaad-index/compare/yaad-mcp-v0.2.0...yaad-mcp-v0.3.0) (2026-05-17)
 
 
