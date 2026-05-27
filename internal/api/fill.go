@@ -12,6 +12,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
@@ -87,7 +88,7 @@ type fillConflictResponse struct {
 // case that the agent flow targets. A stale DB → 404 not_found is
 // acceptable behavior — operator runs `yaad-index reindex` to
 // repair drift.
-func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, canonicalKindReg map[string]config.CanonicalKindConfig, writeLocks *writelocks.Manager, bus eventbus.Bus) http.HandlerFunc {
+func handleFill(logger *slog.Logger, st store.Store, edgeWriter edgewrite.EdgeWriter, vaultReader *vault.Reader, vaultWriter *vault.Writer, canonicalKindReg map[string]config.CanonicalKindConfig, writeLocks *writelocks.Manager, bus eventbus.Bus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Decode once into json.RawMessage values so canonical_type
 		// fields per yaad-index can re-decode against the
@@ -320,7 +321,7 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 		// edge. The fill path has no plugin attribution (agent / operator
 		// driven), so DateFields is nil and every day-shaped value gets
 		// the baseline edge type.
-		canonical.EmitDayRefs(r.Context(), st, ve.ID, vaultEntityDataForDB(ve), nil, logger)
+		canonical.EmitDayRefs(r.Context(), st, edgeWriter, ve.ID, vaultEntityDataForDB(ve), nil, logger)
 		if err := st.AppendProvenance(r.Context(), ve.ID,
 			[]store.ProvenanceEntry{toStoreProvenance(fillEntry)},
 		); err != nil {
@@ -338,7 +339,7 @@ func handleFill(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, 
 		// source, ensures thin label rows for new endpoints, then
 		// CreateEdge for each.
 		if len(canonicalTypeOps) > 0 {
-			if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, canonicalTypeOps, effectiveGaps, logger, bus, eventbus.SourceAgent, &pending); err != nil {
+			if err := applyCanonicalTypeEdges(r.Context(), st, edgeWriter, ve.ID, canonicalTypeOps, effectiveGaps, logger, bus, eventbus.SourceAgent, &pending); err != nil {
 				logger.ErrorContext(r.Context(), "fill canonical_type edge create/replace",
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",

@@ -15,6 +15,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/store"
@@ -252,6 +253,13 @@ type ingestTracker struct {
 	// shape for the no-canonical-layer case.
 	canonicalEdgeTypes []string
 
+	// edgeWriter is the centralized edge-write service per #304
+	// Cut C1. ingest's canonical-edge create path flows through
+	// it instead of calling store.CreateEdge directly. Nil →
+	// newIngestTracker builds a default Service over the store
+	// (legacy passthrough behavior preserved).
+	edgeWriter edgewrite.EdgeWriter
+
 	// canonicalKinds is the operator-enabled canonical-kind set
 	// (same value vault.Writer holds) so the ingest path can
 	// compute the title-synthesized-merged alias list per
@@ -462,12 +470,23 @@ func (t *ingestTracker) publishEntityEdgeAdded(ctx context.Context, e *store.Edg
 // constructs a guard from the keys of cfg.CanonicalKinds (the
 // registry map per ADR-0013 §1) plus cfg.CanonicalEdgeTypes; tests
 // typically pass nil unless they exercise the canonical path.
-func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer, reader *vault.Reader, guard *config.CanonicalGuard, globalCacheTTLSeconds int, dispatcher *attachments.Dispatcher, writeLocks *writelocks.Manager, bus eventbus.Bus, pluginInstances map[string][]string, canonicalEdgeTypes []string, canonicalKinds []string) *ingestTracker {
+func newIngestTracker(logger *slog.Logger, st store.Store, edgeWriter edgewrite.EdgeWriter, writer *vault.Writer, reader *vault.Reader, guard *config.CanonicalGuard, globalCacheTTLSeconds int, dispatcher *attachments.Dispatcher, writeLocks *writelocks.Manager, bus eventbus.Bus, pluginInstances map[string][]string, canonicalEdgeTypes []string, canonicalKinds []string) *ingestTracker {
 	if (writer == nil) != (reader == nil) {
 		panic("newIngestTracker: vault writer and reader must both be set or both be nil")
 	}
 	if writeLocks == nil {
 		writeLocks = writelocks.New()
+	}
+	if edgeWriter == nil {
+		// Default to a passthrough edgewrite.Service over the
+		// store per #304 Cut C1 — production main.go passes a
+		// Service with the canonical-kind resolver map wired;
+		// tests / dev paths get the legacy-equivalent passthrough.
+		svc, err := edgewrite.New(st, nil)
+		if err != nil {
+			panic(fmt.Sprintf("newIngestTracker: default edgewrite.Service construction failed: %v", err))
+		}
+		edgeWriter = svc
 	}
 	return &ingestTracker{
 		records:               make(map[string]*ingestRecord),
@@ -484,6 +503,7 @@ func newIngestTracker(logger *slog.Logger, st store.Store, writer *vault.Writer,
 		pluginInstances:       pluginInstances,
 		canonicalEdgeTypes:    canonicalEdgeTypes,
 		canonicalKinds:        canonicalKinds,
+		edgeWriter:            edgeWriter,
 	}
 }
 
@@ -1066,7 +1086,7 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 	// `references_day` edge (or the plugin-declared override per
 	// Capabilities.DateFields). Best-effort: per-ref failures log
 	// and continue without blocking the rest of the commit.
-	canonical.EmitDayRefs(ctx, t.store, result.Entity.ID, result.Entity.Data,
+	canonical.EmitDayRefs(ctx, t.store, t.edgeWriter, result.Entity.ID, result.Entity.Data,
 		att.simulation.plugin.Capabilities().DateFields, t.logger)
 	if err := t.store.ClearGapCallDone(ctx, result.Entity.ID); err != nil {
 		t.logger.Warn("ingest simulator: ClearGapCallDone (plugin path; best-effort)",
@@ -1518,7 +1538,7 @@ func (t *ingestTracker) persistCanonicalEdges(ctx context.Context, pending *even
 			}
 			continue
 		}
-		if err := t.store.CreateEdge(ctx, e); err != nil {
+		if err := t.edgeWriter.CreateEdge(ctx, e); err != nil {
 			if errors.Is(err, store.ErrMissingEntity) {
 				t.logger.Debug("ingest: canonical edge dropped — endpoint filtered out by canonical-kinds",
 					"plugin", plugin, "type", e.Type, "from", e.From, "to", e.To)

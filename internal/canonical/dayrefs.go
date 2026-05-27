@@ -35,6 +35,15 @@ type DayRefStore interface {
 	CreateEdge(ctx context.Context, e *store.Edge) error
 }
 
+// DayRefEdgeWriter is the narrow edge-create surface the
+// EmitDayRefs helper uses per #304 Cut C1. Decoupled from
+// DayRefStore so callers can pass the centralized
+// edgewrite.Service (production) without dragging the broader
+// store.Store interface in.
+type DayRefEdgeWriter interface {
+	CreateEdge(ctx context.Context, e *store.Edge) error
+}
+
 // DayIDPrefix is the canonical-ID prefix for day entities per
 // ADR-0025. The full ID shape is `day:YYYY-MM-DD`.
 const DayIDPrefix = "day:"
@@ -170,11 +179,20 @@ func ensureLabelRowFor(ctx context.Context, st DayRefStore, label string, logger
 func EmitDayRefs(
 	ctx context.Context,
 	st DayRefStore,
+	edgeWriter DayRefEdgeWriter,
 	sourceID string,
 	data map[string]any,
 	dateFields map[string]string,
 	logger *slog.Logger,
 ) int {
+	if edgeWriter == nil {
+		// Back-compat: default to the store's CreateEdge when no
+		// explicit edge writer is supplied. Production paths pass
+		// a centralized edgewrite.Service so Cut C2 + C3 routing
+		// applies; tests that don't care about routing leave it
+		// nil and fall through to the legacy direct-store shape.
+		edgeWriter = st
+	}
 	refs := ScanDayRefs(data)
 	emitted := 0
 	for _, ref := range refs {
@@ -187,7 +205,7 @@ func EmitDayRefs(
 		}
 		edgeType := ResolveDayEdgeType(ref.Field, dateFields)
 		edge := &store.Edge{Type: edgeType, From: sourceID, To: ref.DayID}
-		if err := st.CreateEdge(ctx, edge); err != nil {
+		if err := edgeWriter.CreateEdge(ctx, edge); err != nil {
 			if logger != nil {
 				logger.WarnContext(ctx, "day shape-scan: emit edge",
 					"source", sourceID, "field", ref.Field,

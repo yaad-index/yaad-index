@@ -19,7 +19,7 @@ import (
 func TestFileTaskWriter_FreshCreate(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	err := w.AppendTaskSection(context.Background(),
 		"review-queue", "boardgame-acme", "", "", "candidates",
@@ -41,7 +41,7 @@ func TestFileTaskWriter_FreshCreate(t *testing.T) {
 func TestFileTaskWriter_AppendsToExistingSection(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "subj", "", "", "candidates", "first", parser.IfAlreadyPresentSkip))
@@ -62,7 +62,7 @@ func TestFileTaskWriter_AppendsToExistingSection(t *testing.T) {
 func TestFileTaskWriter_SkipDedupes(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "subj", "", "", "candidates", "same", parser.IfAlreadyPresentSkip))
@@ -79,7 +79,7 @@ func TestFileTaskWriter_SkipDedupes(t *testing.T) {
 func TestFileTaskWriter_AppendAnyway(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "subj", "", "", "s", "line", parser.IfAlreadyPresentSkip))
@@ -97,7 +97,7 @@ func TestFileTaskWriter_AppendAnyway(t *testing.T) {
 func TestFileTaskWriter_Replace(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "subj", "", "", "s", "match", parser.IfAlreadyPresentSkip))
@@ -119,7 +119,7 @@ func TestFileTaskWriter_Replace(t *testing.T) {
 func TestFileTaskWriter_NewSection_InExistingFile(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "subj", "", "", "a", "alpha", parser.IfAlreadyPresentSkip))
@@ -141,7 +141,7 @@ func TestFileTaskWriter_NewSection_InExistingFile(t *testing.T) {
 func TestFileTaskWriter_Slugify_HandlesUnsafeChars(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	err := w.AppendTaskSection(context.Background(),
 		"My Workflow", "Acme Game (2026)", "", "", "s", "c", parser.IfAlreadyPresentSkip)
@@ -159,7 +159,7 @@ func TestFileTaskWriter_Slugify_HandlesUnsafeChars(t *testing.T) {
 func TestFileTaskWriter_UnknownPolicy(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	// First write so the section exists.
 	require.NoError(t, w.AppendTaskSection(context.Background(),
@@ -176,7 +176,7 @@ func TestFileTaskWriter_UnknownPolicy(t *testing.T) {
 func TestFileTaskWriter_EmptyWorkflow_Rejected(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 	err := w.AppendTaskSection(context.Background(),
 		"", "subj", "", "", "s", "c", parser.IfAlreadyPresentSkip)
 	require.Error(t, err)
@@ -188,7 +188,7 @@ func TestFileTaskWriter_EmptyWorkflow_Rejected(t *testing.T) {
 func TestFileTaskWriter_EmptySubject_Allowed(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 	err := w.AppendTaskSection(context.Background(),
 		"daily-summary", "", "", "", "s", "c", parser.IfAlreadyPresentSkip)
 	require.NoError(t, err)
@@ -202,7 +202,7 @@ func TestFileTaskWriter_EmptySubject_Allowed(t *testing.T) {
 func TestFileTaskWriter_MissingRefs_AppendsSection(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "subj", "", "", "candidates", "first", parser.IfAlreadyPresentSkip))
@@ -222,7 +222,7 @@ func TestFileTaskWriter_MissingRefs_AppendsSection(t *testing.T) {
 func TestFileTaskWriter_MissingRefs_SyncsOnReFire(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "subj", "", "", "candidates", "first", parser.IfAlreadyPresentSkip))
@@ -246,7 +246,7 @@ func TestFileTaskWriter_MissingRefs_SyncsOnReFire(t *testing.T) {
 func TestFileTaskWriter_MissingRefs_EmptyRemovesSection(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "subj", "", "", "candidates", "first", parser.IfAlreadyPresentSkip))
@@ -269,7 +269,7 @@ func TestFileTaskWriter_MissingRefs_EmptyRemovesSection(t *testing.T) {
 func TestFileTaskWriter_MissingRefs_FileAbsent_NoOp(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	require.NoError(t, w.EnsureMissingRefsSection(context.Background(),
 		"wf", "subj", []string{"id:a"}))
@@ -286,7 +286,7 @@ func TestFileTaskWriter_MissingRefs_FileAbsent_NoOp(t *testing.T) {
 func TestFileTaskWriter_DedupKeyStampedOnFirstCreate(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "subj", "wf|entity:1", "", "s", "first", parser.IfAlreadyPresentSkip))
@@ -308,7 +308,7 @@ func TestFileTaskWriter_DedupKeyStampedOnFirstCreate(t *testing.T) {
 func TestFileTaskWriter_EmptyDedupKey_Omitted(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, nil, nil, nil)
+	w := NewFileTaskWriter(vault, nil, nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "subj", "", "", "s", "c", parser.IfAlreadyPresentSkip))
@@ -332,7 +332,7 @@ func TestFileTaskWriter_ViaSection_FreshCreate(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
 	kinds := canonicalKindsForTest() // {boardgame, person, gmail}
-	w := NewFileTaskWriter(vault, kinds, nil, nil)
+	w := NewFileTaskWriter(vault, kinds, nil, nil, nil)
 
 	err := w.AppendTaskSection(context.Background(),
 		"linkedin-hiring", "hiring-2026-05", "", "gmail:msg-1",
@@ -360,7 +360,7 @@ func TestFileTaskWriter_ViaSection_DedupSameWorkflowSameEntity(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
 	kinds := canonicalKindsForTest()
-	w := NewFileTaskWriter(vault, kinds, nil, nil)
+	w := NewFileTaskWriter(vault, kinds, nil, nil, nil)
 	ctx := context.Background()
 
 	require.NoError(t, w.AppendTaskSection(ctx,
@@ -417,7 +417,7 @@ func TestDedupAndPrepend_DedupKeepsOriginalPosition(t *testing.T) {
 func TestFileTaskWriter_ViaSection_PrependsNewEntity(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, canonicalKindsForTest(), nil, nil)
+	w := NewFileTaskWriter(vault, canonicalKindsForTest(), nil, nil, nil)
 	ctx := context.Background()
 
 	require.NoError(t, w.AppendTaskSection(ctx,
@@ -442,7 +442,7 @@ func TestFileTaskWriter_ViaSection_PrependsNewEntity(t *testing.T) {
 func TestFileTaskWriter_ViaSection_UnknownEntityLiteral(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, canonicalKindsForTest(), nil, nil)
+	w := NewFileTaskWriter(vault, canonicalKindsForTest(), nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "subj", "", "" /*entityID empty → unknown*/, "alerts", "x", parser.IfAlreadyPresentSkip))
@@ -462,7 +462,7 @@ func TestFileTaskWriter_ViaSection_UnknownEntityLiteral(t *testing.T) {
 func TestFileTaskWriter_ViaSection_FrontmatterAndBodyStaySynced(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, canonicalKindsForTest(), nil, nil)
+	w := NewFileTaskWriter(vault, canonicalKindsForTest(), nil, nil, nil)
 	ctx := context.Background()
 
 	require.NoError(t, w.AppendTaskSection(ctx,
@@ -505,7 +505,7 @@ func TestFileTaskWriter_ViaSection_FrontmatterAndBodyStaySynced(t *testing.T) {
 func TestFileTaskWriter_ViaSection_ContentWrappedWhenEntityShape(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
-	w := NewFileTaskWriter(vault, canonicalKindsForTest(), nil, nil)
+	w := NewFileTaskWriter(vault, canonicalKindsForTest(), nil, nil, nil)
 	ctx := context.Background()
 
 	require.NoError(t, w.AppendTaskSection(ctx,
@@ -532,7 +532,7 @@ func TestFileTaskWriter_ViaSection_UnknownKindNotWrapped(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
 	// Registry omits "package" kind.
-	w := NewFileTaskWriter(vault, canonicalKindsForTest(), nil, nil)
+	w := NewFileTaskWriter(vault, canonicalKindsForTest(), nil, nil, nil)
 
 	require.NoError(t, w.AppendTaskSection(context.Background(),
 		"wf", "subj", "", "gmail:msg-1", "alerts",

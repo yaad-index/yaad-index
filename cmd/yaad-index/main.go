@@ -27,6 +27,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/attachments"
 	"github.com/yaad-index/yaad-index/internal/auth"
 	"github.com/yaad-index/yaad-index/internal/canonical"
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
@@ -479,6 +480,14 @@ func (s *ServeCmd) Run() error {
 		// classify each frontmatter alias as bare vs typed (per
 		// #3). nil/empty stays permissive — every alias bare.
 		enabledEdgeTypes []string
+		// edgeService is the centralized edge-write service per
+		// #304 Cut C1; built inside the `if cfg != nil` block
+		// when canonicalKindResolvers is available, then reused
+		// by the reindexer + workflow runner constructors that
+		// land later in this function. Outside the cfg-loaded
+		// path it stays nil and downstream constructors default
+		// to a passthrough Service over the store.
+		edgeService *edgewrite.Service
 	)
 	if cfg != nil {
 		// ADR-0016 §4: build the merged effective canonical-kind
@@ -572,6 +581,20 @@ func (s *ServeCmd) Run() error {
 			logger.Info("canonical_kind_resolvers ownership map built (per #304 Cut A)",
 				"kinds_with_resolver", len(canonicalKindResolvers))
 		}
+
+		// Construct the centralized edge-write service per #304
+		// Cut C1. Every edge-create entry point in the daemon
+		// routes through this single Service so Cut C2 + C3 can
+		// add caller-mode + resolver-aware behavior in one
+		// place. Cardinality enforcement (≤1 resolver per kind)
+		// happens inside edgewrite.New — Cut A built a map[][]string
+		// to defer the cardinality decision; Cut C1 upgrades the
+		// multi-resolver case to a config-load ERROR.
+		edgeService, err = edgewrite.New(st, canonicalKindResolvers)
+		if err != nil {
+			return fmt.Errorf("edge-write service: %w", err)
+		}
+		handlerOpts = append(handlerOpts, api.WithEdgeWriter(edgeService))
 		// Pass-through unconditionally — the build helper produces a
 		// `[]` wire shape on empty input regardless, but dropping the
 		// len-guard here means the option is always wired in a single
@@ -622,6 +645,11 @@ func (s *ServeCmd) Run() error {
 		if err != nil {
 			return fmt.Errorf("init reindex (vault.path=%s): %w", cfg.Vault.Path, err)
 		}
+		// Route reindex's edge-restore path through the centralized
+		// edge-write service per #304 Cut C1 — keeps every edge-
+		// create call site on the same service so Cut C2 + C3 can
+		// add routing behavior in one place.
+		reindexer.SetEdgeWriter(edgeService)
 		handlerOpts = append(handlerOpts, api.WithReindexHandler(api.HandleReindex(logger, reindexer)))
 
 		// Auto-commit (per yaad-index the source issue): construct a
@@ -693,7 +721,7 @@ func (s *ServeCmd) Run() error {
 		// entity_aliases keeps /v1/search and the vault frontmatter
 		// in lockstep on the first ingest pass.
 		syncIngester := api.NewSyncIngester(
-			logger, st, registry, writer, reader,
+			logger, st, edgeService, registry, writer, reader,
 			guard, cfg.CacheTTLSeconds, dispatcher, wfWriteLocks, bus,
 			pluginInstances,
 			pluginInstanceConfigs,
@@ -759,6 +787,7 @@ func (s *ServeCmd) Run() error {
 		// entity coordinate on a single lock map.
 		wfWriterBackend := &actions.VaultWriterBackend{
 			Store:       st,
+			EdgeWriter:  edgeService,
 			VaultReader: reader,
 			VaultWriter: writer,
 			WriteLocks:  wfWriteLocks,
@@ -770,12 +799,12 @@ func (s *ServeCmd) Run() error {
 			return fmt.Errorf("init workflow plugin dispatcher: %w", err)
 		}
 		wfRunner := actions.New(actions.Options{
-			TaskWriter:       actions.NewFileTaskWriter(cfg.Vault.Path, mergedRegistry, st, logger),
+			TaskWriter:       actions.NewFileTaskWriter(cfg.Vault.Path, mergedRegistry, st, edgeService, logger),
 			NoteWriter:       actions.NewVaultNoteWriter(wfWriterBackend),
 			GapWriter:        actions.NewVaultGapWriter(wfWriterBackend),
 			PropertyWriter:   actions.NewVaultPropertyWriter(wfWriterBackend),
 			EdgeWriter: actions.NewVaultEdgeWriter(
-				st, reader, writer, wfWriteLocks,
+				st, edgeService, reader, writer, wfWriteLocks,
 				mergedRegistry, bus, logger,
 			),
 			ArchiveWriter:    actions.NewVaultArchiveWriter(wfWriterBackend),

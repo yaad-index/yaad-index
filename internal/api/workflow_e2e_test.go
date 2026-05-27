@@ -42,7 +42,7 @@ func TestWorkflowAgentSurface_EndToEnd(t *testing.T) {
 	vault := t.TempDir()
 	// Action runner wired with a real FileTaskWriter so the
 	// task lands on disk where the reader will see it.
-	taskWriter := actions.NewFileTaskWriter(vault, nil, nil, nil)
+	taskWriter := actions.NewFileTaskWriter(vault, nil, nil, nil, nil)
 	runner := actions.New(actions.Options{TaskWriter: taskWriter})
 
 	bus := eventbus.NewMemoryBus()

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/yaad-index/yaad-index/internal/canonical"
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/store"
@@ -49,7 +50,7 @@ type edgeResponse struct {
 	Edge edge `json:"edge"`
 }
 
-func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Registry, bus eventbus.Bus) http.HandlerFunc {
+func handleCreateEdge(logger *slog.Logger, st store.Store, edgeWriter edgewrite.EdgeWriter, registry *plugins.Registry, bus eventbus.Bus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req edgeRequest
 		dec := json.NewDecoder(r.Body)
@@ -106,7 +107,7 @@ func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Reg
 					"target_id", req.To, "kind", targetKind, "err", err)
 			}
 		}
-		err := st.CreateEdge(r.Context(), se)
+		err := edgeWriter.CreateEdge(r.Context(), se)
 		if errors.Is(err, store.ErrMissingEntity) {
 			// missing_entity carries the offending id in the message so
 			// callers can correlate without re-deriving. 422 per ADR-0002

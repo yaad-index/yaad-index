@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/yaad-index/yaad-index/internal/canonical"
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/slug"
@@ -109,6 +110,12 @@ type VaultEntityWriter interface {
 // would just duplicate every field.
 type VaultWriterBackend struct {
 	Store       EntityStore
+	// EdgeWriter routes the workflow-side fill paths' day-ref
+	// edge creates through the centralized edge-write service
+	// per #304 Cut C1. Nil-safe — when unset, EmitDayRefs falls
+	// back to Store.CreateEdge (preserving legacy behavior for
+	// any test fixture that doesn't wire this).
+	EdgeWriter  canonical.DayRefEdgeWriter
 	VaultReader VaultEntityReader
 	VaultWriter VaultEntityWriter
 	WriteLocks  *writelocks.Manager
@@ -421,7 +428,7 @@ func (w *VaultPropertyWriter) SetProperties(ctx context.Context, workflow, entit
 	// the originating plugin), so DateFields is nil and every
 	// day-shaped value gets the baseline edge type. Matches the
 	// fill + reindex shape.
-	canonical.EmitDayRefs(ctx, w.backend.Store, ve.ID,
+	canonical.EmitDayRefs(ctx, w.backend.Store, w.backend.EdgeWriter, ve.ID,
 		vaultEntityDataForDB(ve), nil, w.backend.logger())
 	return nil
 }
@@ -774,6 +781,7 @@ func cloneStringMap(in map[string]string) map[string]string {
 // EntityStore exposes.
 type VaultEdgeWriter struct {
 	store       store.Store
+	edgeWriter  edgewrite.EdgeWriter
 	vaultReader *vault.Reader
 	vaultWriter *vault.Writer
 	writeLocks  *writelocks.Manager
@@ -789,6 +797,7 @@ type VaultEdgeWriter struct {
 // optional-deps convention).
 func NewVaultEdgeWriter(
 	st store.Store,
+	edgeWriter edgewrite.EdgeWriter,
 	vaultReader *vault.Reader,
 	vaultWriter *vault.Writer,
 	writeLocks *writelocks.Manager,
@@ -799,8 +808,24 @@ func NewVaultEdgeWriter(
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	if edgeWriter == nil {
+		// Default to a passthrough Service per #304 Cut C1; the
+		// VaultEdgeWriter's CreateEdge calls flow through it
+		// so future cuts surface caller-mode + resolver routing
+		// uniformly across all edge-creation paths.
+		svc, err := edgewrite.New(st, nil)
+		if err != nil {
+			// Same surfacing as api/api.go's default path —
+			// only fires if a future edgewrite.New grows a
+			// new validation gate that the nil-resolver call
+			// trips.
+			panic(fmt.Sprintf("NewVaultEdgeWriter: default edgewrite.Service construction failed: %v", err))
+		}
+		edgeWriter = svc
+	}
 	return &VaultEdgeWriter{
 		store:       st,
+		edgeWriter:  edgeWriter,
 		vaultReader: vaultReader,
 		vaultWriter: vaultWriter,
 		writeLocks:  writeLocks,
@@ -874,7 +899,7 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 		})
 	}
 
-	if err := w.store.CreateEdge(ctx, &store.Edge{
+	if err := w.edgeWriter.CreateEdge(ctx, &store.Edge{
 		Type: edgeType,
 		From: sourceID,
 		To:   targetID,

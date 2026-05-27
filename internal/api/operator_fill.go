@@ -13,6 +13,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
@@ -56,6 +57,7 @@ type operatorFillResponse struct {
 func handleEntityOperatorFill(
 	logger *slog.Logger,
 	st store.Store,
+	edgeWriter edgewrite.EdgeWriter,
 	vaultReader *vault.Reader,
 	vaultWriter *vault.Writer,
 	canonicalKindReg map[string]config.CanonicalKindConfig,
@@ -307,7 +309,7 @@ func handleEntityOperatorFill(
 		// are auto-materialized as thin entity rows (mirrors the
 		// ingest-time path from phase B) so the FK on edges
 		// is satisfied.
-		if err := applyCanonicalTypeEdges(r.Context(), st, ve.ID, ops, effectiveGaps, logger, bus, eventbus.SourceOperator, &pending); err != nil {
+		if err := applyCanonicalTypeEdges(r.Context(), st, edgeWriter, ve.ID, ops, effectiveGaps, logger, bus, eventbus.SourceOperator, &pending); err != nil {
 			logger.ErrorContext(r.Context(), "operator-fill canonical_type edge create/replace",
 				"err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",
