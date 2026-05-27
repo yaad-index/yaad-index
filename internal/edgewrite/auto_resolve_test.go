@@ -35,11 +35,11 @@ type fakeResolverResponse struct {
 }
 
 type fakeResolverCall struct {
-	plugin, name string
+	plugin, targetKind, name string
 }
 
-func (f *fakeResolver) ResolveCanonicalEntity(_ context.Context, pluginName, name string) (string, map[string]plugins.DisambiguationOption, error) {
-	f.calls = append(f.calls, fakeResolverCall{plugin: pluginName, name: name})
+func (f *fakeResolver) ResolveCanonicalEntity(_ context.Context, pluginName, targetKind, name string) (string, map[string]plugins.DisambiguationOption, error) {
+	f.calls = append(f.calls, fakeResolverCall{plugin: pluginName, targetKind: targetKind, name: name})
 	resp, ok := f.responses[pluginName+"|"+name]
 	if !ok {
 		return "", nil, errors.New("fake resolver: no response seeded for " + pluginName + "|" + name)
@@ -106,6 +106,7 @@ func TestCreateCanonicalEdgeByName_AutoSingleMatch(t *testing.T) {
 
 	require.Len(t, resolver.calls, 1)
 	assert.Equal(t, "yaad-bgg", resolver.calls[0].plugin)
+	assert.Equal(t, "boardgame", resolver.calls[0].targetKind, "service threads targetKind to the resolver so source-shape plugins can hop to the right canonical-kind target")
 	assert.Equal(t, "Brass", resolver.calls[0].name)
 
 	edges, err := st.GetEdgesFor(context.Background(), "email:m1", nil)

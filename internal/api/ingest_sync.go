@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/yaad-index/yaad-index/internal/attachments"
@@ -66,21 +67,39 @@ type SyncIngester interface {
 	// map bubbles back instead of collapsing into an error
 	// string. The centralized edgewrite.Service consumes
 	// this on the auto-mode resolution branch — single match
-	// → edge with the resolved id, options → defer via
-	// ResolutionDeferred sentinel.
+	// → edge with the resolved canonical-kind id, options →
+	// defer via ResolutionDeferred sentinel.
+	//
+	// targetKind is the canonical kind the workflow declared
+	// for the edge target. After a successful ingest the
+	// returned entityID is guaranteed to be of that kind:
+	//
+	//   - If the plugin's `result.Entity.ID` already has the
+	//     `<targetKind>:` prefix, it's returned directly
+	//     (identity-resolver case).
+	//   - Otherwise the source row is treated as a hop and
+	//     the implementation walks the persisted outgoing
+	//     canonical edges, returning the first edge `to`
+	//     of `<targetKind>:` shape (source-shape resolver
+	//     case — yaad-bgg, yaad-wikipedia, etc.).
+	//   - If neither path yields a `<targetKind>:` id the
+	//     call errors out — the workflow's declared edge
+	//     target shape is a hard contract.
 	//
 	// Return-tuple semantics:
 	//
-	//   - (entityID, nil, nil) on single-match resolution.
+	//   - (entityID, nil, nil) on single-match resolution;
+	//     entityID has `<targetKind>:` prefix.
 	//   - ("", options, nil) on disambiguation; len(options)
 	//     ≥ 2 (a single-match plugin doesn't return
 	//     options — it returns the entity).
 	//   - ("", nil, err) on transport / unresolvable failures
 	//     (plugin returns failed state, no plugin matches
-	//     the name, etc.).
+	//     the name, plugin ingest succeeded but produced no
+	//     canonical `<targetKind>` target, etc.).
 	//
 	// timeout cap is the same shape as IngestURL.
-	IngestByName(ctx context.Context, pluginName, name string, timeout time.Duration) (entityID string, options map[string]plugins.DisambiguationOption, err error)
+	IngestByName(ctx context.Context, pluginName, targetKind, name string, timeout time.Duration) (entityID string, options map[string]plugins.DisambiguationOption, err error)
 }
 
 // NewSyncIngester constructs a tracker-backed SyncIngester
@@ -200,12 +219,22 @@ func (s *syncIngester) IngestURL(ctx context.Context, url string, timeout time.D
 // shared ingest tracker, bubbling Options back on
 // disambiguation rather than collapsing into an error string
 // (the Cut C2 wire-shape contract).
-func (s *syncIngester) IngestByName(ctx context.Context, pluginName, name string, timeout time.Duration) (string, map[string]plugins.DisambiguationOption, error) {
+//
+// On successful ingest, snap.entityID is the plugin's
+// `result.Entity.ID` — which is the source-row id for
+// universal-source plugins (yaad-bgg, yaad-wikipedia, ...)
+// rather than the canonical-kind target. resolveCanonicalTarget
+// reconciles the source-row id with the requested targetKind by
+// walking the persisted outgoing edges.
+func (s *syncIngester) IngestByName(ctx context.Context, pluginName, targetKind, name string, timeout time.Duration) (string, map[string]plugins.DisambiguationOption, error) {
 	if s.registry == nil {
 		return "", nil, fmt.Errorf("ingest_sync: registry not wired")
 	}
 	if pluginName == "" {
 		return "", nil, fmt.Errorf("ingest_sync: pluginName is required")
+	}
+	if targetKind == "" {
+		return "", nil, fmt.Errorf("ingest_sync: targetKind is required")
 	}
 	if name == "" {
 		return "", nil, fmt.Errorf("ingest_sync: name is required")
@@ -230,7 +259,11 @@ func (s *syncIngester) IngestByName(ctx context.Context, pluginName, name string
 	}
 	switch snap.state {
 	case ingestStateComplete, ingestStateNeedsFill:
-		return snap.entityID, nil, nil
+		canonicalID, err := s.resolveCanonicalTarget(ctx, snap.entityID, targetKind)
+		if err != nil {
+			return "", nil, fmt.Errorf("ingest of %s: %w", shorthand, err)
+		}
+		return canonicalID, nil, nil
 	case ingestStateDisambiguation:
 		// Copy the map so callers can't accidentally mutate
 		// the tracker's stored slice. Cheap — disambiguation
@@ -246,6 +279,50 @@ func (s *syncIngester) IngestByName(ctx context.Context, pluginName, name string
 	default:
 		return "", nil, fmt.Errorf("ingest of %s returned unexpected state %d", shorthand, snap.state)
 	}
+}
+
+// resolveCanonicalTarget reconciles a tracker-emitted entity id
+// with the workflow's declared canonical kind per #304 Cut C2.
+// Universal-source plugins materialize a source row as
+// `result.Entity.ID` (e.g. `yaad-bgg:thing-12345`) and emit
+// canonical-kind edges from that row to the actual target
+// (`boardgame:brass-birmingham`); identity-resolver plugins
+// emit a canonical-shape row directly. Both shapes funnel
+// through this helper so callers never see a source-row id
+// leaking into a workflow edge target.
+//
+// Strategy:
+//
+//  1. If ingestedID already has the `<targetKind>:` prefix, it
+//     IS the canonical target — return it directly. Covers the
+//     identity-resolver shape + the future case where a
+//     universal-source plugin happens to mint canonical-shape
+//     ids.
+//  2. Otherwise walk the outgoing edges from ingestedID (no
+//     type filter — the canonical-edge type is plugin-defined
+//     and ADR-0016 doesn't pin it) and return the first edge
+//     `to` whose prefix matches the requested kind. Order is
+//     store-defined; the workflow's contract is "one canonical
+//     edge per (source, kind)" so multi-match would indicate a
+//     plugin-side bug, not a routing-policy choice.
+//  3. If neither path yields a `<targetKind>:` id, error out —
+//     a workflow that asked for `boardgame:` cannot be
+//     fulfilled by a plugin that produced no boardgame target.
+func (s *syncIngester) resolveCanonicalTarget(ctx context.Context, ingestedID, targetKind string) (string, error) {
+	prefix := targetKind + ":"
+	if strings.HasPrefix(ingestedID, prefix) {
+		return ingestedID, nil
+	}
+	edges, err := s.tracker.store.GetEdgesFor(ctx, ingestedID, nil)
+	if err != nil {
+		return "", fmt.Errorf("lookup canonical edges from %s: %w", ingestedID, err)
+	}
+	for _, e := range edges {
+		if strings.HasPrefix(e.To, prefix) {
+			return e.To, nil
+		}
+	}
+	return "", fmt.Errorf("plugin ingest of %s produced no canonical %s target", ingestedID, targetKind)
 }
 
 // trackerHandle returns the inner *ingestTracker. Defined in

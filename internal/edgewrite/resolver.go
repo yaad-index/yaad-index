@@ -20,16 +20,31 @@ import (
 // centralized edge-write service depends on. Implementations
 // invoke the named resolver plugin's `<plugin>: <name>`
 // shorthand ingest path, returning either a single resolved
-// entity id (the happy path) or the plugin's disambiguation
-// Options map (the deferred path).
+// canonical-kind entity id (the happy path) or the plugin's
+// disambiguation Options map (the deferred path).
+//
+// targetKind is the canonical kind the workflow declared for
+// the edge target (e.g. `boardgame`, `person`). The resolver
+// MUST return an entity id of that kind, not a plugin-source
+// id. Universal-source plugins (yaad-bgg, yaad-wikipedia, ...)
+// materialize a source row alongside one or more canonical-
+// edge targets; the implementation traverses the persisted
+// canonical edges to surface the right `<targetKind>:...`
+// entity for the requested kind. Plugins emitting an
+// already-canonical-shape row return it directly.
 //
 // Returns:
 //
 //   - (entityID, nil, nil) on single-match resolution.
+//     entityID has the `<targetKind>:` prefix; callers may rely
+//     on the shape without re-checking.
 //   - ("", options, nil) on disambiguation — Options is the
 //     plugin's response map; the caller composes the
 //     ResolutionDeferred sentinel from it.
 //   - ("", nil, err) on transport / unresolvable failures.
+//     Failures include "plugin ingest succeeded but produced
+//     no canonical <targetKind> target" (source-shape plugin
+//     that doesn't cover the requested kind).
 //
 // nil NameResolver wired into the Service degrades auto-mode
 // to fall-through (every kind passes through to legacy
@@ -37,7 +52,7 @@ import (
 // don't have to wire a fake resolver unless they exercise
 // auto-mode.
 type NameResolver interface {
-	ResolveCanonicalEntity(ctx context.Context, pluginName, name string) (entityID string, options map[string]plugins.DisambiguationOption, err error)
+	ResolveCanonicalEntity(ctx context.Context, pluginName, targetKind, name string) (entityID string, options map[string]plugins.DisambiguationOption, err error)
 }
 
 // ResolutionDeferred is the sentinel error Service.

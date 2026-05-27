@@ -2207,7 +2207,7 @@ type syncIngesterResolverShim struct {
 	timeout  time.Duration
 }
 
-func (s *syncIngesterResolverShim) ResolveCanonicalEntity(ctx context.Context, pluginName, name string) (string, map[string]plugins.DisambiguationOption, error) {
-	return s.ingester.IngestByName(ctx, pluginName, name, s.timeout)
+func (s *syncIngesterResolverShim) ResolveCanonicalEntity(ctx context.Context, pluginName, targetKind, name string) (string, map[string]plugins.DisambiguationOption, error) {
+	return s.ingester.IngestByName(ctx, pluginName, targetKind, name, s.timeout)
 }
 

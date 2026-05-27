@@ -200,7 +200,7 @@ func (s *Service) CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeTyp
 	alreadyResolved := stripped != targetName
 
 	if mode == Auto && resolverPlugin != "" && s.resolver != nil && !alreadyResolved {
-		entityID, options, err := s.resolver.ResolveCanonicalEntity(ctx, resolverPlugin, targetName)
+		entityID, options, err := s.resolver.ResolveCanonicalEntity(ctx, resolverPlugin, targetKind, targetName)
 		if err != nil {
 			return "", false, fmt.Errorf("resolve %s via plugin %s: %w", targetName, resolverPlugin, err)
 		}
