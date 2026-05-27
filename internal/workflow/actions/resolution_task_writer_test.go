@@ -41,7 +41,7 @@ func newResolutionTaskWriter(t *testing.T) (*FileTaskWriter, string, store.Store
 	st, err := store.New(":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
-	w := NewFileTaskWriter(vaultRoot, nil, st, nil, slog.Default())
+	w := NewFileTaskWriter(vaultRoot, nil, st, nil, nil, slog.Default())
 	return w, vaultRoot, st
 }
 

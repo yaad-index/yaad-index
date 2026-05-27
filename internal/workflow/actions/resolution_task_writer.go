@@ -207,6 +207,7 @@ func (w *FileTaskWriter) WriteResolutionTask(ctx context.Context, d *edgewrite.R
 	if err := w.writeFile(path, body); err != nil {
 		return "", false, err
 	}
+	w.notifyCommit(ctx, path, "task: resolution-task "+ResolutionTaskKey(d)+": create", "")
 
 	// Mirror into the store as a `task:<key>` entity so
 	// /v1/entities/task:<id>, set_property, and the resolve

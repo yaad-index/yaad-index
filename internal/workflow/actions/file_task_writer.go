@@ -106,6 +106,14 @@ type FileTaskWriter struct {
 	// on next reindex" rather than failing the task spawn.
 	logger *slog.Logger
 
+	// committer hooks task-file writes into the vault auto-
+	// committer per #314. Nil disables the OnWrite signal —
+	// the on-disk write still lands, but no git commit follows.
+	// Production wires the same vault.Committer the vault.Writer
+	// uses so workflow-driven task-body mutations land in git
+	// alongside entity writes.
+	committer vault.Committer
+
 	// mu serializes the read-modify-write cycle so a single
 	// task_append on the same file path can't race. For
 	// cross-file appends this is over-strict but the cost
@@ -131,7 +139,7 @@ type FileTaskWriter struct {
 //
 // logger surfaces non-fatal store materialization failures.
 // Nil falls back to slog.Default().
-func NewFileTaskWriter(vaultRoot string, kinds map[string]config.CanonicalKindConfig, st store.Store, edgeWriter edgewrite.EdgeWriter, logger *slog.Logger) *FileTaskWriter {
+func NewFileTaskWriter(vaultRoot string, kinds map[string]config.CanonicalKindConfig, st store.Store, edgeWriter edgewrite.EdgeWriter, committer vault.Committer, logger *slog.Logger) *FileTaskWriter {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -151,6 +159,7 @@ func NewFileTaskWriter(vaultRoot string, kinds map[string]config.CanonicalKindCo
 		kinds:      kinds,
 		store:      st,
 		edgeWriter: edgeWriter,
+		committer:  committer,
 		logger:     logger,
 	}
 }
@@ -212,6 +221,7 @@ func (w *FileTaskWriter) AppendTaskSection(ctx context.Context, workflow, subjec
 		if err := w.writeFile(path, body); err != nil {
 			return err
 		}
+		w.notifyCommit(ctx, path, taskCommitMessage(workflow, subject, "create"), workflowAuthor(workflow))
 		// #268: mirror the new task into the store as a first-
 		// class entity so /v1/entities/task:<slug>, set_property,
 		// and graph walks reach it. Best-effort — file write is
@@ -232,7 +242,11 @@ func (w *FileTaskWriter) AppendTaskSection(ctx context.Context, workflow, subjec
 	if err != nil {
 		return err
 	}
-	return w.writeFile(path, []byte(body))
+	if err := w.writeFile(path, []byte(body)); err != nil {
+		return err
+	}
+	w.notifyCommit(ctx, path, taskCommitMessage(workflow, subject, "append"), workflowAuthor(workflow))
+	return nil
 }
 
 // materializeTaskEntity upserts the task row + `triggered_by`
@@ -399,7 +413,7 @@ func (w *FileTaskWriter) formatViaEntity(id string) string {
 // untouched. Workflow authors use a discriminating prefix
 // shape (e.g. `<owner>/<repo>#<n>`) to avoid accidental
 // collisions.
-func (w *FileTaskWriter) ResolveTaskLine(_ context.Context, workflow, subject, section, matchKey, mode string) error {
+func (w *FileTaskWriter) ResolveTaskLine(ctx context.Context, workflow, subject, section, matchKey, mode string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -440,7 +454,11 @@ func (w *FileTaskWriter) ResolveTaskLine(_ context.Context, workflow, subject, s
 		// No-match or already-resolved — leave the file alone.
 		return nil
 	}
-	return w.writeFile(path, []byte(body))
+	if err := w.writeFile(path, []byte(body)); err != nil {
+		return err
+	}
+	w.notifyCommit(ctx, path, taskCommitMessage(workflow, subject, "resolve-line"), workflowAuthor(workflow))
+	return nil
 }
 
 // resolveTaskLineInBody is the pure-string transform under
@@ -517,7 +535,7 @@ func splitBulletContent(line string) (content, prefix string, ok bool) {
 // See TaskWriter docstring for the four-case semantics
 // (refs empty / non-empty × section present / absent +
 // file-absent no-op).
-func (w *FileTaskWriter) EnsureMissingRefsSection(_ context.Context, workflow, subject string, refs []string) error {
+func (w *FileTaskWriter) EnsureMissingRefsSection(ctx context.Context, workflow, subject string, refs []string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -542,7 +560,11 @@ func (w *FileTaskWriter) EnsureMissingRefsSection(_ context.Context, workflow, s
 	if body == string(existing) {
 		return nil
 	}
-	return w.writeFile(path, []byte(body))
+	if err := w.writeFile(path, []byte(body)); err != nil {
+		return err
+	}
+	w.notifyCommit(ctx, path, taskCommitMessage(workflow, subject, "missing-refs"), workflowAuthor(workflow))
+	return nil
 }
 
 // rewriteMissingRefsSection produces a new task-file body
@@ -666,6 +688,21 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
+// taskCommitMessage renders the per-write commit message the
+// auto-committer stamps onto task-file writes per #314. Shape:
+// `task: <workflow> <subject>: <op>` (e.g. `task: linkedin-hiring
+// hiring-2026-05: append`). Empty subject collapses to the
+// workflow-only form `task: <workflow>: <op>` for err-tasks
+// (which carry no subject). The leading `task:` op token lets
+// the committer's summarizeBatch group task-write commits per
+// the existing operation-prefix convention.
+func taskCommitMessage(workflow, subject, op string) string {
+	if strings.TrimSpace(subject) == "" {
+		return fmt.Sprintf("task: %s: %s", workflow, op)
+	}
+	return fmt.Sprintf("task: %s %s: %s", workflow, subject, op)
+}
+
 // writeFile writes body to path atomically (temp file +
 // rename). Permissions match a standard markdown file.
 func (w *FileTaskWriter) writeFile(path string, body []byte) error {
@@ -677,6 +714,28 @@ func (w *FileTaskWriter) writeFile(path string, body []byte) error {
 		return fmt.Errorf("rename %q → %q: %w", tmp, path, err)
 	}
 	return nil
+}
+
+// notifyCommit signals the auto-committer (when wired) that a
+// task file at path was just written. Per #314, every workflow-
+// driven write to a task file — first-create, subsequent
+// task_append, ResolveTaskLine flips, resolution-task — flows
+// through here so the auto-committer stages + commits the file
+// in the same cycle that produced it. Best-effort: a committer
+// OnWrite failure logs at WARN and continues; the on-disk write
+// is the source of truth.
+func (w *FileTaskWriter) notifyCommit(ctx context.Context, path, message, author string) {
+	if w.committer == nil {
+		return
+	}
+	rel, err := filepath.Rel(w.vaultRoot, path)
+	if err != nil {
+		w.logger.WarnContext(ctx, "task auto-commit relPath compute failed", "path", path, "err", err)
+		return
+	}
+	if err := w.committer.OnWrite(ctx, rel, message, author); err != nil {
+		w.logger.WarnContext(ctx, "task auto-commit OnWrite failed", "path", rel, "err", err)
+	}
 }
 
 // mergeSection takes the existing file body + finds the

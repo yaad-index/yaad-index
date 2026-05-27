@@ -7,8 +7,10 @@
 package tasks
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,23 +18,69 @@ import (
 	"time"
 )
 
+// Committer is the narrow auto-commit interface tasks.Writer
+// signals after every successful on-disk mutation per #314.
+// Structurally identical to internal/vault.Committer so
+// main.go can pass the same instance into both.
+type Committer interface {
+	OnWrite(ctx context.Context, relPath, message, author string) error
+}
+
 // Writer mutates tasks in the configured vault root. v1
 // surface: Resolve marks a task done + optionally archives
 // per ADR-0024 §"Task". Concurrent-safe (an internal mutex
 // serializes the read-modify-write).
 type Writer struct {
+	vaultRoot  string
 	tasksDir   string
 	archiveDir string
+	committer  Committer
+	logger     *slog.Logger
 	mu         sync.Mutex
 }
 
 // NewWriter returns a Writer rooted at `<vaultRoot>/tasks/`.
 // The archive sub-directory `<vaultRoot>/tasks/_archive/`
 // is created on first archived resolve.
-func NewWriter(vaultRoot string) *Writer {
-	return &Writer{
+//
+// committer hooks resolve-time + archive-move writes into the
+// vault auto-committer per #314. Nil disables the signal —
+// on-disk write still lands, no git commit follows. Production
+// wires the same vault.Committer the vault.Writer uses.
+// logger may be nil; non-nil enables WARN logs on best-effort
+// committer failures.
+func NewWriter(vaultRoot string, opts ...WriterOption) *Writer {
+	w := &Writer{
+		vaultRoot:  vaultRoot,
 		tasksDir:   filepath.Join(vaultRoot, "tasks"),
 		archiveDir: filepath.Join(vaultRoot, "tasks", "_archive"),
+		logger:     slog.New(slog.DiscardHandler),
+	}
+	for _, opt := range opts {
+		opt(w)
+	}
+	return w
+}
+
+// WriterOption configures a Writer at construction time.
+type WriterOption func(*Writer)
+
+// WithCommitter wires the auto-commit signal per #314.
+func WithCommitter(c Committer) WriterOption {
+	return func(w *Writer) {
+		if c != nil {
+			w.committer = c
+		}
+	}
+}
+
+// WithLogger wires the operator logger so committer-OnWrite
+// failures land at WARN.
+func WithLogger(l *slog.Logger) WriterOption {
+	return func(w *Writer) {
+		if l != nil {
+			w.logger = l
+		}
 	}
 }
 
@@ -75,6 +123,7 @@ func (w *Writer) Resolve(id string, now time.Time, autoArchive bool) error {
 		if err := writeAtomic(activePath, []byte(updated)); err != nil {
 			return err
 		}
+		w.notifyCommit(context.Background(), activePath, fmt.Sprintf("task: %s: resolve-stamp", id), "")
 	}
 	if !autoArchive {
 		return nil
@@ -85,7 +134,30 @@ func (w *Writer) Resolve(id string, now time.Time, autoArchive bool) error {
 	if err := os.Rename(activePath, archivePath); err != nil {
 		return fmt.Errorf("archive task %q → %q: %w", activePath, archivePath, err)
 	}
+	// Auto-commit the archive move per #314. Both the old (deleted)
+	// path and the new (created) path need staging; the auto-
+	// committer's `git add -A -- <path>` shape stages a deletion at
+	// activePath when we signal that path AFTER the rename — so we
+	// notify on both so the commit captures the move.
+	w.notifyCommit(context.Background(), activePath, fmt.Sprintf("task: %s: archive", id), "")
+	w.notifyCommit(context.Background(), archivePath, fmt.Sprintf("task: %s: archive", id), "")
 	return nil
+}
+
+// notifyCommit signals the auto-committer (when wired) that
+// the path was just mutated. Best-effort per the #314 design.
+func (w *Writer) notifyCommit(ctx context.Context, path, message, author string) {
+	if w.committer == nil {
+		return
+	}
+	rel, err := filepath.Rel(w.vaultRoot, path)
+	if err != nil {
+		w.logger.WarnContext(ctx, "task-writer auto-commit relPath compute failed", "path", path, "err", err)
+		return
+	}
+	if err := w.committer.OnWrite(ctx, rel, message, author); err != nil {
+		w.logger.WarnContext(ctx, "task-writer auto-commit OnWrite failed", "path", rel, "err", err)
+	}
 }
 
 // stampResolvedAt rewrites the task body's frontmatter to
