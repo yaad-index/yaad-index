@@ -172,6 +172,143 @@ func handleCreateEdge(logger *slog.Logger, st store.Store, registry *plugins.Reg
 	}
 }
 
+// updateEdgeTargetRequest mirrors the POST /v1/edges/update-target
+// body per #304 Cut B. All four fields are required.
+type updateEdgeTargetRequest struct {
+	From      string `json:"from"`
+	Type      string `json:"type"`
+	OldTarget string `json:"old_target"`
+	NewTarget string `json:"new_target"`
+}
+
+// handleUpdateEdgeTarget implements POST /v1/edges/update-target
+// per #304 Cut B. Single transactional API: deletes the old
+// (from, type, old_target) edge and creates (from, type, new_target),
+// preserving created_at + metadata. 409 conflict when the old
+// tuple doesn't match current state (stale rewrite); 422 missing
+// entity when new_target doesn't resolve.
+//
+// Edge-type registry check follows the same shape as
+// handleCreateEdge — the new edge keeps the type the old edge had
+// (which already passed the registry gate on create), so we only
+// re-check for defense in depth.
+//
+// Lazy thin-label materialization: when new_target is a daemon-
+// managed thin-label kind (day, email, email-address, label),
+// ensure the row before UpdateEdgeTarget so the FK holds without
+// the caller having to pre-create the entity. Mirrors
+// handleCreateEdge's ensure-on-write shape.
+//
+// No vault-side rewrite from this primitive; vault consistency
+// is the caller's concern per the v1 cut framing (Cut C's
+// centralized edge-write composes vault + DB updates when the
+// source entity is vault-resident).
+func handleUpdateEdgeTarget(logger *slog.Logger, st store.Store, registry *plugins.Registry, bus eventbus.Bus) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req updateEdgeTargetRequest
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				fmt.Sprintf("request body is not valid JSON: %v", err))
+			return
+		}
+		switch {
+		case strings.TrimSpace(req.From) == "":
+			writeError(w, http.StatusBadRequest, "invalid_argument", "from is required")
+			return
+		case strings.TrimSpace(req.Type) == "":
+			writeError(w, http.StatusBadRequest, "invalid_argument", "type is required")
+			return
+		case strings.TrimSpace(req.OldTarget) == "":
+			writeError(w, http.StatusBadRequest, "invalid_argument", "old_target is required")
+			return
+		case strings.TrimSpace(req.NewTarget) == "":
+			writeError(w, http.StatusBadRequest, "invalid_argument", "new_target is required")
+			return
+		case req.OldTarget == req.NewTarget:
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				"old_target == new_target is a no-op; nothing to update")
+			return
+		}
+		if !isRegisteredEdgeKind(registry, req.Type) {
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				fmt.Sprintf("edge type %q is not in the registered edge_kinds", req.Type))
+			return
+		}
+
+		// Same lazy thin-label ensure as handleCreateEdge: when the
+		// new target is a daemon-managed kind (day / email / etc.)
+		// the row may not yet exist, but the caller shouldn't have
+		// to pre-create it. Best-effort; FK-error fall-through
+		// from UpdateEdgeTarget below surfaces missing_entity if
+		// ensure didn't run.
+		if targetKind, _, ok := canonical.SplitLabelID(req.NewTarget); ok && isLazyMaterializableKind(targetKind) {
+			if _, err := canonical.EnsureLabelRow(r.Context(), st, req.NewTarget, logger); err != nil {
+				logger.WarnContext(r.Context(), "POST /v1/edges/update-target: ensure thin-label target failed",
+					"target_id", req.NewTarget, "kind", targetKind, "err", err)
+			}
+		}
+
+		newEdge, err := st.UpdateEdgeTarget(r.Context(), req.From, req.Type, req.OldTarget, req.NewTarget)
+		if errors.Is(err, store.ErrEdgeStale) {
+			writeError(w, http.StatusConflict, "edge_stale",
+				fmt.Sprintf("(%s, %s, %s) does not match a current edge — already rewritten, deleted, or never existed; re-read state and retry with the fresh tuple", req.From, req.Type, req.OldTarget))
+			return
+		}
+		if errors.Is(err, store.ErrMissingEntity) {
+			writeError(w, http.StatusUnprocessableEntity, "missing_entity",
+				fmt.Sprintf("referenced entity not found: %v", err))
+			return
+		}
+		if err != nil {
+			logger.ErrorContext(r.Context(), "store.UpdateEdgeTarget", "err", err,
+				"from", req.From, "type", req.Type, "old_target", req.OldTarget, "new_target", req.NewTarget)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to update edge target")
+			return
+		}
+
+		// Publish entity.edge_added on the NEW tuple per ADR-0024
+		// Phase 2 — downstream subscribers see the resolved edge
+		// as a fresh add. The old (from, type, old_target) edge
+		// disappears silently; an explicit entity.edge_removed
+		// event is out of scope for Cut B (the bus surface today
+		// emits adds only).
+		bus.Publish(r.Context(), eventbus.EntityEdgeAddedEvent{
+			FromID:           newEdge.From,
+			ToID:             newEdge.To,
+			EdgeType:         newEdge.Type,
+			SourceTag:        eventbus.SourceAgent,
+			At:               newEdge.UpdatedAt.UTC(),
+			Chain:            eventbus.WorkflowChainFromContext(r.Context()),
+			CausedByEntityID: newEdge.From,
+		})
+
+		resp := edgeResponse{
+			OK: true,
+			Edge: edge{
+				Type:     newEdge.Type,
+				From:     newEdge.From,
+				To:       newEdge.To,
+				Metadata: newEdge.Metadata,
+				Provenance: []provenanceEntry{
+					{
+						Source:    stubProvenanceSource,
+						FetchedAt: newEdge.UpdatedAt.UTC().Format(time.RFC3339),
+						OK:        true,
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			logger.ErrorContext(r.Context(), "encode /v1/edges/update-target response", "err", err)
+		}
+	}
+}
+
 // isRegisteredEdgeKind reports whether name is advertised by any
 // registered plugin's Capabilities().EdgeKinds OR is a daemon-
 // managed canonical edge type (the day-anchored vocabulary per

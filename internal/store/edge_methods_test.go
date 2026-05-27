@@ -210,3 +210,221 @@ func TestGetEdgesFor_OrdersByCreatedAtAscending(t *testing.T) {
 	assert.Equal(t, []string{"person:p1", "person:p2", "person:p3"}, gotOrder,
 		"order: want created_at ASC")
 }
+
+// --- UpdateEdgeTarget (#304 Cut B) -------------------------------------
+
+func TestUpdateEdgeTarget_HappyPath(t *testing.T) {
+	t.Parallel()
+
+	s := newMemoryStore(t)
+	ctx := context.Background()
+	seedEntityForEdges(t, s, "book:lotr", "book")
+	seedEntityForEdges(t, s, "person:tolkien", "person")
+	seedEntityForEdges(t, s, "person:tolkien-real", "person")
+
+	require.NoError(t, s.CreateEdge(ctx, &Edge{
+		Type: "authored_by", From: "book:lotr", To: "person:tolkien",
+		Metadata: map[string]any{"role": "primary"},
+	}))
+	priorEdges, _ := s.GetEdgesFor(ctx, "book:lotr", nil)
+	require.Len(t, priorEdges, 1)
+	priorCreatedAt := priorEdges[0].CreatedAt
+	// Allow at least one wall-clock tick so updated_at can advance
+	// past the prior row's timestamp on the rewrite.
+	time.Sleep(2 * time.Millisecond)
+
+	got, err := s.UpdateEdgeTarget(ctx, "book:lotr", "authored_by", "person:tolkien", "person:tolkien-real")
+	require.NoError(t, err)
+	require.Equal(t, "person:tolkien-real", got.To)
+	require.Equal(t, "book:lotr", got.From)
+	require.Equal(t, "authored_by", got.Type)
+	assert.Equal(t, map[string]any{"role": "primary"}, got.Metadata,
+		"metadata preserved across rewrite")
+	assert.True(t, got.CreatedAt.Equal(priorCreatedAt),
+		"created_at preserved (audit-trail contract)")
+	assert.True(t, got.UpdatedAt.After(priorCreatedAt),
+		"updated_at advances to the rewrite moment")
+
+	// Old edge gone.
+	allFromLotr, err := s.GetEdgesFor(ctx, "book:lotr", nil)
+	require.NoError(t, err)
+	require.Len(t, allFromLotr, 1, "exactly one edge after rewrite")
+	assert.Equal(t, "person:tolkien-real", allFromLotr[0].To)
+}
+
+func TestUpdateEdgeTarget_StaleTuple(t *testing.T) {
+	t.Parallel()
+
+	s := newMemoryStore(t)
+	ctx := context.Background()
+	seedEntityForEdges(t, s, "book:lotr", "book")
+	seedEntityForEdges(t, s, "person:tolkien", "person")
+
+	// No edge exists; tuple is stale by definition.
+	_, err := s.UpdateEdgeTarget(ctx, "book:lotr", "authored_by", "person:wrong-target", "person:tolkien")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEdgeStale,
+		"missing tuple → ErrEdgeStale so handlers map to 409")
+}
+
+func TestUpdateEdgeTarget_StaleAfterConcurrentRewrite(t *testing.T) {
+	t.Parallel()
+
+	s := newMemoryStore(t)
+	ctx := context.Background()
+	seedEntityForEdges(t, s, "book:lotr", "book")
+	seedEntityForEdges(t, s, "person:tolkien", "person")
+	seedEntityForEdges(t, s, "person:tolkien-real", "person")
+	seedEntityForEdges(t, s, "person:c-s-lewis", "person")
+
+	require.NoError(t, s.CreateEdge(ctx, &Edge{
+		Type: "authored_by", From: "book:lotr", To: "person:tolkien",
+	}))
+
+	// First rewrite succeeds.
+	_, err := s.UpdateEdgeTarget(ctx, "book:lotr", "authored_by", "person:tolkien", "person:tolkien-real")
+	require.NoError(t, err)
+
+	// Second rewrite, racing on the now-stale old tuple, must reject.
+	_, err = s.UpdateEdgeTarget(ctx, "book:lotr", "authored_by", "person:tolkien", "person:c-s-lewis")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEdgeStale,
+		"concurrent rewrite collapses: loser sees ErrEdgeStale")
+}
+
+// TestUpdateEdgeTarget_NewTargetAlreadyExists pins the
+// collision-rejection contract per PR-306 review: when
+// (from, type, new_target) is already a current row, the
+// rewrite would silently merge two distinct edges and the
+// ON CONFLICT branch would overwrite the existing row's
+// metadata. Both DB state and the returned Edge would diverge
+// from the caller's intent. Reject as ErrEdgeStale → 409.
+func TestUpdateEdgeTarget_NewTargetAlreadyExists(t *testing.T) {
+	t.Parallel()
+
+	s := newMemoryStore(t)
+	ctx := context.Background()
+	seedEntityForEdges(t, s, "book:lotr", "book")
+	seedEntityForEdges(t, s, "person:placeholder", "person")
+	seedEntityForEdges(t, s, "person:tolkien", "person")
+
+	// Pre-existing rows: a "placeholder" edge AND an
+	// already-resolved edge to the same canonical target the
+	// agent now wants to rewrite to.
+	require.NoError(t, s.CreateEdge(ctx, &Edge{
+		Type: "authored_by", From: "book:lotr", To: "person:placeholder",
+		Metadata: map[string]any{"role": "placeholder"},
+	}))
+	require.NoError(t, s.CreateEdge(ctx, &Edge{
+		Type: "authored_by", From: "book:lotr", To: "person:tolkien",
+		Metadata: map[string]any{"role": "primary"},
+	}))
+
+	_, err := s.UpdateEdgeTarget(ctx, "book:lotr", "authored_by", "person:placeholder", "person:tolkien")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEdgeStale,
+		"new tuple already exists → ErrEdgeStale so handlers map to 409")
+	assert.Contains(t, err.Error(), "already exists",
+		"error message names the collision so the agent knows the failure mode")
+
+	// DB state must be unchanged — both pre-existing rows
+	// preserved with original metadata.
+	got, err := s.GetEdgesFor(ctx, "book:lotr", nil)
+	require.NoError(t, err)
+	require.Len(t, got, 2, "no merge: both rows survive the rejected rewrite")
+	byTarget := make(map[string]map[string]any, 2)
+	for _, e := range got {
+		byTarget[e.To] = e.Metadata
+	}
+	assert.Equal(t, "placeholder", byTarget["person:placeholder"]["role"],
+		"placeholder row metadata preserved (no overwrite from rejected merge)")
+	assert.Equal(t, "primary", byTarget["person:tolkien"]["role"],
+		"resolved row metadata preserved")
+}
+
+func TestUpdateEdgeTarget_MissingNewTarget(t *testing.T) {
+	t.Parallel()
+
+	s := newMemoryStore(t)
+	ctx := context.Background()
+	seedEntityForEdges(t, s, "book:lotr", "book")
+	seedEntityForEdges(t, s, "person:tolkien", "person")
+
+	require.NoError(t, s.CreateEdge(ctx, &Edge{
+		Type: "authored_by", From: "book:lotr", To: "person:tolkien",
+	}))
+
+	_, err := s.UpdateEdgeTarget(ctx, "book:lotr", "authored_by", "person:tolkien", "person:does-not-exist")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrMissingEntity,
+		"new target FK failure → ErrMissingEntity so handlers map to 422")
+
+	// Old edge MUST survive the failed rewrite (transaction rolled
+	// back).
+	got, err := s.GetEdgesFor(ctx, "book:lotr", nil)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "person:tolkien", got[0].To,
+		"failed rewrite rolls back; original edge preserved")
+}
+
+func TestUpdateEdgeTarget_NoopRejected(t *testing.T) {
+	t.Parallel()
+
+	s := newMemoryStore(t)
+	ctx := context.Background()
+	seedEntityForEdges(t, s, "book:lotr", "book")
+	seedEntityForEdges(t, s, "person:tolkien", "person")
+
+	require.NoError(t, s.CreateEdge(ctx, &Edge{
+		Type: "authored_by", From: "book:lotr", To: "person:tolkien",
+	}))
+
+	_, err := s.UpdateEdgeTarget(ctx, "book:lotr", "authored_by", "person:tolkien", "person:tolkien")
+	require.Error(t, err, "old==new is a no-op; caller should short-circuit")
+}
+
+func TestUpdateEdgeTarget_RejectsEmptyArgs(t *testing.T) {
+	t.Parallel()
+
+	s := newMemoryStore(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		name                            string
+		from, edgeType, oldTo, newTo    string
+	}{
+		{"empty from", "", "authored_by", "old", "new"},
+		{"empty edgeType", "book:lotr", "", "old", "new"},
+		{"empty oldTo", "book:lotr", "authored_by", "", "new"},
+		{"empty newTo", "book:lotr", "authored_by", "old", ""},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := s.UpdateEdgeTarget(ctx, tc.from, tc.edgeType, tc.oldTo, tc.newTo)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestUpdateEdgeTarget_PreservesMetadataAndNullMetadata(t *testing.T) {
+	t.Parallel()
+
+	s := newMemoryStore(t)
+	ctx := context.Background()
+	seedEntityForEdges(t, s, "book:lotr", "book")
+	seedEntityForEdges(t, s, "person:tolkien", "person")
+	seedEntityForEdges(t, s, "person:tolkien-real", "person")
+
+	// Edge with nil metadata.
+	require.NoError(t, s.CreateEdge(ctx, &Edge{
+		Type: "authored_by", From: "book:lotr", To: "person:tolkien",
+	}))
+
+	got, err := s.UpdateEdgeTarget(ctx, "book:lotr", "authored_by", "person:tolkien", "person:tolkien-real")
+	require.NoError(t, err)
+	assert.Nil(t, got.Metadata,
+		"NULL metadata column survives rewrite — not coerced to empty map")
+}

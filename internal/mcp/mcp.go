@@ -110,6 +110,7 @@ func registerAll(s *server.MCPServer, b *bridge) {
 
 	// Edges.
 	registerEdges(s, b)
+	registerUpdateEdgeTarget(s, b)
 
 	// Notes (entity-level ADR-0020 notes).
 	registerAddNote(s, b)

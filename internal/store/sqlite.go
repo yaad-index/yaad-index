@@ -957,6 +957,136 @@ func (s *sqliteStore) CreateEdge(ctx context.Context, e *Edge) error {
 	return nil
 }
 
+// UpdateEdgeTarget implements store.Store per #304 Cut B. Single
+// transactional rewrite: read the old row (assert it exists),
+// delete it, insert the new row preserving created_at. Concurrent
+// rewrites collapse via the tuple-match check — the loser sees
+// ErrEdgeStale.
+func (s *sqliteStore) UpdateEdgeTarget(ctx context.Context, fromID, edgeType, oldTargetID, newTargetID string) (*Edge, error) {
+	switch {
+	case fromID == "":
+		return nil, errors.New("UpdateEdgeTarget: fromID is required")
+	case edgeType == "":
+		return nil, errors.New("UpdateEdgeTarget: edgeType is required")
+	case oldTargetID == "":
+		return nil, errors.New("UpdateEdgeTarget: oldTargetID is required")
+	case newTargetID == "":
+		return nil, errors.New("UpdateEdgeTarget: newTargetID is required")
+	case oldTargetID == newTargetID:
+		return nil, errors.New("UpdateEdgeTarget: oldTargetID == newTargetID is a no-op; caller should short-circuit")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Read the old row inside the transaction so the tuple-match
+	// check + delete + insert are atomic against concurrent
+	// rewrites. metadataJSON survives the rewrite.
+	var (
+		metadataJSON sql.NullString
+		createdStr   string
+	)
+	err = tx.QueryRowContext(ctx, `
+		SELECT metadata, created_at FROM edges
+		WHERE from_id = ? AND type = ? AND to_id = ?
+	`, fromID, edgeType, oldTargetID).Scan(&metadataJSON, &createdStr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s -[%s]-> %s", ErrEdgeStale, fromID, edgeType, oldTargetID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read prior edge %s -[%s]-> %s: %w", fromID, edgeType, oldTargetID, err)
+	}
+	createdAt, err := parseSQLiteTime(createdStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse prior edge created_at: %w", err)
+	}
+
+	// New target must reference an existing entity — same
+	// fail-fast shape CreateEdge uses, mapped to ErrMissingEntity
+	// so the handler returns 422.
+	if err := assertEntityExists(ctx, tx, newTargetID, "new target"); err != nil {
+		return nil, err
+	}
+
+	// Reject when the new tuple already exists: rewriting onto it
+	// would silently merge two distinct edges + the ON CONFLICT
+	// branch would overwrite the existing target's metadata with
+	// the old placeholder's, while leaving its created_at intact
+	// (so the returned Edge.CreatedAt would diverge from DB
+	// state). Maps to 409 ErrEdgeStale — "current state doesn't
+	// permit this rewrite"; caller picks a different new_target
+	// (or merges the two edges intentionally via a separate
+	// surface).
+	var existing int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT 1 FROM edges
+		WHERE from_id = ? AND type = ? AND to_id = ?
+	`, fromID, edgeType, newTargetID).Scan(&existing); err == nil {
+		return nil, fmt.Errorf("%w: %s -[%s]-> %s already exists; rewriting would merge two edges", ErrEdgeStale, fromID, edgeType, newTargetID)
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("probe new tuple %s -[%s]-> %s: %w", fromID, edgeType, newTargetID, err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM edges
+		WHERE from_id = ? AND type = ? AND to_id = ?
+	`, fromID, edgeType, oldTargetID); err != nil {
+		return nil, fmt.Errorf("delete prior edge %s -[%s]-> %s: %w", fromID, edgeType, oldTargetID, err)
+	}
+
+	now := time.Now().UTC()
+	// Plain INSERT — the new-tuple collision was rejected above,
+	// so ON CONFLICT is no longer load-bearing for normal flows.
+	// FK violations on (from_id, to_id) still surface here as
+	// driver errors (defense in depth against the
+	// pre-check + tx-rollback race; SetMaxOpenConns(1) means
+	// there's no real race window, but the constraint is good
+	// hygiene).
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO edges (type, from_id, to_id, metadata, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, edgeType, fromID, newTargetID,
+		nullableString(metadataJSON),
+		createdAt.Format(sqliteTimeFormat),
+		now.Format(sqliteTimeFormat),
+	); err != nil {
+		return nil, fmt.Errorf("insert rewritten edge %s -[%s]-> %s: %w", fromID, edgeType, newTargetID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	out := &Edge{
+		Type:      edgeType,
+		From:      fromID,
+		To:        newTargetID,
+		CreatedAt: createdAt,
+		UpdatedAt: now,
+	}
+	if metadataJSON.Valid && metadataJSON.String != "" {
+		var meta map[string]any
+		if err := json.Unmarshal([]byte(metadataJSON.String), &meta); err == nil {
+			out.Metadata = meta
+		}
+	}
+	return out, nil
+}
+
+// nullableString returns the inner string when v is Valid, else
+// nil — the value SQLite stores as NULL rather than the empty
+// string. Used by UpdateEdgeTarget to preserve a NULL metadata
+// column through the rewrite.
+func nullableString(v sql.NullString) any {
+	if v.Valid {
+		return v.String
+	}
+	return nil
+}
+
 // DeleteEdgesByTypeFrom removes every edge of the given type
 // originating at fromID. Used by the canonical_type fill path
 // (yaad-index) to implement idempotent re-fill semantics:

@@ -128,6 +128,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("GET /v1/entities/{id}/context", protect(http.HandlerFunc(handleEntityContext(logger, st, cfg.vaultReader))))
 	mux.Handle("GET /v1/entities/{id}/attachments/{name}", protect(http.HandlerFunc(handleEntityAttachment(logger, st, cfg.vaultReader))))
 	mux.Handle("POST /v1/edges", protect(http.HandlerFunc(handleCreateEdge(logger, st, registry, cfg.eventBus))))
+	mux.Handle("POST /v1/edges/update-target", protect(http.HandlerFunc(handleUpdateEdgeTarget(logger, st, registry, cfg.eventBus))))
 	mux.Handle("GET /v1/edges", protect(http.HandlerFunc(handleListEdges(logger, st))))
 	mux.Handle("GET /v1/search", protect(http.HandlerFunc(handleSearch(logger, st))))
 	mux.Handle("POST /v1/search/upstream", protect(http.HandlerFunc(handleSearchUpstream(logger, registry))))

@@ -197,3 +197,192 @@ func Test_Edges_MissingToEntity_Returns422(t *testing.T) {
 	assertErrorEnvelope(t, rec, http.StatusUnprocessableEntity, "missing_entity",
 		"person:no-such-person")
 }
+
+// --- POST /v1/edges/update-target (#304 Cut B) -------------------------
+
+func updateEdgeTargetBody(t *testing.T, req updateEdgeTargetRequest) io.Reader {
+	t.Helper()
+	b, err := json.Marshal(req)
+	require.NoError(t, err, "marshal update-target request")
+	return strings.NewReader(string(b))
+}
+
+func Test_UpdateEdgeTarget_HappyPath(t *testing.T) {
+	t.Parallel()
+
+	h, st := newAPIWithStore(t)
+	seedEntity(t, st, "book:lotr", "book")
+	seedEntity(t, st, "person:tolkien", "person")
+	seedEntity(t, st, "person:tolkien-real", "person")
+
+	createBody := edgeRequestBody(t, edgeRequest{
+		Type: "authored_by", From: "book:lotr", To: "person:tolkien",
+		Metadata: map[string]any{"role": "primary"},
+	})
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/edges", createBody)
+	createRec := httptest.NewRecorder()
+	h.ServeHTTP(createRec, createReq)
+	require.Equal(t, http.StatusOK, createRec.Code, "seed body=%s", createRec.Body.String())
+
+	body := updateEdgeTargetBody(t, updateEdgeTargetRequest{
+		From: "book:lotr", Type: "authored_by",
+		OldTarget: "person:tolkien", NewTarget: "person:tolkien-real",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges/update-target", body)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var got edgeResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	assert.True(t, got.OK)
+	assert.Equal(t, "person:tolkien-real", got.Edge.To)
+	assert.Equal(t, "book:lotr", got.Edge.From)
+	assert.Equal(t, "authored_by", got.Edge.Type)
+	assert.Equal(t, "primary", got.Edge.Metadata["role"], "metadata preserved across rewrite")
+}
+
+func Test_UpdateEdgeTarget_StaleTupleReturns409(t *testing.T) {
+	t.Parallel()
+
+	h, st := newAPIWithStore(t)
+	seedEntity(t, st, "book:lotr", "book")
+	seedEntity(t, st, "person:tolkien", "person")
+	seedEntity(t, st, "person:tolkien-real", "person")
+
+	body := updateEdgeTargetBody(t, updateEdgeTargetRequest{
+		From: "book:lotr", Type: "authored_by",
+		OldTarget: "person:never-existed", NewTarget: "person:tolkien-real",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges/update-target", body)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assertErrorEnvelope(t, rec, http.StatusConflict, "edge_stale",
+		"does not match a current edge")
+}
+
+func Test_UpdateEdgeTarget_MissingNewTargetReturns422(t *testing.T) {
+	t.Parallel()
+
+	h, st := newAPIWithStore(t)
+	seedEntity(t, st, "book:lotr", "book")
+	seedEntity(t, st, "person:tolkien", "person")
+
+	// Seed the edge.
+	createBody := edgeRequestBody(t, edgeRequest{
+		Type: "authored_by", From: "book:lotr", To: "person:tolkien",
+	})
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/edges", createBody)
+	createRec := httptest.NewRecorder()
+	h.ServeHTTP(createRec, createReq)
+	require.Equal(t, http.StatusOK, createRec.Code)
+
+	body := updateEdgeTargetBody(t, updateEdgeTargetRequest{
+		From: "book:lotr", Type: "authored_by",
+		OldTarget: "person:tolkien", NewTarget: "person:does-not-exist",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges/update-target", body)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assertErrorEnvelope(t, rec, http.StatusUnprocessableEntity, "missing_entity",
+		"person:does-not-exist")
+}
+
+// Test_UpdateEdgeTarget_NewTargetAlreadyExists pins the
+// HTTP-level mapping of the collision case surfaced in PR-306
+// review: (from, type, new_target) already a current row →
+// 409 edge_stale (not a silent merge).
+func Test_UpdateEdgeTarget_NewTargetAlreadyExists(t *testing.T) {
+	t.Parallel()
+
+	h, st := newAPIWithStore(t)
+	seedEntity(t, st, "book:lotr", "book")
+	seedEntity(t, st, "person:placeholder", "person")
+	seedEntity(t, st, "person:tolkien", "person")
+
+	createPlaceholder := edgeRequestBody(t, edgeRequest{
+		Type: "authored_by", From: "book:lotr", To: "person:placeholder",
+	})
+	r1 := httptest.NewRecorder()
+	h.ServeHTTP(r1, httptest.NewRequest(http.MethodPost, "/v1/edges", createPlaceholder))
+	require.Equal(t, http.StatusOK, r1.Code)
+
+	createResolved := edgeRequestBody(t, edgeRequest{
+		Type: "authored_by", From: "book:lotr", To: "person:tolkien",
+	})
+	r2 := httptest.NewRecorder()
+	h.ServeHTTP(r2, httptest.NewRequest(http.MethodPost, "/v1/edges", createResolved))
+	require.Equal(t, http.StatusOK, r2.Code)
+
+	body := updateEdgeTargetBody(t, updateEdgeTargetRequest{
+		From: "book:lotr", Type: "authored_by",
+		OldTarget: "person:placeholder", NewTarget: "person:tolkien",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges/update-target", body)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assertErrorEnvelope(t, rec, http.StatusConflict, "edge_stale",
+		"does not match a current edge")
+}
+
+func Test_UpdateEdgeTarget_RejectsNoop(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newAPIWithStore(t)
+	body := updateEdgeTargetBody(t, updateEdgeTargetRequest{
+		From: "book:lotr", Type: "authored_by",
+		OldTarget: "person:tolkien", NewTarget: "person:tolkien",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges/update-target", body)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_argument",
+		"no-op")
+}
+
+func Test_UpdateEdgeTarget_RejectsMissingFields(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newAPIWithStore(t)
+	cases := []struct {
+		name    string
+		req     updateEdgeTargetRequest
+		hint    string
+	}{
+		{"empty from", updateEdgeTargetRequest{Type: "authored_by", OldTarget: "a", NewTarget: "b"}, "from"},
+		{"empty type", updateEdgeTargetRequest{From: "book:lotr", OldTarget: "a", NewTarget: "b"}, "type"},
+		{"empty old_target", updateEdgeTargetRequest{From: "book:lotr", Type: "authored_by", NewTarget: "b"}, "old_target"},
+		{"empty new_target", updateEdgeTargetRequest{From: "book:lotr", Type: "authored_by", OldTarget: "a"}, "new_target"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := updateEdgeTargetBody(t, tc.req)
+			req := httptest.NewRequest(http.MethodPost, "/v1/edges/update-target", body)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_argument", tc.hint)
+		})
+	}
+}
+
+func Test_UpdateEdgeTarget_RejectsUnknownEdgeType(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newAPIWithStore(t)
+	body := updateEdgeTargetBody(t, updateEdgeTargetRequest{
+		From: "book:lotr", Type: "totally-not-registered",
+		OldTarget: "person:tolkien", NewTarget: "person:tolkien-real",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/edges/update-target", body)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_argument",
+		"edge_kinds")
+}
