@@ -10,16 +10,13 @@ Read this before calling any tool. The pattern is small enough that one read car
 
 ## Connecting
 
-Two connection paths to the same 37-tool surface — pick whichever fits your agent runtime:
+The daemon exposes its full MCP tool surface as a Streamable-HTTP MCP server at `<base-url>/mcp` (same host + port that serves `/v1/...`, e.g. `http://localhost:7433/mcp`). Auth: the same Bearer JWT that protects every REST route — issue with `yaad-index issue-token --operator <op> --agent <name>`, send as `Authorization: Bearer <token>`. The full daemon mux handles the call in-process; no wrapper to run.
 
-- **Direct (preferred):** the daemon exposes its full tool surface as a Streamable-HTTP MCP server at `<base-url>/mcp` (same host + port that serves `/v1/...`, e.g. `http://localhost:7433/mcp`). Auth: the same Bearer JWT that protects every REST route — issue with `yaad-index issue-token --operator <op> --agent <name>`, send as `Authorization: Bearer <token>`. The full daemon mux handles the call in-process; no wrapper to run.
-- **Legacy stdio wrapper:** the bundled `mcp/` Node process (TypeScript) speaks stdio MCP and forwards every tool to the daemon's REST surface. Still bundled, still works — use it when your agent runtime can't speak Streamable HTTP, or when you're already wired against it. Both paths surface identical tool semantics (same names, same arguments, same response shapes); the direct path eliminates the wrapper hop.
-
-**Tool inventory is live.** Both paths advertise the same 37 tools via the MCP `tools/list` call. The catalog below is the per-tool reference; `tools/list` is the authoritative live source on a running daemon.
+**Tool inventory is live.** Call MCP `tools/list` on a running daemon for the authoritative current set. The catalog below is the per-tool reference; treat `tools/list` as the source of truth when the two disagree.
 
 ## What yaad-mcp is
 
-An MCP surface over yaad-index — a knowledge index that turns URLs into structured entities, plus the workflow engine that reacts to graph changes. Thirty-seven tools, all active: `ingest`, `get_entity`, `get_entity_with_context`, `edges`, `update_edge_target`, `get_entities_batch`, `fill`, `set_operator_fill`, `defer_gap`, `add_note`, `list_entities`, `search_local`, `search_upstream`, `structure`, `cv_status`, `reindex`, `kinds`, `plugins`, `needs_fill`, `archive_entity`, `restore_entity`, `delete_entity`, plus the user-content (UGC) read trio `get_user_content`, `list_user_content_sections`, `get_user_content_section` and write hexad `create_user_content`, `edit_user_content_section`, `add_user_content_section`, `rename_user_content_section`, `delete_user_content_section`, `delete_user_content`, plus the workflow surface `workflow_list`, `workflow_discover`, `workflow_trigger` and task surface `task_list`, `task_load`, `task_resolve` (per ADR-0024 §"Agent surface").
+An MCP surface over yaad-index — a knowledge index that turns URLs into structured entities, plus the workflow engine that reacts to graph changes. The current tool surface, grouped by responsibility: entity reads + lifecycle (`get_entity`, `get_entities_batch`, `get_entity_with_context`, `list_entities`, `archive_entity`, `restore_entity`, `delete_entity`); search (`search_local`, `search_upstream`); ingest (`ingest`); fill / canonical-kind gap workflow (`fill`, `set_operator_fill`, `defer_gap`, `needs_fill`, `cv_status`, `canonical_registry_effective`, `canonical_registry_available`); edges (`edges`, `update_edge_target`); notes (`add_note`); system metadata (`structure`, `kinds`, `plugins`, `reindex`); user-content (UGC) read trio (`get_user_content`, `list_user_content_sections`, `get_user_content_section`) and write hexad (`create_user_content`, `edit_user_content_section`, `add_user_content_section`, `rename_user_content_section`, `delete_user_content_section`, `delete_user_content`); workflows (`workflow_list`, `workflow_discover`, `workflow_get`, `workflow_define`, `workflow_delete`, `workflow_trigger`); tasks (`task_list`, `task_load`, `task_resolve`) (per ADR-0024 §"Agent surface").
 
 ## Mental model — the graph yaad-index builds
 
@@ -264,7 +261,7 @@ Create a new UGC entity. Server slugifies `title` → `id = user-content:<slug>`
 - `"<kind>:<slug>"` — pre-formed canonical-label string (UGC is operator-authored, so the pre-formed shape is accepted — same waiver as `set_operator_fill`'s `canonical_type`).
 - `["<kind>:<slug>", ...]` — list of pre-formed strings.
 
-Other fields land verbatim under the entity's `Data` map without edge derivation. Idempotent re-create isn't a thing (409 conflict path); a future re-edit endpoint (surfaced as a separate MCP tool when the wrapper lands) re-applies the same derivation cleanly so the edge graph tracks frontmatter edits exactly.
+Other fields land verbatim under the entity's `Data` map without edge derivation. Idempotent re-create isn't a thing (409 conflict path); a future re-edit endpoint will re-apply the same derivation cleanly so the edge graph tracks frontmatter edits exactly.
 
 ### `edit_user_content_section(id, sec, body, etag)`
 
@@ -479,9 +476,6 @@ Before running a flow, sanity-check yaad-index is alive:
 ingest("https://en.wikipedia.org/wiki/Test")
 ```
 
-A `complete` or `needs_fill` response means the platform is up. Connection errors mean check the daemon is running + reachable:
-
-- **Direct path:** confirm `<base-url>/mcp` is reachable + the Bearer token is valid (curl `<base-url>/v1/health` returns 200; that same daemon serves `/mcp`).
-- **Legacy stdio wrapper:** check `YAAD_INDEX_URL` is set + the Docker pilot is running.
+A `complete` or `needs_fill` response means the platform is up. Connection errors mean check the daemon is running + reachable: confirm `<base-url>/mcp` is reachable + the Bearer token is valid (curl `<base-url>/v1/health` returns 200; that same daemon serves `/mcp`).
 
 A 401 from the MCP layer means the JWT is missing / malformed / expired — re-issue via `yaad-index issue-token` and reconfigure the agent.
