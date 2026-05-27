@@ -48,9 +48,16 @@ type operatorFillResponse struct {
 // fill_strategy is "agent" reject with 400 (operators can't write
 // agent-only fields).
 //
-// Auth: operator-only — Claim.Subject must equal Claim.Operator.
-// Agent-on-behalf-of-operator (Subject != Operator) rejects with
-// 403 `agent_not_allowed`.
+// Auth: any authenticated, non-anonymous claim per #317. Agent-
+// tier tokens (Subject names an agent, Operator may or may not
+// be present) are accepted as the right caller for the per-gap
+// `fill_strategy` source semantics (ADR-0019): when the gap is
+// strategy=operator, the agent surfaces the question to the
+// operator OUT-OF-BAND and writes here on the operator's
+// confirmed behalf. The per-gap strategy still governs the
+// SOURCE of the value; this endpoint is a write-permission
+// boundary, not a source-governance gate. Provenance records
+// the calling Subject so the audit trail names the agent.
 //
 // Vault-then-DB ordering per ADR-0008. Auto-commit prefix
 // `operator-fill: <id>`.
@@ -92,19 +99,19 @@ func handleEntityOperatorFill(
 				"auth claim missing on request — server misconfiguration")
 			return
 		}
-		// Operator-authority gate per yaad-index: accept any
-		// pair-claim that names a real operator — direct (Subject ==
-		// Operator) OR agent-on-behalf (Subject is an agent + Operator
-		// names a human). Anonymous + agent-only (no Operator) tokens
-		// reject. This widens the legacy brittle Subject==Operator
-		// check that excluded the agent-conduit pattern even though
-		// the operator authority was structurally present on the
-		// pair-claim. The audit trail still names the agent (as
-		// commit author + provenance) AND the operator (as the
-		// authority).
-		if !ClaimHasOperatorAuthority(claim) {
-			writeError(w, http.StatusForbidden, "operator_authority_required",
-				"operator-fill requires a token with operator authority; pass a pair-claim where Operator names a real operator (agent-on-behalf is allowed)")
+		// Per #317: this endpoint accepts any authenticated, non-
+		// anonymous claim. The per-gap `fill_strategy` (ADR-0019)
+		// governs the value's SOURCE — operator/agent/both — and
+		// the agent runtime honors that discipline at the skill
+		// layer (never auto-fill strategy=operator without explicit
+		// operator confirmation). The HTTP boundary no longer
+		// gates on operator authority; an agent-tier token writing
+		// on the operator's confirmed behalf is the documented
+		// pattern. Anonymous tokens still reject — there's no
+		// identity to attribute the fill to.
+		if IsAnonymousClaim(claim) {
+			writeError(w, http.StatusForbidden, "authentication_required",
+				"operator-fill requires an authenticated claim; anonymous tokens are not accepted")
 			return
 		}
 
