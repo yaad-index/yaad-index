@@ -12,8 +12,7 @@
       "exclude-paths": [
         "cmd/yaad-wikipedia",
         "cmd/yaad-bgg",
-        "cmd/yaad-gmail",
-        "mcp"
+        "cmd/yaad-gmail"
       ]
     },
     "cmd/yaad-wikipedia": {
@@ -30,11 +29,6 @@
       "release-type": "go",
       "component": "yaad-gmail",
       "package-name": "yaad-gmail"
-    },
-    "mcp": {
-      "release-type": "node",
-      "component": "yaad-mcp",
-      "package-name": "@yaad-index/mcp"
     }
   }
 }
