@@ -10,16 +10,16 @@ Read this before calling any tool. The pattern is small enough that one read car
 
 ## Connecting
 
-Two connection paths to the same 33-tool surface — pick whichever fits your agent runtime:
+Two connection paths to the same 37-tool surface — pick whichever fits your agent runtime:
 
 - **Direct (preferred):** the daemon exposes its full tool surface as a Streamable-HTTP MCP server at `<base-url>/mcp` (same host + port that serves `/v1/...`, e.g. `http://localhost:7433/mcp`). Auth: the same Bearer JWT that protects every REST route — issue with `yaad-index issue-token --operator <op> --agent <name>`, send as `Authorization: Bearer <token>`. The full daemon mux handles the call in-process; no wrapper to run.
 - **Legacy stdio wrapper:** the bundled `mcp/` Node process (TypeScript) speaks stdio MCP and forwards every tool to the daemon's REST surface. Still bundled, still works — use it when your agent runtime can't speak Streamable HTTP, or when you're already wired against it. Both paths surface identical tool semantics (same names, same arguments, same response shapes); the direct path eliminates the wrapper hop.
 
-**Tool inventory is live.** Both paths advertise the same 36 tools via the MCP `tools/list` call. The catalog below is the per-tool reference; `tools/list` is the authoritative live source on a running daemon.
+**Tool inventory is live.** Both paths advertise the same 37 tools via the MCP `tools/list` call. The catalog below is the per-tool reference; `tools/list` is the authoritative live source on a running daemon.
 
 ## What yaad-mcp is
 
-An MCP surface over yaad-index — a knowledge index that turns URLs into structured entities, plus the workflow engine that reacts to graph changes. Thirty-six tools, all active: `ingest`, `get_entity`, `get_entity_with_context`, `edges`, `get_entities_batch`, `fill`, `set_operator_fill`, `defer_gap`, `add_note`, `list_entities`, `search_local`, `search_upstream`, `structure`, `cv_status`, `reindex`, `kinds`, `plugins`, `needs_fill`, `archive_entity`, `restore_entity`, `delete_entity`, plus the user-content (UGC) read trio `get_user_content`, `list_user_content_sections`, `get_user_content_section` and write hexad `create_user_content`, `edit_user_content_section`, `add_user_content_section`, `rename_user_content_section`, `delete_user_content_section`, `delete_user_content`, plus the workflow surface `workflow_list`, `workflow_discover`, `workflow_trigger` and task surface `task_list`, `task_load`, `task_resolve` (per ADR-0024 §"Agent surface").
+An MCP surface over yaad-index — a knowledge index that turns URLs into structured entities, plus the workflow engine that reacts to graph changes. Thirty-seven tools, all active: `ingest`, `get_entity`, `get_entity_with_context`, `edges`, `update_edge_target`, `get_entities_batch`, `fill`, `set_operator_fill`, `defer_gap`, `add_note`, `list_entities`, `search_local`, `search_upstream`, `structure`, `cv_status`, `reindex`, `kinds`, `plugins`, `needs_fill`, `archive_entity`, `restore_entity`, `delete_entity`, plus the user-content (UGC) read trio `get_user_content`, `list_user_content_sections`, `get_user_content_section` and write hexad `create_user_content`, `edit_user_content_section`, `add_user_content_section`, `rename_user_content_section`, `delete_user_content_section`, `delete_user_content`, plus the workflow surface `workflow_list`, `workflow_discover`, `workflow_trigger` and task surface `task_list`, `task_load`, `task_resolve` (per ADR-0024 §"Agent surface").
 
 ## Mental model — the graph yaad-index builds
 
@@ -87,6 +87,22 @@ Single-hop edge query — the flat one-hop surface for "who designed this game" 
 - `next_cursor` is reserved for forward-compat and always null today (single-hop counts per entity are bounded; cursor traversal is a future enhancement).
 
 **When to use this vs `get_entity_with_context`.** Use `edges` for direct one-hop queries — the flat shape (no nested neighbors, no BFS depth, no canonical_vocabulary payload) keeps the response small. Use `get_entity_with_context` when you need a multi-hop walk where each neighbor's surrounding state matters (clean_content, gaps, etc.). `edges` is also the right tool for inbound queries — `get_entity_with_context` walks outbound only.
+
+### `update_edge_target(from, type, old_target, new_target)`
+
+Rewrite an edge's target in a single transaction per #304 Cut B. Wraps `POST /v1/edges/update-target`. Deletes the `(from, type, old_target)` edge and creates `(from, type, new_target)`, preserving the original edge's `created_at` + metadata so the audit trail shows "edge existed since T, target finalized at T'" rather than a delete+create pair with two separate timestamps. `updated_at` advances to the rewrite moment.
+
+**When to use.** The agent-driven half of the canonical-kind resolver flow: a workflow / agent created an edge whose target was a placeholder (`mentions → boardgame:?brass`), then resolved the name via plugin search / operator disambiguation, and now needs to swap the placeholder for the resolved canonical id (`mentions → boardgame:brass-birmingham`). Edge identity + history survive the swap. Pre-Cut-B flows had to `delete_edge` + `create_edge` and lost both.
+
+**Stale-safety.** Concurrent rewrites converge: returns `edge_stale` (409) when the `(from, type, old_target)` tuple doesn't match a current row (already rewritten by another caller, deleted, or never existed). Re-read state via `edges(entity_id=from)` and retry with the fresh tuple.
+
+**Error envelopes (passthrough — branch on `ok === false`):**
+
+- `error: "edge_stale"` (409) — old tuple doesn't match current state. Refetch + retry.
+- `error: "missing_entity"` (422) — `new_target` doesn't resolve to a known entity. Materialize via `ingest` or pick a valid canonical id, then retry.
+- `error: "invalid_argument"` (400) — any required field empty, edge type not registered, or `old_target == new_target` (no-op rejected at the boundary).
+
+**No vault-side rewrite.** The primitive is DB-transactional only. If the source entity is vault-resident (plugin-emitted, UGC) and its frontmatter `edges:` block carries the old target, a subsequent reindex of that vault file will revert the rewrite. Cut C's centralized edge-write will compose vault + DB updates for vault-resident sources; until then, callers handling vault-resident sources should also touch the source's vault edges block.
 
 ### `get_entities_batch(ids, with_edges?)`
 

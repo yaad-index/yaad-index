@@ -439,6 +439,30 @@ type Store interface {
 	GetEdgesForMany(ctx context.Context, fromIDs []string, types []string) ([]Edge, error)
 	CreateEdge(ctx context.Context, e *Edge) error
 
+	// UpdateEdgeTarget atomically rewrites an edge's target per
+	// #304 Cut B. Deletes (fromID, edgeType, oldTargetID) and
+	// creates (fromID, edgeType, newTargetID) in one transaction,
+	// preserving created_at on the new row so the audit trail
+	// shows "this edge existed since T, target finalized at T'"
+	// rather than a delete+create with two separate timestamps.
+	// updated_at advances to the rewrite moment.
+	//
+	// Stale-safety per the v1 cut framing: returns ErrEdgeStale
+	// (handlers → 409) when the (fromID, edgeType, oldTargetID)
+	// tuple doesn't match a current row — the edge was already
+	// deleted, already resolved to a different target, or never
+	// existed. Concurrent rewrites collapse cleanly: the second
+	// caller sees ErrEdgeStale on the now-different tuple and
+	// re-reads state.
+	//
+	// newTargetID must reference an existing entity; absent →
+	// ErrMissingEntity (handlers → 422). The metadata + edge type
+	// on the new row mirror the old row (same payload, swap
+	// target). A no-op rewrite (newTargetID == oldTargetID)
+	// rejects with a plain error — the routing layer should
+	// short-circuit before calling.
+	UpdateEdgeTarget(ctx context.Context, fromID, edgeType, oldTargetID, newTargetID string) (*Edge, error)
+
 	// DeleteEdgesByTypeFrom removes every edge of the given type
 	// originating at fromID. Used by the canonical_type fill path
 	// (yaad-index) to implement idempotent re-fill semantics:
@@ -572,6 +596,14 @@ var ErrNotFound = errors.New("not found")
 // §15.5.21 unprocessable content — request well-formed, can't be
 // processed because of a referential-integrity gap).
 var ErrMissingEntity = errors.New("missing entity")
+
+// ErrEdgeStale is returned by UpdateEdgeTarget when the (from_id,
+// edge_type, old_target_id) tuple no longer matches a current row
+// per #304 Cut B. Either the edge was already deleted, already
+// resolved to a different target, or never existed. Handlers map
+// to 409 conflict so callers re-read state + retry with the
+// fresh tuple.
+var ErrEdgeStale = errors.New("edge tuple does not match current state")
 
 // ErrNotImplemented is returned by stub methods until a follow-up PR
 // implements them. Tests in this package assert against it to lock the
