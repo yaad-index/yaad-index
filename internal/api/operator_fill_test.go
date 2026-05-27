@@ -320,16 +320,20 @@ func TestOperatorFill_AgentOnBehalfOfOperatorAccepted(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), `"rating":9`)
 }
 
-// Note: the spec lists "agent-only token (no operator claim)
-// rejected" as a 403 path. The JWT signer (`internal/auth`) rejects
-// empty Operator at sign time, so the agent-only-token shape is
-// not constructable through the production auth layer — every
-// verified pair-claim has Operator populated. The gate's
-// rejection of the no-operator case is covered by the
-// ClaimHasOperatorAuthority unit test in
-// auth_middleware_operator_authority_test.go; an integration test
-// here would require widening the auth signer (explicitly out of
-// scope per the spec, which kept JWT shape unchanged).
+// Per #317 the operator-authority gate has been dropped. The
+// production signer continues to reject empty Operator at sign
+// time, so the new "agent-tier no-Operator token accepted" shape
+// is not directly testable through the production auth layer
+// without widening the signer (out-of-scope per the spec). The
+// surviving integration test for the gate's positive path is
+// TestOperatorFill_AgentOnBehalfOfOperatorAccepted (above), which
+// continues to pass post-change — the agent-conduit pattern now
+// routes through the no-op auth check rather than the (removed)
+// operator-authority gate, but the observed wire-shape is
+// identical. The anonymous-rejection branch is exercised by the
+// auth middleware's own RequireAuth-with-required=true path; the
+// handler-level `IsAnonymousClaim` check is the dev-mode safety
+// net for the auth-disabled deploy.
 
 // TestOperatorFill_VaultRequired: no vault wired returns 503.
 func TestOperatorFill_VaultRequired(t *testing.T) {
