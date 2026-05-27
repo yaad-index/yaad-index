@@ -50,6 +50,7 @@ import (
 	"time"
 
 	"github.com/yaad-index/yaad-index/internal/canonical"
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
@@ -93,6 +94,12 @@ type FileTaskWriter struct {
 	// on-disk file shape don't need to wire a backing store.
 	store store.Store
 
+	// edgeWriter routes the `triggered_by` edge create per
+	// #304 Cut C1 through the centralized edge-write service.
+	// Defaulted in NewFileTaskWriter when nil so test fixtures
+	// stay buildable without explicit wiring.
+	edgeWriter edgewrite.EdgeWriter
+
 	// logger surfaces non-fatal store/edge materialization
 	// failures at WARN. The on-disk file write is the load-
 	// bearing op; store errors degrade to "row will materialize
@@ -124,15 +131,27 @@ type FileTaskWriter struct {
 //
 // logger surfaces non-fatal store materialization failures.
 // Nil falls back to slog.Default().
-func NewFileTaskWriter(vaultRoot string, kinds map[string]config.CanonicalKindConfig, st store.Store, logger *slog.Logger) *FileTaskWriter {
+func NewFileTaskWriter(vaultRoot string, kinds map[string]config.CanonicalKindConfig, st store.Store, edgeWriter edgewrite.EdgeWriter, logger *slog.Logger) *FileTaskWriter {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if edgeWriter == nil && st != nil {
+		// Default-init the centralized edge-write service so the
+		// triggered_by edge mirror flows through the same routing
+		// layer the rest of the daemon uses per #304 Cut C1. nil
+		// store stays nil-safe (mirror loop is skipped anyway).
+		svc, err := edgewrite.New(st, nil)
+		if err != nil {
+			panic(fmt.Sprintf("NewFileTaskWriter: default edgewrite.Service construction failed: %v", err))
+		}
+		edgeWriter = svc
+	}
 	return &FileTaskWriter{
-		vaultRoot: vaultRoot,
-		kinds:     kinds,
-		store:     st,
-		logger:    logger,
+		vaultRoot:  vaultRoot,
+		kinds:      kinds,
+		store:      st,
+		edgeWriter: edgeWriter,
+		logger:     logger,
 	}
 }
 
@@ -259,7 +278,7 @@ func (w *FileTaskWriter) materializeTaskEntity(ctx context.Context, workflow, su
 		return
 	}
 	edge := &store.Edge{Type: canonical.EdgeTypeTriggeredBy, From: taskID, To: entityID}
-	if err := w.store.CreateEdge(ctx, edge); err != nil {
+	if err := w.edgeWriter.CreateEdge(ctx, edge); err != nil {
 		// ErrMissingEntity here means the source entity isn't
 		// in the store — common for manual-trigger inputs that
 		// reference an unknown id. Don't WARN on that shape;

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/attachments"
 	"github.com/yaad-index/yaad-index/internal/auth"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/mcp"
 	"github.com/yaad-index/yaad-index/internal/plugins"
@@ -71,6 +73,26 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	if cfg.eventBus == nil {
 		cfg.eventBus = eventbus.NewMemoryBus()
 	}
+	// Default-init the centralized edge-write service per #304
+	// Cut C1 when no opt provided. Production wires WithEdgeWriter
+	// with a Service over the same store + canonical-kind
+	// resolver map; tests/dev get a passthrough Service with no
+	// resolvers (legacy edge-write behavior preserved). The
+	// Service is the single entry point Cut C2 + C3 will read
+	// caller-mode + plugin-routing decisions through.
+	if cfg.edgeWriter == nil {
+		svc, err := edgewrite.New(st, nil)
+		if err != nil {
+			// New rejects nil store + multi-resolver maps; the
+			// nil-map call can't return an error today, so a panic
+			// here would only fire if a future edgewrite.New
+			// grows a new validation gate that the default path
+			// trips. Surface it loudly rather than silently
+			// degrading to a partial handler config.
+			panic(fmt.Sprintf("default edgewrite.Service construction failed: %v", err))
+		}
+		cfg.edgeWriter = svc
+	}
 
 	mux := http.NewServeMux()
 	// Prefer the SyncIngester's tracker when one was supplied
@@ -84,7 +106,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 		tracker = si.trackerHandle()
 	}
 	if tracker == nil {
-		tracker = newIngestTracker(logger, st, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks, cfg.eventBus, cfg.pluginInstances, cfg.canonicalEdgeTypes, canonicalKindKeys(cfg.canonicalKindReg))
+		tracker = newIngestTracker(logger, st, cfg.edgeWriter, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks, cfg.eventBus, cfg.pluginInstances, cfg.canonicalEdgeTypes, canonicalKindKeys(cfg.canonicalKindReg))
 	}
 
 	// Per yaad-index a prior PR: the protect wrapper enforces Bearer-JWT
@@ -127,15 +149,15 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("POST /v1/entities/{id}/restore", protect(http.HandlerFunc(handleEntityRestore(logger, st, cfg.vaultWriter, cfg.writeLocks))))
 	mux.Handle("GET /v1/entities/{id}/context", protect(http.HandlerFunc(handleEntityContext(logger, st, cfg.vaultReader))))
 	mux.Handle("GET /v1/entities/{id}/attachments/{name}", protect(http.HandlerFunc(handleEntityAttachment(logger, st, cfg.vaultReader))))
-	mux.Handle("POST /v1/edges", protect(http.HandlerFunc(handleCreateEdge(logger, st, registry, cfg.eventBus))))
+	mux.Handle("POST /v1/edges", protect(http.HandlerFunc(handleCreateEdge(logger, st, cfg.edgeWriter, registry, cfg.eventBus))))
 	mux.Handle("POST /v1/edges/update-target", protect(http.HandlerFunc(handleUpdateEdgeTarget(logger, st, registry, cfg.eventBus))))
 	mux.Handle("GET /v1/edges", protect(http.HandlerFunc(handleListEdges(logger, st))))
 	mux.Handle("GET /v1/search", protect(http.HandlerFunc(handleSearch(logger, st))))
 	mux.Handle("POST /v1/search/upstream", protect(http.HandlerFunc(handleSearchUpstream(logger, registry))))
 	mux.Handle("POST /v1/ingest", protect(http.HandlerFunc(handleIngest(logger, st, tracker, registry, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg, cfg.pluginInstanceConfigs))))
 	mux.Handle("GET /v1/needs-fill", protect(http.HandlerFunc(handleNeedsFill(logger, st, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg))))
-	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
-	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
+	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleFill(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
+	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
 	mux.Handle("POST /v1/entities/{id}/notes", protect(http.HandlerFunc(handleNotes(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg))))
 
 	// User-content (UGC) read + write surface per yaad-index
@@ -143,12 +165,12 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("GET /v1/user-content/{id}", protect(http.HandlerFunc(handleUserContentRead(logger, st, cfg.vaultReader))))
 	mux.Handle("GET /v1/user-content/{id}/sections", protect(http.HandlerFunc(handleUserContentSectionsList(logger, st, cfg.vaultReader))))
 	mux.Handle("GET /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSection(logger, st, cfg.vaultReader))))
-	mux.Handle("POST /v1/user-content", protect(http.HandlerFunc(handleUserContentCreate(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.userContentFrontmatterEdges, cfg.writeLocks, cfg.eventBus))))
+	mux.Handle("POST /v1/user-content", protect(http.HandlerFunc(handleUserContentCreate(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.userContentFrontmatterEdges, cfg.writeLocks, cfg.eventBus))))
 	mux.Handle("PUT /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSectionReplace(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
 	mux.Handle("POST /v1/user-content/{id}/sections", protect(http.HandlerFunc(handleUserContentSectionAdd(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
 	mux.Handle("PATCH /v1/user-content/{id}/sections/{sec}/heading", protect(http.HandlerFunc(handleUserContentSectionRenameHeading(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
 	mux.Handle("DELETE /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSectionDelete(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
-	mux.Handle("PUT /v1/user-content/{id}/frontmatter", protect(http.HandlerFunc(handleUserContentFrontmatterEdit(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.userContentFrontmatterEdges, cfg.eventBus, cfg.writeLocks))))
+	mux.Handle("PUT /v1/user-content/{id}/frontmatter", protect(http.HandlerFunc(handleUserContentFrontmatterEdit(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.userContentFrontmatterEdges, cfg.eventBus, cfg.writeLocks))))
 	mux.Handle("DELETE /v1/user-content/{id}", protect(http.HandlerFunc(handleUserContentDelete(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
 	// Archive lifecycle for user-content per ADR-0018 step 2. Same
 	// shared handler as the entity routes — kind-aware via the row
@@ -253,6 +275,13 @@ type handlerConfig struct {
 	// (`update_edge_target` primitive) and Cut C (centralized
 	// edge-write routing) to consume.
 	canonicalKindResolvers map[string][]string
+	// edgeWriter is the centralized edge-write service per #304
+	// Cut C1. handleCreateEdge + fill-side edge writes flow
+	// through it instead of calling store.CreateEdge directly.
+	// Nil → NewHandlerWithRegistry builds a default Service
+	// over the store (empty resolvers — Cut C2 wires the
+	// resolver-aware behavior).
+	edgeWriter edgewrite.EdgeWriter
 	userContentFrontmatterEdges map[string]config.UserContentFrontmatterEdgeMapping
 	authVerifier auth.Verifier
 	authRequired bool
@@ -446,6 +475,20 @@ func WithFillInstruction(text string) HandlerOption {
 func WithCanonicalEdgeTypes(edgeTypes []string) HandlerOption {
 	return func(c *handlerConfig) {
 		c.canonicalEdgeTypes = edgeTypes
+	}
+}
+
+// WithEdgeWriter wires the centralized edge-write service per
+// #304 Cut C1. Production main.go constructs one Service over
+// the daemon's store + canonical-kind resolver ownership map
+// (which Cut A built) and passes it here so every edge-write
+// entry point in the handler flows through the same routing
+// layer. Tests / dev binaries that don't wire this option get a
+// default Service over the store with empty resolvers (legacy
+// passthrough behavior preserved).
+func WithEdgeWriter(w edgewrite.EdgeWriter) HandlerOption {
+	return func(c *handlerConfig) {
+		c.edgeWriter = w
 	}
 }
 

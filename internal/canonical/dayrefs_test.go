@@ -133,7 +133,7 @@ func TestEmitDayRefs_BaselineEdge(t *testing.T) {
 		ID: "boardgame:acme-game", Kind: "boardgame",
 	}))
 
-	emitted := EmitDayRefs(context.Background(), st,
+	emitted := EmitDayRefs(context.Background(), st, nil,
 		"boardgame:acme-game",
 		map[string]any{"played_on": "day:2026-11-11"},
 		nil,
@@ -162,7 +162,7 @@ func TestEmitDayRefs_PluginOverrideEdge(t *testing.T) {
 		ID: "task:write-report", Kind: "task",
 	}))
 
-	emitted := EmitDayRefs(context.Background(), st,
+	emitted := EmitDayRefs(context.Background(), st, nil,
 		"task:write-report",
 		map[string]any{"deadline": "day:2026-12-01"},
 		map[string]string{"deadline": EdgeTypeDueOn},
@@ -188,9 +188,9 @@ func TestEmitDayRefs_Idempotent(t *testing.T) {
 	}))
 
 	data := map[string]any{"deadline": "day:2026-11-11"}
-	EmitDayRefs(context.Background(), st, "task:t1", data, nil, logger)
-	EmitDayRefs(context.Background(), st, "task:t1", data, nil, logger)
-	EmitDayRefs(context.Background(), st, "task:t1", data, nil, logger)
+	EmitDayRefs(context.Background(), st, nil, "task:t1", data, nil, logger)
+	EmitDayRefs(context.Background(), st, nil, "task:t1", data, nil, logger)
+	EmitDayRefs(context.Background(), st, nil, "task:t1", data, nil, logger)
 
 	gotEdges, err := st.GetEdgesFor(context.Background(), "task:t1", nil)
 	require.NoError(t, err)
@@ -209,7 +209,7 @@ func TestEmitDayRefs_MixedDeclaredAndBaseline(t *testing.T) {
 		ID: "task:t1", Kind: "task",
 	}))
 
-	emitted := EmitDayRefs(context.Background(), st, "task:t1",
+	emitted := EmitDayRefs(context.Background(), st, nil, "task:t1",
 		map[string]any{
 			"deadline":     "day:2026-11-11",
 			"random_note":  "day:2026-12-31",

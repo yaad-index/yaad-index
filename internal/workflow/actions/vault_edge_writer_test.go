@@ -51,7 +51,7 @@ func newVaultEdgeWriterFixture(t *testing.T) (*VaultEdgeWriter, store.Store, *va
 	}))
 
 	writer := NewVaultEdgeWriter(
-		st, r, w,
+		st, nil, r, w,
 		writelocks.New(),
 		kindReg,
 		nil, // bus — not asserted here
@@ -209,7 +209,7 @@ func TestVaultEdgeWriter_KindPrefixStrip_DayCanonicalID(t *testing.T) {
 	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
 		ID: "task:write-report", Kind: "task",
 	}))
-	writer := NewVaultEdgeWriter(st, r, w, writelocks.New(), nil, nil,
+	writer := NewVaultEdgeWriter(st, nil, r, w, writelocks.New(), nil, nil,
 		slog.New(slog.DiscardHandler))
 
 	err := writer.AddCanonicalEdge(context.Background(), "today-stamp",
@@ -239,7 +239,7 @@ func TestVaultEdgeWriter_KindPrefixStrip_PreservesBareName(t *testing.T) {
 	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
 		ID: "task:t1", Kind: "task",
 	}))
-	writer := NewVaultEdgeWriter(st, r, w, writelocks.New(), nil, nil,
+	writer := NewVaultEdgeWriter(st, nil, r, w, writelocks.New(), nil, nil,
 		slog.New(slog.DiscardHandler))
 
 	err := writer.AddCanonicalEdge(context.Background(), "wf",
@@ -264,7 +264,7 @@ func TestVaultEdgeWriter_KindPrefixStrip_OnlyExactKindPrefix(t *testing.T) {
 	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
 		ID: "task:t1", Kind: "task",
 	}))
-	writer := NewVaultEdgeWriter(st, r, w, writelocks.New(), nil, nil,
+	writer := NewVaultEdgeWriter(st, nil, r, w, writelocks.New(), nil, nil,
 		slog.New(slog.DiscardHandler))
 
 	// target.kind=day but target.name has prefix "week:" — the

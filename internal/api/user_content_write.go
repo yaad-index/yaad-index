@@ -47,6 +47,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/auth"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
@@ -125,6 +126,7 @@ type userContentDeleteResponse struct {
 func handleUserContentCreate(
 	logger *slog.Logger,
 	st store.Store,
+	edgeWriter edgewrite.EdgeWriter,
 	vaultReader *vault.Reader,
 	vaultWriter *vault.Writer,
 	canonicalKindReg map[string]config.CanonicalKindConfig,
@@ -348,7 +350,7 @@ func handleUserContentCreate(
 			// helper publishes entity.created on each thin
 			// canonical-label row materialized for the first
 			// time + entity.edge_added on each derived edge.
-			if err := applyCanonicalTypeEdges(r.Context(), st, id, ucEdgeOps, ucGaps, logger, bus, eventbus.SourceOperator, &pending); err != nil {
+			if err := applyCanonicalTypeEdges(r.Context(), st, edgeWriter, id, ucEdgeOps, ucGaps, logger, bus, eventbus.SourceOperator, &pending); err != nil {
 				logger.ErrorContext(r.Context(), "user-content create: canonical-edge derivation",
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",
@@ -1077,6 +1079,7 @@ type userContentSectionDeleteResponse struct {
 func handleUserContentFrontmatterEdit(
 	logger *slog.Logger,
 	st store.Store,
+	edgeWriter edgewrite.EdgeWriter,
 	vaultReader *vault.Reader,
 	vaultWriter *vault.Writer,
 	canonicalKindReg map[string]config.CanonicalKindConfig,
@@ -1251,7 +1254,7 @@ func handleUserContentFrontmatterEdit(
 			// The helper still emits entity.edge_added on each
 			// new edge (and entity.created on any newly-
 			// materialized thin canonical-label rows).
-			if err := applyCanonicalTypeEdges(r.Context(), st, id, fullOps, ucGaps, logger, bus, eventbus.SourceOperator, &pending); err != nil {
+			if err := applyCanonicalTypeEdges(r.Context(), st, edgeWriter, id, fullOps, ucGaps, logger, bus, eventbus.SourceOperator, &pending); err != nil {
 				logger.ErrorContext(r.Context(), "user-content frontmatter-edit: canonical-edge re-derivation",
 					"err", err, "id", id)
 				writeError(w, http.StatusInternalServerError, "internal_error",

@@ -23,6 +23,7 @@ import (
 
 	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/slug"
 	"github.com/yaad-index/yaad-index/internal/store"
@@ -81,6 +82,7 @@ import (
 func applyCanonicalTypeEdges(
 	ctx context.Context,
 	st store.Store,
+	edgeWriter edgewrite.EdgeWriter,
 	sourceID string,
 	ops []operatorFillOp,
 	gaps map[string]config.GapSpec,
@@ -136,10 +138,10 @@ func applyCanonicalTypeEdges(
 					CausedByEntityID: sourceID,
 				})
 			}
-			if err := st.CreateEdge(ctx, &store.Edge{
+			if err := edgeWriter.CreateEdge(ctx, &store.Edge{
 				Type: op.Field,
 				From: sourceID,
-				To: label,
+				To:   label,
 			}); err != nil {
 				return fmt.Errorf("create edge %s -[%s]-> %s: %w",
 					sourceID, op.Field, label, err)

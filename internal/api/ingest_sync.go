@@ -26,6 +26,7 @@ import (
 
 	"github.com/yaad-index/yaad-index/internal/attachments"
 	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/eventbus"
 	"github.com/yaad-index/yaad-index/internal/plugins"
 	"github.com/yaad-index/yaad-index/internal/store"
@@ -68,6 +69,7 @@ type SyncIngester interface {
 func NewSyncIngester(
 	logger *slog.Logger,
 	st store.Store,
+	edgeWriter edgewrite.EdgeWriter,
 	registry *plugins.Registry,
 	vaultWriter *vault.Writer,
 	vaultReader *vault.Reader,
@@ -84,7 +86,7 @@ func NewSyncIngester(
 	return &syncIngester{
 		logger:                logger,
 		registry:              registry,
-		tracker:               newIngestTracker(logger, st, vaultWriter, vaultReader, canonicalGuard, cacheTTLSeconds, dispatcher, writeLocks, bus, pluginInstances, canonicalEdgeTypes, canonicalKinds),
+		tracker:               newIngestTracker(logger, st, edgeWriter, vaultWriter, vaultReader, canonicalGuard, cacheTTLSeconds, dispatcher, writeLocks, bus, pluginInstances, canonicalEdgeTypes, canonicalKinds),
 		pluginInstanceConfigs: pluginInstanceConfigs,
 	}
 }

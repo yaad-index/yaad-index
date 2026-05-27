@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/yaad-index/yaad-index/internal/canonical"
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
@@ -87,6 +88,14 @@ type Summary struct {
 // calls).
 type Reindexer struct {
 	store store.Store
+	// edgeWriter is the centralized edge-write service per #304
+	// Cut C1. The reindex re-derive path's CreateEdge call (the
+	// per-vault-file edge restore in applyVaultEdges) flows
+	// through it instead of calling store.CreateEdge directly.
+	// Nil → NewWithOptions builds a default Service over the
+	// store (legacy passthrough behavior preserved for tests +
+	// dev binaries).
+	edgeWriter edgewrite.EdgeWriter
 	vaultRoot string
 	reader *vault.Reader
 	guard *config.CanonicalGuard
@@ -134,14 +143,37 @@ func NewWithOptions(st store.Store, vaultRoot string, guard *config.CanonicalGua
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	// Default edge-write through a passthrough Service per #304
+	// Cut C1. Production callers (main.go) can later swap this
+	// for the resolver-aware Service via SetEdgeWriter when
+	// they're constructed downstream of the canonical-kind
+	// resolver map.
+	edgeWriter, err := edgewrite.New(st, nil)
+	if err != nil {
+		return nil, fmt.Errorf("init default edgewrite.Service: %w", err)
+	}
 	return &Reindexer{
 		store:              st,
+		edgeWriter:         edgeWriter,
 		vaultRoot:          vaultRoot,
 		reader:             r,
 		guard:              guard,
 		logger:             logger,
 		canonicalEdgeTypes: canonicalEdgeTypes,
 	}, nil
+}
+
+// SetEdgeWriter swaps the Reindexer's edge-write service per
+// #304 Cut C1. Production main.go uses this to wire the
+// resolver-aware Service after canonicalKindResolvers is built
+// (the resolver map only exists after plugin registration, but
+// the Reindexer is constructed earlier in the boot sequence —
+// post-hoc setter is the simplest threading without a circular
+// dependency).
+func (r *Reindexer) SetEdgeWriter(w edgewrite.EdgeWriter) {
+	if w != nil {
+		r.edgeWriter = w
+	}
 }
 
 // Run executes one reindex pass and returns its Summary. Errors that
@@ -417,7 +449,7 @@ func (r *Reindexer) applyVaultEdges(ctx context.Context, entity *vault.Entity) (
 				}
 			}
 			se := &store.Edge{Type: edgeType, From: entity.ID, To: ve.To, Metadata: ve.Metadata}
-			if err := r.store.CreateEdge(ctx, se); err != nil {
+			if err := r.edgeWriter.CreateEdge(ctx, se); err != nil {
 				errs = append(errs,
 					fmt.Sprintf("edge %s -[%s]-> %s: %v", entity.ID, edgeType, ve.To, err))
 				continue
@@ -466,7 +498,7 @@ func (r *Reindexer) upsertEntity(ctx context.Context, e *vault.Entity) error {
 	// override stays accurate for the lifetime the plugin emits
 	// the field — reindex is a recovery / rebuild path, not the
 	// authoritative emission point.
-	canonical.EmitDayRefs(ctx, r.store, e.ID, e.Data, nil, r.logger)
+	canonical.EmitDayRefs(ctx, r.store, r.edgeWriter, e.ID, e.Data, nil, r.logger)
 	// Notations cache (per yaad-index the source issue a prior PR). The vault is
 	// the canonical source for the entity_notations table — reindex
 	// reconciles the DB to the vault frontmatter `notations:` list,
