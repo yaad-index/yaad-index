@@ -261,7 +261,7 @@ Create a new UGC entity. Server slugifies `title` → `id = user-content:<slug>`
 - `"<kind>:<slug>"` — pre-formed canonical-label string (UGC is operator-authored, so the pre-formed shape is accepted — same waiver as `set_operator_fill`'s `canonical_type`).
 - `["<kind>:<slug>", ...]` — list of pre-formed strings.
 
-Other fields land verbatim under the entity's `Data` map without edge derivation. Idempotent re-create isn't a thing (409 conflict path); a future re-edit endpoint (surfaced as a separate MCP tool when the wrapper lands) re-applies the same derivation cleanly so the edge graph tracks frontmatter edits exactly.
+Other fields land verbatim under the entity's `Data` map without edge derivation. Idempotent re-create isn't a thing (409 conflict path); a future re-edit endpoint will re-apply the same derivation cleanly so the edge graph tracks frontmatter edits exactly.
 
 ### `edit_user_content_section(id, sec, body, etag)`
 
