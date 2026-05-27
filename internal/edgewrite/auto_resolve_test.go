@@ -99,9 +99,10 @@ func TestCreateCanonicalEdgeByName_AutoSingleMatch(t *testing.T) {
 	seedEntity(t, st, "boardgame:brass-birmingham", "boardgame")
 
 	ctx := WithMode(context.Background(), Auto)
-	got, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "boardgame", "Brass", nil)
+	got, created, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "boardgame", "Brass", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "boardgame:brass-birmingham", got)
+	assert.False(t, created, "auto-resolve branch defers entity.created to the resolver plugin's ingest path")
 
 	require.Len(t, resolver.calls, 1)
 	assert.Equal(t, "yaad-bgg", resolver.calls[0].plugin)
@@ -133,9 +134,10 @@ func TestCreateCanonicalEdgeByName_AutoAmbiguous(t *testing.T) {
 	seedEntity(t, st, "email:m1", "email")
 
 	ctx := WithMode(context.Background(), Auto)
-	got, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "boardgame", "Brass", nil)
+	got, created, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "boardgame", "Brass", nil)
 	require.Error(t, err)
 	assert.Equal(t, "", got)
+	assert.False(t, created, "deferred-resolution must not claim a row was materialized")
 
 	deferred, ok := IsResolutionDeferred(err)
 	require.True(t, ok, "ambiguous → *ResolutionDeferred sentinel")
@@ -167,9 +169,10 @@ func TestCreateCanonicalEdgeByName_InteractiveBypassesResolver(t *testing.T) {
 	seedEntity(t, st, "email:m1", "email")
 
 	// Interactive is the default — no WithMode call.
-	got, err := svc.CreateCanonicalEdgeByName(context.Background(), "email:m1", "mentions", "boardgame", "Brass", nil)
+	got, created, err := svc.CreateCanonicalEdgeByName(context.Background(), "email:m1", "mentions", "boardgame", "Brass", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "boardgame:brass", got, "slugify locally — no plugin call")
+	assert.True(t, created, "fresh slugify fall-through materializes a thin row — caller must emit entity.created")
 
 	assert.Empty(t, resolver.calls, "Interactive mode must NOT invoke the resolver")
 
@@ -193,9 +196,10 @@ func TestCreateCanonicalEdgeByName_NoResolverFallThrough(t *testing.T) {
 	seedEntity(t, st, "email:m1", "email")
 
 	ctx := WithMode(context.Background(), Auto)
-	got, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "person", "Martin Wallace", nil)
+	got, created, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "person", "Martin Wallace", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "person:martin-wallace", got)
+	assert.True(t, created, "no-resolver kind freshly materializes a thin row — preserves the entity.created contract")
 
 	assert.Empty(t, resolver.calls, "no-resolver kind must NOT invoke the resolver")
 
@@ -218,9 +222,10 @@ func TestCreateCanonicalEdgeByName_AlreadyResolvedSkipsResolver(t *testing.T) {
 	seedEntity(t, st, "email:m1", "email")
 
 	ctx := WithMode(context.Background(), Auto)
-	got, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "boardgame", "boardgame:caverna", nil)
+	got, created, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "boardgame", "boardgame:caverna", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "boardgame:caverna", got, "canonical-ID-shape name strips the prefix and reuses the slug")
+	assert.True(t, created, "first-touch of boardgame:caverna materializes the thin row")
 
 	assert.Empty(t, resolver.calls, "already-resolved name must NOT invoke the resolver")
 }
@@ -238,9 +243,10 @@ func TestCreateCanonicalEdgeByName_NilResolverFallThrough(t *testing.T) {
 	seedEntity(t, st, "email:m1", "email")
 
 	ctx := WithMode(context.Background(), Auto)
-	got, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "boardgame", "Brass", nil)
+	got, created, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "boardgame", "Brass", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "boardgame:brass", got, "nil resolver → fall through to slugify")
+	assert.True(t, created, "nil-resolver fall-through still materializes the thin row")
 }
 
 // TestCreateCanonicalEdgeByName_ResolverError surfaces
@@ -259,7 +265,7 @@ func TestCreateCanonicalEdgeByName_ResolverError(t *testing.T) {
 	seedEntity(t, st, "email:m1", "email")
 
 	ctx := WithMode(context.Background(), Auto)
-	_, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "boardgame", "Brass", nil)
+	_, _, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "boardgame", "Brass", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "plugin offline")
 	// Not a ResolutionDeferred — the sentinel reserved for
@@ -288,7 +294,7 @@ func TestCreateCanonicalEdgeByName_RejectsEmptyArgs(t *testing.T) {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := svc.CreateCanonicalEdgeByName(context.Background(), c.from, c.edge, c.kind, c.target, nil)
+			_, _, err := svc.CreateCanonicalEdgeByName(context.Background(), c.from, c.edge, c.kind, c.target, nil)
 			require.Error(t, err)
 		})
 	}
@@ -329,7 +335,7 @@ func TestCreateCanonicalEdgeByName_CtxCancelPropagates(t *testing.T) {
 	}
 	svc, _ := newServiceWithResolver(t, map[string][]string{"boardgame": {"yaad-bgg"}}, resolver)
 	ctx = WithMode(ctx, Auto)
-	_, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "boardgame", "Brass", nil)
+	_, _, err := svc.CreateCanonicalEdgeByName(ctx, "email:m1", "mentions", "boardgame", "Brass", nil)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.Canceled))
 	_ = time.Second // keep the time import alive for parallel-test sanity

@@ -877,10 +877,13 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 	// reads caller-mode from ctx + the kind→resolver map and
 	// either invokes the plugin to resolve the raw name
 	// (returns the resolved canonical id), or falls through
-	// to legacy slugify-then-CreateEdge. ADR-0027 cut 1
-	// canonical-ID prefix-strip lives inside the service now
-	// — every caller's path is consistent.
-	targetID, err := w.edgeWriter.CreateCanonicalEdgeByName(ctx, sourceID, edgeType, targetKind, targetName, nil)
+	// to legacy slugify-then-CreateEdge. The `created` bit
+	// signals whether the slugify path's thin canonical-label
+	// row was freshly materialized — entity.created bus event
+	// fires iff that bit is true (auto-resolve branch never
+	// returns true; the plugin's ingest tracker emits its own
+	// events on materialization).
+	targetID, created, err := w.edgeWriter.CreateCanonicalEdgeByName(ctx, sourceID, edgeType, targetKind, targetName, nil)
 	if err != nil {
 		// ResolutionDeferred surfaces here when auto-mode +
 		// plugin returned ambiguous Options. Cut C2 bubbles
@@ -893,19 +896,6 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 		return fmt.Errorf("create canonical edge %s -[%s]-> %s:%s: %w", sourceID, edgeType, targetKind, targetName, err)
 	}
 
-	// EnsureLabelRow + entity.created event fire AFTER the
-	// edge lands so the FK is guaranteed. The service path
-	// already creates the edge on success; calling
-	// EnsureLabelRow here is redundant for the resolved-by-
-	// plugin case (the plugin's ingest already materialized
-	// the entity), but cheap + idempotent for the legacy
-	// slugify path. Run it unconditionally to preserve the
-	// thin-row materialization semantics every existing test
-	// relies on.
-	created, err := canonical.EnsureLabelRow(ctx, w.store, targetID, w.logger)
-	if err != nil {
-		return fmt.Errorf("ensure label row %q: %w", targetID, err)
-	}
 	if created && w.bus != nil {
 		// CausedByEntityID = sourceID: the entity the workflow
 		// action operated on drove this thin-row materialization.

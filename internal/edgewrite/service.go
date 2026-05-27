@@ -54,9 +54,17 @@ type EdgeWriter interface {
 // EdgeWriter so callers that need both methods don't carry
 // two fields; embedded so structural typing keeps tests
 // flexible.
+//
+// The `created` return on CreateCanonicalEdgeByName preserves
+// the pre-Cut-C2 entity.created event contract: true iff the
+// slugify-fall-through path's thin canonical-label row was
+// freshly materialized by this call. The auto-resolve branch
+// always returns false — the resolver plugin's ingest
+// tracker emits the entity.created event from its own path
+// (so the workflow runner doesn't double-emit).
 type CanonicalEdgeWriter interface {
 	EdgeWriter
-	CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeType, targetKind, targetName string, edgeMetadata map[string]any) (string, error)
+	CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeType, targetKind, targetName string, edgeMetadata map[string]any) (targetID string, created bool, err error)
 }
 
 // Service is the centralized edge-write entry point. Construct
@@ -155,24 +163,29 @@ func (s *Service) SetNameResolver(r NameResolver) {
 //     ResolutionDeferred (no edge created — Cut C3 picks up
 //     the sentinel and creates a task).
 //
-// Returns the final target entity id of the written edge on
-// success, the empty string + a *ResolutionDeferred sentinel
-// on deferred-resolution, or the empty string + a transport
-// error on resolution / write failures.
+// Returns:
+//   - (targetID, created, nil) on success. `created` is true
+//     iff the slugify-fall-through path freshly materialized
+//     the thin canonical-label row (caller emits
+//     entity.created for the new row); false on the
+//     auto-resolve branch (the resolver plugin's ingest path
+//     emits its own events).
+//   - ("", false, *ResolutionDeferred) on deferred-resolution.
+//   - ("", false, err) on transport / write failures.
 //
 // edgeMetadata may be nil. Used by the workflow path's
 // AddCanonicalEdge metadata-passthrough; non-workflow callers
 // can leave it nil.
-func (s *Service) CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeType, targetKind, targetName string, edgeMetadata map[string]any) (string, error) {
+func (s *Service) CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeType, targetKind, targetName string, edgeMetadata map[string]any) (string, bool, error) {
 	switch {
 	case fromID == "":
-		return "", fmt.Errorf("CreateCanonicalEdgeByName: fromID is required")
+		return "", false, fmt.Errorf("CreateCanonicalEdgeByName: fromID is required")
 	case edgeType == "":
-		return "", fmt.Errorf("CreateCanonicalEdgeByName: edgeType is required")
+		return "", false, fmt.Errorf("CreateCanonicalEdgeByName: edgeType is required")
 	case targetKind == "":
-		return "", fmt.Errorf("CreateCanonicalEdgeByName: targetKind is required")
+		return "", false, fmt.Errorf("CreateCanonicalEdgeByName: targetKind is required")
 	case strings.TrimSpace(targetName) == "":
-		return "", fmt.Errorf("CreateCanonicalEdgeByName: targetName is required")
+		return "", false, fmt.Errorf("CreateCanonicalEdgeByName: targetName is required")
 	}
 
 	mode := ModeFromContext(ctx)
@@ -189,10 +202,10 @@ func (s *Service) CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeTyp
 	if mode == Auto && resolverPlugin != "" && s.resolver != nil && !alreadyResolved {
 		entityID, options, err := s.resolver.ResolveCanonicalEntity(ctx, resolverPlugin, targetName)
 		if err != nil {
-			return "", fmt.Errorf("resolve %s via plugin %s: %w", targetName, resolverPlugin, err)
+			return "", false, fmt.Errorf("resolve %s via plugin %s: %w", targetName, resolverPlugin, err)
 		}
 		if len(options) > 0 {
-			return "", &ResolutionDeferred{
+			return "", false, &ResolutionDeferred{
 				From:           fromID,
 				EdgeType:       edgeType,
 				TargetKind:     targetKind,
@@ -202,7 +215,7 @@ func (s *Service) CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeTyp
 			}
 		}
 		if entityID == "" {
-			return "", fmt.Errorf("resolve %s via plugin %s: empty entity id without options", targetName, resolverPlugin)
+			return "", false, fmt.Errorf("resolve %s via plugin %s: empty entity id without options", targetName, resolverPlugin)
 		}
 		if err := s.store.CreateEdge(ctx, &store.Edge{
 			Type:     edgeType,
@@ -210,9 +223,13 @@ func (s *Service) CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeTyp
 			To:       entityID,
 			Metadata: edgeMetadata,
 		}); err != nil {
-			return "", fmt.Errorf("create resolved edge %s -[%s]-> %s: %w", fromID, edgeType, entityID, err)
+			return "", false, fmt.Errorf("create resolved edge %s -[%s]-> %s: %w", fromID, edgeType, entityID, err)
 		}
-		return entityID, nil
+		// Auto-resolve branch returns created=false — the
+		// plugin's ingest tracker emits the entity.created
+		// event on its own materialization path; the
+		// workflow caller doesn't double-emit.
+		return entityID, false, nil
 	}
 
 	// Legacy slugify-then-CreateEdge path — preserved for
@@ -221,7 +238,7 @@ func (s *Service) CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeTyp
 	// pass-through" clarification per the v1 cut framing).
 	targetSlug := slug.Slug(stripped)
 	if targetSlug == "" {
-		return "", fmt.Errorf("slugify target name %q produced empty slug", targetName)
+		return "", false, fmt.Errorf("slugify target name %q produced empty slug", targetName)
 	}
 	targetID := targetKind + ":" + targetSlug
 	// Auto-materialize the thin canonical-label row so the
@@ -229,8 +246,9 @@ func (s *Service) CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeTyp
 	// existing shape — the duplication is intentional to
 	// keep edgewrite from importing canonical (cycle via the
 	// dayrefs DayRefEdgeWriter dedup landed earlier).
-	if err := s.ensureTargetRow(ctx, targetKind, targetID); err != nil {
-		return "", err
+	created, err := s.ensureTargetRow(ctx, targetKind, targetID)
+	if err != nil {
+		return "", false, err
 	}
 	if err := s.store.CreateEdge(ctx, &store.Edge{
 		Type:     edgeType,
@@ -238,27 +256,30 @@ func (s *Service) CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeTyp
 		To:       targetID,
 		Metadata: edgeMetadata,
 	}); err != nil {
-		return "", fmt.Errorf("create edge %s -[%s]-> %s: %w", fromID, edgeType, targetID, err)
+		return "", false, fmt.Errorf("create edge %s -[%s]-> %s: %w", fromID, edgeType, targetID, err)
 	}
-	return targetID, nil
+	return targetID, created, nil
 }
 
 // ensureTargetRow probes the store for an entity at targetID
 // and creates a thin row (Kind only, no Data) when absent —
 // the same shape canonical.EnsureLabelRow produces, duplicated
 // here to keep edgewrite from importing canonical. Cycle
-// landed via the dayrefs DayRefEdgeWriter dedup. Idempotent:
-// pre-existing rows are reused without modification.
-func (s *Service) ensureTargetRow(ctx context.Context, kind, targetID string) error {
+// landed via the dayrefs DayRefEdgeWriter dedup. Returns
+// `created` true iff a row was freshly inserted by this call;
+// false on pre-existing-row reuse. Caller propagates the bit
+// so workflow-spawned edge writes can emit entity.created on
+// thin-row materialization.
+func (s *Service) ensureTargetRow(ctx context.Context, kind, targetID string) (bool, error) {
 	if _, err := s.store.GetEntity(ctx, targetID); err == nil {
-		return nil
+		return false, nil
 	} else if !errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("probe target row %q: %w", targetID, err)
+		return false, fmt.Errorf("probe target row %q: %w", targetID, err)
 	}
 	if err := s.store.UpsertEntity(ctx, &store.Entity{ID: targetID, Kind: kind}); err != nil {
-		return fmt.Errorf("upsert thin target row %q: %w", targetID, err)
+		return false, fmt.Errorf("upsert thin target row %q: %w", targetID, err)
 	}
-	return nil
+	return true, nil
 }
 
 // ResolverFor returns the plugin name that resolves the given
