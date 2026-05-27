@@ -10,12 +10,11 @@ Read this before calling any tool. The pattern is small enough that one read car
 
 ## Connecting
 
-Two connection paths to the same 37-tool surface — pick whichever fits your agent runtime:
+The daemon exposes its full 37-tool surface as a Streamable-HTTP MCP server at `<base-url>/mcp` (same host + port that serves `/v1/...`, e.g. `http://localhost:7433/mcp`). Auth: the same Bearer JWT that protects every REST route — issue with `yaad-index issue-token --operator <op> --agent <name>`, send as `Authorization: Bearer <token>`. The full daemon mux handles the call in-process; no wrapper to run.
 
-- **Direct (preferred):** the daemon exposes its full tool surface as a Streamable-HTTP MCP server at `<base-url>/mcp` (same host + port that serves `/v1/...`, e.g. `http://localhost:7433/mcp`). Auth: the same Bearer JWT that protects every REST route — issue with `yaad-index issue-token --operator <op> --agent <name>`, send as `Authorization: Bearer <token>`. The full daemon mux handles the call in-process; no wrapper to run.
-- **Legacy stdio wrapper:** the bundled `mcp/` Node process (TypeScript) speaks stdio MCP and forwards every tool to the daemon's REST surface. Still bundled, still works — use it when your agent runtime can't speak Streamable HTTP, or when you're already wired against it. Both paths surface identical tool semantics (same names, same arguments, same response shapes); the direct path eliminates the wrapper hop.
+The legacy stdio Node wrapper that used to live under `mcp/` is no longer shipped from this repo; if your agent runtime can't speak Streamable HTTP, write a minimal stdio bridge against the daemon's REST + `/mcp` surface yourself rather than reaching for a now-removed package.
 
-**Tool inventory is live.** Both paths advertise the same 37 tools via the MCP `tools/list` call. The catalog below is the per-tool reference; `tools/list` is the authoritative live source on a running daemon.
+**Tool inventory is live.** The MCP `tools/list` call advertises the full 37-tool surface. The catalog below is the per-tool reference; `tools/list` is the authoritative live source on a running daemon.
 
 ## What yaad-mcp is
 
