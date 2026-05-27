@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -203,6 +204,15 @@ type resolveResolutionTaskResponse struct {
 // field → empty string (legacy path). Reads at most 4 KB
 // to keep a malformed-large-body payload from monopolizing
 // the handler.
+//
+// Empty-body shapes treated as legacy: nil body, declared
+// `Content-Length: 0`, `io.EOF` from json.Decoder (the
+// shape unknown-length / chunked-encoding empty bodies
+// produce), and a JSON SyntaxError at offset 0 (defensive
+// — some older clients send a single whitespace byte
+// before the body terminator). Everything else surfaces
+// as a decode failure so genuine malformed payloads
+// don't silently fall through to the legacy path.
 func decodeResolveOption(r *http.Request) (string, error) {
 	if r.Body == nil || r.ContentLength == 0 {
 		return "", nil
@@ -212,7 +222,15 @@ func decodeResolveOption(r *http.Request) (string, error) {
 	dec.DisallowUnknownFields()
 	var req resolveResolutionTaskRequest
 	if err := dec.Decode(&req); err != nil {
-		// io.EOF on empty body is fine — legacy path.
+		// json.Decoder.Decode returns io.EOF when the
+		// underlying reader is empty — typical for chunked-
+		// encoding empty bodies where ContentLength is -1.
+		// Legacy callers POST with `Content-Length: 0` (caught
+		// above) OR with no body at all (io.EOF here); both
+		// must reach the legacy text-task resolve path.
+		if errors.Is(err, io.EOF) {
+			return "", nil
+		}
 		if errors.Is(err, http.ErrBodyReadAfterClose) {
 			return "", nil
 		}

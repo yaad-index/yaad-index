@@ -451,6 +451,31 @@ func TestHTTPResolveResolutionTask_LegacyTaskRejected(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+// TestHTTPResolve_EmptyBodyChunkedLegacyPath pins the PR-311
+// catch: when a client POSTs with an unknown Content-Length
+// (chunked encoding or no Content-Length header at all) and
+// an empty body, json.Decoder.Decode returns io.EOF. The
+// resolve handler must treat that as the legacy path — not
+// surface a 400 decode error. ContentLength=-1 simulates the
+// shape httptest doesn't auto-populate.
+func TestHTTPResolve_EmptyBodyChunkedLegacyPath(t *testing.T) {
+	t.Parallel()
+	h, _, dir, _ := newAPIWithResolutionTaskWiring(t)
+	writeResolutionTaskFile(t, dir, "legacy", map[string]any{
+		"kind":     "task",
+		"workflow": "wf",
+	}, "")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/tasks/legacy/resolve",
+		http.NoBody) // non-nil empty body
+	req.ContentLength = -1 // simulate chunked-encoding / unknown-length
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	assert.NotEqual(t, http.StatusBadRequest, rec.Code,
+		"empty chunked body must route through the legacy path, not 400 on json.EOF; body=%s", rec.Body.String())
+	assert.True(t, rec.Code < 500, "no server error expected; got %d (%s)", rec.Code, rec.Body.String())
+}
+
 // TestHTTPResolve_LegacyPathStillWorks pins that an empty
 // body on a legacy text-task continues to route through the
 // pre-C3 resolve path — the C3.3 branch is additive.
