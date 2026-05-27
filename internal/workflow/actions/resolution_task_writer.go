@@ -23,6 +23,9 @@ package actions
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -84,28 +87,45 @@ type resolutionOption struct {
 }
 
 // ResolutionTaskKey derives the deterministic idempotency
-// key for a ResolutionDeferred. Concatenates the 5-tuple
-// fields with `|` separators + slugifies the whole string;
-// `slug.Slug` lowercases + hyphenates so the result is
-// filesystem-safe + a valid canonical-id slug component.
+// key for a ResolutionDeferred. Length-prefixed SHA-256 over
+// the 5-tuple fields preserves field boundaries — slug-and-
+// join would let `|` separators normalize to the same `-` as
+// embedded punctuation (e.g. `email:m1`'s colon → hyphen),
+// collapsing distinct 5-tuples like `(from="x", edge="a-b")`
+// and `(from="x-a", edge="b")` to the same path. Each
+// component is length-prefixed with an 8-byte big-endian
+// uint64 before hashing so structurally-different tuples
+// produce different digests regardless of which component
+// embeds the bytes another component happens to contain.
 //
 // The 5-tuple per the locked design:
 // (from_id, edge_type, target_kind, normalized_raw_target,
 // resolver_plugin). RawTarget is normalized via slug.Slug
-// before joining so plugin-side casing / whitespace
+// before hashing so plugin-side casing / whitespace
 // differences collapse to the same key.
+//
+// Output shape: `<target_kind_slug>-<16-hex-chars>`. The
+// target-kind prefix keeps `ls tasks/` operator-readable;
+// the 16 hex chars (64 bits) give collision resistance to
+// >10^19 distinct tuples.
 func ResolutionTaskKey(d *edgewrite.ResolutionDeferred) string {
 	if d == nil {
 		return ""
 	}
-	parts := []string{
-		d.From,
-		d.EdgeType,
-		d.TargetKind,
-		slug.Slug(d.RawTarget),
-		d.ResolverPlugin,
+	h := sha256.New()
+	writeLenPrefixed := func(s string) {
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], uint64(len(s)))
+		h.Write(buf[:])
+		h.Write([]byte(s))
 	}
-	return slug.Slug(strings.Join(parts, "|"))
+	writeLenPrefixed(d.From)
+	writeLenPrefixed(d.EdgeType)
+	writeLenPrefixed(d.TargetKind)
+	writeLenPrefixed(slug.Slug(d.RawTarget))
+	writeLenPrefixed(d.ResolverPlugin)
+	sum := h.Sum(nil)
+	return slug.Slug(d.TargetKind) + "-" + hex.EncodeToString(sum[:8])
 }
 
 // ResolutionTaskID returns the canonical entity id for the

@@ -79,6 +79,28 @@ func TestResolutionTaskKey_RawTargetCasingCollapses(t *testing.T) {
 	assert.Equal(t, ResolutionTaskKey(base), ResolutionTaskKey(&mixed))
 }
 
+// TestResolutionTaskKey_NoFieldBoundaryCollision pins the
+// PR-309 catch: a naive slug-and-join derivation collapses
+// `|` separators and embedded `:` / `_` / `-` punctuation
+// onto the same `-` shape, so structurally-different
+// 5-tuples can hash to the same path. Length-prefixed SHA-256
+// preserves field boundaries — these two tuples differ only
+// in where the `-` "lives" between adjacent fields, and they
+// MUST rotate the key.
+func TestResolutionTaskKey_NoFieldBoundaryCollision(t *testing.T) {
+	t.Parallel()
+	a := &edgewrite.ResolutionDeferred{
+		From: "x", EdgeType: "a-b", TargetKind: "boardgame",
+		RawTarget: "Brass", ResolverPlugin: "p",
+	}
+	b := &edgewrite.ResolutionDeferred{
+		From: "x-a", EdgeType: "b", TargetKind: "boardgame",
+		RawTarget: "Brass", ResolverPlugin: "p",
+	}
+	assert.NotEqual(t, ResolutionTaskKey(a), ResolutionTaskKey(b),
+		"length-prefixed hashing must distinguish field boundary shifts")
+}
+
 // TestResolutionTaskKey_DistinctTuplesDistinctKeys pins
 // that any 5-tuple field change rotates the key. Workflow
 // retries that DO change the source / kind / plugin land
