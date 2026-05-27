@@ -244,6 +244,14 @@ type handlerConfig struct {
 	// every gap with an empty source_layer (degraded but valid).
 	canonicalKindProvenance config.RegistryProvenance
 	canonicalEdgeTypes []string
+	// canonicalKindResolvers is the kind → []plugin-name ownership
+	// map built at config-load per #304 Cut A. Empty / nil = no
+	// plugin has opted into resolution; routing-side logic in
+	// later cuts treats every kind as un-resolvable. Cut A wires
+	// the field but no handler reads it yet — exposed for Cut B
+	// (`update_edge_target` primitive) and Cut C (centralized
+	// edge-write routing) to consume.
+	canonicalKindResolvers map[string][]string
 	userContentFrontmatterEdges map[string]config.UserContentFrontmatterEdgeMapping
 	authVerifier auth.Verifier
 	authRequired bool
@@ -437,6 +445,27 @@ func WithFillInstruction(text string) HandlerOption {
 func WithCanonicalEdgeTypes(edgeTypes []string) HandlerOption {
 	return func(c *handlerConfig) {
 		c.canonicalEdgeTypes = edgeTypes
+	}
+}
+
+// WithCanonicalKindResolvers wires the kind → []plugin-name
+// ownership map built at config-load per #304 Cut A. The map
+// records which plugins declared `resolves_canonical_kinds:` for
+// each canonical kind. Cut A surfaces the option but no handler
+// reads it yet — exposed so Cut B's `update_edge_target` and
+// Cut C's centralized edge-write can consume the same static
+// data without re-walking the registry.
+//
+// The slice ordering inside each entry is arbitrary (registry
+// iteration order). Cardinality enforcement (one-resolver-per-
+// kind) lands in Cut C where routing actually picks a single
+// resolver.
+//
+// Empty / nil → no plugin opted in; resolver-routing layers
+// treat every kind as un-resolvable.
+func WithCanonicalKindResolvers(resolvers map[string][]string) HandlerOption {
+	return func(c *handlerConfig) {
+		c.canonicalKindResolvers = resolvers
 	}
 }
 

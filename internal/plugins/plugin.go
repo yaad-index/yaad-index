@@ -177,6 +177,36 @@ type Capabilities struct {
 	// CanonicalKindsEmitted.
 	CanonicalEdgeTypesEmitted []string `json:"canonical_edge_types_emitted,omitempty"`
 
+	// ResolvesCanonicalKinds names the subset of CanonicalKindsEmitted
+	// for which this plugin can resolve a free-text name to a
+	// concrete canonical entity per #304 Cut A. Plugins set this
+	// when they have a name-search primitive (wikidata search,
+	// BGG search-by-name, gmail query) and want core's resolver
+	// path to route disambiguations through them.
+	//
+	// **Subset constraint:** every entry MUST also appear in
+	// CanonicalKindsEmitted. Daemon startup ERRORS at config-load
+	// when a plugin declares a resolver entry for a kind it
+	// doesn't emit — typo-resistant (matches the §6.5 typo
+	// gate used by canonical_kinds_extras, but stricter — error
+	// rather than WARN+drop, because resolver routing is
+	// load-bearing).
+	//
+	// **Cross-plugin coverage:** an emitted kind with no plugin
+	// declaring it in ResolvesCanonicalKinds surfaces as a
+	// startup WARN per Cut A. Cut C's centralized edge-write
+	// falls these through to the existing edge-write path
+	// (no resolution attempt) so legacy behavior is preserved
+	// — operators opt INTO auto-resolution by declaring the
+	// kind on a plugin, not the other way around.
+	//
+	// Empty / absent → plugin claims no resolver responsibility.
+	// Plugins predating #304 emit no `resolves_canonical_kinds`
+	// field and decode as nil, preserving back-compat: they
+	// continue to ingest by URL / command, just don't appear in
+	// the kind→resolver ownership map.
+	ResolvesCanonicalKinds []string `json:"resolves_canonical_kinds,omitempty"`
+
 	// SupportsSearch declares that the plugin opts in to the
 	// upstream-search dispatch surface (per yaad-index the source issue
 	// a prior PR). When `POST /v1/search/upstream` fans a query out
