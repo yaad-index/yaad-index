@@ -21,9 +21,11 @@ package actions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/yaad-index/yaad-index/internal/edgewrite"
 	"github.com/yaad-index/yaad-index/internal/workflow/parser"
 )
 
@@ -49,6 +51,23 @@ type EdgeWriter interface {
 		workflow, sourceID, edgeType, targetKind, targetName string,
 		data map[string]string,
 	) error
+}
+
+// ResolutionTaskWriter spawns a structured resolution-task
+// when add_canonical_edge's EdgeWriter returns an
+// edgewrite.ResolutionDeferred sentinel per #304 Cut C3.2.
+// Production wires FileTaskWriter (the existing task-file
+// writer; the WriteResolutionTask method landed in Cut C3.1).
+// Tests wire an in-memory fake.
+//
+// The (taskID, created, err) tuple matches FileTaskWriter's
+// shape: `created=true` on fresh materialization, `created=
+// false` on the idempotency-probe hit (workflow retried
+// with the same 5-tuple → same on-disk task). Either way
+// the action runner treats the catch as a successful
+// deferral and sets ActionResult.Deferred=true.
+type ResolutionTaskWriter interface {
+	WriteResolutionTask(ctx context.Context, d *edgewrite.ResolutionDeferred) (taskID string, created bool, err error)
 }
 
 // runAddCanonicalEdge executes one add_canonical_edge action:
@@ -129,6 +148,47 @@ func (d *dispatcher) runAddCanonicalEdge(ctx context.Context, idx int, _ *parser
 	}
 
 	if err := d.edgeWriter.AddCanonicalEdge(ctx, dec.Workflow, source, edgeType, targetKind, targetName, data); err != nil {
+		// #304 Cut C3.2: catch ResolutionDeferred and route to
+		// the structured resolution-task surface instead of the
+		// err-task pattern. The workflow paused on operator
+		// disambiguation is a recorded "paused" state, not a
+		// failure. errors.As traverses the wrap from
+		// VaultEdgeWriter.AddCanonicalEdge so the sentinel is
+		// still reachable here.
+		var deferred *edgewrite.ResolutionDeferred
+		if errors.As(err, &deferred) {
+			if d.resolutionTaskWriter == nil {
+				// No writer wired — fall back to pre-C3 behaviour
+				// (err-task) so dev / test builds without the
+				// dependency surface a clear failure rather than
+				// silently dropping the resolution signal.
+				return ActionResult{
+					ActionIdx: idx,
+					Type:      "add_canonical_edge",
+					Err:       fmt.Errorf("add_canonical_edge: %w", err),
+				}
+			}
+			taskID, created, taskErr := d.resolutionTaskWriter.WriteResolutionTask(ctx, deferred)
+			if taskErr != nil {
+				return ActionResult{
+					ActionIdx: idx,
+					Type:      "add_canonical_edge",
+					Err:       fmt.Errorf("add_canonical_edge: spawn resolution-task: %w", taskErr),
+				}
+			}
+			d.logger.InfoContext(ctx, "workflow add_canonical_edge deferred — resolution-task spawned",
+				"workflow", dec.Workflow,
+				"source_id", source,
+				"edge_type", edgeType,
+				"target_kind", targetKind,
+				"raw_target", targetName,
+				"resolver_plugin", deferred.ResolverPlugin,
+				"task_id", taskID,
+				"created", created,
+				"options", len(deferred.Options),
+			)
+			return ActionResult{ActionIdx: idx, Type: "add_canonical_edge", Deferred: true}
+		}
 		return ActionResult{
 			ActionIdx: idx,
 			Type:      "add_canonical_edge",

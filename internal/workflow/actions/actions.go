@@ -137,6 +137,18 @@ type ActionResult struct {
 	// on every other action type — the engine treats absence
 	// as "not claimed" identical to nil.
 	Claim bool
+
+	// Deferred is the #304 Cut C3.2 signal that the action
+	// caught an edgewrite.ResolutionDeferred sentinel and
+	// spawned a structured resolution-task instead of failing.
+	// Engine MUST skip the err-task append for Deferred
+	// results — the resolution-task IS the workflow's
+	// recorded "paused, needs operator pick" state; an
+	// err-task on top would mis-classify "ambiguous resolve"
+	// as a workflow-fire failure. Set only by the
+	// add_canonical_edge runner; every other action type
+	// leaves this false.
+	Deferred bool
 }
 
 // Runner is the public dispatch surface. The engine holds
@@ -253,6 +265,19 @@ type Options struct {
 	// ErrActionNotImplemented.
 	EdgeWriter EdgeWriter
 
+	// ResolutionTaskWriter backs the #304 Cut C3.2 catch site:
+	// when add_canonical_edge's EdgeWriter returns an
+	// edgewrite.ResolutionDeferred sentinel (auto-mode +
+	// ambiguous resolver options per Cut C2), the runner
+	// invokes this writer to spawn a typed resolution-task
+	// instead of bubbling the failure into the err-task path.
+	// Production wires FileTaskWriter (the same writer
+	// task_append uses; the resolution-task method lives on
+	// it per Cut C3.1). Nil falls back to the pre-C3 behavior
+	// where ResolutionDeferred wraps through the err-task
+	// pattern.
+	ResolutionTaskWriter ResolutionTaskWriter
+
 	// ArchiveWriter backs archive_entity (#150). Production
 	// wires VaultArchiveWriter (vault move + DB toggle behind a
 	// per-entity write-lock via AcquireWithTimeout); nil →
@@ -305,17 +330,18 @@ func New(opts Options) Runner {
 		errTaskWriter = StubErrTaskWriter{}
 	}
 	return &dispatcher{
-		taskWriter:       opts.TaskWriter,
-		commentWriter:    opts.NoteWriter,
-		gapWriter:        opts.GapWriter,
-		pluginDispatcher: opts.PluginDispatcher,
-		propertyWriter:   opts.PropertyWriter,
-		edgeWriter:       opts.EdgeWriter,
-		archiveWriter:    opts.ArchiveWriter,
-		restoreWriter:    opts.RestoreWriter,
-		errTaskWriter:    errTaskWriter,
-		bus:              opts.Bus,
-		logger:           logger,
+		taskWriter:           opts.TaskWriter,
+		commentWriter:        opts.NoteWriter,
+		gapWriter:            opts.GapWriter,
+		pluginDispatcher:     opts.PluginDispatcher,
+		propertyWriter:       opts.PropertyWriter,
+		edgeWriter:           opts.EdgeWriter,
+		resolutionTaskWriter: opts.ResolutionTaskWriter,
+		archiveWriter:        opts.ArchiveWriter,
+		restoreWriter:        opts.RestoreWriter,
+		errTaskWriter:        errTaskWriter,
+		bus:                  opts.Bus,
+		logger:               logger,
 	}
 }
 
@@ -323,17 +349,18 @@ func New(opts Options) Runner {
 // per-primitive writer dependencies; per-action runners are
 // methods that close over the dispatcher's fields.
 type dispatcher struct {
-	taskWriter       TaskWriter
-	commentWriter    NoteWriter
-	gapWriter        GapWriter
-	pluginDispatcher PluginDispatcher
-	propertyWriter   PropertyWriter
-	edgeWriter       EdgeWriter
-	archiveWriter    ArchiveWriter
-	restoreWriter    RestoreWriter
-	errTaskWriter    ErrTaskWriter
-	bus              eventbus.Bus
-	logger           *slog.Logger
+	taskWriter           TaskWriter
+	commentWriter        NoteWriter
+	gapWriter            GapWriter
+	pluginDispatcher     PluginDispatcher
+	propertyWriter       PropertyWriter
+	edgeWriter           EdgeWriter
+	resolutionTaskWriter ResolutionTaskWriter
+	archiveWriter        ArchiveWriter
+	restoreWriter        RestoreWriter
+	errTaskWriter        ErrTaskWriter
+	bus                  eventbus.Bus
+	logger               *slog.Logger
 }
 
 // ErrTaskWriterFor exposes the runner's configured
