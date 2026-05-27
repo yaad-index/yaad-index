@@ -98,6 +98,15 @@ func NewReader(vaultRoot string) *Reader {
 	return &Reader{tasksDir: filepath.Join(vaultRoot, "tasks")}
 }
 
+// TasksDir returns the absolute path to the tasks/
+// directory the Reader walks. Exposed for callers
+// (e.g. the #304 Cut C3.3 resolution-task resolve
+// handler) that need to read a task file via a typed
+// frontmatter shape the Reader doesn't surface.
+func (r *Reader) TasksDir() string {
+	return r.tasksDir
+}
+
 // ErrTaskNotFound is the typed sentinel Load returns when
 // the id doesn't resolve to a file in the tasks/ directory.
 // HTTP handlers translate this to 404.

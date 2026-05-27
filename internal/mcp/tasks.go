@@ -4,7 +4,10 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/url"
 	"strconv"
 
@@ -72,11 +75,29 @@ func registerTaskResolve(s *server.MCPServer, b *bridge) {
 				"has `auto_archive_on_done: true` (default). Err-tasks "+
 				"always auto-archive regardless of the workflow opt-out. "+
 				"Returns `{ok, id, errored, auto_archived, resolved_at}` "+
-				"verbatim from `POST /v1/tasks/{id}/resolve`. Idempotent.",
+				"verbatim from `POST /v1/tasks/{id}/resolve`. Idempotent. "+
+				"\n\n"+
+				"For resolution-tasks (#304 Cut C3 — `kind: resolution-"+
+				"task` frontmatter), pass `option` to pick one of the "+
+				"recorded candidates: the daemon re-ingests via the "+
+				"resolver plugin's shorthand, lands a canonical-edge "+
+				"edge (or rewrites a stale one via Cut B's "+
+				"update_edge_target), and auto-archives the task. "+
+				"Returns `{ok, id, auto_archived, resolved_at, "+
+				"chosen_id, edge_outcome, from_id, edge_type, "+
+				"target_kind}` instead. `edge_outcome` is one of "+
+				"`created` / `rewritten` / `unchanged`.",
 		),
 		mcp.WithString("id",
 			mcp.Required(),
 			mcp.Description("Task id (markdown file basename without `.md`)."),
+		),
+		mcp.WithString("option",
+			mcp.Description(
+				"For resolution-tasks: the option `id` from the task's "+
+					"frontmatter `options` list. Must match exactly. "+
+					"Leave empty for legacy text-task resolves.",
+			),
 		),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -84,6 +105,14 @@ func registerTaskResolve(s *server.MCPServer, b *bridge) {
 		if id == "" {
 			return mcp.NewToolResultError("`id` is required"), nil
 		}
-		return b.callTool(ctx, "POST", "/v1/tasks/"+url.PathEscape(id)+"/resolve", nil)
+		var body io.Reader
+		if option := req.GetString("option", ""); option != "" {
+			encoded, err := json.Marshal(map[string]string{"option": option})
+			if err != nil {
+				return mcp.NewToolResultError("encode option: " + err.Error()), nil
+			}
+			body = bytes.NewReader(encoded)
+		}
+		return b.callTool(ctx, "POST", "/v1/tasks/"+url.PathEscape(id)+"/resolve", body)
 	})
 }

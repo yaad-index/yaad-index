@@ -199,7 +199,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 		mux.Handle("GET /v1/tasks", protect(http.HandlerFunc(handleTaskList(logger, cfg.tasksReader))))
 		mux.Handle("GET /v1/tasks/{id}", protect(http.HandlerFunc(handleTaskLoad(logger, cfg.tasksReader))))
 		if cfg.tasksWriter != nil {
-			mux.Handle("POST /v1/tasks/{id}/resolve", protect(http.HandlerFunc(handleTaskResolve(logger, cfg.tasksReader, cfg.tasksWriter, cfg.workflowEngine))))
+			mux.Handle("POST /v1/tasks/{id}/resolve", protect(http.HandlerFunc(handleTaskResolve(logger, cfg.tasksReader, cfg.tasksWriter, cfg.workflowEngine, st, cfg.syncIngester, cfg.tasksReader.TasksDir()))))
 		}
 	}
 
