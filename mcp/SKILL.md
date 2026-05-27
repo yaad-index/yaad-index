@@ -94,11 +94,16 @@ Rewrite an edge's target in a single transaction per #304 Cut B. Wraps `POST /v1
 
 **When to use.** The agent-driven half of the canonical-kind resolver flow: a workflow / agent created an edge whose target was a placeholder (`mentions → boardgame:?brass`), then resolved the name via plugin search / operator disambiguation, and now needs to swap the placeholder for the resolved canonical id (`mentions → boardgame:brass-birmingham`). Edge identity + history survive the swap. Pre-Cut-B flows had to `delete_edge` + `create_edge` and lost both.
 
-**Stale-safety.** Concurrent rewrites converge: returns `edge_stale` (409) when the `(from, type, old_target)` tuple doesn't match a current row (already rewritten by another caller, deleted, or never existed). Re-read state via `edges(entity_id=from)` and retry with the fresh tuple.
+**Stale-safety.** Concurrent rewrites converge via `edge_stale` (409). The store rejects two distinct conditions under this one shape — both mean "your view of the edge graph is stale, re-read and decide":
+
+- **Old tuple missing.** `(from, type, old_target)` doesn't match a current row (already rewritten by another caller, deleted, or never existed).
+- **New tuple already exists.** `(from, type, new_target)` is already a current edge — rewriting onto it would silently merge two distinct edges, so the store refuses. This often means another caller already resolved the same disambiguation before you, OR the source carried two parallel edges and the agent picked the wrong one to rewrite.
+
+Re-read via `edges(entity_id=from)` and decide: either the resolution already landed (no further action), or pick a different `old_target` / different `new_target`. Don't blind-retry — both shapes typically indicate a real state divergence the agent needs to inspect.
 
 **Error envelopes (passthrough — branch on `ok === false`):**
 
-- `error: "edge_stale"` (409) — old tuple doesn't match current state. Refetch + retry.
+- `error: "edge_stale"` (409) — current state doesn't permit the rewrite (either case above). Refetch + inspect.
 - `error: "missing_entity"` (422) — `new_target` doesn't resolve to a known entity. Materialize via `ingest` or pick a valid canonical id, then retry.
 - `error: "invalid_argument"` (400) — any required field empty, edge type not registered, or `old_target == new_target` (no-op rejected at the boundary).
 
