@@ -414,11 +414,16 @@ func entitySubtreeFor(relPath string) string {
 	base := strings.TrimSuffix(relPath, mdExt)
 	// Exactly one path separator → `<kind>/<slug>.md` shape. Zero
 	// separators (e.g. `README.md`) or two+ separators (e.g.
-	// `_archive/<kind>/<slug>.md`, `tasks/<workflow>-<id>.md`) are
-	// not in scope of #314's entity-attachments-sidecar rule. The
-	// _archive path mirrors the same layout but is touched via
-	// archive_entity which preserves the subtree via a directory-
-	// level mv, not a flush-through write.
+	// `_archive/<kind>/<slug>.md`) are not in scope of #314's
+	// entity-attachments-sidecar rule. The _archive path mirrors
+	// the same layout but is touched via archive_entity which
+	// preserves the subtree via a directory-level mv, not a
+	// flush-through write. Task-shape paths (`tasks/<id>.md`)
+	// share the one-separator shape with entity main files, so
+	// they pass this filter — but the caller (stagePathsFor) then
+	// runs an `os.Stat` guard on `<base>/`, and a task file has
+	// no sibling subtree on disk, so staging falls back to the
+	// single-path behavior. Both guards are load-bearing.
 	if strings.Count(base, "/") != 1 {
 		return ""
 	}
