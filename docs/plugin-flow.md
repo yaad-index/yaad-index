@@ -151,6 +151,7 @@ One `ProvenanceEntry` stamped by the plugin: `{source, fetched_at, ok}`. If a pl
   ],
   "canonical_kinds_emitted": ["person", "city", "country", "book", "boardgame"],
   "canonical_edge_types_emitted": ["is_about"],
+  "resolves_canonical_kinds": ["person", "city", "country", "book", "boardgame"],
   "supports_search": true,
   "commands": [],
   "source_namespace": "wikipedia",
@@ -168,6 +169,7 @@ One `ProvenanceEntry` stamped by the plugin: `{source, fetched_at, ok}`. If a pl
 - **`entity_kinds[]`** — `{name, description, default_ttl_days?, snippet_fields?}`. The `name` is what `structured.kind` would name if the protocol allowed plugin-emitted kinds — today plugins emit `"source"`, but the entity-kinds list still drives the daemon's snippet-field lookup + drift-counter attribution.
 - **`edge_kinds[]`** — `{name, from_kind, to_kind, description?}`. Declared edge types this plugin emits in `structured.edges`. The daemon's drift-counter (`/v1/cv-status`) attributes drops against this list.
 - **`canonical_kinds_emitted[]`** / **`canonical_edge_types_emitted[]`** — names canonical-shape kinds / edge types this plugin MAY emit. Drives the startup warning when the operator's `canonical_kinds:` config doesn't enable a kind the plugin emits.
+- **`resolves_canonical_kinds[]`** — subset of `canonical_kinds_emitted` for which this plugin can resolve a free-text name to a concrete canonical entity per #304 (e.g. "Brass" → `boardgame:brass-birmingham`). Plugins opt in when they have a name-search primitive (wikidata search, BGG search-by-name, gmail query). Empty / absent → plugin claims no resolver responsibility; auto-mode edges targeting kinds in `canonical_kinds_emitted` without a matching resolver claim fall through to legacy edge-write (no name-resolution attempt, no disambiguation task). Subset constraint enforced at config-load — declaring an entry for a kind not in `canonical_kinds_emitted` is fail-fast (typo gate).
 - **`supports_search: true`** — opt-in to the `POST /v1/search/upstream` fan-out surface. Default false; explicit opt-in.
 - **`commands[]`** — command-shape invocation names per ADR-0022 (e.g. `yaad-gmail` declares `["fetch"]`, invoked via `gmail: !fetch`).
 - **`source_namespace`** — the `<source_namespace>` prefix on emitted entity ids (`<source_namespace>:<slug>`).

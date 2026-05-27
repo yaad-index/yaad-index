@@ -557,6 +557,21 @@ func (s *ServeCmd) Run() error {
 				"plugin_emitted", len(pluginEmittedKinds),
 				"operator_per_kind", len(cfg.CanonicalKinds))
 		}
+
+		// Build the canonical-kind → resolver-plugin ownership map per
+		// #304 Cut A. Strict per-plugin subset validation (error on
+		// declares-but-doesn't-emit); lenient cross-plugin coverage
+		// (WARN on emitted-without-resolver, upgraded to ERROR in
+		// Cut C's centralized edge-write).
+		canonicalKindResolvers, err := buildCanonicalKindResolvers(registry, pluginEmittedKinds, logger)
+		if err != nil {
+			return fmt.Errorf("canonical kind resolvers: %w", err)
+		}
+		if len(canonicalKindResolvers) > 0 {
+			handlerOpts = append(handlerOpts, api.WithCanonicalKindResolvers(canonicalKindResolvers))
+			logger.Info("canonical_kind_resolvers ownership map built (per #304 Cut A)",
+				"kinds_with_resolver", len(canonicalKindResolvers))
+		}
 		// Pass-through unconditionally — the build helper produces a
 		// `[]` wire shape on empty input regardless, but dropping the
 		// len-guard here means the option is always wired in a single
@@ -1978,6 +1993,76 @@ func collectPluginEmittedEdgeTypes(registry *plugins.Registry) []string {
 		emitted = append(emitted, t)
 	}
 	return emitted
+}
+
+// buildCanonicalKindResolvers walks the loaded plugins, validates
+// each plugin's ResolvesCanonicalKinds subset constraint per #304
+// Cut A, and returns the static `kind → []plugin-name` ownership
+// map later cuts consume.
+//
+// **Per-plugin validation (ERROR):** every entry in a plugin's
+// ResolvesCanonicalKinds MUST also appear in its
+// CanonicalKindsEmitted. A typo here would silently route
+// resolution to a plugin that doesn't emit the kind it claims to
+// resolve — fail-fast at config-load is safer than a runtime
+// 404. Mirrors the §6.5 typo gate's intent, but ERROR not WARN.
+//
+// **Cross-plugin coverage (WARN):** every kind in
+// pluginEmittedKinds SHOULD have at least one resolver. Lone
+// emitters surface as WARN here. Cut C's centralized edge-write
+// falls these through to the existing edge-write path (no
+// resolution attempt; legacy pass-through behavior). Operators
+// see the gap before workflows that expect auto-resolution land.
+//
+// **Cardinality:** Cut A does NOT enforce one-resolver-per-kind.
+// The returned map shape is `kind → []plugin` so multi-resolver
+// kinds (e.g. yaad-wikipedia + yaad-bgg both resolving
+// `boardgame`) survive into Cut C, which is where routing
+// consumption needs to pick a single plugin and may reject
+// ambiguity.
+//
+// Returns the ownership map on success. Returns error only on
+// the per-plugin subset violation — cross-plugin coverage gaps
+// log + return without error per the lenient policy.
+func buildCanonicalKindResolvers(registry *plugins.Registry, pluginEmittedKinds []string, logger *slog.Logger) (map[string][]string, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	resolvers := make(map[string][]string)
+	for _, p := range registry.Plugins() {
+		caps := p.Capabilities()
+		if len(caps.ResolvesCanonicalKinds) == 0 {
+			continue
+		}
+		emittedSet := make(map[string]struct{}, len(caps.CanonicalKindsEmitted))
+		for _, k := range caps.CanonicalKindsEmitted {
+			emittedSet[k] = struct{}{}
+		}
+		for _, k := range caps.ResolvesCanonicalKinds {
+			if k == "" {
+				continue
+			}
+			if _, ok := emittedSet[k]; !ok {
+				return nil, fmt.Errorf("plugin %q declares resolves_canonical_kinds entry %q which is not in its canonical_kinds_emitted (#304 Cut A subset constraint)", p.Name(), k)
+			}
+			resolvers[k] = append(resolvers[k], p.Name())
+		}
+	}
+	// Cross-plugin coverage WARN: a plugin-emitted kind with no
+	// resolver claim from any plugin will reject auto-mode edges
+	// in Cut C — surface the gap at startup so operators can
+	// declare the resolver before deploying workflows that need
+	// it.
+	for _, k := range pluginEmittedKinds {
+		if k == "" {
+			continue
+		}
+		if _, ok := resolvers[k]; !ok {
+			logger.Warn("canonical kind has plugin emitters but no resolver claim (per #304 Cut A): Cut C will fall edges to this kind through to the existing edge-write path without resolution — declare resolves_canonical_kinds on the relevant plugin to opt into name-resolution + disambiguation-task routing",
+				"kind", k)
+		}
+	}
+	return resolvers, nil
 }
 
 // unionEdgeTypes returns the deduped union of two edge-type slices
