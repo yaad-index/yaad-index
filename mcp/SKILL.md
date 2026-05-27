@@ -476,9 +476,6 @@ Before running a flow, sanity-check yaad-index is alive:
 ingest("https://en.wikipedia.org/wiki/Test")
 ```
 
-A `complete` or `needs_fill` response means the platform is up. Connection errors mean check the daemon is running + reachable:
-
-- **Direct path:** confirm `<base-url>/mcp` is reachable + the Bearer token is valid (curl `<base-url>/v1/health` returns 200; that same daemon serves `/mcp`).
-- **Legacy stdio wrapper:** check `YAAD_INDEX_URL` is set + the Docker pilot is running.
+A `complete` or `needs_fill` response means the platform is up. Connection errors mean check the daemon is running + reachable: confirm `<base-url>/mcp` is reachable + the Bearer token is valid (curl `<base-url>/v1/health` returns 200; that same daemon serves `/mcp`).
 
 A 401 from the MCP layer means the JWT is missing / malformed / expired — re-issue via `yaad-index issue-token` and reconfigure the agent.
