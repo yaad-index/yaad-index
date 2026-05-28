@@ -48,9 +48,11 @@ The per-source NDJSON line:
     "kind": "source",
     "name": "Susanna Clarke",
     "data": { "lang": "en", "wikidata_q": "Q278391" },
-    "edges": [
-      { "type": "authored", "name": "Piranesi", "kind": "book" }
-    ],
+    "edges": {
+      "is_a":     [ { "name": "wikipedia-article", "kind": "source-type" } ],
+      "is_about": [ { "name": "Susanna Clarke",   "kind": "person" } ],
+      "authored": [ { "name": "Piranesi",         "kind": "book" } ]
+    },
     "gaps": { "summary": "Two-sentence biography." }
   },
   "raw_content": "# Susanna Clarke\n\nAuthor of...",
@@ -93,7 +95,7 @@ A plugin emitting these as plugin-extracted fields gets clobbered by the project
 
 ### `structured.edges`
 
-Typed relationships emitted alongside the source entity, as `{type, name, kind}` per ref. The daemon resolves each `(name, kind)` to a canonical-label edge target via `canonical.EnsureLabelRow` — auto-materializing the thin canonical-label row when absent, gated by the operator's `canonical_kinds:` + `canonical_edge_types:` config (ADR-0016). Plugins MUST declare `canonical_kinds_emitted` + `canonical_edge_types_emitted` in their `--init` capabilities so the operator sees the discoverability-gap warning at startup for any kind / type they haven't enabled.
+Typed relationships emitted alongside the source entity, as a **map keyed by edge type**. Each value is a list of `{name, kind}` targets — the daemon resolves each `(name, kind)` to a canonical-label edge target via `canonical.EnsureLabelRow`, auto-materializing the thin canonical-label row when absent, gated by the operator's `canonical_kinds:` + `canonical_edge_types:` config (ADR-0016). The wire shape matches `SourceEdges map[string][]SourceEdgeTarget` in `internal/plugins/plugin.go`. Plugins MUST declare `canonical_kinds_emitted` + `canonical_edge_types_emitted` in their `--init` capabilities so the operator sees the discoverability-gap warning at startup for any kind / type they haven't enabled.
 
 ### `structured.gaps`
 
