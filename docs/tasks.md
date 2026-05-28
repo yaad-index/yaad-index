@@ -82,6 +82,42 @@ resolved_at: null
 - **Body sections** — each `task_append.section:` becomes a `## <section>` heading; lines accumulate under it via the action's `if_already_present` policy.
 - **`## Missing references` section** — auto-appended by the engine when the workflow's `context[].via` or `graph.get(...)` calls resolved no entity (per ADR-0024 §"Missing-reference handling"). The operator sees the unresolved id + the time it was attempted; deciding to add the missing entity or accept the note is the operator's call.
 
+### 2a. Resolution-task shape (#304 Cut C3)
+
+A second, structurally distinct task shape lands when a workflow's `add_canonical_edge` action runs under auto mode and the resolver plugin returns ambiguous disambiguation options (per [`docs/plugin-flow.md`](./plugin-flow.md) §3.3). The daemon spawns a `kind: resolution-task` file instead of an err-task — the workflow's "paused awaiting operator pick" state is recorded by the task itself.
+
+```markdown
+---
+kind: resolution-task
+schema_version: 1
+idempotency_key: boardgame-9f3a8b71c4e0d62a
+created_at: 2026-05-27T14:30:00Z
+from_id: email:m1
+edge_type: mentions
+target_kind: boardgame
+resolver_plugin: yaad-bgg
+normalized_raw_target: brass
+raw_target: Brass
+options:
+  - id: boardgame:brass-birmingham
+    label: "Brass: Birmingham"
+    summary: "2018 Wallace, deck-build network economic"
+  - id: boardgame:brass-lancashire
+    label: "Brass: Lancashire"
+    summary: "2007 Wallace, the original"
+---
+
+## Resolution
+
+Workflow paused on ambiguous resolve of "Brass" via plugin yaad-bgg.
+Pick one option below and resolve via `task_resolve` (#304 Cut C3.3).
+
+- [ ] boardgame:brass-birmingham — Brass: Birmingham — 2018 Wallace, deck-build network economic
+- [ ] boardgame:brass-lancashire — Brass: Lancashire — 2007 Wallace, the original
+```
+
+Frontmatter fields are daemon-managed; the body checklist is presentational (the resolve handler reads from the frontmatter `options[]` list, not the body). The file lives at the same `<vault>/tasks/<id>.md` path as text tasks; the existing `task_list` / `task_load` MCP tools return both shapes uniformly. The id is `task:<idempotency-key>` where the key is a length-prefixed SHA-256 over the 5-tuple `(from_id, edge_type, target_kind, normalized_raw_target, resolver_plugin)`, prefixed with `<target_kind_slug>-` for operator readability. Workflow retries over the same tuple collapse to one task — the daemon's idempotency probe checks for the file path before writing.
+
 ## 3. Append shape — how `task_append` accumulates
 
 The `task_append` action (per [`docs/workflows.md`](./workflows.md) §5.1):
@@ -212,6 +248,39 @@ Response:
 ```
 
 Idempotent: re-resolving an already-resolved (but not-yet-archived) task preserves the original `resolved_at` timestamp. Re-resolving an already-archived task is a no-op success.
+
+#### Resolution-task resolve (#304 Cut C3.3)
+
+When the target task has `kind: resolution-task` (per §2a), pass an additional `option=<canonical-id>` argument to pick one of the recorded candidates:
+
+```ts
+task_resolve("boardgame-9f3a8b71c4e0d62a", { option: "boardgame:brass-birmingham" });
+```
+
+Maps to `POST /v1/tasks/{id}/resolve` with body `{"option": "<id>"}`. Behaviour:
+
+1. Reads the task's frontmatter, validates `option` against the recorded `options[]` list (400 `option_not_in_list` when the id isn't a member).
+2. Re-ingests the chosen entity via the `resolver_plugin`'s `<plugin>: <id>` shorthand (per [`docs/plugin-flow.md`](./plugin-flow.md) §3.3) — idempotent if the canonical entity is already in the store.
+3. Lands the deferred canonical edge: `CreateEdge(from_id, edge_type, chosen_id)` when no prior edge exists for the source-edge tuple, OR `UpdateEdgeTarget` when one does (the stale-rewrite path; 409 `edge_stale` surfaces if the tuple shifted between probe and update).
+4. Auto-archives the resolution-task (always — the operator's pick is a terminal state; the `auto_archive_on_done` opt-out for text tasks does NOT apply).
+
+Response shape gains four resolution-specific fields alongside the legacy envelope:
+
+```json
+{
+  "ok": true,
+  "id": "boardgame-9f3a8b71c4e0d62a",
+  "auto_archived": true,
+  "resolved_at": "2026-05-27T15:00:00Z",
+  "chosen_id": "boardgame:brass-birmingham",
+  "edge_outcome": "created",
+  "from_id": "email:m1",
+  "edge_type": "mentions",
+  "target_kind": "boardgame"
+}
+```
+
+`edge_outcome` is one of `created` (no prior edge), `unchanged` (prior edge already pointed at chosen), or `rewritten` (prior edge redirected via `update_edge_target`). 409 `ingest_disambiguated` surfaces if the plugin returns options on the specific-id re-ingest — re-run the originating workflow to regenerate the task's option set.
 
 ## 6. Snooze semantics
 

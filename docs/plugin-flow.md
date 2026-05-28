@@ -232,6 +232,18 @@ Aggregate response shape for bare-plugin fan-out across 2+ instances:
 
 Single-instance plugins (1 configured instance OR instance-scoped form against 1 instance) collapse to the regular single-attempt response shape — no `fan_out` wrapper. Back-compat for the common single-instance deployment.
 
+### 3.3 Resolver capability — auto-fetch loop (#304)
+
+When the operator's workflow runs an `add_canonical_edge` action under auto mode (the engine's default for workflow-spawned writes), the daemon walks the kind → resolver-plugin ownership map computed from every plugin's `resolves_canonical_kinds`. If exactly one plugin claims responsibility for the action's `target.kind`, the daemon invokes that plugin's `<plugin>: <name>` shorthand-ingest path to resolve the raw name to a concrete canonical entity:
+
+- **Single match** (plugin returns one entity id) → daemon creates the source-edge against the resolved canonical-kind target. If `result.Entity.ID` is a source-row id (yaad-bgg / yaad-wikipedia shape), the daemon walks its outgoing canonical edges to find the matching `<target_kind>:` target (one hop).
+- **Ambiguous match** (plugin returns N disambiguation options per ADR-0006) → daemon defers the edge write and spawns a structured `kind: resolution-task` file at `<vault>/tasks/<idempotency-key>.md` carrying the (from_id, edge_type, target_kind, resolver_plugin, normalized_raw_target, options[]) payload. Operator picks via `task_resolve(id, option=<canonical-id>)` per `docs/tasks.md` §5.3. Workflow-retry-storm collapses to one task — the idempotency key is a length-prefixed SHA-256 over the 5-tuple, so a second fire over the same (source, edge, kind, raw_target, plugin) reuses the existing task file.
+- **No resolver registered for the target kind** OR `target.name` already in `<kind>:<slug>` canonical-shape OR no plugin currently has the resolver wired (nil) → fall through to legacy slugify-then-CreateEdge with no plugin call. This is the pre-#304 path; useful for hand-authored canonical-kind targets (`target.name: today()`, operator-curated names).
+
+The cardinality enforcement (≤1 resolver per kind) lives at daemon-config-load time per #304 Cut C1: if two plugins both declare the same canonical kind in `resolves_canonical_kinds`, the daemon refuses to start with a deterministic error naming the conflict. The operator-side resolution is to disable one of the plugins or trim their `resolves_canonical_kinds` for the contested kind.
+
+Plugins opt out cleanly: leave `resolves_canonical_kinds` empty / absent and the kind falls through to the legacy slugify path. Plugins that DO opt in MUST accept the `<plugin>: <name>` shorthand input shape in their URL-pattern matcher (the daemon synthesizes this input for every auto-mode resolution). The `<plugin>: <canonical-id>` shorthand (per ADR-0006 "Disambiguation responses") is the resolve-time form an agent passes to finalize an operator's option pick.
+
 ## 4. Cache TTL — three-level resolution
 
 Per-entity cache freshness resolves at fetch time across three input layers, narrowest-wins:

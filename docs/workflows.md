@@ -416,6 +416,16 @@ Idempotency: same `(source, edge_type, target)` tuple does not duplicate. Identi
 
 ADR refs: [ADR-0024](../adr/0024-workflows-and-tasks.md), [ADR-0021](../adr/0021-daemon-owns-slug.md) §3, #119 (per-entry data), #132 (this primitive).
 
+#### 5.5a Auto-resolver behavior (#304)
+
+Every workflow-spawned `add_canonical_edge` runs under **`edgewrite.Auto` mode** — the engine stamps it on the action context before dispatch. When the operator has a plugin registered for `target.kind` via that plugin's `resolves_canonical_kinds` capability (per [`docs/plugin-flow.md`](./plugin-flow.md) §3.3), the daemon routes the resolution through that plugin instead of slugifying locally:
+
+- **Single match** → the plugin returns the resolved canonical entity id; the edge lands against that id directly. `target.name` can be a descriptive name (e.g. `"Brass"`) and the daemon resolves it to the specific canonical (`boardgame:brass-birmingham`) via the plugin's name-search primitive.
+- **Ambiguous match** → the engine catches the `edgewrite.ResolutionDeferred` sentinel, spawns a structured `kind: resolution-task` file at `<vault>/tasks/<idempotency-key>.md`, and returns an `ActionResult.Deferred = true` outcome (skipped from the err-task path — the workflow is paused on operator pick, not failed). See [`docs/tasks.md`](./tasks.md) §2a for the task shape. Idempotency-keyed on the 5-tuple `(source, edge_type, target_kind, normalized_raw_target, resolver_plugin)` — workflow retries collapse to one task.
+- **No resolver for the target kind** OR `target.name` already in `<kind>:<slug>` form OR plugin's resolver is offline → fall through to legacy slugify-then-CreateEdge with no plugin call. Pre-#304 behavior preserved.
+
+Workflow authors don't need to opt in — the routing is transparent. `target.name` accepts either a descriptive name (plugin resolves) or a canonical-shape id (e.g. `today()` → `"day:2026-11-11"`, slugify path strips the prefix).
+
 ### 5.6 `plugin_dispatch`
 
 ```yaml
@@ -598,6 +608,7 @@ Per ADR-0024 §"Agent surface" + #277. All routes are gated by the standard daem
 | Action fires but writer fails                        | Per-action `ActionResult.Err` surfaces on the workflow's err-task. Check the task file for the wrap.    |
 | `add_canonical_edge` slug doesn't match what you expect | `slug.Slug` is the deterministic clean-slug rule per ADR-0017 / ADR-0021 §1. Strip punctuation + lowercase. |
 | Two writes to the same entity conflict               | Per-entity write-lock acquired by another writer (workflow + UGC + operator). 409 conflict; rejected caller retries. |
+| `add_canonical_edge` action shows `Deferred=true` (no err-task) | Auto-mode resolver returned ambiguous options; engine spawned a structured `resolution-task` at `<vault>/tasks/<key>.md` per #304 Cut C3. Inspect the task's frontmatter `options[]` and resolve via `task_resolve(id, option=<canonical-id>)`. No err-task is emitted because the deferral is the recorded state, not a failure. |
 
 ## 14. ADRs + companion issues
 
