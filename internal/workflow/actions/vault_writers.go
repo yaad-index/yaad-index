@@ -83,6 +83,13 @@ type EntityStore interface {
 	// Mirrors the production *sqliteStore signature so the
 	// existing wiring satisfies the interface without a wrapper.
 	CreateEdge(ctx context.Context, e *store.Edge) error
+	// ClearGapCallDone resets the gap-call lifecycle flag (per
+	// ADR-0013 §4). Used by the add_gap path (#324) to re-open the
+	// gap-callable cycle for an entity that has already been
+	// gap-called this cycle: a workflow-added gap means the AI has
+	// not yet been called for the new set, so the entity must
+	// re-surface on /v1/needs-fill. Idempotent on already-NULL.
+	ClearGapCallDone(ctx context.Context, id string) error
 }
 
 // VaultEntityReader is the narrow subset of *vault.Reader.
@@ -345,6 +352,23 @@ func (w *VaultGapWriter) AddGap(ctx context.Context, workflow, entityID, gap str
 	}); err != nil {
 		w.backend.logger().Warn(
 			"workflow add_gap: store.UpsertEntity failed (vault already written)",
+			"entity_id", entityID, "gap", gap, "err", err)
+	}
+
+	// Re-open the gap-call cycle (#324). Reaching this point means a
+	// new gap was added OR an existing gap's shape was refreshed —
+	// either way the AI hasn't been called for the current set, so
+	// the entity must re-surface on /v1/needs-fill. Without this,
+	// an entity whose gap_call_done_at was stamped by a prior fill
+	// stays excluded from the gap-callable candidate query forever.
+	// Best-effort: ErrNotFound is anomalous (GetEntity above proved
+	// the row exists) but mirrors the upsert's non-fatal posture —
+	// the vault write already landed and the operator can recover
+	// via force_refetch.
+	if err := w.backend.Store.ClearGapCallDone(ctx, entityID); err != nil &&
+		!errors.Is(err, store.ErrNotFound) {
+		w.backend.logger().Warn(
+			"workflow add_gap: store.ClearGapCallDone failed (best-effort)",
 			"entity_id", entityID, "gap", gap, "err", err)
 	}
 	return nil
