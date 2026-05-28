@@ -524,3 +524,11 @@ Status remains PROPOSED pending operator hard-gate review of this revision.
 - `add_note` vs `task_append` decision rule — added one-sentence heuristic.
 - Manual trigger input disambiguation — cross-referenced to the existing `workflow.trigger(input) input semantics` section already in the ADR.
 - YAML code-fence schema — added minimal worked example (boardgame-news workflow) to the workflow location section.
+
+### 2026-05-28 — amendment: worked-example `workflow` var is aspirational
+
+Three pre-implementation passages in this ADR (the `dedup.key` lines at `:77` + `:119`, and the §"Dedup default" prose at `:334`) reference a `workflow` CEL variable as if the engine bound the workflow's name into the expression environment — e.g. `key: 'workflow + entity.id'`, "the default key is `workflow + entity_id`". The implementation never wired this binding; the runtime CEL env exposes `entity`, `edge`, `trigger`, and each `context[].name` binding only (per `internal/workflow/decision/decision.go`'s `buildEnv`). A workflow-author writing `key: 'workflow + entity.id'` rejects at workflow-load time with `undeclared reference to 'workflow'`.
+
+The intent in the ADR's worked-example phrasing was illustrative — naming the per-workflow-scoping concept rather than pinning a specific CEL identifier. Implementations consistent with the framing: compose a per-workflow prefix as a literal string in the key (`key: '"boardgame-news:" + entity.id'`) when cross-workflow uniqueness matters. The single-workflow case can use `entity.id` directly — `dedup` is already scoped per-workflow at the engine layer; the key only needs to disambiguate within a single workflow's fires.
+
+The ADR text is preserved verbatim above for historical accuracy. For live behavior + the recommended dedup-key pattern, see [`docs/workflows.md`](../docs/workflows.md) §3.1 (variables list) and §6 (dedup-key composition).
