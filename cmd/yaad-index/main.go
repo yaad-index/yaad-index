@@ -594,6 +594,15 @@ func (s *ServeCmd) Run() error {
 		if err != nil {
 			return fmt.Errorf("edge-write service: %w", err)
 		}
+		// #325: thread the canonical-kinds set + shared logger
+		// into the edge-write service so the auto-fetch hook can
+		// (a) suppress dispatch on plugin-source-shape edges
+		// (recursion break) and (b) WARN-log dispatch failures.
+		// The set is derived from mergedRegistry's key set; the
+		// resolution-task / err-task writers wire later once
+		// FileTaskWriter + FileErrTaskWriter are constructed.
+		edgeService.SetCanonicalKinds(canonicalKindsSet(mergedRegistry))
+		edgeService.SetLogger(logger)
 		handlerOpts = append(handlerOpts, api.WithEdgeWriter(edgeService))
 		// Pass-through unconditionally — the build helper produces a
 		// `[]` wire shape on empty input regardless, but dropping the
@@ -815,6 +824,15 @@ func (s *ServeCmd) Run() error {
 		// task-body writes (first-create + append + missing-refs +
 		// resolve-line + resolution-task) land git commits.
 		wfTaskWriter := actions.NewFileTaskWriter(cfg.Vault.Path, mergedRegistry, st, edgeService, committer, logger)
+		// #325: route the centralized edge-write service's
+		// disambiguation + error outcomes through the same
+		// FileTaskWriter / FileErrTaskWriter instances the
+		// workflow runner uses. Both narrow interfaces on
+		// edgewrite are satisfied structurally by the actions
+		// writers; no shim needed.
+		wfErrTaskWriter := actions.NewFileErrTaskWriter(cfg.Vault.Path, st, committer, logger)
+		edgeService.SetResolutionTaskWriter(wfTaskWriter)
+		edgeService.SetErrTaskWriter(wfErrTaskWriter)
 		wfRunner := actions.New(actions.Options{
 			TaskWriter:           wfTaskWriter,
 			ResolutionTaskWriter: wfTaskWriter,
@@ -833,7 +851,7 @@ func (s *ServeCmd) Run() error {
 			// (condition-eval, subject-render, action-runner
 			// non-MissingRef errors) accumulate into the
 			// workflow's err task at tasks/<workflow>-err.md.
-			ErrTaskWriter: actions.NewFileErrTaskWriter(cfg.Vault.Path, st, committer, logger),
+			ErrTaskWriter: wfErrTaskWriter,
 			// Receives the rendered-template drift Warn when
 			// the engine ships a non-nil RenderedTemplates map
 			// that lacks an expected (idx, field) entry —
@@ -1947,6 +1965,21 @@ func canonicalKindNames(reg map[string]config.CanonicalKindConfig) []string {
 	out := make([]string, 0, len(reg))
 	for k := range reg {
 		out = append(out, k)
+	}
+	return out
+}
+
+// canonicalKindsSet returns reg's key set as the set-shape the
+// edgewrite.Service.SetCanonicalKinds method consumes for the #325
+// auto-fetch hook (recursion break + source-shape classification
+// on incoming-edges).
+func canonicalKindsSet(reg map[string]config.CanonicalKindConfig) map[string]struct{} {
+	if len(reg) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(reg))
+	for k := range reg {
+		out[k] = struct{}{}
 	}
 	return out
 }

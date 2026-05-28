@@ -31,8 +31,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/yaad-index/yaad-index/internal/slug"
 	"github.com/yaad-index/yaad-index/internal/store"
@@ -86,6 +88,35 @@ type Service struct {
 	// api.SyncIngester. Tests that don't exercise auto-mode
 	// leave it unset.
 	resolver NameResolver
+
+	// canonicalKinds is the operator-declared canonical-kinds
+	// set, plumbed via SetCanonicalKinds for #325. The
+	// auto-fetch hook uses it to (a) suppress dispatch on
+	// edges whose source is plugin-source-shape (kind not in
+	// the set — the recursion break) and (b) classify
+	// incoming edges as plugin-source vs canonical in the
+	// source-connection check. nil-safe: see fromKindIsCanonical.
+	canonicalKinds map[string]struct{}
+
+	// resolutionTaskWriter handles the #325 disambiguation
+	// outcome — routes through actions.FileTaskWriter in
+	// production via the narrow interface. nil-safe: the
+	// auto-fetch hook logs a WARN if disambiguation lands
+	// without a writer wired.
+	resolutionTaskWriter ResolutionTaskWriter
+
+	// errTaskWriter handles the #325 dispatch-error outcome
+	// — routes through actions.FileErrTaskWriter in
+	// production. Same nil-safety as resolutionTaskWriter.
+	errTaskWriter ErrTaskWriter
+
+	// clock is the timestamp source for err-task spawns.
+	// nil → time.Now.UTC(). Test-only knob.
+	clock func() time.Time
+
+	// logger is the slog.Logger the auto-fetch hook's WARN
+	// path uses. nil → slog.DiscardHandler (quiet tests).
+	logger *slog.Logger
 }
 
 // New constructs a Service backed by the given store + the
@@ -119,16 +150,21 @@ func New(st store.Store, resolvers map[string][]string) (*Service, error) {
 	return &Service{store: st, resolvers: flat}, nil
 }
 
-// CreateEdge routes through the centralized service. In Cut C1
-// this was a thin passthrough; Cut C2 keeps it as a passthrough
-// because the auto-mode resolution path uses the separate
-// CreateCanonicalEdgeByName entry point (see Gap 1 in the
-// design comment). Callers with already-resolved canonical
-// IDs in their edge.To stay on this method; the workflow
-// `add_canonical_edge` path that carries a raw name uses
-// CreateCanonicalEdgeByName.
+// CreateEdge routes through the centralized service. Per #325,
+// after a successful write the auto-fetch hook fires when the
+// target is a canonical kind with a configured resolver_plugin
+// and no plugin-source connection yet — dispatching the resolver
+// plugin's name-ingest path. The hook is best-effort: a dispatch
+// failure logs but doesn't fail this method (the edge already
+// landed).
 func (s *Service) CreateEdge(ctx context.Context, e *store.Edge) error {
-	return s.store.CreateEdge(ctx, e)
+	if err := s.store.CreateEdge(ctx, e); err != nil {
+		return err
+	}
+	if e != nil {
+		s.maybeDispatchResolverAutoFetch(ctx, e.From, e.Type, e.To)
+	}
+	return nil
 }
 
 // SetNameResolver wires the plugin-name-resolution surface per
@@ -141,6 +177,53 @@ func (s *Service) CreateEdge(ctx context.Context, e *store.Edge) error {
 func (s *Service) SetNameResolver(r NameResolver) {
 	if r != nil {
 		s.resolver = r
+	}
+}
+
+// SetCanonicalKinds wires the operator-declared canonical-kinds
+// set used by the #325 auto-fetch hook. Nil → the hook degrades
+// to "always treat from-kind as canonical" (works for tests that
+// only exercise the resolver-plugin gate). Idempotent: nil
+// preserves the prior set so accidental nil-wires don't blank
+// out a running configuration.
+func (s *Service) SetCanonicalKinds(kinds map[string]struct{}) {
+	if kinds != nil {
+		s.canonicalKinds = kinds
+	}
+}
+
+// SetResolutionTaskWriter wires the resolution-task spawn surface
+// (#325 disambiguation outcomes). Idempotent on nil per the same
+// rationale as SetNameResolver.
+func (s *Service) SetResolutionTaskWriter(w ResolutionTaskWriter) {
+	if w != nil {
+		s.resolutionTaskWriter = w
+	}
+}
+
+// SetErrTaskWriter wires the err-task spawn surface (#325
+// dispatch error outcomes). Idempotent on nil.
+func (s *Service) SetErrTaskWriter(w ErrTaskWriter) {
+	if w != nil {
+		s.errTaskWriter = w
+	}
+}
+
+// SetClock overrides the auto-fetch hook's timestamp source.
+// Used by tests to pin err-task timestamps; production leaves
+// it unset (time.Now.UTC() default).
+func (s *Service) SetClock(c func() time.Time) {
+	if c != nil {
+		s.clock = c
+	}
+}
+
+// SetLogger wires the slog.Logger the auto-fetch hook's WARN
+// path uses. nil preserves the prior logger (or the
+// DiscardHandler default).
+func (s *Service) SetLogger(l *slog.Logger) {
+	if l != nil {
+		s.logger = l
 	}
 }
 
@@ -258,6 +341,12 @@ func (s *Service) CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeTyp
 	}); err != nil {
 		return "", false, fmt.Errorf("create edge %s -[%s]-> %s: %w", fromID, edgeType, targetID, err)
 	}
+	// #325 auto-fetch hook on the legacy slugify path: when the
+	// target kind has a resolver_plugin and no plugin-source
+	// connection yet, dispatch the plugin's name-ingest. The
+	// auto-resolve branch above doesn't need this hook — it
+	// already invoked the plugin via the resolver.
+	s.maybeDispatchResolverAutoFetch(ctx, fromID, edgeType, targetID)
 	return targetID, created, nil
 }
 

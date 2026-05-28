@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/yaad-index/yaad-index/internal/plugins"
 )
@@ -118,4 +119,22 @@ func IsResolutionDeferred(err error) (*ResolutionDeferred, bool) {
 		return d, true
 	}
 	return nil, false
+}
+
+// ResolutionTaskWriter is the narrow resolution-task spawn surface
+// the Service consumes on #325 disambiguation outcomes. The
+// production wiring is `actions.FileTaskWriter` (which matches
+// this signature). Defined here so edgewrite doesn't import
+// workflow/actions (actions already imports edgewrite via
+// ResolutionDeferred — cycle risk).
+type ResolutionTaskWriter interface {
+	WriteResolutionTask(ctx context.Context, d *ResolutionDeferred) (path string, created bool, err error)
+}
+
+// ErrTaskWriter is the narrow err-task spawn surface the Service
+// consumes on #325 dispatch errors / timeouts. The production
+// wiring is `actions.FileErrTaskWriter`. Defined here for the
+// same reason as ResolutionTaskWriter.
+type ErrTaskWriter interface {
+	AppendErrTask(ctx context.Context, workflow string, when time.Time, entityID, errMsg string) error
 }
