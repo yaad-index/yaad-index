@@ -32,6 +32,10 @@ type fakeEntityStore struct {
 	restores map[string]int
 	// edges records CreateEdge calls per #221 (ADR-0025 cut 2).
 	edges []*store.Edge
+	// gapCallCleared counts ClearGapCallDone calls per id (#324).
+	gapCallCleared    map[string]int
+	clearGapCallErr   error
+	clearGapCallNotFound map[string]bool
 }
 
 func newFakeEntityStore(seed map[string]*store.Entity) *fakeEntityStore {
@@ -119,6 +123,28 @@ func (f *fakeEntityStore) upsertSnapshot() []*store.Entity {
 	out := make([]*store.Entity, len(f.upserts))
 	copy(out, f.upserts)
 	return out
+}
+
+func (f *fakeEntityStore) ClearGapCallDone(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.clearGapCallErr != nil {
+		return f.clearGapCallErr
+	}
+	if f.clearGapCallNotFound[id] {
+		return store.ErrNotFound
+	}
+	if f.gapCallCleared == nil {
+		f.gapCallCleared = map[string]int{}
+	}
+	f.gapCallCleared[id]++
+	return nil
+}
+
+func (f *fakeEntityStore) clearGapCallCount(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.gapCallCleared[id]
 }
 
 func (f *fakeEntityStore) CreateEdge(_ context.Context, e *store.Edge) error {
@@ -1202,6 +1228,90 @@ func TestVaultRestoreWriter_BackendNotWired(t *testing.T) {
 	err := w.RestoreEntity(context.Background(), "wf", "gmail:x", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "backend not wired")
+}
+
+// TestVaultGapWriter_ClearsGapCallDoneOnAdd (#324): a successful
+// AddGap calls Store.ClearGapCallDone so an entity that was
+// previously gap-called this cycle re-surfaces on /v1/needs-fill.
+// Without this, the candidate filter (gap_call_done_at IS NULL)
+// silently excludes the entity even though the workflow has just
+// added a new agent-fill gap.
+func TestVaultGapWriter_ClearsGapCallDoneOnAdd(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
+	b, es, _, _ := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"email:m1": {ID: "email:m1", Kind: "email"},
+		},
+		map[string]*vault.Entity{
+			"email:m1": {ID: "email:m1", Kind: "email"},
+		},
+		now,
+	)
+	w := NewVaultGapWriter(b)
+	err := w.AddGap(context.Background(), "personal-is-about", "email:m1", "is_about", GapInjection{
+		Type:         "canonical_type",
+		FillStrategy: "agent",
+		Kinds:        []string{"person"},
+		Description:  "the subject of the email",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, es.clearGapCallCount("email:m1"),
+		"AddGap must clear gap_call_done_at so the entity re-surfaces on needs_fill")
+}
+
+// TestVaultGapWriter_IdempotentSkipDoesNotClear (#324): the
+// idempotent fast-path (gap already present + empty injection
+// returns nil before the upsert) must NOT clear gap_call_done_at
+// — no actual change to the gap set means the AI's prior call
+// still covers the current state, so reopening the cycle would
+// be a regression on the cache-hit suppression contract.
+func TestVaultGapWriter_IdempotentSkipDoesNotClear(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
+	b, es, _, _ := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"email:m1": {ID: "email:m1", Kind: "email"},
+		},
+		map[string]*vault.Entity{
+			"email:m1": {
+				ID: "email:m1", Kind: "email",
+				Gaps: []string{"is_about"},
+				GapState: map[string]vault.GapStateEntry{
+					"is_about": {},
+				},
+			},
+		},
+		now,
+	)
+	w := NewVaultGapWriter(b)
+	require.NoError(t, w.AddGap(context.Background(), "wf", "email:m1", "is_about", GapInjection{}))
+	assert.Equal(t, 0, es.clearGapCallCount("email:m1"),
+		"idempotent re-fire on existing gap must not reopen the gap-call cycle")
+}
+
+// TestVaultGapWriter_ClearGapCallDoneNotFoundIsTolerated (#324):
+// a ClearGapCallDone returning ErrNotFound (theoretically
+// impossible — GetEntity above confirmed the row exists, but the
+// race-deletion safety net mirrors the upsert's posture) does
+// not fail the AddGap call. The vault write already landed.
+func TestVaultGapWriter_ClearGapCallDoneNotFoundIsTolerated(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
+	b, es, _, _ := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"email:m1": {ID: "email:m1", Kind: "email"},
+		},
+		map[string]*vault.Entity{
+			"email:m1": {ID: "email:m1", Kind: "email"},
+		},
+		now,
+	)
+	es.clearGapCallNotFound = map[string]bool{"email:m1": true}
+	w := NewVaultGapWriter(b)
+	require.NoError(t, w.AddGap(context.Background(), "wf", "email:m1", "is_about", GapInjection{
+		Type: "string", Description: "desc",
+	}))
 }
 
 // TestVaultPropertyWriter_DayShapeScanEmitsEdge (#221, ADR-0025 cut 2):
