@@ -64,7 +64,7 @@ condition: 'entity.rating > 7 || (prior != null && prior.rating > 7) || entity.o
 subject: '{{ entity.slug }}'
 
 dedup:
-  key: 'workflow + entity.id'
+  key: '"boardgame-news:" + entity.id'
   policy: update
 
 actions:
@@ -123,6 +123,10 @@ The decision pipeline uses CEL ([cel-go](https://pkg.go.dev/github.com/google/ce
 - `trigger` — the per-firing trigger context (see §3.1.1). Always populated; predicates referencing missing sub-fields see `has() == false` rather than raising.
 - `<binding>` — each entry in the workflow's `context:` stanza becomes a dynamic variable with the same name. Pre-evaluated once per fire (see §4). `entity`, `edge`, and `trigger` are reserved — declaring a binding with one of those names is rejected at workflow-load time.
 
+**Available variables: `entity`, `edge`, `trigger`, plus each `context[].name`.** There is no `workflow` binding — the workflow's name is not available as a CEL identifier. When you need a per-workflow prefix in a `dedup.key` or template string, compose it as a literal: `key: '"boardgame-news:" + entity.id'`. (YAML single-quotes around a CEL double-quoted string.)
+
+**Bare-CEL mode + dash hazard.** When a template field has no `{{` segments, the engine compiles the entire value as one bare CEL expression (per `internal/workflow/template/template.go`). In bare-CEL mode, `<word>-<word>` parses as binary subtraction on two identifiers — `subject: github-active` reads as `github - active` and rejects with `undeclared reference to 'github'`. To embed a static literal that contains `-`, `+`, `*`, or `/` between word characters in bare-CEL mode, wrap as a CEL string: `subject: '"github-active"'` (YAML single-quotes around a CEL double-quoted string), or switch to mustache: `subject: '{{ "github-active" }}'`. The same hazard hits any literal of that shape.
+
 #### 3.1.1 Trigger context
 
 `trigger.*` describes *what caused this firing*. Fields:
@@ -159,7 +163,7 @@ actions:
 
 #### Lookups + utilities
 
-- `graph.get(id)` — fetch a canonical-id entity (`<kind>:<slug>`). Returns the entity's `data` map or null. **Missing entity** does NOT raise — instead the engine records a missing-reference note that gets attached to any task the workflow produces. The workflow proceeds; the operator decides whether to manually add the missing edge / ingest the missing entity.
+- `graph.get(id)` — fetch a canonical-id entity (`<kind>:<slug>`). Returns the entity as a dynamic map — `{id, kind, slug, data?}` where `data` is the entity's frontmatter sub-map (absent on thin canonical-label rows that have no plugin-emitted data yet) — or `null` when the entity isn't in the graph. Plugin / fill data fields are accessed via `graph.get(id).data.<field>`, NOT `graph.get(id).<field>`. **Missing entity** does NOT raise — instead the engine records a missing-reference note that gets attached to any task the workflow produces. The workflow proceeds; the operator decides whether to manually add the missing edge / ingest the missing entity.
 - `regex_capture(text, pattern, group_index)` — returns the matched capture group as string (0 = whole match) or `""` on no-match / out-of-range / negative index. Process-wide compiled-regex cache. **Literal patterns are pre-validated at workflow-Compile time**; a malformed regex fails registration, not the first fire. Runtime-computed patterns can only fail at eval and return `""`.
 - `string(value)` — CEL's standard type cast. The `string(timestamp)` overload formats RFC3339 / ISO 8601 (e.g. `"2026-05-17T19:00:00Z"`) and is the way to embed `edge.timestamp` in a template: `"- alert at " + string(edge.timestamp)`. Direct concat `"prefix " + edge.timestamp` fails with `no such overload` because CEL has no implicit string/time coercion. For date-only or time-only shapes, compose with the strings extension: `string(edge.timestamp).substring(0, 10)` → `"2026-05-17"`.
 
@@ -340,7 +344,7 @@ The operator-side `task_resolve` MCP tool (resolves an entire task by id) is a s
 ```yaml
 - add_note:
     target: 'edge.to'
-    content: 'Surfaced via {{ workflow }}: {{ entity.summary }}'
+    content: 'Surfaced: {{ entity.summary }}'
 ```
 
 Attach a note to an existing entity via the standard notes pathway (the `add_note` MCP tool's daemon-internal equivalent). The note lands between the entity's `<!-- yaad:notes start/end -->` markers per ADR-0015 (extended #115). Author = `workflow:<name>` per the ADR-0024 source vocabulary.
@@ -438,11 +442,11 @@ ADR refs: [ADR-0024](../adr/0024-workflows-and-tasks.md) §"plugin_dispatch exec
 
 ```yaml
 dedup:
-  key: 'workflow + entity.id'
+  key: '"boardgame-news:" + entity.id'
   policy: update
 ```
 
-The engine computes the dedup key from the CEL template before dispatching actions. The policy decides what happens when the same key has fired before:
+The engine computes the dedup key from the CEL template before dispatching actions. The key is workflow-author-supplied — there is no implicit `workflow` variable in CEL (see §3 "Available variables"); compose a per-workflow prefix as a literal string when you need cross-workflow uniqueness in the key. The policy decides what happens when the same key has fired before:
 
 - `update` (default) — re-fire the actions; let `task_append.if_already_present` decide line-level dedup.
 - `skip` — drop the fire silently (don't even run actions).
