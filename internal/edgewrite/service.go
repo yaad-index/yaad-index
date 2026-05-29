@@ -178,11 +178,22 @@ func New(st store.Store, resolvers map[string][]string) (*Service, error) {
 // plugin's name-ingest path. The hook is best-effort: a dispatch
 // failure logs but doesn't fail this method (the edge already
 // landed).
+//
+// Recursion break (per #330): the resolver plugin's own
+// `<source>:<id> -> <canonical>:<slug>` edge writes come through
+// CreateEdge too. When the from-entity's kind is NOT canonical
+// (i.e., source-shape), the dispatch is suppressed — the plugin
+// is the one writing this edge as part of its source-row
+// materialization, so triggering the plugin again would loop.
+// The guard lives here at the call site (not inside
+// MaybeDispatchResolverAutoFetch) so the fill-gate's direct
+// invocation — where fromID is typically source-shape but no
+// edge write is involved — isn't incorrectly suppressed.
 func (s *Service) CreateEdge(ctx context.Context, e *store.Edge) error {
 	if err := s.store.CreateEdge(ctx, e); err != nil {
 		return err
 	}
-	if e != nil {
+	if e != nil && s.fromKindIsCanonical(ctx, e.From) {
 		s.MaybeDispatchResolverAutoFetch(ctx, e.From, e.Type, e.To)
 	}
 	return nil
@@ -367,7 +378,13 @@ func (s *Service) CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeTyp
 	// connection yet, dispatch the plugin's name-ingest. The
 	// auto-resolve branch above doesn't need this hook — it
 	// already invoked the plugin via the resolver.
-	s.MaybeDispatchResolverAutoFetch(ctx, fromID, edgeType, targetID)
+	//
+	// Recursion break (per #330) — same shape as CreateEdge:
+	// suppress when the from-entity is source-shape so the
+	// plugin's own legacy-path edge writes don't re-trigger.
+	if s.fromKindIsCanonical(ctx, fromID) {
+		s.MaybeDispatchResolverAutoFetch(ctx, fromID, edgeType, targetID)
+	}
 	return targetID, created, nil
 }
 
