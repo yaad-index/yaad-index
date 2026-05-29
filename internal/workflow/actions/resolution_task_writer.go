@@ -49,6 +49,14 @@ import (
 // schema_version sniffing.
 const ResolutionTaskKind = "resolution-task"
 
+// resolutionTaskPromptSeed is the throwaway prompt that
+// RenderTaskSections accepts to satisfy the renderer's
+// mandatory-prompt check before SetPrompt installs the
+// edge-aware framing. Never lands in operator-visible output
+// — SetPrompt replaces it on the same code path that future
+// operator edits would route through.
+const resolutionTaskPromptSeed = "(populated below)"
+
 // ResolutionTaskSchemaVersion pins the integer schema version
 // stamped onto every resolution-task frontmatter at write time.
 // Bump when the typed-payload shape changes in a way readers
@@ -266,16 +274,38 @@ func renderResolutionTaskBody(d *edgewrite.ResolutionDeferred) ([]byte, error) {
 		return nil, fmt.Errorf("marshal resolution-task frontmatter: %w", err)
 	}
 
-	// #337 Cut 1: emit the 5-section schema. Prompt carries the
-	// disambiguation instruction; todo carries the options
-	// checkbox list. Edges / freeform / notes render as empty
-	// marker pairs so Cut 2's bounded primitives have well-
-	// formed sections to mutate.
+	// #345: compose the 5-section body via the Cut 2 bounded
+	// primitives. RenderTaskSections seeds the schema with a
+	// throwaway prompt + the populated todo (option checklist)
+	// and edges (source-edge tuple) sections; SetPrompt then
+	// installs the edge-aware operator-facing framing.
+	//
+	// Edges section records the source-edge tuple as freeform-
+	// structured text per #345 — until #337 Cut 3 wires real
+	// AddEdge, the section is a daemon-emitted audit view of
+	// the deferred edge so operators can read it inline without
+	// re-parsing frontmatter.
 	prompt := fmt.Sprintf(
-		"Workflow paused on ambiguous resolve of %q via plugin %s.\n"+
-			"Pick one option from the todo section and resolve via `task_resolve`.",
-		d.RawTarget, d.ResolverPlugin,
+		"Workflow paused on ambiguous resolve of %q via plugin %s.\n\n"+
+			"Pick one option from the todo section. On resolve, the chosen entity will\n"+
+			"be fetched via the plugin shorthand `%s:<option-id>` and the deferred edge\n"+
+			"will be landed:\n\n"+
+			"    %s --%s--> <chosen-id>\n\n"+
+			"If a prior edge for this source-tuple already exists pointing elsewhere,\n"+
+			"it will be rewritten to the chosen target (stale-rewrite per #304 Cut C3.3).\n"+
+			"The edges section below records the source-edge tuple for audit.",
+		d.RawTarget, d.ResolverPlugin, d.ResolverPlugin, d.From, d.EdgeType,
 	)
+
+	edges := fmt.Sprintf(
+		"- from_id: %s\n"+
+			"- edge_type: %s\n"+
+			"- target_kind: %s\n"+
+			"- normalized_raw_target: %s\n"+
+			"- resolver_plugin: %s",
+		d.From, d.EdgeType, d.TargetKind, slug.Slug(d.RawTarget), d.ResolverPlugin,
+	)
+
 	var todoBuilder strings.Builder
 	for _, opt := range fm.Options {
 		todoBuilder.WriteString("- [ ] ")
@@ -292,11 +322,16 @@ func renderResolutionTaskBody(d *edgewrite.ResolutionDeferred) ([]byte, error) {
 	}
 
 	body, err := RenderTaskSections(TaskSections{
-		Prompt: prompt,
+		Prompt: resolutionTaskPromptSeed,
+		Edges:  edges,
 		Todo:   strings.TrimRight(todoBuilder.String(), "\n"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render resolution-task sections: %w", err)
+	}
+	body, err = SetPrompt(body, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("install resolution-task prompt: %w", err)
 	}
 
 	var b strings.Builder
