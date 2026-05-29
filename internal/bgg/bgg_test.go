@@ -439,16 +439,20 @@ func TestPlugin_Fetch_NameShorthand_SingleMatch(t *testing.T) {
 }
 
 // TestPlugin_Fetch_NameShorthand_MultiMatch covers the disambiguation
-// path per: BGG search returns multiple matches, Fetch
-// returns *FetchOutcome with Options populated (no Boardgame), so the
-// agent picks one and re-ingests via `bgg: <numeric-id>`.
+// path per: BGG search returns multiple matches with NO single
+// exact-name match, Fetch returns *FetchOutcome with Options
+// populated (no Boardgame), so the agent picks one and re-ingests
+// via `bgg: <numeric-id>`. Per #329 the search-result names are
+// chosen so the query has no exact match (the original "Brass"
+// entry is renamed; preserved query "brass" → all three are
+// substring hits, none exact-match → disambig stays).
 func TestPlugin_Fetch_NameShorthand_MultiMatch(t *testing.T) {
 	t.Parallel()
 
 	const searchXML = `<?xml version="1.0" encoding="utf-8"?>
 <items total="3" termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
  <item type="boardgame" id="28720">
- <name type="primary" value="Brass"/>
+ <name type="primary" value="Brass: Original"/>
  <yearpublished value="2007"/>
  </item>
  <item type="boardgame" id="220308">
@@ -502,7 +506,7 @@ func TestPlugin_Fetch_NameShorthand_MultiMatch(t *testing.T) {
 	// re-ingest via `bgg: <id>`); Label is `<name> (<year>)` when
 	// the year is known; Summary is empty (BGG search has no desc).
 	wantByID := map[string]string{
-		"28720": "Brass (2007)",
+		"28720": "Brass: Original (2007)",
 		"220308": "Brass: Lancashire (2018)",
 		"224517": "Brass: Birmingham (2018)",
 	}
@@ -517,6 +521,215 @@ func TestPlugin_Fetch_NameShorthand_MultiMatch(t *testing.T) {
 		if got := gotByID[id]; got != wantLabel {
 			t.Errorf("Option(%s).Label: want %q, got %q", id, wantLabel, got)
 		}
+	}
+}
+
+// TestPlugin_Fetch_NameShorthand_ExactMatchAutoResolves pins the
+// #329 contract: when the BGG search returns multiple results
+// but exactly one has a name that matches the query exactly
+// (case + whitespace normalized; year suffix excluded), Fetch
+// auto-resolves to that single entry via fetchByID rather than
+// returning the full set as disambiguation. The repro scenario
+// is the original #329 trigger: a `bgg: The Lost Expedition`
+// search returns ~10 substring hits but only one exact-name
+// match.
+func TestPlugin_Fetch_NameShorthand_ExactMatchAutoResolves(t *testing.T) {
+	t.Parallel()
+
+	const searchXML = `<?xml version="1.0" encoding="utf-8"?>
+<items total="4" termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
+ <item type="boardgame" id="216459">
+ <name type="primary" value="The Lost Expedition"/>
+ <yearpublished value="2017"/>
+ </item>
+ <item type="boardgame" id="1572">
+ <name type="primary" value="The Lost Expeditions"/>
+ <yearpublished value="2016"/>
+ </item>
+ <item type="boardgame" id="999991">
+ <name type="primary" value="The Lost Expedition: Promo Pack"/>
+ <yearpublished value="2018"/>
+ </item>
+ <item type="boardgame" id="999992">
+ <name type="primary" value="Lost Cities: Expedition 6 – The Lost Expedition"/>
+ <yearpublished value="2019"/>
+ </item>
+</items>`
+
+	const thingXML = `<?xml version="1.0" encoding="utf-8"?>
+<items termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
+ <item type="boardgame" id="216459">
+ <name type="primary" sortindex="5" value="The Lost Expedition"/>
+ <yearpublished value="2017"/>
+ <description>A jungle survival deduction game.</description>
+ <minplayers value="1"/>
+ <maxplayers value="5"/>
+ <playingtime value="45"/>
+ </item>
+</items>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if strings.HasPrefix(r.URL.Path, "/xmlapi2/search") {
+			_, _ = w.Write([]byte(searchXML))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/xmlapi2/thing") {
+			_, _ = w.Write([]byte(thingXML))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	srvURL, _ := url.Parse(srv.URL)
+	bggClient := bggo.NewClient("test-key",
+		bggo.WithHost(srvURL.Host),
+		bggo.WithScheme("http"),
+	)
+	p, _ := New("test-key", WithClient(bggClient))
+
+	out, err := p.Fetch(context.Background(), "bgg: The Lost Expedition")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if out.Boardgame == nil {
+		t.Fatal("Boardgame: want resolved boardgame, got nil (auto-resolve must fire on exact-name match)")
+	}
+	if got := out.Boardgame.BGGID; got != "216459" {
+		t.Errorf("Boardgame.BGGID: want \"216459\" (the only exact-name match), got %q", got)
+	}
+	if len(out.Options) != 0 {
+		t.Errorf("Options: want empty on single-exact-match auto-resolve, got %d", len(out.Options))
+	}
+}
+
+// TestPlugin_Fetch_NameShorthand_MultiExactMatchStaysDisambig pins
+// the carve-out: when 2+ results share an exact-name match (e.g.,
+// Catan with multiple editions / republishings), the auto-resolve
+// short-circuits and the full disambiguation list is returned so
+// the operator picks the intended year.
+func TestPlugin_Fetch_NameShorthand_MultiExactMatchStaysDisambig(t *testing.T) {
+	t.Parallel()
+
+	const searchXML = `<?xml version="1.0" encoding="utf-8"?>
+<items total="3" termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
+ <item type="boardgame" id="13">
+ <name type="primary" value="Catan"/>
+ <yearpublished value="1995"/>
+ </item>
+ <item type="boardgame" id="40694">
+ <name type="primary" value="Catan"/>
+ <yearpublished value="2015"/>
+ </item>
+ <item type="boardgame" id="999998">
+ <name type="primary" value="Catan: Cities &amp; Knights"/>
+ <yearpublished value="1998"/>
+ </item>
+</items>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if strings.HasPrefix(r.URL.Path, "/xmlapi2/search") {
+			_, _ = w.Write([]byte(searchXML))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	srvURL, _ := url.Parse(srv.URL)
+	bggClient := bggo.NewClient("test-key",
+		bggo.WithHost(srvURL.Host),
+		bggo.WithScheme("http"),
+	)
+	p, _ := New("test-key", WithClient(bggClient))
+
+	out, err := p.Fetch(context.Background(), "bgg: Catan")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if out.Boardgame != nil {
+		t.Error("Boardgame: want nil on multi-exact-match (year disambig path)")
+	}
+	if len(out.Options) != 3 {
+		t.Errorf("Options: want 3 (full disambig list), got %d", len(out.Options))
+	}
+}
+
+// TestExactNameMatch_NormalizationCases pins the normalizer's
+// case + whitespace handling so the helper's contract is
+// independent of the Fetch integration tests.
+func TestExactNameMatch_NormalizationCases(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		query   string
+		results []bggo.SearchResult
+		wantID  int64 // 0 = no match (fall through to disambig)
+	}{
+		{
+			name: "case_insensitive_exact",
+			query: "the lost expedition",
+			results: []bggo.SearchResult{
+				{ID: 1, Name: "Some Other"},
+				{ID: 2, Name: "The Lost Expedition"},
+			},
+			wantID: 2,
+		},
+		{
+			name: "whitespace_collapsed",
+			query: "The  Lost   Expedition",
+			results: []bggo.SearchResult{
+				{ID: 7, Name: "The Lost Expedition"},
+			},
+			// Single-result path doesn't go through exactNameMatch
+			// in fetchByName; the helper still returns the match.
+			wantID: 7,
+		},
+		{
+			name: "prefix_not_exact",
+			query: "The Lost Expedition",
+			results: []bggo.SearchResult{
+				{ID: 3, Name: "The Lost Expedition: Promo Pack"},
+			},
+			wantID: 0,
+		},
+		{
+			name: "two_exact_matches_no_resolve",
+			query: "Catan",
+			results: []bggo.SearchResult{
+				{ID: 13, Name: "Catan", YearPublished: 1995},
+				{ID: 40694, Name: "Catan", YearPublished: 2015},
+			},
+			wantID: 0,
+		},
+		{
+			name: "empty_query_no_resolve",
+			query: "",
+			results: []bggo.SearchResult{
+				{ID: 1, Name: ""},
+			},
+			wantID: 0,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := exactNameMatch(c.query, c.results)
+			if c.wantID == 0 {
+				if got != nil {
+					t.Errorf("exactNameMatch: want nil, got result id=%d", got.ID)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("exactNameMatch: want result id=%d, got nil", c.wantID)
+			}
+			if got.ID != c.wantID {
+				t.Errorf("exactNameMatch: want id=%d, got id=%d", c.wantID, got.ID)
+			}
+		})
 	}
 }
 

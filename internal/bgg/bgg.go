@@ -762,6 +762,20 @@ func (p *Plugin) fetchByName(ctx context.Context, query string) (*FetchOutcome, 
 		bggIDStr := strconv.FormatInt(results[0].ID, 10)
 		return p.fetchByID(ctx, results[0].ID, CanonicalURL(bggIDStr), "bgg: "+query)
 	default:
+		// #329: exact-name match preference. BGG's search is a
+		// substring/contains match — a query like "The Lost
+		// Expedition" returns the exact-name hit alongside
+		// expansions/prefix/unrelated matches. When exactly one
+		// result's name matches the query exactly (case +
+		// whitespace normalized; year suffix excluded from
+		// comparison), auto-resolve to that single entry rather
+		// than forcing disambiguation. Multi-exact-match
+		// (e.g., Catan with multiple editions sharing the same
+		// canonical name) falls through to the full list.
+		if exact := exactNameMatch(query, results); exact != nil {
+			bggIDStr := strconv.FormatInt(exact.ID, 10)
+			return p.fetchByID(ctx, exact.ID, CanonicalURL(bggIDStr), "bgg: "+query)
+		}
 		now := operatorNow()
 		options := make([]DisambiguationOption, 0, len(results))
 		for _, r := range results {
@@ -788,6 +802,76 @@ func (p *Plugin) fetchByName(ctx context.Context, query string) (*FetchOutcome, 
 			},
 		}, nil
 	}
+}
+
+// normalizeNameForExactMatch lowercases + collapses runs of
+// whitespace to a single space + trims. Used by #329's
+// exact-name disambiguation preference so e.g.
+// "The Lost Expedition" matches "the  lost  expedition" but NOT
+// "The Lost Expedition: Promo Pack".
+func normalizeNameForExactMatch(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := true
+	for _, r := range s {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+			continue
+		}
+		// ASCII-only lowercase: query / result names from BGG are
+		// effectively ASCII in practice. Non-ASCII letters pass
+		// through unchanged; both sides of the equality go through
+		// the same normalizer so the comparison stays symmetric.
+		if r >= 'A' && r <= 'Z' {
+			r += 'a' - 'A'
+		}
+		b.WriteRune(r)
+		prevSpace = false
+	}
+	out := b.String()
+	if len(out) > 0 && out[len(out)-1] == ' ' {
+		out = out[:len(out)-1]
+	}
+	return out
+}
+
+// exactNameMatch returns the single search result whose name
+// matches the query exactly under normalizeNameForExactMatch.
+// Returns nil when:
+//   - zero exact matches (caller falls through to full
+//     disambiguation), OR
+//   - two or more exact matches (e.g., Catan editions from
+//     different years share the same name — caller falls
+//     through to disambiguation so the user picks the
+//     intended year).
+//
+// Year suffix is intentionally excluded from the comparator:
+// the search-result's r.Name field already strips the
+// year-published; the label-with-year is a presentation-layer
+// concern.
+func exactNameMatch(query string, results []bggo.SearchResult) *bggo.SearchResult {
+	normQuery := normalizeNameForExactMatch(query)
+	if normQuery == "" {
+		return nil
+	}
+	var hit *bggo.SearchResult
+	matchCount := 0
+	for i := range results {
+		if normalizeNameForExactMatch(results[i].Name) == normQuery {
+			matchCount++
+			if matchCount > 1 {
+				return nil
+			}
+			hit = &results[i]
+		}
+	}
+	if matchCount == 1 {
+		return hit
+	}
+	return nil
 }
 
 // buildData composes the entity.data map per the operator's 2026-05-06
