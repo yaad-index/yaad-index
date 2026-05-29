@@ -127,6 +127,15 @@ type capabilitiesDoc struct {
 	EntityKinds []kindSpecJSON `json:"entity_kinds"`
 	EdgeKinds []kindSpecJSON `json:"edge_kinds"`
 	CanonicalKindsEmitted []string `json:"canonical_kinds_emitted,omitempty"`
+	// ResolvesCanonicalKinds names the subset of CanonicalKindsEmitted
+	// for which this plugin's name-search primitive (BGG's
+	// search-by-name) can resolve a free-text name to a concrete
+	// canonical entity per yaad-index #304 Cut A. The daemon's
+	// edgewrite Service routes resolver-aware edge writes through
+	// this plugin for declared kinds; #325 additionally routes the
+	// fill-API gate and post-CreateEdge auto-fetch through the
+	// same plugin.
+	ResolvesCanonicalKinds []string `json:"resolves_canonical_kinds,omitempty"`
 	CanonicalEdgeTypesEmitted []string `json:"canonical_edge_types_emitted,omitempty"`
 	CacheTTLSeconds int `json:"cache_ttl_seconds,omitempty"`
 	CanonicalKindsExtras map[string]canonicalKindExtras `json:"canonical_kinds_extras,omitempty"`
@@ -207,7 +216,16 @@ func runInit(stdout io.Writer) error {
 		},
 		EdgeKinds:    []kindSpecJSON{},
 		ConfigSchema: json.RawMessage(configSchemaJSON),
-		CanonicalKindsEmitted: []string{bgg.CanonicalKind, "person", "company"},
+		CanonicalKindsEmitted: []string{bgg.CanonicalKind, bgg.ExpansionCanonicalKind, "person", "company"},
+		// #332 + #334: declare resolver capability for the two
+		// canonical kinds whose name-search BGG handles reliably.
+		// boardgame: search-by-name returns base games. Adding
+		// boardgame-expansion (#334 Cut 1): the same search
+		// surface returns expansion entries when their names
+		// match, and the plugin now accepts them on fetchByID.
+		// person and company stay off the resolver claim until
+		// BGG's search proves out for those kinds.
+		ResolvesCanonicalKinds: []string{bgg.CanonicalKind, bgg.ExpansionCanonicalKind},
 		// Edge types yaad-bgg emits in the source-shape edges
 		// block (per ADR-0021 + this PR's plugin-emitted edge
 		// design). `is_a` is the universal source-type edge;
@@ -221,6 +239,7 @@ func runInit(stdout io.Writer) error {
 		CanonicalEdgeTypesEmitted: []string{
 			bgg.SourceTypeEdgeType,
 			bgg.CanonicalEdgeType,
+			bgg.ExpansionEdgeType,
 			"designed_by",
 			"artist_by",
 			"published_by",

@@ -311,6 +311,8 @@ Append a line to a named section of `tasks/<workflow>-<subject>.md`. `<subject>`
 
 **Tasks are first-class entities** (per ADR-0024 §Task / #268). First-create also upserts a `task:<workflow>-<subject>` row into the entity store (kind=task) and — when the trigger carries a source entity — emits a `triggered_by` edge from the task to that source. So `/v1/entities/task:<slug>` resolves, `set_property` can target the task id, and `graph.in_neighbors(source_id, "triggered_by")` answers "which tasks did this source spawn?" queries. Subsequent appends to the same task file leave the store row + edge alone — operator / cross-workflow mutations on the row survive. Pre-#268 task files already on disk won't have rows backfilled automatically; operators wanting the full entity surface on a pre-existing task recreate it.
 
+**Body shape.** Tasks accumulated via `task_append` use the legacy `## <section>` markdown shape (see [`docs/tasks.md`](./tasks.md) §2). Resolution-tasks (§5.5's deferred-resolve path) and err-tasks (workflow runtime failures) use the 5-section HTML-comment-marker schema and the bounded composition primitives (`SetPrompt` / `AddCheckbox` / `AddNote` / `AppendFreeform` / `AddEdge` stub) per [`docs/tasks.md`](./tasks.md) §2b ([#337](https://github.com/yaad-index/yaad-index/issues/337)).
+
 ### 5.1a `task_resolve` (#266)
 
 ```yaml
@@ -447,6 +449,52 @@ Fire a plugin command from inside a workflow ("look-something-up-then-decide"). 
 On timeout / plugin error: the workflow's err-task pattern fires (one err task per workflow, error appended); the workflow continues firing on future events but the current evaluation aborts.
 
 ADR refs: [ADR-0024](../adr/0024-workflows-and-tasks.md) §"plugin_dispatch execution semantics".
+
+### 5.7 `archive_entity` (#150)
+
+```yaml
+- archive_entity:
+    entity: 'entity.id'
+    reason: '"closed-and-stale: " + entity.data.closed_at'
+```
+
+Flip an entity into the ADR-0018 archived state from inside the workflow action vocabulary. Thin adapter onto the operator-side archive surface (`vault.Writer.ArchiveWithCommit` + `store.Store.ArchiveEntity`); the workflow runner resolves the target id + reason via CEL and hands them to the writer.
+
+- `entity` — CEL expression resolving to the target entity id. Defaults to `entity.id` (the triggering entity).
+- `reason` — optional CEL expression producing a free-form audit string folded into the archive commit message. Empty (or empty after render) leaves the workflow name as the implicit audit source.
+
+Idempotency: archiving an already-archived entity is a no-op — both the vault-side already-at-destination short-circuit and the store-side `COALESCE(archived_at, ?)` preserve the original archive timestamp. Entity-not-found is a soft skip: the runner logs and returns success so the workflow chain continues (the entity may have been archived by another path before this action fired).
+
+ADR refs: [ADR-0024](../adr/0024-workflows-and-tasks.md), [ADR-0018](../adr/0018-archive-replaces-delete.md), #150 (this primitive), PR-153 (per-entity write-lock contention shape).
+
+### 5.8 `restore_entity` (#196)
+
+```yaml
+- restore_entity:
+    entity: 'entity.id'
+    reason: '"reopened: " + entity.data.reopened_at'
+```
+
+Mirror of `archive_entity` — flip an entity back out of the ADR-0018 archived state. Same shape: `entity` defaults to the triggering entity's id, `reason` is the optional CEL audit string folded into the restore commit message. Same idempotence and soft-skip contract: restoring an already-active entity is a no-op; entity-not-found is a soft skip.
+
+- `entity` — CEL expression resolving to the target entity id. Defaults to `entity.id`.
+- `reason` — optional CEL expression producing the audit string.
+
+ADR refs: [ADR-0024](../adr/0024-workflows-and-tasks.md) §"2026-05-21 amendment", [ADR-0018](../adr/0018-archive-replaces-delete.md), #196 (this primitive).
+
+### 5.9 `claim_entity` (#169)
+
+```yaml
+- claim_entity: {}
+```
+
+Flag the triggering event as claimed and stop further workflow dispatch for that event. When the per-event chain runs, a fired `claim_entity` halts the remaining pass-1 workflows from firing on the same event, and prevents pass-2 `catch_all` workflows from running. The action itself produces no side effect outside the engine's in-process queue state (no vault write, no store mutation, no commit).
+
+- v1 has no fields — the action is the bare `- claim_entity: {}` invocation.
+
+A future revision may add a `reason: string` for audit purposes if operators want to record why a particular workflow claimed (separate from the workflow name, which is already tracked in the queue's `claimed_by` field).
+
+ADR refs: [ADR-0024](../adr/0024-workflows-and-tasks.md), #169 (this primitive).
 
 ## 6. `dedup` — per-pattern de-duplication
 

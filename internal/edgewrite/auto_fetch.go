@@ -87,10 +87,25 @@ const autoFetchErrTaskWorkflow = "resolver-auto-fetch"
 // outcome lives in the store (re-check via GetEntity) and the
 // vault tasks/ directory (resolution-task or err-task).
 //
-// The four short-circuits (no resolver, source-shape from-kind,
-// not a canonical-id-shape target, already source-connected)
-// keep the common case (no resolver configured for this kind)
-// at ~one map lookup of overhead per call.
+// The three short-circuits (no resolver, not a canonical-id-shape
+// target, already source-connected) keep the common case (no
+// resolver configured for this kind) at ~one map lookup of
+// overhead per call.
+//
+// **Recursion break lives at the CreateEdge / CreateCanonicalEdgeByName
+// call sites, NOT here** (per #330). When the resolver plugin's
+// ingest creates its own `<source>:<id> -> <canonical>:<slug>`
+// edge via CreateEdge, those callers guard with
+// fromKindIsCanonical(e.From) before invoking this method, so
+// the plugin's own edge writes don't re-trigger the plugin.
+//
+// The fill-API gate (api.checkCanonicalTypeResolverPlugins)
+// passes the entity-being-filled as fromID, which is usually
+// source-shape (e.g., `gmail:<msg-id>`). The recursion-break
+// check would incorrectly suppress the dispatch in that case
+// — moving it out fixes #330. The fill-gate caller has no
+// risk of triggering recursion because there is no edge write
+// in the gate path.
 func (s *Service) MaybeDispatchResolverAutoFetch(ctx context.Context, fromID, edgeType, toID string) {
 	if s.resolver == nil {
 		return
@@ -104,14 +119,6 @@ func (s *Service) MaybeDispatchResolverAutoFetch(ctx context.Context, fromID, ed
 	}
 	resolverPlugin := s.resolvers[targetKind]
 	if resolverPlugin == "" {
-		return
-	}
-	// Recursion break: when the resolver plugin's ingest itself
-	// creates a `<plugin-source>:<id> -> <canonical>:<slug>` edge
-	// via CreateEdge, the from-kind is source-shape (not in the
-	// canonical-kinds set). Skip the auto-fetch hook so the
-	// plugin's own edge writes don't re-trigger the plugin.
-	if !s.fromKindIsCanonical(ctx, fromID) {
 		return
 	}
 	// Source-connection check: if X has any incoming edge whose

@@ -87,11 +87,27 @@ const SourceTypeKind = "source-type"
 // from a BGG source node to its boardgame canonical label.
 const CanonicalEdgeType = "is_about"
 
-// CanonicalKind is the canonical kind a BGG source resolves to:
-// `boardgame`. Used as the Kind on the `is_about` edge target so
+// CanonicalKind is the canonical kind a BGG `boardgame` source
+// resolves to. Used as the Kind on the `is_about` edge target so
 // the daemon can derive the canonical label
 // `boardgame:<slug.Slug(name)>`.
 const CanonicalKind = "boardgame"
+
+// ExpansionCanonicalKind is the canonical kind a BGG
+// `boardgameexpansion` source resolves to per #334 Cut 1.
+// Separate-axis decision: the operator's mental model treats
+// expansions as a different kind of thing from base games even
+// though both are "things you can ingest from BGG" — sharing the
+// canonical kind would conflate the type axis and force every
+// downstream consumer to disambiguate via metadata.
+const ExpansionCanonicalKind = "boardgame-expansion"
+
+// ExpansionEdgeType ties a `boardgame-expansion` canonical to its
+// base `boardgame` canonical. yaad-bgg emits one `expansion_of`
+// edge per parent boardgame the BGG XMLAPI lists under the
+// expansion's `<link type="boardgameexpansion"/>` entries (which,
+// for an expansion thing, are the base games it expands).
+const ExpansionEdgeType = "expansion_of"
 
 // EdgeTarget is one entry in the ADR-0021 source-shape edges
 // block — a descriptive `{name, kind}` reference. Daemon
@@ -558,13 +574,15 @@ func (p *Plugin) fetchByID(ctx context.Context, id int64, canonicalURL, original
 		return nil, ErrNotFoundUpstream
 	}
 
-	// BGG's `thing` endpoint will return any item type for an id —
+	// BGG's `thing` endpoint can return any item type for an id —
 	// boardgameexpansion, boardgameaccessory, rpgitem, videogame.
-	// v1 is boardgame-only per; treat other types as
-	// not-found rather than emitting a confusingly-shaped entity.
+	// #334 Cut 1 accepts boardgameexpansion in addition to
+	// boardgame; other types still surface as not-found pending
+	// Cut 2 (boardgameaccessory + boardgamefamily) and Cut 3
+	// (videogame + rpg / rpgitem).
 	t := results[0]
-	if t.Type != bggo.BoardGameType {
-		return nil, fmt.Errorf("%w: id %d is type %q (yaad-bgg v1 is boardgame-only)",
+	if t.Type != bggo.BoardGameType && t.Type != bggo.BoardGameExpansionType {
+		return nil, fmt.Errorf("%w: id %d is type %q (yaad-bgg supports boardgame + boardgameexpansion only; other thing types pending later cuts)",
 			ErrNotFoundUpstream, id, t.Type)
 	}
 
@@ -647,12 +665,39 @@ func (p *Plugin) fetchByID(ctx context.Context, id int64, canonicalURL, original
 // flow through as-is — BGG's link names for individuals/companies
 // don't carry the same annotations.
 func buildEdges(t bggo.ThingResult) map[string][]EdgeTarget {
+	// #334 Cut 1: for a boardgameexpansion thing, the canonical
+	// `is_about` target is the boardgame-expansion kind rather
+	// than boardgame, AND each `boardgameexpansion`-typed link
+	// becomes an `expansion_of` edge to the parent boardgame
+	// canonical. BGG's xmlapi2 carries these as inbound links
+	// from the expansion to the base game(s) — the daemon's
+	// slug.Slug derives the canonical-label id from the link
+	// Name. (Outbound expansion links from a base game's thing
+	// page would be the reverse direction; v1 doesn't emit those
+	// — operators consume the relationship from the expansion
+	// side only, which is the side that knows what it expands.)
+	canonicalKind := CanonicalKind
+	if t.Type == bggo.BoardGameExpansionType {
+		canonicalKind = ExpansionCanonicalKind
+	}
 	edges := map[string][]EdgeTarget{
 		SourceTypeEdgeType: {{Name: SourceTypeName, Kind: SourceTypeKind}},
 		CanonicalEdgeType: {{
 			Name: canonicalizeBGGName(t.Name),
-			Kind: CanonicalKind,
+			Kind: canonicalKind,
 		}},
+	}
+	if t.Type == bggo.BoardGameExpansionType {
+		if parents := t.Links[string(bggo.BoardGameExpansionType)]; len(parents) > 0 {
+			row := make([]EdgeTarget, len(parents))
+			for i, p := range parents {
+				row[i] = EdgeTarget{
+					Name: canonicalizeBGGName(p.Name),
+					Kind: CanonicalKind,
+				}
+			}
+			edges[ExpansionEdgeType] = row
+		}
 	}
 	if designers := t.Designers(); len(designers) > 0 {
 		row := make([]EdgeTarget, len(designers))
@@ -745,9 +790,14 @@ func (p *Plugin) fetchByName(ctx context.Context, query string) (*FetchOutcome, 
 	if query == "" {
 		return nil, fmt.Errorf("%s: empty name shorthand", PluginName)
 	}
+	// #334 Cut 1: include boardgameexpansion in the search types
+	// so name-shorthand resolution surfaces expansions alongside
+	// base games. Disambiguation candidates now correctly include
+	// expansion entries (which the fetchByID path then accepts
+	// per the boardgame || boardgameexpansion gate above).
 	results, err := p.client.Search(ctx, bggo.SearchRequest{
 		Query: query,
-		Types: []bggo.ItemType{bggo.BoardGameType},
+		Types: []bggo.ItemType{bggo.BoardGameType, bggo.BoardGameExpansionType},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%s: Search(%q): %w", PluginName, query, err)
@@ -762,6 +812,20 @@ func (p *Plugin) fetchByName(ctx context.Context, query string) (*FetchOutcome, 
 		bggIDStr := strconv.FormatInt(results[0].ID, 10)
 		return p.fetchByID(ctx, results[0].ID, CanonicalURL(bggIDStr), "bgg: "+query)
 	default:
+		// #329: exact-name match preference. BGG's search is a
+		// substring/contains match — a query like "The Lost
+		// Expedition" returns the exact-name hit alongside
+		// expansions/prefix/unrelated matches. When exactly one
+		// result's name matches the query exactly (case +
+		// whitespace normalized; year suffix excluded from
+		// comparison), auto-resolve to that single entry rather
+		// than forcing disambiguation. Multi-exact-match
+		// (e.g., Catan with multiple editions sharing the same
+		// canonical name) falls through to the full list.
+		if exact := exactNameMatch(query, results); exact != nil {
+			bggIDStr := strconv.FormatInt(exact.ID, 10)
+			return p.fetchByID(ctx, exact.ID, CanonicalURL(bggIDStr), "bgg: "+query)
+		}
 		now := operatorNow()
 		options := make([]DisambiguationOption, 0, len(results))
 		for _, r := range results {
@@ -788,6 +852,76 @@ func (p *Plugin) fetchByName(ctx context.Context, query string) (*FetchOutcome, 
 			},
 		}, nil
 	}
+}
+
+// normalizeNameForExactMatch lowercases + collapses runs of
+// whitespace to a single space + trims. Used by #329's
+// exact-name disambiguation preference so e.g.
+// "The Lost Expedition" matches "the  lost  expedition" but NOT
+// "The Lost Expedition: Promo Pack".
+func normalizeNameForExactMatch(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := true
+	for _, r := range s {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+			continue
+		}
+		// ASCII-only lowercase: query / result names from BGG are
+		// effectively ASCII in practice. Non-ASCII letters pass
+		// through unchanged; both sides of the equality go through
+		// the same normalizer so the comparison stays symmetric.
+		if r >= 'A' && r <= 'Z' {
+			r += 'a' - 'A'
+		}
+		b.WriteRune(r)
+		prevSpace = false
+	}
+	out := b.String()
+	if len(out) > 0 && out[len(out)-1] == ' ' {
+		out = out[:len(out)-1]
+	}
+	return out
+}
+
+// exactNameMatch returns the single search result whose name
+// matches the query exactly under normalizeNameForExactMatch.
+// Returns nil when:
+//   - zero exact matches (caller falls through to full
+//     disambiguation), OR
+//   - two or more exact matches (e.g., Catan editions from
+//     different years share the same name — caller falls
+//     through to disambiguation so the user picks the
+//     intended year).
+//
+// Year suffix is intentionally excluded from the comparator:
+// the search-result's r.Name field already strips the
+// year-published; the label-with-year is a presentation-layer
+// concern.
+func exactNameMatch(query string, results []bggo.SearchResult) *bggo.SearchResult {
+	normQuery := normalizeNameForExactMatch(query)
+	if normQuery == "" {
+		return nil
+	}
+	var hit *bggo.SearchResult
+	matchCount := 0
+	for i := range results {
+		if normalizeNameForExactMatch(results[i].Name) == normQuery {
+			matchCount++
+			if matchCount > 1 {
+				return nil
+			}
+			hit = &results[i]
+		}
+	}
+	if matchCount == 1 {
+		return hit
+	}
+	return nil
 }
 
 // buildData composes the entity.data map per the operator's 2026-05-06

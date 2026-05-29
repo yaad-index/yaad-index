@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.13.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.12.0...yaad-index-v0.13.0) (2026-05-29)
+
+
+### Features
+
+* **actions:** 5-section task body schema ([#337](https://github.com/yaad-index/yaad-index/issues/337) Cut 1) ([#339](https://github.com/yaad-index/yaad-index/issues/339)) ([d2ab386](https://github.com/yaad-index/yaad-index/commit/d2ab38639e0921c8c5c96f71ce419003a3a18e00))
+* **actions:** bounded task-body primitives ([#337](https://github.com/yaad-index/yaad-index/issues/337) Cut 2) ([#342](https://github.com/yaad-index/yaad-index/issues/342)) ([a2aedbe](https://github.com/yaad-index/yaad-index/commit/a2aedbea12cf718ab79f0eef5d4d091309a0cf4e))
+* **actions:** err-task prompt section via SetPrompt ([#344](https://github.com/yaad-index/yaad-index/issues/344)) ([#346](https://github.com/yaad-index/yaad-index/issues/346)) ([6c55098](https://github.com/yaad-index/yaad-index/commit/6c5509833494607ea95ffaff71b2495744dddfad))
+* **actions:** resolution-task prompt + edges via SetPrompt ([#345](https://github.com/yaad-index/yaad-index/issues/345)) ([#347](https://github.com/yaad-index/yaad-index/issues/347)) ([50e9642](https://github.com/yaad-index/yaad-index/commit/50e964255721de02c1dbcb1200cfe97c3391cfa7))
+* **api,mcp,vault:** UGC section-level CRUD — add + rename + delete ([#299](https://github.com/yaad-index/yaad-index/issues/299)) ([#300](https://github.com/yaad-index/yaad-index/issues/300)) ([be216fb](https://github.com/yaad-index/yaad-index/commit/be216fb51afa5eaecef2f0681914d856028d367e))
+* **api,mcp:** resolution-task resolve flow → ingest + edge + archive ([#304](https://github.com/yaad-index/yaad-index/issues/304) Cut C3.3) ([#311](https://github.com/yaad-index/yaad-index/issues/311)) ([0da1561](https://github.com/yaad-index/yaad-index/commit/0da15619d5bf9b18ae65824671e4012bbf0341f1))
+* **api:** add total field to paginated responses ([#338](https://github.com/yaad-index/yaad-index/issues/338)) ([#349](https://github.com/yaad-index/yaad-index/issues/349)) ([0c95fb8](https://github.com/yaad-index/yaad-index/commit/0c95fb8322464f0c653d148bdc96071467d4d232))
+* **edgewrite,workflow,api:** caller-mode + auto-mode plugin resolution ([#304](https://github.com/yaad-index/yaad-index/issues/304) Cut C2) ([#308](https://github.com/yaad-index/yaad-index/issues/308)) ([f68a45e](https://github.com/yaad-index/yaad-index/commit/f68a45e108be2d0b801d44b90434844971009235))
+* **edgewrite:** centralized edge-write service + cardinality enforcement ([#304](https://github.com/yaad-index/yaad-index/issues/304) Cut C1) ([#307](https://github.com/yaad-index/yaad-index/issues/307)) ([0db9d40](https://github.com/yaad-index/yaad-index/commit/0db9d40d2693e36b12c512a5cefec8102d1d7a7a))
+* **edgewrite:** resolver_plugin auto-fetch on canonical-edge writes ([#325](https://github.com/yaad-index/yaad-index/issues/325)) ([#327](https://github.com/yaad-index/yaad-index/issues/327)) ([99cf65e](https://github.com/yaad-index/yaad-index/commit/99cf65e2f6ebb5d44ffa20d74581a6da11a648b3))
+* **plugins,api:** plugin capability resolves_canonical_kinds + ownership map ([#304](https://github.com/yaad-index/yaad-index/issues/304) Cut A) ([#305](https://github.com/yaad-index/yaad-index/issues/305)) ([85c0a71](https://github.com/yaad-index/yaad-index/commit/85c0a71c45c4ad0d3bdc4733cab60ad2d38946af))
+* **store,api,mcp:** update_edge_target primitive — transactional edge rewrite ([#304](https://github.com/yaad-index/yaad-index/issues/304) Cut B) ([#306](https://github.com/yaad-index/yaad-index/issues/306)) ([e5160ac](https://github.com/yaad-index/yaad-index/commit/e5160ac873b92281b7310a39a8cf50cffed485bd))
+* **workflow,engine:** catch ResolutionDeferred → spawn resolution-task ([#304](https://github.com/yaad-index/yaad-index/issues/304) Cut C3.2) ([#310](https://github.com/yaad-index/yaad-index/issues/310)) ([ad50e1d](https://github.com/yaad-index/yaad-index/commit/ad50e1d85a0c3f8cfaaeafb8137b0be50f1d0559))
+* **workflow:** structured resolution-task primitive ([#304](https://github.com/yaad-index/yaad-index/issues/304) Cut C3.1) ([#309](https://github.com/yaad-index/yaad-index/issues/309)) ([f80b56f](https://github.com/yaad-index/yaad-index/commit/f80b56f6dc31c572f58d9973fef691dd869ff0f3))
+* **yaad-bgg:** support boardgameexpansion thing type ([#334](https://github.com/yaad-index/yaad-index/issues/334) Cut 1) ([#336](https://github.com/yaad-index/yaad-index/issues/336)) ([7c767c9](https://github.com/yaad-index/yaad-index/commit/7c767c93aaed0e6a76878ace87f6b30f443ec0d4))
+
+
+### Bug Fixes
+
+* **api:** drop operator-authority gate on operator-fill endpoint ([#317](https://github.com/yaad-index/yaad-index/issues/317)) ([#318](https://github.com/yaad-index/yaad-index/issues/318)) ([cccdf97](https://github.com/yaad-index/yaad-index/commit/cccdf97b1640aba4822ae6ec3aa13b2242cb5a9f))
+* **edgewrite,api:** shared resolver auto-fetch path for fill-gate + edge-write hook ([#325](https://github.com/yaad-index/yaad-index/issues/325)) ([#328](https://github.com/yaad-index/yaad-index/issues/328)) ([4b6da6c](https://github.com/yaad-index/yaad-index/commit/4b6da6cc0768cc0b73ce45e6449190bfe70362f9))
+* **edgewrite:** move recursion break from shared dispatch method to CreateEdge call sites ([#330](https://github.com/yaad-index/yaad-index/issues/330)) ([#331](https://github.com/yaad-index/yaad-index/issues/331)) ([d2bcb75](https://github.com/yaad-index/yaad-index/commit/d2bcb7582fd6a56430a7e640f08a7d31b8b45318))
+* **vault,workflow:** auto-commit entity subtree + task-body updates ([#314](https://github.com/yaad-index/yaad-index/issues/314)) ([#315](https://github.com/yaad-index/yaad-index/issues/315)) ([e8a2601](https://github.com/yaad-index/yaad-index/commit/e8a2601b1169418d098bbfd040b750dda49ee99c))
+* **workflow:** clear gap_call_done_at on add_gap ([#324](https://github.com/yaad-index/yaad-index/issues/324)) ([#326](https://github.com/yaad-index/yaad-index/issues/326)) ([0f4685e](https://github.com/yaad-index/yaad-index/commit/0f4685ef7d6980384cc62282c43a9ebc708fdc08))
+* **yaad-bgg:** prefer single exact-name match in disambiguation ([#329](https://github.com/yaad-index/yaad-index/issues/329)) ([#335](https://github.com/yaad-index/yaad-index/issues/335)) ([e6790c7](https://github.com/yaad-index/yaad-index/commit/e6790c78f3d5e1817c13c506f707e2805db62e39))
+
 ## [0.12.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.11.0...yaad-index-v0.12.0) (2026-05-26)
 
 

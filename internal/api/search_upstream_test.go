@@ -311,3 +311,50 @@ func TestSearchUpstream_MalformedJSONIs400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Contains(t, rec.Body.String(), "malformed JSON")
 }
+
+// TestSearchUpstream_TotalSumsPerPluginCandidates pins the #338
+// contract: `total` reflects the sum of raw per-plugin candidate
+// counts, surfacing upstream availability across all federated
+// plugins regardless of the per-plugin Limit truncation.
+func TestSearchUpstream_TotalSumsPerPluginCandidates(t *testing.T) {
+	t.Parallel()
+
+	wiki := fixtureWithSearch("wikipedia", []plugins.SearchCandidate{
+		{ID: "w1", Label: "Wiki Hit 1"},
+		{ID: "w2", Label: "Wiki Hit 2"},
+	})
+	bgg := fixtureWithSearch("bgg", []plugins.SearchCandidate{
+		{ID: "b1", Label: "BGG Hit 1"},
+		{ID: "b2", Label: "BGG Hit 2"},
+		{ID: "b3", Label: "BGG Hit 3"},
+	})
+	reg := &stubRegistry{plugins: []plugins.Plugin{wiki, bgg}}
+	rec := doUpstreamSearch(t, reg, map[string]any{"query": "x"})
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp searchUpstreamResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, 5, resp.Total,
+		"total sums per-plugin Candidates (wiki=2 + bgg=3)")
+	// Sanity: per_plugin_status echoes the same per-plugin counts.
+	got := 0
+	for _, s := range resp.PerPlugin {
+		got += s.Candidates
+	}
+	assert.Equal(t, resp.Total, got, "total == sum(per_plugin.Candidates)")
+}
+
+// TestSearchUpstream_TotalIsZeroWhenAllPluginsEmpty pins the
+// no-hits case.
+func TestSearchUpstream_TotalIsZeroWhenAllPluginsEmpty(t *testing.T) {
+	t.Parallel()
+
+	wiki := fixtureWithSearch("wikipedia", nil)
+	reg := &stubRegistry{plugins: []plugins.Plugin{wiki}}
+	rec := doUpstreamSearch(t, reg, map[string]any{"query": "x"})
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp searchUpstreamResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, 0, resp.Total)
+}

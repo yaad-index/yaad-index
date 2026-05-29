@@ -439,16 +439,20 @@ func TestPlugin_Fetch_NameShorthand_SingleMatch(t *testing.T) {
 }
 
 // TestPlugin_Fetch_NameShorthand_MultiMatch covers the disambiguation
-// path per: BGG search returns multiple matches, Fetch
-// returns *FetchOutcome with Options populated (no Boardgame), so the
-// agent picks one and re-ingests via `bgg: <numeric-id>`.
+// path per: BGG search returns multiple matches with NO single
+// exact-name match, Fetch returns *FetchOutcome with Options
+// populated (no Boardgame), so the agent picks one and re-ingests
+// via `bgg: <numeric-id>`. Per #329 the search-result names are
+// chosen so the query has no exact match (the original "Brass"
+// entry is renamed; preserved query "brass" → all three are
+// substring hits, none exact-match → disambig stays).
 func TestPlugin_Fetch_NameShorthand_MultiMatch(t *testing.T) {
 	t.Parallel()
 
 	const searchXML = `<?xml version="1.0" encoding="utf-8"?>
 <items total="3" termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
  <item type="boardgame" id="28720">
- <name type="primary" value="Brass"/>
+ <name type="primary" value="Brass: Original"/>
  <yearpublished value="2007"/>
  </item>
  <item type="boardgame" id="220308">
@@ -502,7 +506,7 @@ func TestPlugin_Fetch_NameShorthand_MultiMatch(t *testing.T) {
 	// re-ingest via `bgg: <id>`); Label is `<name> (<year>)` when
 	// the year is known; Summary is empty (BGG search has no desc).
 	wantByID := map[string]string{
-		"28720": "Brass (2007)",
+		"28720": "Brass: Original (2007)",
 		"220308": "Brass: Lancashire (2018)",
 		"224517": "Brass: Birmingham (2018)",
 	}
@@ -517,6 +521,215 @@ func TestPlugin_Fetch_NameShorthand_MultiMatch(t *testing.T) {
 		if got := gotByID[id]; got != wantLabel {
 			t.Errorf("Option(%s).Label: want %q, got %q", id, wantLabel, got)
 		}
+	}
+}
+
+// TestPlugin_Fetch_NameShorthand_ExactMatchAutoResolves pins the
+// #329 contract: when the BGG search returns multiple results
+// but exactly one has a name that matches the query exactly
+// (case + whitespace normalized; year suffix excluded), Fetch
+// auto-resolves to that single entry via fetchByID rather than
+// returning the full set as disambiguation. The repro scenario
+// is the original #329 trigger: a `bgg: The Lost Expedition`
+// search returns ~10 substring hits but only one exact-name
+// match.
+func TestPlugin_Fetch_NameShorthand_ExactMatchAutoResolves(t *testing.T) {
+	t.Parallel()
+
+	const searchXML = `<?xml version="1.0" encoding="utf-8"?>
+<items total="4" termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
+ <item type="boardgame" id="216459">
+ <name type="primary" value="The Lost Expedition"/>
+ <yearpublished value="2017"/>
+ </item>
+ <item type="boardgame" id="1572">
+ <name type="primary" value="The Lost Expeditions"/>
+ <yearpublished value="2016"/>
+ </item>
+ <item type="boardgame" id="999991">
+ <name type="primary" value="The Lost Expedition: Promo Pack"/>
+ <yearpublished value="2018"/>
+ </item>
+ <item type="boardgame" id="999992">
+ <name type="primary" value="Lost Cities: Expedition 6 – The Lost Expedition"/>
+ <yearpublished value="2019"/>
+ </item>
+</items>`
+
+	const thingXML = `<?xml version="1.0" encoding="utf-8"?>
+<items termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
+ <item type="boardgame" id="216459">
+ <name type="primary" sortindex="5" value="The Lost Expedition"/>
+ <yearpublished value="2017"/>
+ <description>A jungle survival deduction game.</description>
+ <minplayers value="1"/>
+ <maxplayers value="5"/>
+ <playingtime value="45"/>
+ </item>
+</items>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if strings.HasPrefix(r.URL.Path, "/xmlapi2/search") {
+			_, _ = w.Write([]byte(searchXML))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/xmlapi2/thing") {
+			_, _ = w.Write([]byte(thingXML))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	srvURL, _ := url.Parse(srv.URL)
+	bggClient := bggo.NewClient("test-key",
+		bggo.WithHost(srvURL.Host),
+		bggo.WithScheme("http"),
+	)
+	p, _ := New("test-key", WithClient(bggClient))
+
+	out, err := p.Fetch(context.Background(), "bgg: The Lost Expedition")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if out.Boardgame == nil {
+		t.Fatal("Boardgame: want resolved boardgame, got nil (auto-resolve must fire on exact-name match)")
+	}
+	if got := out.Boardgame.BGGID; got != "216459" {
+		t.Errorf("Boardgame.BGGID: want \"216459\" (the only exact-name match), got %q", got)
+	}
+	if len(out.Options) != 0 {
+		t.Errorf("Options: want empty on single-exact-match auto-resolve, got %d", len(out.Options))
+	}
+}
+
+// TestPlugin_Fetch_NameShorthand_MultiExactMatchStaysDisambig pins
+// the carve-out: when 2+ results share an exact-name match (e.g.,
+// Catan with multiple editions / republishings), the auto-resolve
+// short-circuits and the full disambiguation list is returned so
+// the operator picks the intended year.
+func TestPlugin_Fetch_NameShorthand_MultiExactMatchStaysDisambig(t *testing.T) {
+	t.Parallel()
+
+	const searchXML = `<?xml version="1.0" encoding="utf-8"?>
+<items total="3" termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
+ <item type="boardgame" id="13">
+ <name type="primary" value="Catan"/>
+ <yearpublished value="1995"/>
+ </item>
+ <item type="boardgame" id="40694">
+ <name type="primary" value="Catan"/>
+ <yearpublished value="2015"/>
+ </item>
+ <item type="boardgame" id="999998">
+ <name type="primary" value="Catan: Cities &amp; Knights"/>
+ <yearpublished value="1998"/>
+ </item>
+</items>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if strings.HasPrefix(r.URL.Path, "/xmlapi2/search") {
+			_, _ = w.Write([]byte(searchXML))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	srvURL, _ := url.Parse(srv.URL)
+	bggClient := bggo.NewClient("test-key",
+		bggo.WithHost(srvURL.Host),
+		bggo.WithScheme("http"),
+	)
+	p, _ := New("test-key", WithClient(bggClient))
+
+	out, err := p.Fetch(context.Background(), "bgg: Catan")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if out.Boardgame != nil {
+		t.Error("Boardgame: want nil on multi-exact-match (year disambig path)")
+	}
+	if len(out.Options) != 3 {
+		t.Errorf("Options: want 3 (full disambig list), got %d", len(out.Options))
+	}
+}
+
+// TestExactNameMatch_NormalizationCases pins the normalizer's
+// case + whitespace handling so the helper's contract is
+// independent of the Fetch integration tests.
+func TestExactNameMatch_NormalizationCases(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		query   string
+		results []bggo.SearchResult
+		wantID  int64 // 0 = no match (fall through to disambig)
+	}{
+		{
+			name: "case_insensitive_exact",
+			query: "the lost expedition",
+			results: []bggo.SearchResult{
+				{ID: 1, Name: "Some Other"},
+				{ID: 2, Name: "The Lost Expedition"},
+			},
+			wantID: 2,
+		},
+		{
+			name: "whitespace_collapsed",
+			query: "The  Lost   Expedition",
+			results: []bggo.SearchResult{
+				{ID: 7, Name: "The Lost Expedition"},
+			},
+			// Single-result path doesn't go through exactNameMatch
+			// in fetchByName; the helper still returns the match.
+			wantID: 7,
+		},
+		{
+			name: "prefix_not_exact",
+			query: "The Lost Expedition",
+			results: []bggo.SearchResult{
+				{ID: 3, Name: "The Lost Expedition: Promo Pack"},
+			},
+			wantID: 0,
+		},
+		{
+			name: "two_exact_matches_no_resolve",
+			query: "Catan",
+			results: []bggo.SearchResult{
+				{ID: 13, Name: "Catan", YearPublished: 1995},
+				{ID: 40694, Name: "Catan", YearPublished: 2015},
+			},
+			wantID: 0,
+		},
+		{
+			name: "empty_query_no_resolve",
+			query: "",
+			results: []bggo.SearchResult{
+				{ID: 1, Name: ""},
+			},
+			wantID: 0,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := exactNameMatch(c.query, c.results)
+			if c.wantID == 0 {
+				if got != nil {
+					t.Errorf("exactNameMatch: want nil, got result id=%d", got.ID)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("exactNameMatch: want result id=%d, got nil", c.wantID)
+			}
+			if got.ID != c.wantID {
+				t.Errorf("exactNameMatch: want id=%d, got id=%d", c.wantID, got.ID)
+			}
+		})
 	}
 }
 
@@ -558,17 +771,71 @@ func TestPlugin_Fetch_NameShorthand_NoMatch(t *testing.T) {
 	}
 }
 
-// TestPlugin_Fetch_RejectsNonBoardgame covers the type-filter:
-// BGG returns a boardgameexpansion or rpgitem for the id; v1 is
-// boardgame-only so we reject with not-found rather than emitting
-// a confusingly-shaped entity.
-func TestPlugin_Fetch_RejectsNonBoardgame(t *testing.T) {
+// TestPlugin_Fetch_RejectsUnsupportedTypes covers the type-filter:
+// BGG returns a thing of a type that yaad-bgg doesn't yet support
+// (rpgitem, videogame, boardgameaccessory, boardgamefamily — held
+// for Cut 2 / Cut 3 per #334) and the plugin rejects with not-
+// found rather than emitting a confusingly-shaped entity.
+// boardgameexpansion is now ACCEPTED (per #334 Cut 1) and covered
+// by TestPlugin_Fetch_BoardgameExpansion_HappyPath below.
+func TestPlugin_Fetch_RejectsUnsupportedTypes(t *testing.T) {
+	t.Parallel()
+
+	const rpgItemXML = `<?xml version="1.0" encoding="utf-8"?>
+<items termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
+ <item type="rpgitem" id="999111">
+ <name type="primary" sortindex="1" value="Some RPG Supplement"/>
+ </item>
+</items>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = w.Write([]byte(rpgItemXML))
+	}))
+	t.Cleanup(srv.Close)
+
+	srvURL, _ := url.Parse(srv.URL)
+	bggClient := bggo.NewClient("test-key",
+		bggo.WithHost(srvURL.Host),
+		bggo.WithScheme("http"),
+	)
+	p, _ := New("test-key", WithClient(bggClient))
+
+	_, err := p.Fetch(context.Background(), "bgg: 999111")
+	if err == nil {
+		t.Fatal("Fetch: want ErrNotFoundUpstream-wrapped, got nil")
+	}
+	if !errors.Is(err, ErrNotFoundUpstream) {
+		t.Errorf("Fetch err: want ErrNotFoundUpstream-wrapped, got %v", err)
+	}
+	if !strings.Contains(err.Error(), `type "rpgitem"`) {
+		t.Errorf("Fetch err: want quoted rpgitem type in message, got %v", err)
+	}
+}
+
+// TestPlugin_Fetch_BoardgameExpansion_HappyPath covers the #334
+// Cut 1 acceptance: BGG's thing endpoint returns a
+// boardgameexpansion-typed item, the plugin emits a source-shape
+// entity with `is_about` pointing at the boardgame-expansion
+// canonical kind (not boardgame) AND one `expansion_of` edge per
+// parent boardgame the upstream lists. The expansion-of edges
+// target the boardgame canonical kind so the daemon can wire
+// the relationship onto the base game's canonical row.
+func TestPlugin_Fetch_BoardgameExpansion_HappyPath(t *testing.T) {
 	t.Parallel()
 
 	const expansionXML = `<?xml version="1.0" encoding="utf-8"?>
 <items termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
- <item type="boardgameexpansion" id="271247">
- <name type="primary" sortindex="1" value="Brass: Birmingham + Lancashire"/>
+ <item type="boardgameexpansion" id="379762">
+ <thumbnail>https://cf.geekdo-images.com/thumb_379762.jpg</thumbnail>
+ <name type="primary" sortindex="1" value="Reavers of Midgard: Gods and Prophets"/>
+ <description>An expansion for Reavers of Midgard.</description>
+ <yearpublished value="2023"/>
+ <minplayers value="2"/>
+ <maxplayers value="4"/>
+ <playingtime value="60"/>
+ <link type="boardgameexpansion" id="232751" value="Reavers of Midgard"/>
+ <link type="boardgamedesigner" id="100001" value="alice"/>
  </item>
 </items>`
 
@@ -585,11 +852,111 @@ func TestPlugin_Fetch_RejectsNonBoardgame(t *testing.T) {
 	)
 	p, _ := New("test-key", WithClient(bggClient))
 
-	_, err := p.Fetch(context.Background(), "bgg: 271247")
-	if err == nil {
-		t.Fatal("Fetch: want ErrNotFoundUpstream-wrapped, got nil")
+	out, err := p.Fetch(context.Background(), "bgg: 379762")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
 	}
-	if !strings.Contains(err.Error(), "boardgame-only") {
-		t.Errorf("Fetch err: want 'boardgame-only' substring, got %v", err)
+	if out.Boardgame == nil {
+		t.Fatal("Boardgame: want non-nil (expansion now accepted per #334 Cut 1)")
+	}
+	bg := out.Boardgame
+
+	// Source-shape Name preserves the full BGG title; the
+	// canonical-edge target Name is stripped of the colon-space.
+	if bg.Name != "Reavers of Midgard: Gods and Prophets" {
+		t.Errorf("Name: want full BGG title, got %q", bg.Name)
+	}
+
+	// is_about → boardgame-expansion (NOT boardgame): the
+	// expansion's own canonical kind is distinct from base games
+	// per the #334 separate-axis decision.
+	isAbout, ok := bg.Edges[CanonicalEdgeType]
+	if !ok || len(isAbout) != 1 {
+		t.Fatalf("Edges[%q]: want 1 target, got %+v", CanonicalEdgeType, isAbout)
+	}
+	if isAbout[0].Kind != ExpansionCanonicalKind {
+		t.Errorf("Edges[%q][0].Kind: want %q, got %q",
+			CanonicalEdgeType, ExpansionCanonicalKind, isAbout[0].Kind)
+	}
+	if isAbout[0].Name != "Reavers of Midgard Gods and Prophets" {
+		t.Errorf("Edges[%q][0].Name: want canonicalized title, got %q",
+			CanonicalEdgeType, isAbout[0].Name)
+	}
+
+	// expansion_of → boardgame:<parent>: the inbound
+	// boardgameexpansion link points at the base game.
+	expansionOf, ok := bg.Edges[ExpansionEdgeType]
+	if !ok || len(expansionOf) != 1 {
+		t.Fatalf("Edges[%q]: want 1 target, got %+v", ExpansionEdgeType, expansionOf)
+	}
+	if expansionOf[0].Kind != CanonicalKind {
+		t.Errorf("Edges[%q][0].Kind: want %q (parent is a base boardgame), got %q",
+			ExpansionEdgeType, CanonicalKind, expansionOf[0].Kind)
+	}
+	if expansionOf[0].Name != "Reavers of Midgard" {
+		t.Errorf("Edges[%q][0].Name: want %q, got %q",
+			ExpansionEdgeType, "Reavers of Midgard", expansionOf[0].Name)
+	}
+
+	// Designer edge still flows through (boardgameexpansion
+	// things still have designers).
+	designers, ok := bg.Edges["designed_by"]
+	if !ok || len(designers) != 1 {
+		t.Fatalf("Edges[designed_by]: want 1, got %+v", designers)
+	}
+}
+
+// TestPlugin_Fetch_NameShorthand_ExpansionInDisambig covers the
+// search-side complement to the Cut 1 fetchByID acceptance: BGG
+// search returns a mix of boardgame + boardgameexpansion items,
+// the plugin keeps both in the disambig list so picking either
+// works on the follow-up `bgg: <numeric-id>` ingest. Pre-Cut-1
+// the search filtered to boardgame only and the expansion was
+// invisible in the disambig surface.
+func TestPlugin_Fetch_NameShorthand_ExpansionInDisambig(t *testing.T) {
+	t.Parallel()
+
+	const searchXML = `<?xml version="1.0" encoding="utf-8"?>
+<items total="2" termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
+ <item type="boardgame" id="232751">
+ <name type="primary" value="Reavers of Midgard: Base"/>
+ <yearpublished value="2019"/>
+ </item>
+ <item type="boardgameexpansion" id="379762">
+ <name type="primary" value="Reavers of Midgard: Expansion"/>
+ <yearpublished value="2023"/>
+ </item>
+</items>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if strings.HasPrefix(r.URL.Path, "/xmlapi2/search") {
+			// Assert the request asked for both types.
+			if !strings.Contains(r.URL.RawQuery, "boardgame") || !strings.Contains(r.URL.RawQuery, "boardgameexpansion") {
+				t.Errorf("search request: want both types in query, got %q", r.URL.RawQuery)
+			}
+			_, _ = w.Write([]byte(searchXML))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	srvURL, _ := url.Parse(srv.URL)
+	bggClient := bggo.NewClient("test-key",
+		bggo.WithHost(srvURL.Host),
+		bggo.WithScheme("http"),
+	)
+	p, _ := New("test-key", WithClient(bggClient))
+
+	out, err := p.Fetch(context.Background(), "bgg: reavers")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if out.Boardgame != nil {
+		t.Error("Boardgame: want nil on disambig path")
+	}
+	if len(out.Options) != 2 {
+		t.Errorf("Options: want 2 candidates (base + expansion), got %d", len(out.Options))
 	}
 }

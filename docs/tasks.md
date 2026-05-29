@@ -107,16 +107,75 @@ options:
     summary: "2007 Wallace, the original"
 ---
 
-## Resolution
-
+<!-- yaad-index prompt -->
 Workflow paused on ambiguous resolve of "Brass" via plugin yaad-bgg.
-Pick one option below and resolve via `task_resolve` (#304 Cut C3.3).
 
+Pick one option from the todo section. On resolve, the chosen entity will
+be fetched via the plugin shorthand `yaad-bgg:<option-id>` and the deferred edge
+will be landed:
+
+    email:m1 --mentions--> <chosen-id>
+
+If a prior edge for this source-tuple already exists pointing elsewhere,
+it will be rewritten to the chosen target (stale-rewrite per #304 Cut C3.3).
+The edges section below records the source-edge tuple for audit.
+<!-- /yaad-index prompt -->
+
+<!-- yaad-index edges -->
+- from_id: email:m1
+- edge_type: mentions
+- target_kind: boardgame
+- normalized_raw_target: brass
+- resolver_plugin: yaad-bgg
+<!-- /yaad-index edges -->
+
+<!-- yaad-index todo -->
 - [ ] boardgame:brass-birmingham — Brass: Birmingham — 2018 Wallace, deck-build network economic
 - [ ] boardgame:brass-lancashire — Brass: Lancashire — 2007 Wallace, the original
+<!-- /yaad-index todo -->
+
+<!-- yaad-index freeform -->
+<!-- /yaad-index freeform -->
+
+<!-- yaad-index notes -->
+<!-- /yaad-index notes -->
 ```
 
-Frontmatter fields are daemon-managed; the body checklist is presentational (the resolve handler reads from the frontmatter `options[]` list, not the body). The file lives at the same `<vault>/tasks/<id>.md` path as text tasks; the existing `task_list` / `task_load` MCP tools return both shapes uniformly. The id (file basename, what `task_resolve` and `task_load` accept) is shaped `<target_kind_slug>-<16-hex>` where the hex segment is a length-prefixed SHA-256 over the 5-tuple `(from_id, edge_type, target_kind, normalized_raw_target, resolver_plugin)` — `boardgame-9f3a8b71c4e0d62a` in the example above. The store entity-mirror id (returned by `/v1/entities/...`) is prefixed: `task:<basename>` — same layered id-vs-entity-mirror split the legacy text-task surface uses. Workflow retries over the same tuple collapse to one task; the daemon's idempotency probe checks for the file path before writing.
+Frontmatter fields are daemon-managed. The body uses the 5-section schema (§2b); the resolve handler reads from frontmatter `options[]` not the body, so the body is operator-presentational. The file lives at the same `<vault>/tasks/<id>.md` path as text tasks; the existing `task_list` / `task_load` MCP tools return both shapes uniformly. The id (file basename, what `task_resolve` and `task_load` accept) is shaped `<target_kind_slug>-<16-hex>` where the hex segment is a length-prefixed SHA-256 over the 5-tuple `(from_id, edge_type, target_kind, normalized_raw_target, resolver_plugin)` — `boardgame-9f3a8b71c4e0d62a` in the example above. The store entity-mirror id (returned by `/v1/entities/...`) is prefixed: `task:<basename>` — same layered id-vs-entity-mirror split the legacy text-task surface uses. Workflow retries over the same tuple collapse to one task; the daemon's idempotency probe checks for the file path before writing.
+
+### 2b. 5-section task body schema (#337)
+
+Resolution-tasks (§2a) and err-tasks (§4) carry a generalized 5-section body schema per [#337](https://github.com/yaad-index/yaad-index/issues/337). Each section is delimited by an HTML-comment marker pair so readers + writers can target sections by name without parsing free-form markdown.
+
+| Section    | Marker pair                                                                        | Shape          | What lives there                                                              |
+|------------|------------------------------------------------------------------------------------|----------------|-------------------------------------------------------------------------------|
+| `prompt`   | `<!-- yaad-index prompt -->` … `<!-- /yaad-index prompt -->`                       | replace        | Operator-facing instruction. Mandatory (renderer rejects empty).              |
+| `edges`    | `<!-- yaad-index edges -->` … `<!-- /yaad-index edges -->`                         | daemon-view    | Daemon-managed read-only view of entities the task references. Audit only.   |
+| `todo`     | `<!-- yaad-index todo -->` … `<!-- /yaad-index todo -->`                           | set            | Checkbox list (`- [ ] ...`). Duplicate items collapse to one entry.           |
+| `freeform` | `<!-- yaad-index freeform -->` … `<!-- /yaad-index freeform -->`                   | ordered-append | Free-form prose. Order-of-write determines order-of-text; duplicates allowed. |
+| `notes`    | `<!-- yaad-index notes -->` … `<!-- /yaad-index notes -->`                         | set            | System-stamped event lines. Err-task failure log lands here.                  |
+
+Section order is fixed (`prompt → edges → todo → freeform → notes`). All five markers are always emitted at task-create time; empty sections render as an empty marker pair so subsequent writers parse a well-formed body.
+
+Commutativity carve-out:
+
+- **Set-shape** (`todo`, `notes`) — two writes of the same line collapse to one entry; order doesn't matter for set membership.
+- **Replace-shape** (`prompt`) — last write wins.
+- **Ordered-append** (`freeform`) — order-of-calls determines order-of-text; duplicate input produces duplicate paragraphs.
+
+[#337 Cut 2](https://github.com/yaad-index/yaad-index/pull/342) ships the bounded composition primitives writers use to mutate the body. Each routes through a shared parse → mutate → render helper so repeated calls against the same body stay byte-stable:
+
+| Primitive                              | Targets    | Shape          |
+|----------------------------------------|------------|----------------|
+| `SetPrompt(body, prompt)`              | `prompt`   | replace        |
+| `AddCheckbox(body, item)`              | `todo`     | set            |
+| `AddNote(body, note)`                  | `notes`    | set            |
+| `AppendFreeform(body, text)`           | `freeform` | ordered-append |
+| `AddEdge(body, entityID, edgeType)`    | `edges`    | stub (Cut 3)   |
+
+`AddEdge` is a v1 stub returning the body unchanged — the graph-write vs section-regen atomicity contract is unresolved; Cut 3 lands the real implementation. The other four primitives are wired into the resolution-task and err-task writers today.
+
+Implementation: `internal/workflow/actions/task_schema.go` (schema + parser + renderer) + `internal/workflow/actions/task_primitives.go` (bounded primitives). Legacy text-tasks (task_append output) still use the `## section` markdown shape per §2; the migration to the 5-section schema for text-tasks is tracked separately.
 
 ## 3. Append shape — how `task_append` accumulates
 
@@ -148,6 +207,39 @@ Per [ADR-0024](../adr/0024-workflows-and-tasks.md) §"Runtime errors — the err
 
 ```
 <vault>/tasks/<workflow>-err.md
+```
+
+The err-task body uses the 5-section schema (§2b). The `prompt` section carries an operator-facing failure framing installed at first-create time; each failure appends a single-line entry to the `notes` section:
+
+```markdown
+---
+kind: task
+errored: true
+workflow: classify
+created_at: 2026-05-29T17:00:00Z
+---
+
+<!-- yaad-index prompt -->
+Workflow `classify` failed during action dispatch. Each entry in the notes
+section below records a timestamp, source entity (when known), and the
+wrapped error message. Address the underlying cause, then resolve via
+`task_resolve` — the err-task auto-archives on resolve and a fresh one
+spawns on the next failure.
+<!-- /yaad-index prompt -->
+
+<!-- yaad-index edges -->
+<!-- /yaad-index edges -->
+
+<!-- yaad-index todo -->
+<!-- /yaad-index todo -->
+
+<!-- yaad-index freeform -->
+<!-- /yaad-index freeform -->
+
+<!-- yaad-index notes -->
+- 2026-05-29T17:00:00Z (boardgame:b): condition: cel-go error: undeclared reference 'foo'
+- 2026-05-29T17:15:00Z (boardgame:c): action: missing field 'target.name'
+<!-- /yaad-index notes -->
 ```
 
 One err-task per workflow regardless of subject. Each failure appends one entry. The err-task's `errored: true` frontmatter flag distinguishes it from normal tasks at `task_list` time.

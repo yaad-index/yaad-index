@@ -166,10 +166,41 @@ func TestWriteResolutionTask_FreshCreate(t *testing.T) {
 	require.Positive(t, lancIdx)
 	assert.Less(t, birmIdx, lancIdx, "options sort ascending by id")
 
-	// Body checklist mirrors the options.
-	assert.Contains(t, got, "## Resolution\n")
-	assert.Contains(t, got, "- [ ] boardgame:brass-birmingham — Brass: Birmingham — 2018 Wallace\n")
-	assert.Contains(t, got, "- [ ] boardgame:brass-lancashire — Brass: Lancashire — 2007 Wallace\n")
+	// #337 Cut 1: body is the 5-section schema. All markers
+	// always emitted; prompt + todo populated, edges /
+	// freeform / notes empty marker pairs.
+	assert.Contains(t, got, taskMarkerOpen(TaskSectionPrompt))
+	assert.Contains(t, got, taskMarkerClose(TaskSectionPrompt))
+	assert.Contains(t, got, taskMarkerOpen(TaskSectionEdges))
+	assert.Contains(t, got, taskMarkerClose(TaskSectionEdges))
+	assert.Contains(t, got, taskMarkerOpen(TaskSectionTodo))
+	assert.Contains(t, got, taskMarkerClose(TaskSectionTodo))
+	assert.Contains(t, got, taskMarkerOpen(TaskSectionFreeform))
+	assert.Contains(t, got, taskMarkerClose(TaskSectionFreeform))
+	assert.Contains(t, got, taskMarkerOpen(TaskSectionNotes))
+	assert.Contains(t, got, taskMarkerClose(TaskSectionNotes))
+	// Prompt + todo content lands in their respective sections.
+	assert.Contains(t, got, `Workflow paused on ambiguous resolve of "Brass"`)
+	assert.Contains(t, got, "- [ ] boardgame:brass-birmingham — Brass: Birmingham — 2018 Wallace")
+	assert.Contains(t, got, "- [ ] boardgame:brass-lancashire — Brass: Lancashire — 2007 Wallace")
+	// #345: edge-aware prompt framing names the plugin
+	// shorthand, the from→to edge, and the stale-rewrite
+	// behavior so operators understand what resolve will do.
+	assert.Contains(t, got, "`yaad-bgg:<option-id>`",
+		"prompt names plugin shorthand for the chosen entity")
+	assert.Contains(t, got, "email:m1 --mentions--> <chosen-id>",
+		"prompt names the from→edge_type→target tuple being landed")
+	assert.Contains(t, got, "stale-rewrite",
+		"prompt calls out stale-rewrite behavior")
+	assert.NotContains(t, got, "(populated below)",
+		"seed prompt replaced by SetPrompt")
+	// #345: edges section records the source-edge tuple as
+	// freeform-structured text until Cut 3 wires real AddEdge.
+	assert.Contains(t, got, "- from_id: email:m1")
+	assert.Contains(t, got, "- edge_type: mentions")
+	assert.Contains(t, got, "- target_kind: boardgame")
+	assert.Contains(t, got, "- normalized_raw_target: brass")
+	assert.Contains(t, got, "- resolver_plugin: yaad-bgg")
 }
 
 // TestWriteResolutionTask_IdempotencyOnSameTuple pins the
