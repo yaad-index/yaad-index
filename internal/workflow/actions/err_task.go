@@ -128,16 +128,17 @@ func (w *FileErrTaskWriter) AppendErrTask(ctx context.Context, workflow string, 
 		return fmt.Errorf("read existing err task %q: %w", path, err)
 	}
 
-	// Append the new failure line to the existing
-	// Failures section. Re-uses the mergeSection helper
-	// (Phase 4) with append-anyway so every failure lands
-	// (no skip-dedup on err entries — each failure is
-	// distinct by timestamp).
-	body, err := mergeSection(string(existing), errTaskSectionName, line, "append-anyway")
+	// #337 Cut 1: append the new failure line to the err-task's
+	// notes section. The 5-section schema replaces the legacy
+	// `## Failures` markdown section; every failure still lands
+	// (no dedup — each is distinct by timestamp). Cut 2's
+	// add_note bounded primitive will replace this inline
+	// parse+render with a method call.
+	body, err := appendErrFailureLine(existing, line)
 	if err != nil {
 		return err
 	}
-	if err := w.writeAtomic(path, []byte(body)); err != nil {
+	if err := w.writeAtomic(path, body); err != nil {
 		return err
 	}
 	w.notifyCommit(ctx, path, taskCommitMessage(workflow, "", "err-append"), workflowAuthor(workflow))
@@ -217,16 +218,33 @@ func (w *FileErrTaskWriter) writeAtomic(path string, body []byte) error {
 	return nil
 }
 
-// errTaskSectionName is the body section every failure line
-// appends to. Kept distinct from regular task sections so a
-// future shared-vocabulary surface (Phase 6 task.* MCP) can
-// branch on it.
-const errTaskSectionName = "Failures"
+// errTaskPromptTemplate is the prompt-section body for an
+// err-task. Operators reading the task see the instruction
+// describing what failed and how to handle it; agents can
+// route on the workflow name in frontmatter for automated
+// triage. The prompt itself is stable across err appends —
+// the per-failure detail lands in the notes section per #337
+// Cut 1.
+const errTaskPromptTemplate = "Workflow %q produced one or more execution failures. " +
+	"Review the failure entries in the notes section, address the underlying causes, and " +
+	"resolve or archive this err-task once the workflow runs cleanly."
 
 // freshErrTaskBody renders the initial err-task file body —
-// frontmatter (`kind: task` + `errored: true`) + the
-// Failures section header + the first failure line.
+// frontmatter (`kind: task` + `errored: true`) + the 5-section
+// schema with the prompt populated and the first failure line
+// landing in the notes section per #337 Cut 1.
 func freshErrTaskBody(workflow string, when time.Time, line string) []byte {
+	prompt := fmt.Sprintf(errTaskPromptTemplate, workflow)
+	body, err := RenderTaskSections(TaskSections{
+		Prompt: prompt,
+		Notes:  line,
+	})
+	if err != nil {
+		// Renderer only errors on empty prompt; we always supply
+		// one above. Treat as programmer-bug — fall back to a
+		// minimal body so the caller still gets a writable file.
+		body = "<!-- yaad-index prompt -->\n" + prompt + "\n<!-- /yaad-index prompt -->\n"
+	}
 	var b strings.Builder
 	b.WriteString("---\n")
 	b.WriteString("kind: task\n")
@@ -234,9 +252,60 @@ func freshErrTaskBody(workflow string, when time.Time, line string) []byte {
 	b.WriteString("workflow: " + workflow + "\n")
 	b.WriteString("created_at: " + when.UTC().Format(time.RFC3339) + "\n")
 	b.WriteString("---\n\n")
-	b.WriteString("## " + errTaskSectionName + "\n\n")
-	b.WriteString(line + "\n")
+	b.WriteString(body)
 	return []byte(b.String())
+}
+
+// appendErrFailureLine parses an existing err-task body, adds
+// the new failure line to the notes section, and renders the
+// 5-section schema back. Cut 2's bounded add_note primitive
+// will absorb this logic; Cut 1 uses it inline so the append
+// branch stays semantically aligned with the schema.
+func appendErrFailureLine(existing []byte, line string) ([]byte, error) {
+	frontmatter, sectionsBody, err := splitFrontmatter(string(existing))
+	if err != nil {
+		return nil, fmt.Errorf("err-task append: %w", err)
+	}
+	sections, err := ParseTaskSections(sectionsBody)
+	if err != nil {
+		return nil, fmt.Errorf("err-task append: %w", err)
+	}
+	if sections.Notes == "" {
+		sections.Notes = line
+	} else {
+		sections.Notes = sections.Notes + "\n" + line
+	}
+	body, err := RenderTaskSections(sections)
+	if err != nil {
+		return nil, fmt.Errorf("err-task append: %w", err)
+	}
+	return []byte(frontmatter + body), nil
+}
+
+// splitFrontmatter splits a task body into (frontmatterBlock,
+// remainder) at the second `---` line. The frontmatterBlock
+// retains its leading `---` / yaml / trailing `---` and the
+// double newline that follows so the caller can concatenate
+// back without re-shaping. When no frontmatter is present
+// (no leading `---` line) returns ("", body) so callers can
+// always concat.
+func splitFrontmatter(body string) (string, string, error) {
+	if !strings.HasPrefix(body, "---\n") {
+		return "", body, nil
+	}
+	// Find the closing `---` on its own line.
+	closeIdx := strings.Index(body[4:], "\n---\n")
+	if closeIdx < 0 {
+		return "", "", fmt.Errorf("malformed frontmatter: missing closing ---")
+	}
+	end := 4 + closeIdx + len("\n---\n")
+	// Consume the blank line the renderer emits between the
+	// frontmatter and the section markers (so re-render
+	// produces byte-stable output).
+	if strings.HasPrefix(body[end:], "\n") {
+		end++
+	}
+	return body[:end], body[end:], nil
 }
 
 // formatFailureLine renders one entry for the Failures
