@@ -206,9 +206,10 @@ func TestRunInit_EmitsCapabilities(t *testing.T) {
 	// `is_about` target), person (designed_by + artist_by
 	// targets), company (published_by target).
 	wantKinds := map[string]bool{
-		bgg.CanonicalKind: false,
-		"person": false,
-		"company": false,
+		bgg.CanonicalKind:          false,
+		bgg.ExpansionCanonicalKind: false, // #334 Cut 1
+		"person":                   false,
+		"company":                  false,
 	}
 	for _, k := range got.CanonicalKindsEmitted {
 		if _, ok := wantKinds[k]; ok {
@@ -230,7 +231,8 @@ func TestRunInit_EmitsCapabilities(t *testing.T) {
 	// isn't also emitted) is verified by daemon startup; this
 	// test pins the wire-shape minimum the plugin must declare.
 	wantResolves := map[string]bool{
-		bgg.CanonicalKind: false,
+		bgg.CanonicalKind:          false,
+		bgg.ExpansionCanonicalKind: false, // #334 Cut 1
 	}
 	for _, k := range got.ResolvesCanonicalKinds {
 		if _, ok := wantResolves[k]; ok {
@@ -259,10 +261,11 @@ func TestRunInit_EmitsCapabilities(t *testing.T) {
 	// edges block.
 	wantEdgeTypes := map[string]bool{
 		bgg.SourceTypeEdgeType: false,
-		bgg.CanonicalEdgeType: false,
-		"designed_by": false,
-		"artist_by": false,
-		"published_by": false,
+		bgg.CanonicalEdgeType:  false,
+		bgg.ExpansionEdgeType:  false, // #334 Cut 1
+		"designed_by":          false,
+		"artist_by":            false,
+		"published_by":         false,
 	}
 	for _, et := range got.CanonicalEdgeTypesEmitted {
 		if _, ok := wantEdgeTypes[et]; ok {
