@@ -216,17 +216,16 @@ func runInit(stdout io.Writer) error {
 		},
 		EdgeKinds:    []kindSpecJSON{},
 		ConfigSchema: json.RawMessage(configSchemaJSON),
-		CanonicalKindsEmitted: []string{bgg.CanonicalKind, "person", "company"},
-		// #332: declare resolver capability for boardgame only.
-		// BGG's search-by-name endpoint resolves boardgame names
-		// to BGG entity ids reliably; person and company are
-		// emitted as canonical labels via the per-game extract
-		// (designer / artist / publisher fields) but BGG's
-		// search surface for those kinds is less reliable —
-		// conservative scope per the dispatch keeps the resolver
-		// claim honest. Expand here if BGG's person/company
-		// search shows up well in practice.
-		ResolvesCanonicalKinds: []string{bgg.CanonicalKind},
+		CanonicalKindsEmitted: []string{bgg.CanonicalKind, bgg.ExpansionCanonicalKind, "person", "company"},
+		// #332 + #334: declare resolver capability for the two
+		// canonical kinds whose name-search BGG handles reliably.
+		// boardgame: search-by-name returns base games. Adding
+		// boardgame-expansion (#334 Cut 1): the same search
+		// surface returns expansion entries when their names
+		// match, and the plugin now accepts them on fetchByID.
+		// person and company stay off the resolver claim until
+		// BGG's search proves out for those kinds.
+		ResolvesCanonicalKinds: []string{bgg.CanonicalKind, bgg.ExpansionCanonicalKind},
 		// Edge types yaad-bgg emits in the source-shape edges
 		// block (per ADR-0021 + this PR's plugin-emitted edge
 		// design). `is_a` is the universal source-type edge;
@@ -240,6 +239,7 @@ func runInit(stdout io.Writer) error {
 		CanonicalEdgeTypesEmitted: []string{
 			bgg.SourceTypeEdgeType,
 			bgg.CanonicalEdgeType,
+			bgg.ExpansionEdgeType,
 			"designed_by",
 			"artist_by",
 			"published_by",

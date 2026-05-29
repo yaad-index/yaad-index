@@ -87,11 +87,27 @@ const SourceTypeKind = "source-type"
 // from a BGG source node to its boardgame canonical label.
 const CanonicalEdgeType = "is_about"
 
-// CanonicalKind is the canonical kind a BGG source resolves to:
-// `boardgame`. Used as the Kind on the `is_about` edge target so
+// CanonicalKind is the canonical kind a BGG `boardgame` source
+// resolves to. Used as the Kind on the `is_about` edge target so
 // the daemon can derive the canonical label
 // `boardgame:<slug.Slug(name)>`.
 const CanonicalKind = "boardgame"
+
+// ExpansionCanonicalKind is the canonical kind a BGG
+// `boardgameexpansion` source resolves to per #334 Cut 1.
+// Separate-axis decision: the operator's mental model treats
+// expansions as a different kind of thing from base games even
+// though both are "things you can ingest from BGG" — sharing the
+// canonical kind would conflate the type axis and force every
+// downstream consumer to disambiguate via metadata.
+const ExpansionCanonicalKind = "boardgame-expansion"
+
+// ExpansionEdgeType ties a `boardgame-expansion` canonical to its
+// base `boardgame` canonical. yaad-bgg emits one `expansion_of`
+// edge per parent boardgame the BGG XMLAPI lists under the
+// expansion's `<link type="boardgameexpansion"/>` entries (which,
+// for an expansion thing, are the base games it expands).
+const ExpansionEdgeType = "expansion_of"
 
 // EdgeTarget is one entry in the ADR-0021 source-shape edges
 // block — a descriptive `{name, kind}` reference. Daemon
@@ -558,13 +574,15 @@ func (p *Plugin) fetchByID(ctx context.Context, id int64, canonicalURL, original
 		return nil, ErrNotFoundUpstream
 	}
 
-	// BGG's `thing` endpoint will return any item type for an id —
+	// BGG's `thing` endpoint can return any item type for an id —
 	// boardgameexpansion, boardgameaccessory, rpgitem, videogame.
-	// v1 is boardgame-only per; treat other types as
-	// not-found rather than emitting a confusingly-shaped entity.
+	// #334 Cut 1 accepts boardgameexpansion in addition to
+	// boardgame; other types still surface as not-found pending
+	// Cut 2 (boardgameaccessory + boardgamefamily) and Cut 3
+	// (videogame + rpg / rpgitem).
 	t := results[0]
-	if t.Type != bggo.BoardGameType {
-		return nil, fmt.Errorf("%w: id %d is type %q (yaad-bgg v1 is boardgame-only)",
+	if t.Type != bggo.BoardGameType && t.Type != bggo.BoardGameExpansionType {
+		return nil, fmt.Errorf("%w: id %d is type %q (yaad-bgg supports boardgame + boardgameexpansion only; other thing types pending later cuts)",
 			ErrNotFoundUpstream, id, t.Type)
 	}
 
@@ -647,12 +665,39 @@ func (p *Plugin) fetchByID(ctx context.Context, id int64, canonicalURL, original
 // flow through as-is — BGG's link names for individuals/companies
 // don't carry the same annotations.
 func buildEdges(t bggo.ThingResult) map[string][]EdgeTarget {
+	// #334 Cut 1: for a boardgameexpansion thing, the canonical
+	// `is_about` target is the boardgame-expansion kind rather
+	// than boardgame, AND each `boardgameexpansion`-typed link
+	// becomes an `expansion_of` edge to the parent boardgame
+	// canonical. BGG's xmlapi2 carries these as inbound links
+	// from the expansion to the base game(s) — the daemon's
+	// slug.Slug derives the canonical-label id from the link
+	// Name. (Outbound expansion links from a base game's thing
+	// page would be the reverse direction; v1 doesn't emit those
+	// — operators consume the relationship from the expansion
+	// side only, which is the side that knows what it expands.)
+	canonicalKind := CanonicalKind
+	if t.Type == bggo.BoardGameExpansionType {
+		canonicalKind = ExpansionCanonicalKind
+	}
 	edges := map[string][]EdgeTarget{
 		SourceTypeEdgeType: {{Name: SourceTypeName, Kind: SourceTypeKind}},
 		CanonicalEdgeType: {{
 			Name: canonicalizeBGGName(t.Name),
-			Kind: CanonicalKind,
+			Kind: canonicalKind,
 		}},
+	}
+	if t.Type == bggo.BoardGameExpansionType {
+		if parents := t.Links[string(bggo.BoardGameExpansionType)]; len(parents) > 0 {
+			row := make([]EdgeTarget, len(parents))
+			for i, p := range parents {
+				row[i] = EdgeTarget{
+					Name: canonicalizeBGGName(p.Name),
+					Kind: CanonicalKind,
+				}
+			}
+			edges[ExpansionEdgeType] = row
+		}
 	}
 	if designers := t.Designers(); len(designers) > 0 {
 		row := make([]EdgeTarget, len(designers))
@@ -745,9 +790,14 @@ func (p *Plugin) fetchByName(ctx context.Context, query string) (*FetchOutcome, 
 	if query == "" {
 		return nil, fmt.Errorf("%s: empty name shorthand", PluginName)
 	}
+	// #334 Cut 1: include boardgameexpansion in the search types
+	// so name-shorthand resolution surfaces expansions alongside
+	// base games. Disambiguation candidates now correctly include
+	// expansion entries (which the fetchByID path then accepts
+	// per the boardgame || boardgameexpansion gate above).
 	results, err := p.client.Search(ctx, bggo.SearchRequest{
 		Query: query,
-		Types: []bggo.ItemType{bggo.BoardGameType},
+		Types: []bggo.ItemType{bggo.BoardGameType, bggo.BoardGameExpansionType},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%s: Search(%q): %w", PluginName, query, err)
