@@ -33,7 +33,11 @@ func TestFileErrTaskWriter_FirstFailureCreates(t *testing.T) {
 	assert.Contains(t, got, "kind: task\n")
 	assert.Contains(t, got, "errored: true\n")
 	assert.Contains(t, got, "workflow: classify\n")
-	assert.Contains(t, got, "## Failures\n")
+	// #337 Cut 1: failure lines land in the notes section;
+	// the prompt section carries the operator instruction.
+	assert.Contains(t, got, taskMarkerOpen(TaskSectionPrompt))
+	assert.Contains(t, got, taskMarkerOpen(TaskSectionNotes))
+	assert.Contains(t, got, taskMarkerClose(TaskSectionNotes))
 	assert.Contains(t, got, "- 2026-05-16T18:00:00Z (boardgame:b): condition: cel-go error: undeclared reference 'foo'")
 }
 
@@ -58,8 +62,11 @@ func TestFileErrTaskWriter_SubsequentFailuresAppend(t *testing.T) {
 	assert.Contains(t, got, "second failure")
 	// Order preserved
 	assert.True(t, strings.Index(got, "first failure") < strings.Index(got, "second failure"))
-	// Single section header
-	assert.Equal(t, 1, strings.Count(got, "## Failures"))
+	// #337 Cut 1: single notes section markers, no duplicate
+	// schema render — append goes through the parse → inject
+	// → render round-trip.
+	assert.Equal(t, 1, strings.Count(got, taskMarkerOpen(TaskSectionNotes)))
+	assert.Equal(t, 1, strings.Count(got, taskMarkerClose(TaskSectionNotes)))
 	// Single frontmatter
 	assert.Equal(t, 1, strings.Count(got, "kind: task"))
 }

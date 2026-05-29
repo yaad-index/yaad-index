@@ -166,10 +166,23 @@ func TestWriteResolutionTask_FreshCreate(t *testing.T) {
 	require.Positive(t, lancIdx)
 	assert.Less(t, birmIdx, lancIdx, "options sort ascending by id")
 
-	// Body checklist mirrors the options.
-	assert.Contains(t, got, "## Resolution\n")
-	assert.Contains(t, got, "- [ ] boardgame:brass-birmingham — Brass: Birmingham — 2018 Wallace\n")
-	assert.Contains(t, got, "- [ ] boardgame:brass-lancashire — Brass: Lancashire — 2007 Wallace\n")
+	// #337 Cut 1: body is the 5-section schema. All markers
+	// always emitted; prompt + todo populated, edges /
+	// freeform / notes empty marker pairs.
+	assert.Contains(t, got, taskMarkerOpen(TaskSectionPrompt))
+	assert.Contains(t, got, taskMarkerClose(TaskSectionPrompt))
+	assert.Contains(t, got, taskMarkerOpen(TaskSectionEdges))
+	assert.Contains(t, got, taskMarkerClose(TaskSectionEdges))
+	assert.Contains(t, got, taskMarkerOpen(TaskSectionTodo))
+	assert.Contains(t, got, taskMarkerClose(TaskSectionTodo))
+	assert.Contains(t, got, taskMarkerOpen(TaskSectionFreeform))
+	assert.Contains(t, got, taskMarkerClose(TaskSectionFreeform))
+	assert.Contains(t, got, taskMarkerOpen(TaskSectionNotes))
+	assert.Contains(t, got, taskMarkerClose(TaskSectionNotes))
+	// Prompt + todo content lands in their respective sections.
+	assert.Contains(t, got, `Workflow paused on ambiguous resolve of "Brass"`)
+	assert.Contains(t, got, "- [ ] boardgame:brass-birmingham — Brass: Birmingham — 2018 Wallace")
+	assert.Contains(t, got, "- [ ] boardgame:brass-lancashire — Brass: Lancashire — 2007 Wallace")
 }
 
 // TestWriteResolutionTask_IdempotencyOnSameTuple pins the

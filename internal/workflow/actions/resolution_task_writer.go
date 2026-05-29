@@ -266,26 +266,44 @@ func renderResolutionTaskBody(d *edgewrite.ResolutionDeferred) ([]byte, error) {
 		return nil, fmt.Errorf("marshal resolution-task frontmatter: %w", err)
 	}
 
+	// #337 Cut 1: emit the 5-section schema. Prompt carries the
+	// disambiguation instruction; todo carries the options
+	// checkbox list. Edges / freeform / notes render as empty
+	// marker pairs so Cut 2's bounded primitives have well-
+	// formed sections to mutate.
+	prompt := fmt.Sprintf(
+		"Workflow paused on ambiguous resolve of %q via plugin %s.\n"+
+			"Pick one option from the todo section and resolve via `task_resolve`.",
+		d.RawTarget, d.ResolverPlugin,
+	)
+	var todoBuilder strings.Builder
+	for _, opt := range fm.Options {
+		todoBuilder.WriteString("- [ ] ")
+		todoBuilder.WriteString(opt.ID)
+		if opt.Label != "" {
+			todoBuilder.WriteString(" — ")
+			todoBuilder.WriteString(opt.Label)
+		}
+		if opt.Summary != "" {
+			todoBuilder.WriteString(" — ")
+			todoBuilder.WriteString(opt.Summary)
+		}
+		todoBuilder.WriteByte('\n')
+	}
+
+	body, err := RenderTaskSections(TaskSections{
+		Prompt: prompt,
+		Todo:   strings.TrimRight(todoBuilder.String(), "\n"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render resolution-task sections: %w", err)
+	}
+
 	var b strings.Builder
 	b.WriteString("---\n")
 	b.Write(yamlBytes)
 	b.WriteString("---\n\n")
-	b.WriteString("## Resolution\n\n")
-	fmt.Fprintf(&b,
-		"Workflow paused on ambiguous resolve of %q via plugin %s.\n"+
-			"Pick one option below and resolve via `task_resolve` (Cut C3.3).\n\n",
-		d.RawTarget, d.ResolverPlugin,
-	)
-	for _, opt := range fm.Options {
-		line := "- [ ] " + opt.ID
-		if opt.Label != "" {
-			line += " — " + opt.Label
-		}
-		if opt.Summary != "" {
-			line += " — " + opt.Summary
-		}
-		b.WriteString(line + "\n")
-	}
+	b.WriteString(body)
 	return []byte(b.String()), nil
 }
 
