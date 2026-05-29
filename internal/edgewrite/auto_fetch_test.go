@@ -325,10 +325,16 @@ func TestAutoFetch_EmptyResolvedAndNoOptions_SpawnsErrTask(t *testing.T) {
 
 // TestAutoFetch_SourceShapeFromKind_NoOp pins the recursion
 // break: when the from-entity's kind is NOT in the canonical
-// set (i.e., it's plugin-source-shape like `bgg:13`), the hook
-// short-circuits. Critical for stopping the plugin's own
+// set (i.e., it's plugin-source-shape like `bgg:13`), the
+// CreateEdge call-site guard short-circuits the dispatch.
+// Critical for stopping the plugin's own
 // `<plugin-source> -> <canonical>` edge writes from
 // re-triggering plugin ingest on every fire.
+//
+// Note (#330): the guard lives at the CreateEdge call site,
+// NOT inside MaybeDispatchResolverAutoFetch — see
+// TestAutoFetch_MaybeDispatchDirectInvocation_FromKindSourceShape_StillDispatches
+// for the direct-invocation contract used by the fill-API gate.
 func TestAutoFetch_SourceShapeFromKind_NoOp(t *testing.T) {
 	t.Parallel()
 	f := newAutoFetchFixture(t,
@@ -346,6 +352,39 @@ func TestAutoFetch_SourceShapeFromKind_NoOp(t *testing.T) {
 		"bgg:13 → boardgame:brass is a plugin's own edge write; auto-fetch must not re-trigger the plugin")
 	assert.Empty(t, f.resWriter.snapshot())
 	assert.Empty(t, f.errWriter.snapshot())
+}
+
+// TestAutoFetch_MaybeDispatchDirectInvocation_FromKindSourceShape_StillDispatches
+// is the #330 regression test. The fill-API gate
+// (api.checkCanonicalTypeResolverPlugins) calls
+// MaybeDispatchResolverAutoFetch DIRECTLY (not via CreateEdge)
+// and passes the entity-being-filled as fromID — which is
+// usually source-shape (e.g., `gmail:<msg-id>`). The pre-#330
+// recursion break inside the method suppressed the dispatch
+// in that case; the fix moved the break to the CreateEdge
+// call site so direct callers aren't blocked.
+//
+// Without this guarantee, the fill-gate stays at HTTP 422
+// even though resolver_plugin is set and the plugin would
+// resolve the target — the failure mode #330 was filed for
+// after PR-328 deployed.
+func TestAutoFetch_MaybeDispatchDirectInvocation_FromKindSourceShape_StillDispatches(t *testing.T) {
+	t.Parallel()
+	f := newAutoFetchFixture(t,
+		map[string][]string{"boardgame": {"yaad-bgg"}},
+		[]string{"email", "boardgame"}, // `gmail` deliberately NOT in the set
+	)
+	f.resolver.resolvedID = "boardgame:lost-expedition"
+	seedEntity(t, f.st, "gmail:msg-1", "gmail")
+	seedEntity(t, f.st, "boardgame:lost-expedition", "boardgame")
+
+	// Direct invocation, mimicking the fill-API gate caller.
+	// fromID is source-shape (gmail:msg-1); pre-#330 this would
+	// short-circuit. Post-#330 the dispatch fires.
+	f.svc.MaybeDispatchResolverAutoFetch(context.Background(), "gmail:msg-1", "mentions", "boardgame:lost-expedition")
+
+	assert.Equal(t, 1, f.resolver.callCount(),
+		"direct invocation with source-shape fromID must dispatch (the fill-gate caller path)")
 }
 
 // TestAutoFetch_SourceConnected_NoOp pins the
