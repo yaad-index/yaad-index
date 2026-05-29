@@ -59,17 +59,39 @@ import (
 // file keeps the operator's recovery surface compact).
 const autoFetchErrTaskWorkflow = "resolver-auto-fetch"
 
-// maybeDispatchResolverAutoFetch runs the #325 hook after a
-// successful edge write. Best-effort: any failure logs a WARN
-// against the Service's logger; the original edge already
-// landed, so the workflow / fill / ingest caller sees success
-// regardless of what happens here.
+// MaybeDispatchResolverAutoFetch is the shared resolution-
+// attempt path per #325 — the single source of truth for
+// "canonical X is not yet resolved → invoke its resolver
+// plugin." Called from two surfaces:
+//
+//   - Service.CreateEdge / CreateCanonicalEdgeByName legacy
+//     slugify path: AFTER the edge lands. Best-effort with
+//     no callback to the caller; the edge already exists.
+//   - api.checkCanonicalTypeResolverPlugins (fill / operator-
+//     fill pre-flight gate): BEFORE the gate decides. The
+//     gate runs this, then re-probes GetEntity. When the
+//     plugin completed sync (single-match), the re-probe
+//     succeeds and the fill proceeds. When the plugin
+//     deferred (disambiguation) or errored, the corresponding
+//     task is spawned and the re-probe still fails — the
+//     gate returns 422 so the agent follows the task
+//     surface.
+//
+// fromID + edgeType supply ResolutionDeferred context if the
+// plugin returns disambiguation options. For the fill-gate
+// case the source entity id + the canonical-edge field name
+// fit naturally; the edge-write case passes the just-created
+// edge's tuple.
+//
+// Best-effort posture: any failure logs a WARN; observable
+// outcome lives in the store (re-check via GetEntity) and the
+// vault tasks/ directory (resolution-task or err-task).
 //
 // The four short-circuits (no resolver, source-shape from-kind,
 // not a canonical-id-shape target, already source-connected)
 // keep the common case (no resolver configured for this kind)
-// at ~one map lookup of overhead per CreateEdge call.
-func (s *Service) maybeDispatchResolverAutoFetch(ctx context.Context, fromID, edgeType, toID string) {
+// at ~one map lookup of overhead per call.
+func (s *Service) MaybeDispatchResolverAutoFetch(ctx context.Context, fromID, edgeType, toID string) {
 	if s.resolver == nil {
 		return
 	}

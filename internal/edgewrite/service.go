@@ -50,6 +50,27 @@ type EdgeWriter interface {
 	CreateEdge(ctx context.Context, e *store.Edge) error
 }
 
+// ResolverAutoFetcher is the #325 shared-resolution-attempt
+// surface — the single entry point both the post-CreateEdge
+// hook AND the fill-API pre-flight gate route through.
+// Production wires *Service. Callers that need the auto-fetch
+// capability (currently fill-API gate via
+// api.checkCanonicalTypeResolverPlugins) embed this alongside
+// EdgeWriter rather than burdening every EdgeWriter
+// implementation with the method (the in-memory test fakes for
+// EmitDayRefs etc. would otherwise need stub no-op
+// implementations).
+//
+// The fill gate calls MaybeDispatchResolverAutoFetch BEFORE
+// returning 422 so the plugin materializes the target; the
+// subsequent GetEntity re-probe succeeds and the fill
+// proceeds. The post-CreateEdge hook calls the same method
+// AFTER the edge lands so an edge to an un-enriched canonical
+// triggers the same dispatch.
+type ResolverAutoFetcher interface {
+	MaybeDispatchResolverAutoFetch(ctx context.Context, fromID, edgeType, canonicalID string)
+}
+
 // CanonicalEdgeWriter is the auto-resolver-aware extension
 // EdgeWriter callers reach for when the target is a raw name
 // (e.g. workflow `add_canonical_edge` per #304 Cut C2). Embeds
@@ -162,7 +183,7 @@ func (s *Service) CreateEdge(ctx context.Context, e *store.Edge) error {
 		return err
 	}
 	if e != nil {
-		s.maybeDispatchResolverAutoFetch(ctx, e.From, e.Type, e.To)
+		s.MaybeDispatchResolverAutoFetch(ctx, e.From, e.Type, e.To)
 	}
 	return nil
 }
@@ -346,7 +367,7 @@ func (s *Service) CreateCanonicalEdgeByName(ctx context.Context, fromID, edgeTyp
 	// connection yet, dispatch the plugin's name-ingest. The
 	// auto-resolve branch above doesn't need this hook — it
 	// already invoked the plugin via the resolver.
-	s.maybeDispatchResolverAutoFetch(ctx, fromID, edgeType, targetID)
+	s.MaybeDispatchResolverAutoFetch(ctx, fromID, edgeType, targetID)
 	return targetID, created, nil
 }
 
