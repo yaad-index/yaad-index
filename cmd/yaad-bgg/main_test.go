@@ -222,6 +222,35 @@ func TestRunInit_EmitsCapabilities(t *testing.T) {
 		}
 	}
 
+	// #332: resolver capability for boardgame only — BGG's
+	// search-by-name surface is reliable for boardgame ids;
+	// person / company stay off the resolver claim until the
+	// plugin's search proves out for those kinds. The subset-of-
+	// emitted constraint (daemon-side ERROR if a resolves entry
+	// isn't also emitted) is verified by daemon startup; this
+	// test pins the wire-shape minimum the plugin must declare.
+	wantResolves := map[string]bool{
+		bgg.CanonicalKind: false,
+	}
+	for _, k := range got.ResolvesCanonicalKinds {
+		if _, ok := wantResolves[k]; ok {
+			wantResolves[k] = true
+		}
+	}
+	for k, present := range wantResolves {
+		if !present {
+			t.Errorf("resolves_canonical_kinds: missing %q (got %+v)",
+				k, got.ResolvesCanonicalKinds)
+		}
+	}
+	// Conservative scope: must NOT claim person/company until
+	// BGG's search proves out for those kinds.
+	for _, k := range got.ResolvesCanonicalKinds {
+		if k == "person" || k == "company" {
+			t.Errorf("resolves_canonical_kinds: must not claim %q yet (BGG search reliability TBD)", k)
+		}
+	}
+
 	// Per ADR-0021 + this PR: yaad-bgg emits five canonical edge
 	// types — is_a (universal source-type), is_about (boardgame),
 	// designed_by + artist_by (person), published_by (company).
