@@ -218,33 +218,35 @@ func (w *FileErrTaskWriter) writeAtomic(path string, body []byte) error {
 	return nil
 }
 
-// errTaskPromptTemplate is the prompt-section body for an
-// err-task. Operators reading the task see the instruction
-// describing what failed and how to handle it; agents can
-// route on the workflow name in frontmatter for automated
-// triage. The prompt itself is stable across err appends —
-// the per-failure detail lands in the notes section per #337
-// Cut 1.
-const errTaskPromptTemplate = "Workflow %q produced one or more execution failures. " +
-	"Review the failure entries in the notes section, address the underlying causes, and " +
-	"resolve or archive this err-task once the workflow runs cleanly."
+// errTaskPromptTemplate is the operator-facing framing
+// installed into the err-task's prompt section at first-create
+// time. The wording describes the schema of the notes entries,
+// names the resolve surface, and calls out the auto-archive
+// behavior so an operator opening the file knows exactly what
+// they're looking at and what to do next. Static content for
+// v1 per #344; future revisions may classify failure modes,
+// link to runbooks, etc.
+const errTaskPromptTemplate = "Workflow `%s` failed during action dispatch. Each entry in the notes " +
+	"section below records a timestamp, source entity (when known), and the wrapped error " +
+	"message. Address the underlying cause, then resolve via `task_resolve` — the err-task " +
+	"auto-archives on resolve and a fresh one spawns on the next failure."
+
+// errTaskPromptSeed is the throwaway prompt the initial
+// RenderTaskSections call seeds so the renderer's mandatory-
+// prompt check passes. SetPrompt replaces it with the real
+// content immediately after, routing every prompt mutation
+// (initial install + future operator edits) through the same
+// bounded primitive.
+const errTaskPromptSeed = "(populated below)"
 
 // freshErrTaskBody renders the initial err-task file body —
 // frontmatter (`kind: task` + `errored: true`) + the 5-section
-// schema with the prompt populated and the first failure line
-// landing in the notes section per #337 Cut 1.
+// schema with the prompt populated via SetPrompt and the first
+// failure line landing in the notes section via AddNote (both
+// the Cut 2 bounded primitives per #337).
 func freshErrTaskBody(workflow string, when time.Time, line string) []byte {
 	prompt := fmt.Sprintf(errTaskPromptTemplate, workflow)
-	body, err := RenderTaskSections(TaskSections{
-		Prompt: prompt,
-		Notes:  line,
-	})
-	if err != nil {
-		// Renderer only errors on empty prompt; we always supply
-		// one above. Treat as programmer-bug — fall back to a
-		// minimal body so the caller still gets a writable file.
-		body = "<!-- yaad-index prompt -->\n" + prompt + "\n<!-- /yaad-index prompt -->\n"
-	}
+	body := composeFreshErrTaskBody(prompt, line)
 	var b strings.Builder
 	b.WriteString("---\n")
 	b.WriteString("kind: task\n")
@@ -254,6 +256,32 @@ func freshErrTaskBody(workflow string, when time.Time, line string) []byte {
 	b.WriteString("---\n\n")
 	b.WriteString(body)
 	return []byte(b.String())
+}
+
+// composeFreshErrTaskBody seeds the 5-section schema via
+// RenderTaskSections, installs the operator-facing framing via
+// SetPrompt, then lands the first failure line via AddNote.
+// Every step routes through the Cut 2 bounded primitives so
+// the err-task creation path uses the same surface downstream
+// callers will (per #344 / #337).
+func composeFreshErrTaskBody(prompt, line string) string {
+	body, err := RenderTaskSections(TaskSections{Prompt: errTaskPromptSeed})
+	if err == nil {
+		body, err = SetPrompt(body, prompt)
+	}
+	if err == nil {
+		body, err = AddNote(body, line)
+	}
+	if err == nil {
+		return body
+	}
+	// None of the primitive calls can error in practice: the
+	// seed prompt is non-empty (passes RenderTaskSections /
+	// SetPrompt mandatory-prompt check) and the line is
+	// pre-formatted by formatFailureLine. Programmer-bug
+	// fallback — emit a minimal prompt-only body so the file
+	// still lands.
+	return "<!-- yaad-index prompt -->\n" + prompt + "\n<!-- /yaad-index prompt -->\n"
 }
 
 // appendErrFailureLine adds the new failure line to the
