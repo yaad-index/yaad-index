@@ -448,6 +448,52 @@ On timeout / plugin error: the workflow's err-task pattern fires (one err task p
 
 ADR refs: [ADR-0024](../adr/0024-workflows-and-tasks.md) §"plugin_dispatch execution semantics".
 
+### 5.7 `archive_entity` (#150)
+
+```yaml
+- archive_entity:
+    entity: 'entity.id'
+    reason: '"closed-and-stale: " + entity.data.closed_at'
+```
+
+Flip an entity into the ADR-0018 archived state from inside the workflow action vocabulary. Thin adapter onto the operator-side archive surface (`vault.Writer.ArchiveWithCommit` + `store.Store.ArchiveEntity`); the workflow runner resolves the target id + reason via CEL and hands them to the writer.
+
+- `entity` — CEL expression resolving to the target entity id. Defaults to `entity.id` (the triggering entity).
+- `reason` — optional CEL expression producing a free-form audit string folded into the archive commit message. Empty (or empty after render) leaves the workflow name as the implicit audit source.
+
+Idempotency: archiving an already-archived entity is a no-op — both the vault-side already-at-destination short-circuit and the store-side `COALESCE(archived_at, ?)` preserve the original archive timestamp. Entity-not-found is a soft skip: the runner logs and returns success so the workflow chain continues (the entity may have been archived by another path before this action fired).
+
+ADR refs: [ADR-0024](../adr/0024-workflows-and-tasks.md), [ADR-0018](../adr/0018-archive-replaces-delete.md), #150 (this primitive), PR-153 (per-entity write-lock contention shape).
+
+### 5.8 `restore_entity` (#196)
+
+```yaml
+- restore_entity:
+    entity: 'entity.id'
+    reason: '"reopened: " + entity.data.reopened_at'
+```
+
+Mirror of `archive_entity` — flip an entity back out of the ADR-0018 archived state. Same shape: `entity` defaults to the triggering entity's id, `reason` is the optional CEL audit string folded into the restore commit message. Same idempotence and soft-skip contract: restoring an already-active entity is a no-op; entity-not-found is a soft skip.
+
+- `entity` — CEL expression resolving to the target entity id. Defaults to `entity.id`.
+- `reason` — optional CEL expression producing the audit string.
+
+ADR refs: [ADR-0024](../adr/0024-workflows-and-tasks.md) §"2026-05-21 amendment", [ADR-0018](../adr/0018-archive-replaces-delete.md), #196 (this primitive).
+
+### 5.9 `claim_entity` (#169)
+
+```yaml
+- claim_entity: {}
+```
+
+Flag the triggering event as claimed and stop further workflow dispatch for that event. When the per-event chain runs, a fired `claim_entity` halts the remaining pass-1 workflows from firing on the same event, and prevents pass-2 `catch_all` workflows from running. The action itself produces no side effect outside the engine's in-process queue state (no vault write, no store mutation, no commit).
+
+- v1 has no fields — the action is the bare `- claim_entity: {}` invocation.
+
+A future revision may add a `reason: string` for audit purposes if operators want to record why a particular workflow claimed (separate from the workflow name, which is already tracked in the queue's `claimed_by` field).
+
+ADR refs: [ADR-0024](../adr/0024-workflows-and-tasks.md), #169 (this primitive).
+
 ## 6. `dedup` — per-pattern de-duplication
 
 ```yaml
