@@ -510,6 +510,8 @@ func stringEllipsis(s string, max int) string {
 func checkCanonicalTypeResolverPlugins(
 	ctx context.Context,
 	st store.Store,
+	autoFetcher edgewrite.ResolverAutoFetcher,
+	sourceEntityID string,
 	canonicalKindReg map[string]config.CanonicalKindConfig,
 	ops []operatorFillOp,
 	allowUnresolved bool,
@@ -544,6 +546,28 @@ func checkCanonicalTypeResolverPlugins(
 					status:  http.StatusInternalServerError,
 					code:    "internal_error",
 					message: fmt.Sprintf("probe target %q: %v", e.ID, err),
+				}
+			}
+			// #325: shared resolution-attempt path. Before
+			// rejecting with 422, dispatch the resolver plugin
+			// (synchronous; single-match completes inline + the
+			// re-probe below picks up the materialized row).
+			// Disambiguation / error outcomes spawn the
+			// resolution-task or err-task via the same paths
+			// the edge-write hook uses; the canonical still
+			// doesn't exist in those cases, so the re-probe
+			// fails and we fall through to the 422 — agent
+			// follows the task surface to resolve.
+			if autoFetcher != nil {
+				autoFetcher.MaybeDispatchResolverAutoFetch(ctx, sourceEntityID, op.Field, e.ID)
+				if _, err := st.GetEntity(ctx, e.ID); err == nil {
+					continue
+				} else if !errors.Is(err, store.ErrNotFound) {
+					return &opError{
+						status:  http.StatusInternalServerError,
+						code:    "internal_error",
+						message: fmt.Sprintf("re-probe target %q after resolver dispatch: %v", e.ID, err),
+					}
 				}
 			}
 			return &opError{

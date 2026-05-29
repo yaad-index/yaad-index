@@ -249,10 +249,17 @@ func handleFill(logger *slog.Logger, st store.Store, edgeWriter edgewrite.EdgeWr
 		// `resolver_plugin:` config set, require the canonical id
 		// to already exist in the store. Agent-fill never opts
 		// out — the whole point of resolver_plugin is to block
-		// phantom-entity creation from agent typos. Reject with
-		// 422 unresolved_target on the first violation, suggesting
-		// the resolver plugin to ingest through first.
-		if perr := checkCanonicalTypeResolverPlugins(r.Context(), st, canonicalKindReg, canonicalTypeOps, false); perr != nil {
+		// phantom-entity creation from agent typos.
+		//
+		// #325: the gate first invokes the shared resolver auto-
+		// fetch path so a plugin with a single-match upstream
+		// resolution materializes the target inline + the gate
+		// passes. Disambiguation / error outcomes spawn the
+		// corresponding tasks; the canonical still doesn't exist
+		// after, so the gate falls through to 422 and the agent
+		// follows the task surface.
+		autoFetcher, _ := edgeWriter.(edgewrite.ResolverAutoFetcher)
+		if perr := checkCanonicalTypeResolverPlugins(r.Context(), st, autoFetcher, id, canonicalKindReg, canonicalTypeOps, false); perr != nil {
 			writeError(w, perr.status, perr.code, perr.message)
 			return
 		}

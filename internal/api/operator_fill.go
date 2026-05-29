@@ -238,7 +238,12 @@ func handleEntityOperatorFill(
 		// message suffix below so the audit trail shows the
 		// override was intentional.
 		allowUnresolved := r.URL.Query().Get("allow_unresolved") == "true"
-		if perr := checkCanonicalTypeResolverPlugins(r.Context(), st, canonicalKindReg, ops, allowUnresolved); perr != nil {
+		// #325: same shared resolver auto-fetch path as agent-fill.
+		// When operator passes `allow_unresolved=true`, the
+		// auto-fetch is skipped along with the rest of the gate
+		// per checkCanonicalTypeResolverPlugins' early return.
+		autoFetcher, _ := edgeWriter.(edgewrite.ResolverAutoFetcher)
+		if perr := checkCanonicalTypeResolverPlugins(r.Context(), st, autoFetcher, id, canonicalKindReg, ops, allowUnresolved); perr != nil {
 			writeError(w, perr.status, perr.code, perr.message)
 			return
 		}
