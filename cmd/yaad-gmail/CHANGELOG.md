@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/yaad-index/yaad-index/compare/yaad-gmail-v0.3.0...yaad-gmail-v0.4.0) (2026-05-29)
+
+
+### Features
+
+* **gmail,canonical:** surface from/to/cc/bcc on gmail data + daemon-manage gmail canonical vocabulary ([#273](https://github.com/yaad-index/yaad-index/issues/273)) ([95ef2b0](https://github.com/yaad-index/yaad-index/commit/95ef2b0b335b32e836fe96837ded1130f603d57e))
+
 ## [0.3.0](https://github.com/yaad-index/yaad-index/compare/yaad-gmail-v0.2.1...yaad-gmail-v0.3.0) (2026-05-23)
 
 
