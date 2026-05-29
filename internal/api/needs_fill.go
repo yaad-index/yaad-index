@@ -119,7 +119,15 @@ type needsFillEntry struct {
 }
 
 type needsFillResponse struct {
-	OK         bool             `json:"ok"`
+	OK bool `json:"ok"`
+	// Total reflects the DB-side gap-callable queue depth
+	// (entities with gap_call_done_at IS NULL) per #338. It
+	// over-estimates the final-page entries by the count of
+	// pure-pointer canonical rows + entities whose vault gaps
+	// were entirely auth-filtered. Useful as a queue-depth
+	// anchor for agents pacing the fill loop without needing
+	// to paginate to exhaustion.
+	Total      int              `json:"total"`
 	Entities   []needsFillEntry `json:"entities"`
 	NextCursor string           `json:"next_cursor,omitempty"`
 	// CanonicalVocabulary lives at response-root per #275: one
@@ -161,8 +169,12 @@ func handleNeedsFill(
 			// isn't wired. Honors `?exclude=` the same way the
 			// happy path does.
 			noVaultExcluded := parseNeedsFillExclude(r.URL.Query().Get("exclude"))
+			// total stays 0 on the no-vault path — gap-callable
+			// rows in the DB are meaningless without a vault to
+			// resolve their gaps.
 			noVaultResp := needsFillResponse{
 				OK:       true,
+				Total:    0,
 				Entities: []needsFillEntry{},
 			}
 			if !noVaultExcluded[needsFillFieldCanonicalVocabulary] {
@@ -293,8 +305,22 @@ func handleNeedsFill(
 				entries[i].CleanContent = ""
 			}
 		}
+		// #338: queue-depth anchor for the response. DB-side
+		// count over the same gap-callable predicate as the
+		// listing query; cheap COUNT(*) regardless of cursor
+		// position. Logs at WARN on failure and surfaces total=0
+		// rather than failing the whole response — the entries
+		// payload is the load-bearing surface.
+		total, err := st.CountGapCallableCandidates(r.Context())
+		if err != nil {
+			logger.WarnContext(r.Context(), "store.CountGapCallableCandidates failed; surfacing total=0",
+				"err", err)
+			total = 0
+		}
+
 		resp := needsFillResponse{
 			OK:         true,
+			Total:      total,
 			Entities:   entries,
 			NextCursor: nextCursor,
 		}

@@ -396,6 +396,24 @@ func (s *sqliteStore) ListGapCallableCandidates(ctx context.Context, afterID str
 	return out, nil
 }
 
+// CountGapCallableCandidates returns the DB-side count of
+// gap-callable entities (gap_call_done_at IS NULL). Powers the
+// `/v1/needs-fill` response's `total` field per #338. Same DB
+// predicate as ListGapCallableCandidates; the vault-side gap
+// re-check + auth-aware entry filter are NOT applied (would
+// require materializing every candidate). Over-estimates the
+// final page count by pure-pointer canonical rows + entities
+// whose vault gaps were all auth-filtered.
+func (s *sqliteStore) CountGapCallableCandidates(ctx context.Context) (int, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM entities WHERE gap_call_done_at IS NULL`,
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count gap-callable candidates: %w", err)
+	}
+	return n, nil
+}
+
 // ReplaceProvenance overwrites an entity's provenance rows with the
 // given list. Wraps the DELETE + INSERTs in a single transaction:
 // either every input row replaces the prior set, or the prior set
