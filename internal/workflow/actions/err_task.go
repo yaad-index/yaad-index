@@ -256,30 +256,18 @@ func freshErrTaskBody(workflow string, when time.Time, line string) []byte {
 	return []byte(b.String())
 }
 
-// appendErrFailureLine parses an existing err-task body, adds
-// the new failure line to the notes section, and renders the
-// 5-section schema back. Cut 2's bounded add_note primitive
-// will absorb this logic; Cut 1 uses it inline so the append
-// branch stays semantically aligned with the schema.
+// appendErrFailureLine adds the new failure line to the
+// err-task's notes section by routing through #337 Cut 2's
+// AddNote bounded primitive. The primitive handles parse →
+// inject → render; this helper is a thin []byte adapter for
+// the AppendErrTask handler that still operates on raw file
+// contents.
 func appendErrFailureLine(existing []byte, line string) ([]byte, error) {
-	frontmatter, sectionsBody, err := splitFrontmatter(string(existing))
+	out, err := AddNote(string(existing), line)
 	if err != nil {
 		return nil, fmt.Errorf("err-task append: %w", err)
 	}
-	sections, err := ParseTaskSections(sectionsBody)
-	if err != nil {
-		return nil, fmt.Errorf("err-task append: %w", err)
-	}
-	if sections.Notes == "" {
-		sections.Notes = line
-	} else {
-		sections.Notes = sections.Notes + "\n" + line
-	}
-	body, err := RenderTaskSections(sections)
-	if err != nil {
-		return nil, fmt.Errorf("err-task append: %w", err)
-	}
-	return []byte(frontmatter + body), nil
+	return []byte(out), nil
 }
 
 // splitFrontmatter splits a task body into (frontmatterBlock,
