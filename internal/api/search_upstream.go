@@ -84,7 +84,14 @@ type searchUpstreamPluginStatus struct {
 }
 
 type searchUpstreamResponse struct {
-	OK         bool                         `json:"ok"`
+	OK bool `json:"ok"`
+	// Total is the sum of raw candidate counts each plugin
+	// returned, BEFORE the per-plugin Limit truncation per
+	// #338. Equals sum(PerPlugin[i].Candidates) and reflects
+	// upstream availability — callers see "X hits were
+	// available across all plugins; Y surfaced in results"
+	// without having to sum the per_plugin_status block.
+	Total      int                          `json:"total"`
 	Results    []searchUpstreamCandidate    `json:"results"`
 	PerPlugin  []searchUpstreamPluginStatus `json:"per_plugin_status"`
 	Query      string                       `json:"query"`
@@ -143,10 +150,20 @@ func handleSearchUpstream(logger *slog.Logger, registry pluginRegistry) http.Han
 		perPluginTimeout := time.Duration(timeoutSec) * time.Second
 		merged, statuses := federateSearch(r.Context(), logger, targets, query, limit, perPluginTimeout)
 
+		// #338: sum raw per-plugin candidate counts. Reflects
+		// the pre-limit-truncation availability so callers know
+		// how many hits exist upstream vs how many surfaced in
+		// the merged results.
+		total := 0
+		for _, s := range statuses {
+			total += s.Candidates
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		if err := json.NewEncoder(w).Encode(searchUpstreamResponse{
 			OK:         true,
+			Total:      total,
 			Results:    merged,
 			PerPlugin:  statuses,
 			Query:      query,

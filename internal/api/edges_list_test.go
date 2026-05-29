@@ -205,3 +205,57 @@ func TestListEdges_LimitClamped(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
 	assert.Len(t, got.Edges, 3, "limit=3 caps the response")
 }
+
+// TestListEdges_TotalReportsPreCapCount pins the #338 contract:
+// `total` reports the count of edges matching the tuple before
+// limit truncation, so callers see how many edges exist when
+// the limit cuts the response.
+func TestListEdges_TotalReportsPreCapCount(t *testing.T) {
+	t.Parallel()
+	h, st := newAPIWithStore(t)
+	seedBrassBirmingham(t, st)
+	for i := 0; i < 5; i++ {
+		seedEntity(t, st, "person:p"+string(rune('a'+i)), "person")
+		require.NoError(t, st.CreateEdge(context.Background(), &store.Edge{
+			Type: "designed_by",
+			From: "boardgame:brass-birmingham",
+			To: "person:p" + string(rune('a'+i)),
+		}))
+	}
+
+	// With limit=3 the response cuts to 3; total still reports 5.
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/edges?entity_id=boardgame:brass-birmingham&limit=3", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got edgeListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	assert.Len(t, got.Edges, 3)
+	assert.Equal(t, 5, got.Total,
+		"total reports the pre-cap match count even when limit truncates the response")
+}
+
+// TestListEdges_TotalEqualsLenWhenUnderLimit pins the no-truncation
+// case: total equals len(edges) when the limit doesn't cut.
+func TestListEdges_TotalEqualsLenWhenUnderLimit(t *testing.T) {
+	t.Parallel()
+	h, st := newAPIWithStore(t)
+	seedBrassBirmingham(t, st)
+	seedEntity(t, st, "person:martin-wallace", "person")
+	require.NoError(t, st.CreateEdge(context.Background(), &store.Edge{
+		Type: "designed_by", From: "boardgame:brass-birmingham", To: "person:martin-wallace",
+	}))
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/edges?entity_id=boardgame:brass-birmingham", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	var got edgeListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	assert.Equal(t, len(got.Edges), got.Total,
+		"total equals len(edges) when the limit doesn't truncate")
+	assert.Equal(t, 1, got.Total)
+}

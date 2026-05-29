@@ -1231,3 +1231,72 @@ func TestNeedsFill_ExcludeBothFields(t *testing.T) {
 	require.Len(t, got.Entities, 1)
 	assert.Empty(t, got.Entities[0].CleanContent)
 }
+
+// TestNeedsFill_TotalReflectsGapCallableCount pins the #338
+// queue-depth contract: `total` surfaces the count of DB-side
+// gap-callable entities regardless of the per-page cursor /
+// limit. Five candidates → total=5 across every page; final
+// page still reports 5 even when only 1 entity returns.
+func TestNeedsFill_TotalReflectsGapCallableCount(t *testing.T) {
+	t.Parallel()
+	ids := []string{"boardgame:a", "boardgame:b", "boardgame:c", "boardgame:d", "boardgame:e"}
+	h, _ := nfFixture(t, ids, "", nfRegistryWithBoardgameSummary())
+
+	// Page 1: limit=2.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill?limit=2", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	page1 := decodeNFResponse(t, rec)
+	assert.Equal(t, 5, page1.Total,
+		"total reflects DB-side gap-callable count regardless of per-page limit")
+
+	// Last page after cursor traversal: total stays anchored at 5.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v1/needs-fill?limit=2&cursor="+page1.NextCursor, nil))
+	page2 := decodeNFResponse(t, rec)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v1/needs-fill?limit=2&cursor="+page2.NextCursor, nil))
+	finalPage := decodeNFResponse(t, rec)
+	require.Len(t, finalPage.Entities, 1)
+	assert.Equal(t, 5, finalPage.Total,
+		"total is queue-depth, not per-page count")
+}
+
+// TestNeedsFill_TotalEmptyStore_IsZero pins the empty-DB
+// case: no gap-callable rows → total=0.
+func TestNeedsFill_TotalEmptyStore_IsZero(t *testing.T) {
+	t.Parallel()
+	h, _ := nfFixture(t, nil, "", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	got := decodeNFResponse(t, rec)
+	assert.Equal(t, 0, got.Total)
+}
+
+// TestNeedsFill_TotalVaultNil_IsZero pins the no-vault path:
+// total stays 0 because the gap-callable count without a
+// vault to resolve gaps is meaningless.
+func TestNeedsFill_TotalVaultNil_IsZero(t *testing.T) {
+	t.Parallel()
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+		ID:   "boardgame:vn-1",
+		Kind: "boardgame",
+		Data: map[string]any{"id": "boardgame:vn-1"},
+	}))
+	// No WithVaultIO → vaultReader stays nil.
+	h := NewHandlerWithRegistry(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		st, testRegistryWithSeed(),
+	)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	got := decodeNFResponse(t, rec)
+	assert.Equal(t, 0, got.Total,
+		"vault-nil → total=0 (gap count without vault is meaningless)")
+}

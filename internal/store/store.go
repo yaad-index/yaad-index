@@ -426,6 +426,15 @@ type Store interface {
 	// candidate. Provenance is NOT loaded (the caller drops it
 	// before serializing).
 	ListGapCallableCandidates(ctx context.Context, afterID string, limit int) ([]Entity, error)
+	// CountGapCallableCandidates returns the count of entities whose
+	// gap-call-done flag is NULL — the queue-depth surface for the
+	// `/v1/needs-fill` response's `total` field per yaad-index #338.
+	// The DB-side gap-callable predicate matches ListGapCallableCandidates;
+	// the vault-side "actually has unfilled gaps" filter is NOT applied
+	// (would require scanning every candidate). The count over-estimates
+	// final-page entries by the number of pure-pointer canonical rows
+	// + entities whose vault gaps were all auth-filtered.
+	CountGapCallableCandidates(ctx context.Context) (int, error)
 	GetEdgesFor(ctx context.Context, entityID string, types []string) ([]Edge, error)
 	// GetEdgesTo is the inbound mirror of GetEdgesFor — edges whose
 	// to_id matches the supplied id. Per yaad-index; the new

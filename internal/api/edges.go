@@ -381,6 +381,12 @@ type listEdge struct {
 // lands when an entity surfaces > 1k edges).
 type edgeListResponse struct {
 	OK bool `json:"ok"`
+	// Total reflects the pre-cap edge count for the requested
+	// (entity_id, direction, edge_types) tuple per #338.
+	// Equals len(Edges) until the limit truncation triggers;
+	// then Total > len(Edges) tells the caller more edges
+	// exist than the limit surfaced.
+	Total int `json:"total"`
 	Edges []listEdge `json:"edges"`
 	NextCursor *string `json:"next_cursor"`
 }
@@ -459,12 +465,18 @@ func handleListEdges(logger *slog.Logger, st store.Store) http.HandlerFunc {
 			edges = append(edges, in...)
 		}
 
+		// #338: capture pre-cap count so the response's `total`
+		// field tells the caller how many edges the (entity,
+		// direction, types) tuple matched before the limit
+		// truncation.
+		total := len(edges)
 		if len(edges) > limit {
 			edges = edges[:limit]
 		}
 
 		resp := edgeListResponse{
 			OK: true,
+			Total: total,
 			Edges: make([]listEdge, len(edges)),
 			NextCursor: nil,
 		}
