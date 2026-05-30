@@ -55,7 +55,7 @@ func TestWriteLock_OperatorFill_ReturnsConflictWhenHeld(t *testing.T) {
 	defer release()
 
 	req := httptest.NewRequest(http.MethodPost,
-		"/v1/entities/"+entityID+"/operator-fill",
+		"/v1/entities/"+entityID+"/fill",
 		strings.NewReader(`{"fields":{"name":"Test"}}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

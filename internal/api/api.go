@@ -156,8 +156,13 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("POST /v1/search/upstream", protect(http.HandlerFunc(handleSearchUpstream(logger, registry))))
 	mux.Handle("POST /v1/ingest", protect(http.HandlerFunc(handleIngest(logger, st, tracker, registry, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg, cfg.pluginInstanceConfigs))))
 	mux.Handle("GET /v1/needs-fill", protect(http.HandlerFunc(handleNeedsFill(logger, st, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg))))
-	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleFill(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
-	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
+	// #355 unified fill: POST /v1/entities/{id}/fill is the single
+	// endpoint per ADR-0029. handleEntityOperatorFill is the unified
+	// handler — the rename to handleUnifiedFill is deferred to keep
+	// this PR's diff focused on the routing + parser changes.
+	// /v1/operator-fill returns 410 gone per ADR-0029 §5.
+	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
+	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleOperatorFillGone)))
 	mux.Handle("POST /v1/entities/{id}/notes", protect(http.HandlerFunc(handleNotes(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg))))
 
 	// User-content (UGC) read + write surface per yaad-index

@@ -102,13 +102,13 @@ func authedFillPost(t *testing.T, h http.Handler, id string, body any, signer au
 	return rec
 }
 
-// authedOperatorFillPost issues a POST /v1/entities/<id>/operator-fill
+// authedOperatorFillPost issues a POST /v1/entities/<id>/fill
 // with an operator-authority token attached and an optional
 // query string (used for `allow_unresolved=true`).
 func authedOperatorFillPost(t *testing.T, h http.Handler, id string, body any, query string, signer auth.Signer) *httptest.ResponseRecorder {
 	t.Helper()
 	token := mintOperatorToken(t, signer, "test-operator")
-	target := "/v1/entities/" + id + "/operator-fill"
+	target := "/v1/entities/" + id + "/fill"
 	if query != "" {
 		target += "?" + query
 	}
