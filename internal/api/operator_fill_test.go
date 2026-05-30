@@ -133,7 +133,7 @@ func TestOperatorFill_HappyPath_SetScalar(t *testing.T) {
 // and removes the gap_state entry.
 func TestOperatorFill_Clear(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 	h, st, root, signer := newOperatorFillFixture(t)
 	tok := mintOperatorToken(t, signer, "alice")
 	const id = "boardgame:clear-test"
@@ -178,7 +178,7 @@ func TestOperatorFill_Defer_HappyPath(t *testing.T) {
 // already filled returns 409 deferred_requires_unfilled.
 func TestOperatorFill_Defer_RequiresUnfilled(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 	h, st, root, signer := newOperatorFillFixture(t)
 	tok := mintOperatorToken(t, signer, "alice")
 	const id = "boardgame:defer-conflict"
@@ -311,7 +311,7 @@ func TestOperatorFill_AgentOnlyField(t *testing.T) {
 // field) separately.
 func TestOperatorFill_AgentOnBehalfOfOperatorAccepted(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: agent-on-behalf-of-operator trigger-mode regression; recovery tracked in #361")
 	h, st, root, signer := newOperatorFillFixture(t)
 	const id = "boardgame:agent-on-behalf"
 	seedBoardgameForFill(t, st, root, id)
@@ -507,7 +507,7 @@ func getRating(t *testing.T, ve *vault.Entity) int64 {
 // the field permanently.
 func TestOperatorFill_ClearRestoresField(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 	h, st, root, signer := newOperatorFillFixture(t)
 	tok := mintOperatorToken(t, signer, "alice")
 	const id = "boardgame:clear-restores-field"
@@ -685,7 +685,7 @@ func TestOperatorFill_NonCanonicalKind_WithGapState_Accepted(t *testing.T) {
 // unknown_field (the effective gap set is empty).
 func TestOperatorFill_NonCanonicalKind_NoGapState_RejectsField(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	st, err := store.New(":memory:")
 	require.NoError(t, err)

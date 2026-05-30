@@ -222,7 +222,7 @@ func TestOperatorFill_CanonicalType_EmptyList(t *testing.T) {
 // edge appending; no partial diff.
 func TestOperatorFill_CanonicalType_RefillReplacesEdges(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 	h, st, root, signer := newCanonicalTypeFixture(t, []string{"person", "boardgame"})
 	tok := mintOperatorToken(t, signer, "alice")
 	const id = "source:refill-test"
@@ -294,7 +294,7 @@ func TestOperatorFill_CanonicalType_KindNotInResolution(t *testing.T) {
 // canonical kinds.
 func TestOperatorFill_CanonicalType_WildcardKinds(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 	h, st, root, signer := newCanonicalTypeFixture(t, []string{config.CanonicalTypeWildcard})
 	tok := mintOperatorToken(t, signer, "alice")
 	const id = "source:wildcard-fill"
