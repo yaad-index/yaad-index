@@ -72,6 +72,15 @@ func nfFixture(
 			ID: id,
 			Kind: "boardgame",
 			Data: map[string]any{"id": id},
+			// #350: needs_fill total counts entities whose gap_state
+			// carries at least one unfilled entry. Mirror the
+			// workflow add_gap shape — a single `summary` gap entry
+			// with no filled_at + not deferred — so the entity
+			// passes both the DB-side count predicate and the
+			// vault-side listing filter.
+			GapState: map[string]store.GapStateEntry{
+				"summary": {},
+			},
 			Provenance: []store.ProvenanceEntry{
 				{Source: "seed:fixture", FetchedAt: fetchedAt, OK: true},
 			},
@@ -1299,4 +1308,119 @@ func TestNeedsFill_TotalVaultNil_IsZero(t *testing.T) {
 	got := decodeNFResponse(t, rec)
 	assert.Equal(t, 0, got.Total,
 		"vault-nil → total=0 (gap count without vault is meaningless)")
+}
+
+// TestNeedsFill_TotalIgnoresEmptyGapState pins the #350 fix
+// for the over-count: entities with gap_call_done_at IS NULL
+// but no gap_state populated (i.e., no workflow ever added a
+// gap to them) must NOT inflate the queue-depth count.
+func TestNeedsFill_TotalIgnoresEmptyGapState(t *testing.T) {
+	t.Parallel()
+	// Seed two entities with vault gaps + gap_state populated
+	// (via nfFixture). They should count.
+	h, st := nfFixture(t,
+		[]string{"boardgame:a", "boardgame:b"},
+		"", nfRegistryWithBoardgameSummary())
+
+	// Seed ten extra "noise" entities with gap_call_done_at IS NULL
+	// but empty gap_state — mirrors the staging shape that
+	// motivated #350 (pre-workflow rows that never had a gap
+	// added). These must NOT inflate the count.
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("boardgame:noise-%d", i)
+		require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+			ID:   id,
+			Kind: "boardgame",
+			Data: map[string]any{"id": id},
+		}))
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	got := decodeNFResponse(t, rec)
+	assert.Equal(t, 2, got.Total,
+		"total counts only entities with populated gap_state — empty gap_state rows excluded")
+}
+
+// TestNeedsFill_TotalIgnoresAllFilledGapState pins that an
+// entity whose gap_state has every entry already filled
+// (filled_at stamped) doesn't count — the JSON1 EXISTS clause
+// requires at least one unfilled entry.
+func TestNeedsFill_TotalIgnoresAllFilledGapState(t *testing.T) {
+	t.Parallel()
+	h, st := nfFixture(t,
+		[]string{"boardgame:active"},
+		"", nfRegistryWithBoardgameSummary())
+
+	// Add an entity whose gap_state entry IS populated but
+	// already filled — operator-filled at some point. Must NOT
+	// count as queue depth.
+	filledAt := time.Date(2026, 5, 30, 6, 0, 0, 0, time.UTC)
+	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+		ID:   "boardgame:filled",
+		Kind: "boardgame",
+		Data: map[string]any{"id": "boardgame:filled"},
+		GapState: map[string]store.GapStateEntry{
+			"summary": {Source: "operator", FilledAt: &filledAt},
+		},
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	got := decodeNFResponse(t, rec)
+	assert.Equal(t, 1, got.Total,
+		"total excludes entities whose gap_state has every entry already filled")
+}
+
+// TestNeedsFill_TotalIgnoresDeferredGapState pins that
+// deferred entries (operator-deferred per ADR-0019) don't
+// count toward the queue depth either — the COALESCE check
+// on the `deferred` field treats deferred as "not in queue".
+func TestNeedsFill_TotalIgnoresDeferredGapState(t *testing.T) {
+	t.Parallel()
+	h, st := nfFixture(t,
+		[]string{"boardgame:active"},
+		"", nfRegistryWithBoardgameSummary())
+
+	deferredAt := time.Date(2026, 5, 30, 6, 0, 0, 0, time.UTC)
+	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+		ID:   "boardgame:deferred",
+		Kind: "boardgame",
+		Data: map[string]any{"id": "boardgame:deferred"},
+		GapState: map[string]store.GapStateEntry{
+			"summary": {Deferred: true, DeferredAt: &deferredAt},
+		},
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	got := decodeNFResponse(t, rec)
+	assert.Equal(t, 1, got.Total,
+		"total excludes deferred-only entities — only genuinely queued counts")
+}
+
+// TestNeedsFill_TotalIncludesMixedFilledAndUnfilled pins the
+// "at least one unfilled" semantic: an entity with two gap
+// entries — one filled, one still pending — counts because
+// the EXISTS clause finds the unfilled one.
+func TestNeedsFill_TotalIncludesMixedFilledAndUnfilled(t *testing.T) {
+	t.Parallel()
+	h, st := nfFixture(t, nil, "", nfRegistryWithBoardgameSummary())
+
+	filledAt := time.Date(2026, 5, 30, 6, 0, 0, 0, time.UTC)
+	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+		ID:   "boardgame:mixed",
+		Kind: "boardgame",
+		Data: map[string]any{"id": "boardgame:mixed"},
+		GapState: map[string]store.GapStateEntry{
+			"summary": {Source: "agent", FilledAt: &filledAt},
+			"rating":  {}, // still unfilled
+		},
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/needs-fill", nil))
+	got := decodeNFResponse(t, rec)
+	assert.Equal(t, 1, got.Total,
+		"total counts an entity when at least one gap entry remains unfilled")
 }

@@ -397,18 +397,35 @@ func (s *sqliteStore) ListGapCallableCandidates(ctx context.Context, afterID str
 }
 
 // CountGapCallableCandidates returns the DB-side count of
-// gap-callable entities (gap_call_done_at IS NULL). Powers the
-// `/v1/needs-fill` response's `total` field per #338. Same DB
-// predicate as ListGapCallableCandidates; the vault-side gap
-// re-check + auth-aware entry filter are NOT applied (would
-// require materializing every candidate). Over-estimates the
-// final page count by pure-pointer canonical rows + entities
-// whose vault gaps were all auth-filtered.
+// entities whose gap_state holds at least one genuinely
+// unfilled gap — the queue-depth surface for /v1/needs-fill's
+// `total` per #338 with the gap-state-aware filter from #350.
+//
+// Pre-#350 the predicate was the cheap `gap_call_done_at IS NULL`
+// (~2244 reported, ~6 actually surface-able on a staging instance
+// — 99.7% over-count). The new predicate adds a gap_state
+// non-empty check + a JSON1 EXISTS clause that walks the
+// gap_state map and requires at least one entry to lack a
+// filled_at stamp + not be deferred.
+//
+// The vault-side gap re-check + auth-aware entry filter are still
+// NOT applied (would require materializing every candidate);
+// remaining over-count is bounded by pure-pointer canonical rows
+// + entities whose gaps were entirely auth-hidden.
 func (s *sqliteStore) CountGapCallableCandidates(ctx context.Context) (int, error) {
+	const query = `
+		SELECT COUNT(*) FROM entities
+		WHERE gap_call_done_at IS NULL
+		  AND gap_state IS NOT NULL
+		  AND length(gap_state) > 2
+		  AND EXISTS (
+		    SELECT 1 FROM json_each(gap_state)
+		    WHERE json_extract(value, '$.filled_at') IS NULL
+		      AND COALESCE(json_extract(value, '$.deferred'), 0) = 0
+		  )
+	`
 	var n int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM entities WHERE gap_call_done_at IS NULL`,
-	).Scan(&n); err != nil {
+	if err := s.db.QueryRowContext(ctx, query).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count gap-callable candidates: %w", err)
 	}
 	return n, nil

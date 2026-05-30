@@ -120,13 +120,17 @@ type needsFillEntry struct {
 
 type needsFillResponse struct {
 	OK bool `json:"ok"`
-	// Total reflects the DB-side gap-callable queue depth
-	// (entities with gap_call_done_at IS NULL) per #338. It
-	// over-estimates the final-page entries by the count of
-	// pure-pointer canonical rows + entities whose vault gaps
-	// were entirely auth-filtered. Useful as a queue-depth
-	// anchor for agents pacing the fill loop without needing
-	// to paginate to exhaustion.
+	// Total reflects the count of entities the listing would
+	// surface — entities with gap_call_done_at IS NULL AND a
+	// gap_state map carrying at least one entry that is neither
+	// filled (filled_at stamped) nor deferred. Per #338 (intro)
+	// + #350 (gap-state-aware filter). Useful as a queue-depth
+	// anchor for agents pacing the fill loop without paginating
+	// to exhaustion. Caveats: pure-pointer canonical rows have
+	// no vault file (the listing's vault re-read skips them);
+	// entities whose gaps are entirely auth-hidden still count.
+	// Both over-counts are bounded; the pre-#350 cheap predicate
+	// over-counted by ~99% on real-data staging.
 	Total      int              `json:"total"`
 	Entities   []needsFillEntry `json:"entities"`
 	NextCursor string           `json:"next_cursor,omitempty"`

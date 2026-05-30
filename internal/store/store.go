@@ -426,14 +426,31 @@ type Store interface {
 	// candidate. Provenance is NOT loaded (the caller drops it
 	// before serializing).
 	ListGapCallableCandidates(ctx context.Context, afterID string, limit int) ([]Entity, error)
-	// CountGapCallableCandidates returns the count of entities whose
-	// gap-call-done flag is NULL — the queue-depth surface for the
-	// `/v1/needs-fill` response's `total` field per yaad-index #338.
-	// The DB-side gap-callable predicate matches ListGapCallableCandidates;
-	// the vault-side "actually has unfilled gaps" filter is NOT applied
-	// (would require scanning every candidate). The count over-estimates
-	// final-page entries by the number of pure-pointer canonical rows
-	// + entities whose vault gaps were all auth-filtered.
+	// CountGapCallableCandidates returns the count of entities the
+	// `/v1/needs-fill` listing would surface — the queue-depth
+	// surface for the response's `total` field per #338 with the
+	// gap-state-aware filter from #350. Predicate:
+	//
+	//   gap_call_done_at IS NULL                     (callable)
+	//   AND gap_state IS NOT NULL AND length(gap_state) > 2
+	//                                                (gap_state non-empty)
+	//   AND ∃ entry ∈ gap_state. filled_at IS NULL
+	//                            AND COALESCE(deferred, 0) = 0
+	//                                                (actually unfilled)
+	//
+	// The JSON1 EXISTS filter walks the gap_state map and counts the
+	// entity only when at least one entry is genuinely unfilled (no
+	// filled_at stamp, not deferred). Entities whose gap_state was
+	// populated by `add_gap` but later fully filled / deferred don't
+	// inflate the queue-depth report. Pre-#338 the predicate over-
+	// counted by ~99% on real data; the staging instance reporting
+	// motivated this fix (#350).
+	//
+	// Caveats still in effect: pure-pointer canonical rows have no
+	// vault file; auth-filtered entries with all gaps gated by the
+	// caller's role would still inflate by the gap_state-filled-but-
+	// auth-hidden count. Both surfaced as docstring caveats on the
+	// `total` field.
 	CountGapCallableCandidates(ctx context.Context) (int, error)
 	GetEdgesFor(ctx context.Context, entityID string, types []string) ([]Edge, error)
 	// GetEdgesTo is the inbound mirror of GetEdgesFor — edges whose
