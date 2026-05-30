@@ -2,6 +2,10 @@
 
 ## Status
 
+SUPERSEDED by [ADR-0029](./0029-unified-fill-surface.md) (2026-05-30).
+
+The endpoint split (`/v1/fill` vs `/v1/operator-fill`) + caller-identity gate this ADR introduced collapse into a single `/v1/fill` endpoint per ADR-0029. The still-load-bearing model — `fill_strategy` on gaps, `gap_state` per-field state machine, the `defer` operation, auto-materialize, per-field-op shape — carries forward unchanged; the ADR-0029 framing is the canonical reference.
+
 Proposed 2026-05-08.
 
 ## Context
