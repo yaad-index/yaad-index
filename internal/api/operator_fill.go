@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yaad-index/yaad-index/internal/auth"
 	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
@@ -93,26 +94,12 @@ func handleEntityOperatorFill(
 
 		claim, ok := ClaimFromContext(r.Context())
 		if !ok || claim == nil {
-			logger.ErrorContext(r.Context(),
-				"operator-fill reached without an auth claim", "id", id)
-			writeError(w, http.StatusInternalServerError, "internal_error",
-				"auth claim missing on request — server misconfiguration")
-			return
-		}
-		// Per #317: this endpoint accepts any authenticated, non-
-		// anonymous claim. The per-gap `fill_strategy` (ADR-0019)
-		// governs the value's SOURCE — operator/agent/both — and
-		// the agent runtime honors that discipline at the skill
-		// layer (never auto-fill strategy=operator without explicit
-		// operator confirmation). The HTTP boundary no longer
-		// gates on operator authority; an agent-tier token writing
-		// on the operator's confirmed behalf is the documented
-		// pattern. Anonymous tokens still reject — there's no
-		// identity to attribute the fill to.
-		if IsAnonymousClaim(claim) {
-			writeError(w, http.StatusForbidden, "authentication_required",
-				"operator-fill requires an authenticated claim; anonymous tokens are not accepted")
-			return
+			// Unauthenticated dev-mode path keeps the legacy
+			// /v1/fill ergonomics — agents iterating against a
+			// local daemon without auth wired hit this handler
+			// the same way the old /v1/fill accepted them. The
+			// strategy gate below treats them as agent-trigger.
+			claim = &auth.Claim{}
 		}
 
 		var req map[string]json.RawMessage
@@ -126,6 +113,19 @@ func handleEntityOperatorFill(
 			writeError(w, http.StatusBadRequest, "invalid_argument",
 				"body must be a non-empty object of field operations")
 			return
+		}
+		// #355 Cut 2 compat: the pre-unification /v1/fill body wrapped
+		// fields in a {"fields": {...}} envelope. Detect and unwrap so
+		// existing clients (and the broad test corpus) keep working
+		// while the unified shape (flat per-field-op map) is preferred.
+		// The wrapper is removable once callers migrate.
+		if len(req) == 1 {
+			if rawInner, ok := req["fields"]; ok {
+				var inner map[string]json.RawMessage
+				if err := json.Unmarshal(rawInner, &inner); err == nil && len(inner) > 0 {
+					req = inner
+				}
+			}
 		}
 
 		// autoMaterialize is set when either the entity row OR the
@@ -220,7 +220,22 @@ func handleEntityOperatorFill(
 		// correctly.
 		effectiveGaps := resolveEffectiveGaps(kindCfg.Gaps, ve.GapState)
 
-		ops, opErr := parseOperatorFillOps(req, effectiveGaps, operatorAllKinds)
+		// #355 unified fill: derive trigger-mode from claim and
+		// force-overwrite from query param. Trigger-mode replaces the
+		// caller-identity gate (was: this URL is operator-fill,
+		// therefore caller is operator) with a request-property gate.
+		// operator-trigger: claim subject == operator (caller acting
+		// on operator's behalf). agent-trigger: any other authenticated
+		// claim.
+		triggerMode := "agent"
+		if claim.Subject != "" && claim.Subject == claim.Operator {
+			triggerMode = "operator"
+		}
+		force := r.URL.Query().Get("force") == "true"
+		ops, opErr := parseOperatorFillOps(
+			req, effectiveGaps, operatorAllKinds,
+			ve.Data, ve.Gaps, triggerMode, force,
+		)
 		if opErr != nil {
 			writeError(w, opErr.status, opErr.code, opErr.message)
 			return
@@ -399,6 +414,22 @@ func handleEntityOperatorFill(
 	}
 }
 
+// handleOperatorFillGone implements the ADR-0029 §5 410-gone responder
+// for POST /v1/entities/{id}/operator-fill. The unified endpoint
+// (/v1/entities/{id}/fill) absorbs the operator-fill body shape
+// verbatim, so clients replay the same payload against the new URL.
+//
+// 410 is chosen over 308 redirect: the request shape is identical, so
+// a redirect would add a round-trip without semantic benefit, and 410
+// carries a clearer "migrate" signal for downstream agents reading
+// status codes deterministically.
+func handleOperatorFillGone(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	w.Header().Set("Location", "/v1/entities/"+id+"/fill")
+	writeError(w, http.StatusGone, "operator_fill_removed",
+		"POST /v1/entities/{id}/operator-fill is removed per ADR-0029; replay the same body against POST /v1/entities/{id}/fill")
+}
+
 // operatorFillOpKind is the discriminant for parsed body entries.
 type operatorFillOpKind int
 
@@ -433,31 +464,105 @@ type opError struct {
 // registry (sorted, for deterministic test output). Threaded
 // through to parseSingleOp so canonical_type gaps with `kinds:
 // "*"` resolve their wildcard against the registry per ADR-0008.
+// parseOperatorFillOps routes each request field through one of three
+// branches per ADR-0029 §2:
+//
+//   - Open gap — field appears in currentGaps. Strategy gate fires
+//     per the gap's fill_strategy + the request's triggerMode;
+//     parseSingleOp validates against the gap's typed spec.
+//   - Overwrite — field has a value in currentData but is not in
+//     currentGaps. Requires force=true; else 409 already_filled. When
+//     the field also appears in gaps (closed gap with retained spec),
+//     parseSingleOp validates against that spec; otherwise the
+//     overwrite parses with an empty spec (no type check).
+//   - Ad-hoc — field has no value AND no gap entry. Requires
+//     triggerMode=="operator"; else 400 unknown_field. Parses with an
+//     empty spec.
+//
+// triggerMode is "operator" when the caller's claim subject equals the
+// operator claim, "agent" otherwise. force enables overwrite per the
+// request's `?force=true` query param.
 func parseOperatorFillOps(
 	req map[string]json.RawMessage,
 	gaps map[string]config.GapSpec,
 	operatorAllKinds []string,
+	currentData map[string]any,
+	currentGaps []string,
+	triggerMode string,
+	force bool,
 ) ([]operatorFillOp, *opError) {
+	openGap := make(map[string]bool, len(currentGaps))
+	for _, g := range currentGaps {
+		openGap[g] = true
+	}
 	out := make([]operatorFillOp, 0, len(req))
 	for field, raw := range req {
-		spec, ok := gaps[field]
-		if !ok {
-			return nil, &opError{
-				status: http.StatusBadRequest,
-				code: "unknown_field",
-				message: fmt.Sprintf("field %q is not in the entity's effective gap set (canonical-kind config + gap_state)", field),
+		spec, hasSpec := gaps[field]
+		_, hasValue := currentData[field]
+		isOpen := openGap[field]
+
+		switch {
+		case isOpen:
+			// Open-gap branch: strategy gate per spec + triggerMode.
+			if spec.FillStrategy == "agent" && triggerMode != "agent" {
+				return nil, &opError{
+					status: http.StatusBadRequest,
+					code: "agent_only_field",
+					message: fmt.Sprintf("field %q has fill_strategy=agent; operator-trigger fill rejected", field),
+				}
+			}
+			if spec.FillStrategy == "operator" && triggerMode != "operator" {
+				return nil, &opError{
+					status: http.StatusBadRequest,
+					code: "operator_only_field",
+					message: fmt.Sprintf("field %q has fill_strategy=operator; agent-trigger fill rejected", field),
+				}
+			}
+		case hasValue:
+			// Overwrite branch: existing value, not an open gap.
+			if !force {
+				return nil, &opError{
+					status: http.StatusConflict,
+					code: "already_filled",
+					message: fmt.Sprintf("field %q already has a value; pass ?force=true to overwrite", field),
+				}
+			}
+			// Defer / undefer on a non-open field has no gap_state
+			// entry to flip; reject so the request shape stays clean.
+			if isDeferEnvelope(raw) {
+				return nil, &opError{
+					status: http.StatusBadRequest,
+					code: "defer_requires_open_gap",
+					message: fmt.Sprintf("field %q has no open gap; defer is only valid for open gaps", field),
+				}
+			}
+		default:
+			// Ad-hoc branch: no value, no gap. Operator-trigger only.
+			if triggerMode != "operator" {
+				return nil, &opError{
+					status: http.StatusBadRequest,
+					code: "unknown_field",
+					message: fmt.Sprintf("field %q is not in the entity's effective gap set; ad-hoc writes require operator-trigger", field),
+				}
+			}
+			if isDeferEnvelope(raw) {
+				return nil, &opError{
+					status: http.StatusBadRequest,
+					code: "defer_requires_open_gap",
+					message: fmt.Sprintf("field %q has no open gap; defer is only valid for open gaps", field),
+				}
 			}
 		}
-		// fill_strategy=agent → operator can't write this. Reject
-		// before parsing the value so the operator gets a clear hint.
-		if spec.FillStrategy == "agent" {
-			return nil, &opError{
-				status: http.StatusBadRequest,
-				code: "agent_only_field",
-				message: fmt.Sprintf("field %q has fill_strategy=agent; operator-fill can't set it", field),
-			}
+
+		// Spec resolution: open-gap + spec'd-overwrite use the typed
+		// spec for validation; bare overwrite + ad-hoc parse with an
+		// empty spec (no type check). hasSpec is true for both open
+		// gaps and closed-gap overwrites.
+		parseSpec := spec
+		if !hasSpec {
+			parseSpec = config.GapSpec{}
 		}
-		op, err := parseSingleOp(field, raw, spec, operatorAllKinds)
+		op, err := parseSingleOp(field, raw, parseSpec, operatorAllKinds)
 		if err != nil {
 			return nil, err
 		}
@@ -466,6 +571,23 @@ func parseOperatorFillOps(
 	// Stable order for deterministic commit messages and tests.
 	sort.Slice(out, func(i, j int) bool { return out[i].Field < out[j].Field })
 	return out, nil
+}
+
+// isDeferEnvelope reports whether the raw body looks like a
+// `{"defer": true|false}` envelope. Used to reject defer ops on
+// non-open-gap fields before parseSingleOp inspects the body.
+func isDeferEnvelope(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return false
+	}
+	var env struct {
+		Defer *bool `json:"defer"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return false
+	}
+	return env.Defer != nil
 }
 
 // parseSingleOp resolves one body entry into a discriminated op.

@@ -6,7 +6,6 @@ package api
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -29,24 +28,6 @@ func ingestCommitMessage(entityID string, existing, forceRefetch, ttlExpired boo
 	default:
 		return "re-ingest: " + entityID
 	}
-}
-
-// fillCommitMessage produces the audit line for a fill write.
-//
-// Template: fill: <entity-id> [field1, field2, ...]
-//
-// Field names are sorted alphabetically so the same fill set produces
-// the same commit message regardless of map iteration order.
-func fillCommitMessage(entityID string, fields map[string]any) string {
-	if len(fields) == 0 {
-		return "fill: " + entityID
-	}
-	keys := make([]string, 0, len(fields))
-	for k := range fields {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return fmt.Sprintf("fill: %s [%s]", entityID, strings.Join(keys, ", "))
 }
 
 // userContentCreateCommitMessage produces the audit line for a UGC
