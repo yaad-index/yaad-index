@@ -104,9 +104,9 @@ ADR refs: [ADR-0013](../adr/0013-canonical-kind-owns-gap-contract.md), [ADR-0019
 
 | `fill_strategy` | Surfaces on `/v1/needs-fill` for                  | Who calls the fill                              |
 |-----------------|---------------------------------------------------|-------------------------------------------------|
-| `agent`         | Agent-only `needs_fill` listings                  | Agent via `fill(id, fields)`                    |
-| `operator`      | Operator-only `needs_fill` listings               | Operator via `set_operator_fill(id, fields)`    |
-| `both`          | Both audiences                                    | Either path                                     |
+| `agent`         | Agent-only `needs_fill` listings                  | Agent-trigger `fill_field` / `fill`             |
+| `operator`      | Operator-only `needs_fill` listings               | Operator-trigger `fill_field`                   |
+| `both`          | Both audiences                                    | Either trigger-mode                             |
 
 The endpoint applies the audience filter at response-build time (`buildNeedsFillEntry` in `internal/api/needs_fill.go`). A gap whose `fill_strategy: operator` is invisible to an agent's `needs_fill()` call; the agent can't accidentally write into it.
 
@@ -218,25 +218,32 @@ Maps to `POST /v1/entities/{id}/fill`. The handler:
 
 A fill that fails type validation rejects the WHOLE request (no partial writes) and leaves both vault + store untouched.
 
-### `set_operator_fill(id, fields)` — operator fill
+### `fill_field(id, fields)` — unified fill (replaces `set_operator_fill`)
 
 ```ts
-set_operator_fill("boardgame:caverna", {
+fill_field("boardgame:caverna", {
   rating: 9,
   owned:  true
 });
 ```
 
-Maps to `POST /v1/entities/{id}/operator-fill`. Same flow as `fill` with two semantic differences:
+Maps to `POST /v1/entities/{id}/fill` — the unified endpoint per [ADR-0029](../adr/0029-unified-fill-surface.md). Same flow as `fill` with three case-routing branches per submitted field:
 
-- The audience gate flips: `fill_strategy: operator` gaps are accepted here; `fill_strategy: agent` gaps are rejected.
-- `gap_state[<gap>].source` is stamped as `operator` instead of `agent`.
+- **Open gap** — the strategy gate fires on the request's *trigger-mode* (derived from the caller's JWT claim `Subject == Operator`) crossed against the gap's `fill_strategy`. Operator-trigger requests fill operator-strategy gaps; agent-trigger requests fill agent-strategy gaps. Either-strategy gaps are open to both.
+- **Overwrite** — a field with an existing value (gap previously closed) rejects with `409 already_filled` unless `?force=true` is set.
+- **Ad-hoc** — a brand-new field (no spec, no value, no current gap) accepts the write only under operator-trigger; agent-trigger ad-hoc writes reject with `400 unknown_field`.
 
-Operator-fill is also the **deliberate-create path** for canonical labels (per ADR-0021 §3): when an operator-fills a gap on a canonical label that doesn't yet have a vault file, the daemon auto-creates the file before applying the fill.
+`gap_state[<gap>].source` is stamped as `operator` or `agent` per the request's trigger-mode.
 
-The third related surface is **defer**: `defer_gap(id, gap)` flips `gap_state[<gap>].deferred` to `true` (with `deferred_at: <now>`) and removes the gap from `gaps:`. Deferred gaps don't surface on `needs_fill` for either audience. Operator-fill on a deferred gap un-defers it (the deferred flag clears, source/filled_at land).
+The unified endpoint is also the **deliberate-create path** for canonical labels (per ADR-0021 §3): a fill against a canonical-label target with no vault file auto-creates the file before applying the fill. The frontmatter carries the fill values; subsequent fills merge in-place.
 
-ADR refs: [ADR-0019](../adr/0019-operator-fill.md), [ADR-0021](../adr/0021-daemon-owns-slug.md) §3.
+The related **defer** surface is `defer_gap(id, gap)`, which now POSTs to the same unified endpoint as `{<gap>: {"defer": true}}`. The deferred flag flips on, the gap stops surfacing on `needs_fill` for either audience. A subsequent fill on the deferred gap un-defers it (the deferred flag clears, source/filled_at land).
+
+`set_operator_fill` remains as a compat alias for one minor version after the cut; its handler now dispatches through `fill_field`. New work should prefer the `fill_field` name.
+
+The pre-#355 standalone `POST /v1/entities/{id}/operator-fill` URL is removed (returns `410 gone` with a `Location` header pointing at `/v1/entities/{id}/fill`). Callers that wrote against the operator-fill URL replay the same body against the unified endpoint.
+
+ADR refs: [ADR-0029](../adr/0029-unified-fill-surface.md), [ADR-0019](../adr/0019-operator-fill.md) (superseded), [ADR-0021](../adr/0021-daemon-owns-slug.md) §3.
 
 ## 6. Per-entry `data` on `canonical_type` (the dataview path)
 
@@ -335,6 +342,7 @@ Plugin-side gap declaration was the pre-ADR-0013 shape and is no longer supporte
 - [ADR-0008](../adr/0008-vault-as-source-of-truth.md) — vault as source of truth (every fill writes vault first).
 - [ADR-0013](../adr/0013-canonical-kind-owns-gap-contract.md) — gaps declared by canonical_kinds, not plugins.
 - [ADR-0015](../adr/0015-plugin-body-markers.md) — marker-pair contract (extended to `yaad:notes` + `yaad:dataview`).
-- [ADR-0019](../adr/0019-operator-fill.md) — operator-fill + per-gap state + fill strategies.
+- [ADR-0019](../adr/0019-operator-fill.md) — operator-fill + per-gap state + fill strategies (SUPERSEDED by ADR-0029).
+- [ADR-0029](../adr/0029-unified-fill-surface.md) — unified fill surface (collapses `/v1/fill` + `/v1/operator-fill` into a single endpoint with trigger-mode strategy gate).
 - [ADR-0021](../adr/0021-daemon-owns-slug.md) — daemon owns slug; canonical labels are edge-target labels; auto-materialize policy (§3).
 - [ADR-0024](../adr/0024-workflows-and-tasks.md) — workflows + fill_completed trigger.
