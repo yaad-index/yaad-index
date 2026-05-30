@@ -99,8 +99,11 @@ func registerAll(s *server.MCPServer, b *bridge) {
 	// Ingest.
 	registerIngest(s, b)
 
-	// Fill (canonical-kind gap workflow).
+	// Fill (canonical-kind gap workflow). #355 Cut 3: fill_field is
+	// the preferred name per ADR-0029 §7; set_operator_fill stays
+	// registered as a compat alias for one minor version.
 	registerFill(s, b)
+	registerFillField(s, b)
 	registerSetOperatorFill(s, b)
 	registerDeferGap(s, b)
 	registerNeedsFill(s, b)

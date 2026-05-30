@@ -54,16 +54,27 @@ func registerFill(s *server.MCPServer, b *bridge) {
 	})
 }
 
+// registerSetOperatorFill registers the legacy `set_operator_fill`
+// alias per ADR-0029 §7. The tool now routes to the unified
+// /v1/entities/{id}/fill endpoint (the prior /v1/operator-fill URL
+// returns 410). Description is updated to point operators at the
+// preferred fill_field name; the alias remains for one minor
+// version after the cut so existing workflow YAMLs keep working.
 func registerSetOperatorFill(s *server.MCPServer, b *bridge) {
 	tool := mcp.NewTool("set_operator_fill",
 		mcp.WithDescription(
-			"Operator-fill endpoint. POSTs to "+
-				"`/v1/entities/{id}/operator-fill` with per-field operations. "+
-				"Operator-only — the caller's JWT MUST have Subject == "+
-				"Operator. Per-field value shapes: scalar (number / "+
-				"boolean / string / list) sets the field; explicit `null` "+
-				"clears it; `{defer: true}` marks the field deferred (must "+
-				"be currently unfilled); `{defer: false}` un-defers.",
+			"Alias for `fill_field` per ADR-0029. POSTs to "+
+				"`/v1/entities/{id}/fill` with per-field operations. "+
+				"The caller's JWT determines the trigger-mode: "+
+				"Subject == Operator → operator-trigger (fills "+
+				"operator-strategy gaps + ad-hoc writes); anything "+
+				"else → agent-trigger (fills agent-strategy gaps). "+
+				"Per-field value shapes: scalar (number / boolean / "+
+				"string / list) sets the field; explicit `null` "+
+				"clears it; `{defer: true}` marks the field deferred "+
+				"(must be currently unfilled); `{defer: false}` "+
+				"un-defers. Existing call sites keep working; new "+
+				"work should prefer the `fill_field` name.",
 		),
 		mcp.WithString("id",
 			mcp.Required(),
@@ -75,7 +86,46 @@ func registerSetOperatorFill(s *server.MCPServer, b *bridge) {
 			mcp.AdditionalProperties(true),
 		),
 	)
-	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.AddTool(tool, fillFieldHandler(b))
+}
+
+// registerFillField registers the preferred ADR-0029 §7 tool
+// name. Behavior is identical to set_operator_fill — they share
+// the same handler. New workflow YAMLs + agent integrations
+// should call fill_field; set_operator_fill remains as a
+// compat alias for one minor version after the cut.
+func registerFillField(s *server.MCPServer, b *bridge) {
+	tool := mcp.NewTool("fill_field",
+		mcp.WithDescription(
+			"Unified fill endpoint per ADR-0029. POSTs to "+
+				"`/v1/entities/{id}/fill` with per-field operations. "+
+				"Routes per-field through three cases: open gap "+
+				"(strategy gate per the caller's trigger-mode); "+
+				"overwrite (requires `force=true` query param); "+
+				"ad-hoc property write (operator-trigger only). The "+
+				"trigger-mode follows the caller's JWT — Subject == "+
+				"Operator → operator-trigger. Per-field value "+
+				"shapes: scalar sets the field; explicit `null` "+
+				"clears it; `{defer: true}` marks the field "+
+				"deferred; `{defer: false}` un-defers.",
+		),
+		mcp.WithString("id",
+			mcp.Required(),
+			mcp.Description("Entity id."),
+		),
+		mcp.WithObject("fields",
+			mcp.Required(),
+			mcp.Description("{field-name → value-or-op} map per the description."),
+			mcp.AdditionalProperties(true),
+		),
+	)
+	s.AddTool(tool, fillFieldHandler(b))
+}
+
+// fillFieldHandler is the shared callback both `fill_field` and
+// the `set_operator_fill` alias dispatch through.
+func fillFieldHandler(b *bridge) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id := req.GetString("id", "")
 		if id == "" {
 			return mcp.NewToolResultError("`id` is required"), nil
@@ -89,8 +139,8 @@ func registerSetOperatorFill(s *server.MCPServer, b *bridge) {
 		if err != nil {
 			return mcp.NewToolResultError("encode args: " + err.Error()), nil
 		}
-		return b.callTool(ctx, "POST", "/v1/entities/"+url.PathEscape(id)+"/operator-fill", bytes.NewReader(body))
-	})
+		return b.callTool(ctx, "POST", "/v1/entities/"+url.PathEscape(id)+"/fill", bytes.NewReader(body))
+	}
 }
 
 func registerDeferGap(s *server.MCPServer, b *bridge) {
@@ -126,7 +176,7 @@ func registerDeferGap(s *server.MCPServer, b *bridge) {
 		if err != nil {
 			return mcp.NewToolResultError("encode args: " + err.Error()), nil
 		}
-		return b.callTool(ctx, "POST", "/v1/entities/"+url.PathEscape(id)+"/operator-fill", bytes.NewReader(body))
+		return b.callTool(ctx, "POST", "/v1/entities/"+url.PathEscape(id)+"/fill", bytes.NewReader(body))
 	})
 }
 
