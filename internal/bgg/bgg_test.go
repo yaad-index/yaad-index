@@ -960,3 +960,90 @@ func TestPlugin_Fetch_NameShorthand_ExpansionInDisambig(t *testing.T) {
 		t.Errorf("Options: want 2 candidates (base + expansion), got %d", len(out.Options))
 	}
 }
+
+// TestCanonicalIDToSearchQuery pins the #363 fix: the canonical-id
+// prefix (`bgg-`) the daemon-derived slug places on resolver-plugin
+// auto-fetch dispatch is stripped before the BGG search; bare
+// operator-typed names pass through unchanged.
+func TestCanonicalIDToSearchQuery(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"canonical-id with bgg- prefix", "bgg-foo", "foo"},
+		{"canonical-id with multi-word suffix", "bgg-foo-bar", "foo-bar"},
+		{"operator typed name (no prefix)", "Foo Bar", "Foo Bar"},
+		{"operator typed slug (no prefix)", "foo-bar", "foo-bar"},
+		{"empty input", "", ""},
+		{"prefix only", "bgg-", ""},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			got := canonicalIDToSearchQuery(c.input)
+			if got != c.want {
+				t.Errorf("canonicalIDToSearchQuery(%q) = %q, want %q",
+					c.input, got, c.want)
+			}
+		})
+	}
+}
+
+// TestPlugin_Fetch_CanonicalIDStripped pins #363's end-to-end shape:
+// a `bgg: bgg-<slug>` shorthand input (the resolver-plugin auto-
+// fetch dispatch path) routes through fetchByName with the `bgg-`
+// prefix stripped so BGG search receives the bare slug.
+func TestPlugin_Fetch_CanonicalIDStripped(t *testing.T) {
+	t.Parallel()
+
+	const searchXML = `<?xml version="1.0" encoding="utf-8"?>
+<items total="1" termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
+ <item type="boardgame" id="999999">
+ <name type="primary" value="Foo Bar"/>
+ <yearpublished value="2026"/>
+ </item>
+</items>`
+	const thingXML = `<?xml version="1.0" encoding="utf-8"?>
+<items termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
+ <item type="boardgame" id="999999">
+ <name type="primary" sortindex="1" value="Foo Bar"/>
+ <yearpublished value="2026"/>
+ <minplayers value="2"/>
+ <maxplayers value="4"/>
+ </item>
+</items>`
+
+	var capturedQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if strings.HasPrefix(r.URL.Path, "/xmlapi2/search") {
+			capturedQuery = r.URL.Query().Get("query")
+			_, _ = w.Write([]byte(searchXML))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/xmlapi2/thing") {
+			_, _ = w.Write([]byte(thingXML))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	srvURL, _ := url.Parse(srv.URL)
+	bggClient := bggo.NewClient("test-key",
+		bggo.WithHost(srvURL.Host),
+		bggo.WithScheme("http"),
+	)
+	p, _ := New("test-key", WithClient(bggClient))
+
+	// Resolver-plugin auto-fetch dispatches the canonical id shape.
+	_, err := p.Fetch(context.Background(), "bgg: bgg-foo-bar")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if capturedQuery != "foo-bar" {
+		t.Errorf("BGG search received %q; want %q (bgg- prefix stripped)",
+			capturedQuery, "foo-bar")
+	}
+}
