@@ -165,17 +165,15 @@ func handleEntityOperatorFill(
 		}
 
 		// Resolve the kind config so per-field validation can run
-		// against the typed gap shape. Missing kind → 409: an
-		// operator-fill against a non-canonical kind has no spec to
-		// validate against. (Reordered before vault read so the
-		// auto-materialize path can synthesize a fresh vault.Entity
-		// with gaps initialized from the kind config.)
-		kindCfg, ok := canonicalKindReg[got.Kind]
-		if !ok {
-			writeError(w, http.StatusConflict, "unknown_canonical_kind",
-				fmt.Sprintf("kind %q is not in the resolved canonical-kind registry; operator-fill needs typed gap specs", got.Kind))
-			return
-		}
+		// against the typed gap shape. Per #353 a missing kindCfg
+		// no longer rejects — non-canonical-kind entities (gmail,
+		// github, etc.) can have gap_state populated by workflow
+		// `add_gap` actions, and the typed gap shape resolves from
+		// that gap_state via mergeWorkflowGapSpec / resolveEffectiveGaps.
+		// kindCfg falls through as zero value when the kind isn't in
+		// the registry; resolveEffectiveGaps below produces the per-
+		// field spec map from gap_state alone in that case.
+		kindCfg := canonicalKindReg[got.Kind]
 
 		var ve *vault.Entity
 		if autoMaterialize {
@@ -447,7 +445,7 @@ func parseOperatorFillOps(
 			return nil, &opError{
 				status: http.StatusBadRequest,
 				code: "unknown_field",
-				message: fmt.Sprintf("field %q is not in the resolved canonical-kind gap set", field),
+				message: fmt.Sprintf("field %q is not in the entity's effective gap set (canonical-kind config + gap_state)", field),
 			}
 		}
 		// fill_strategy=agent → operator can't write this. Reject

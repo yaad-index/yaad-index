@@ -448,16 +448,16 @@ func TestOperatorFill_NotFound_NonCanonicalLabelID(t *testing.T) {
 }
 
 // TestOperatorFill_NotFound_VaultFileMissing_NonCanonicalKind
-// asserts the second auto-materialize gate: a thin DB row exists
-// but its Kind is NOT in the canonical-kind registry. Source-
-// shape entities with a missing vault file remain a 404 — the
-// daemon never auto-creates source-shape vault files (that path
-// is plugin-driven).
+// asserts the auto-materialize gate per #353: a thin DB row
+// with a non-registry kind + missing vault file still returns
+// 404. The daemon never auto-creates source-shape vault files
+// (that path is plugin-driven). The pre-#353 unknown_canonical_kind
+// (409) is gone — the kind check no longer fires; the vault-
+// missing branch resolves to 404 not_found instead.
 func TestOperatorFill_NotFound_VaultFileMissing_NonCanonicalKind(t *testing.T) {
 	t.Parallel()
 	h, st, _, signer := newOperatorFillFixture(t)
 	tok := mintOperatorToken(t, signer, "alice")
-	const id = "boardgame:thin-row-no-vault-with-nonregistry"
 
 	// Seed a row with a kind NOT in the canonical-kind registry.
 	// (The fixture's registry covers `boardgame`; we use a
@@ -466,17 +466,13 @@ func TestOperatorFill_NotFound_VaultFileMissing_NonCanonicalKind(t *testing.T) {
 		ID: "widget:foo",
 		Kind: "widget",
 	}))
-	_ = id // not used; we drive the request with the widget id below
 
 	rec := ugcReq(t, h, http.MethodPost,
 		"/v1/entities/widget:foo/operator-fill", tok,
 		map[string]any{"name": "Foo"}, nil)
-	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
-	// `widget` isn't in canonicalKindReg, so the kindCfg lookup
-	// reports unknown_canonical_kind (409) — that fires before
-	// the missing-vault path because we re-ordered kindCfg
-	// resolution ahead of vault read.
-	assert.Contains(t, rec.Body.String(), "unknown_canonical_kind")
+	require.Equal(t, http.StatusNotFound, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "not_found")
+	assert.Contains(t, rec.Body.String(), "no vault file")
 }
 
 // getRating is a small helper to extract `data.rating` as an int64
@@ -602,4 +598,137 @@ func TestOperatorFill_WorkflowInjectedSpec_RespectsAgentOnlyFillStrategy(t *test
 	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
 	assert.Contains(t, rec.Body.String(), "agent_only_field",
 		"workflow-injected fill_strategy=agent must reject operator-fill same as config-side")
+}
+
+// TestOperatorFill_NonCanonicalKind_WithGapState_Accepted pins
+// the #353 fix: an entity whose kind isn't in the canonical-
+// kind registry but carries workflow-injected gap_state with
+// typed shape can still be operator-filled. The gmail / github
+// / wikipedia entity surfaces — exactly the gap_state-driven
+// retroactive-correction path the issue called out.
+func TestOperatorFill_NonCanonicalKind_WithGapState_Accepted(t *testing.T) {
+	t.Parallel()
+
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	r, err := vault.NewReader(root)
+	require.NoError(t, err)
+
+	keyDir := t.TempDir()
+	require.NoError(t, auth.GenerateKeypair(keyDir, false))
+	signer, err := auth.LoadSigner(keyDir)
+	require.NoError(t, err)
+	verifier, err := auth.LoadVerifier(keyDir)
+	require.NoError(t, err)
+
+	// Registry includes only boardgame. gmail is the non-canonical
+	// kind under test — workflow add_gap injected the typed shape.
+	reg := config.MergeCanonicalRegistry(
+		nil,
+		[]string{"boardgame"},
+		config.CanonicalKindConfig{},
+		nil,
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	)
+	h := NewHandlerWithRegistry(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		st, testRegistryWithSeed(),
+		WithVaultIO(w, r),
+		WithAuthVerifier(verifier),
+		WithAuthRequired(true),
+		WithCanonicalKindRegistry(reg),
+	)
+
+	const id = "gmail:msg-abc"
+	require.NoError(t, st.UpsertEntity(context.Background(), &store.Entity{
+		ID: id, Kind: "gmail", Data: map[string]any{"id": id},
+	}))
+	require.NoError(t, w.Write(&vault.Entity{
+		ID: id, Kind: "gmail", Source: []string{"yaad-gmail/default"},
+		Data: map[string]any{"id": id},
+		Gaps: []string{"summary"},
+		GapState: map[string]vault.GapStateEntry{
+			"summary": {
+				Type:        "string",
+				Description: "workflow-injected summary gap",
+			},
+		},
+	}))
+
+	opTok := mintOperatorToken(t, signer, "alice")
+	rec := ugcReq(t, h, http.MethodPost, "/v1/entities/"+id+"/operator-fill", opTok,
+		map[string]any{"summary": "operator-set summary text"}, nil)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	// Vault round-trip: summary lands in data + gap_state stamps
+	// source=operator + filled_at.
+	got, err := r.ReadByID("gmail", id)
+	require.NoError(t, err)
+	assert.Equal(t, "operator-set summary text", got.Data["summary"])
+	require.Contains(t, got.GapState, "summary")
+	assert.Equal(t, "operator", got.GapState["summary"].Source)
+	require.NotNil(t, got.GapState["summary"].FilledAt)
+}
+
+// TestOperatorFill_NonCanonicalKind_NoGapState_RejectsField pins
+// the field-validation half of #353: when the non-canonical-kind
+// entity has empty gap_state, every field rejects as
+// unknown_field (the effective gap set is empty).
+func TestOperatorFill_NonCanonicalKind_NoGapState_RejectsField(t *testing.T) {
+	t.Parallel()
+
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	r, err := vault.NewReader(root)
+	require.NoError(t, err)
+
+	keyDir := t.TempDir()
+	require.NoError(t, auth.GenerateKeypair(keyDir, false))
+	signer, err := auth.LoadSigner(keyDir)
+	require.NoError(t, err)
+	verifier, err := auth.LoadVerifier(keyDir)
+	require.NoError(t, err)
+
+	reg := config.MergeCanonicalRegistry(
+		nil,
+		[]string{"boardgame"},
+		config.CanonicalKindConfig{},
+		nil,
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	)
+	h := NewHandlerWithRegistry(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		st, testRegistryWithSeed(),
+		WithVaultIO(w, r),
+		WithAuthVerifier(verifier),
+		WithAuthRequired(true),
+		WithCanonicalKindRegistry(reg),
+	)
+
+	const id = "gmail:msg-empty"
+	require.NoError(t, st.UpsertEntity(context.Background(), &store.Entity{
+		ID: id, Kind: "gmail", Data: map[string]any{"id": id},
+	}))
+	require.NoError(t, w.Write(&vault.Entity{
+		ID: id, Kind: "gmail", Source: []string{"yaad-gmail/default"},
+		Data: map[string]any{"id": id},
+		// No gap_state; no gaps. Effective gap set is empty.
+	}))
+
+	opTok := mintOperatorToken(t, signer, "alice")
+	rec := ugcReq(t, h, http.MethodPost, "/v1/entities/"+id+"/operator-fill", opTok,
+		map[string]any{"summary": "shouldn't land"}, nil)
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "unknown_field",
+		"non-canonical kind with empty gap_state has no fields to fill")
 }
