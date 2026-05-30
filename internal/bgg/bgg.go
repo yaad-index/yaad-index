@@ -204,6 +204,22 @@ func CanonicalURL(bggID string) string {
 	return "https://boardgamegeek.com/boardgame/" + url.PathEscape(bggID)
 }
 
+// canonicalIDPrefix is the leading segment the daemon-derived slug
+// places on canonical-id-shaped queries (e.g. `bgg-foo`). When the
+// resolver-plugin auto-fetch path dispatches a canonical id to
+// yaad-bgg as a name-shorthand, this prefix isn't a BGG title token
+// and must be stripped before issuing the BGG search. Per #363.
+const canonicalIDPrefix = "bgg-"
+
+// canonicalIDToSearchQuery strips the `bgg-` prefix from a canonical-
+// id-shaped query so the BGG search sees the bare slug instead of
+// the daemon-derived namespace prefix. Inputs without the prefix
+// pass through unchanged — operator-typed names like `Brass:
+// Birmingham` or `brass-birmingham` aren't affected. Per #363.
+func canonicalIDToSearchQuery(query string) string {
+	return strings.TrimPrefix(query, canonicalIDPrefix)
+}
+
 // urlIDRegex extracts the numeric id from a canonical
 // `https://boardgamegeek.com/boardgame/<id>[/<slug>]` URL.
 var urlIDRegex = regexp.MustCompile(`(?i)^https?://(?:www\.)?boardgamegeek\.com/boardgame/(\d+)(?:/.*)?$`)
@@ -790,6 +806,13 @@ func (p *Plugin) fetchByName(ctx context.Context, query string) (*FetchOutcome, 
 	if query == "" {
 		return nil, fmt.Errorf("%s: empty name shorthand", PluginName)
 	}
+	// #363: resolver-plugin auto-fetch dispatches the canonical id
+	// shape (e.g. `bgg-foo`) — the `bgg-` prefix comes from the
+	// daemon-derived slug and isn't a BGG title token. Strip it so
+	// the BGG search sees the bare slug; otherwise BGG returns no
+	// matches and ingest fails. Real-data instance saw five
+	// canonicals fail in a single cron cycle on this shape.
+	query = canonicalIDToSearchQuery(query)
 	// #334 Cut 1: include boardgameexpansion in the search types
 	// so name-shorthand resolution surfaces expansions alongside
 	// base games. Disambiguation candidates now correctly include
