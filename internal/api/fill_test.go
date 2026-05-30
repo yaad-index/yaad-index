@@ -96,7 +96,7 @@ func readVaultByID(t *testing.T, root, kind, id string) *vault.Entity {
 
 func Test_Fill_HappyPath_AllGapsInOneCall(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	h, _, root := newFillFixture(t)
 
@@ -119,11 +119,10 @@ func Test_Fill_HappyPath_AllGapsInOneCall(t *testing.T) {
 		assert.Contains(t, got.Entity.Data, k, "entity.data should have %q after merge", k)
 	}
 
-	// Provenance: agent-fill entry only.
-	require.Len(t, got.Entity.Provenance, 1, "want 1 provenance row (agent fill)")
-	fill := got.Entity.Provenance[0]
-	assert.NotEmpty(t, fill.FilledAt)
-	assert.Empty(t, fill.FetchedAt)
+	// #355: provenance stamping moved to per-field gap_state
+	// (source + filled_at) on the unified handler. Per-call
+	// vault.ProvenanceEntry stamping is tracked separately
+	// in #358. Assertions on the legacy Provenance row removed.
 
 	// Vault file is the source of truth.
 	v := readVaultByID(t, root, "boardgame", fillTestEntityID)
@@ -138,7 +137,7 @@ func Test_Fill_HappyPath_AllGapsInOneCall(t *testing.T) {
 
 func Test_Fill_PartialFill_RemainingGapsStay(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	h, _, root := newFillFixture(t)
 	body := map[string]any{
@@ -172,7 +171,7 @@ func Test_Fill_PartialFill_RemainingGapsStay(t *testing.T) {
 
 func Test_Fill_MultiCall_AccumulatesAcrossCalls(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	h, _, root := newFillFixture(t)
 
@@ -197,12 +196,12 @@ func Test_Fill_MultiCall_AccumulatesAcrossCalls(t *testing.T) {
 	assert.Equal(t, "moderate", v.Data["complexity_assessment"])
 	assert.Empty(t, v.Gaps, "all gaps filled across two calls")
 
-	require.Len(t, v.Provenance, 2, "one agent-fill provenance entry per call")
+	// #355: per-call Provenance stamping retired (tracked in #358).
 }
 
 func Test_Fill_RejectsFieldNotInGaps_ReturnsConflict(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	h, _, root := newFillFixture(t)
 
@@ -232,7 +231,7 @@ func Test_Fill_RejectsFieldNotInGaps_ReturnsConflict(t *testing.T) {
 
 func Test_Fill_AlreadyFilledFieldReturnsConflict(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	h, _, _ := newFillFixture(t)
 
@@ -257,7 +256,7 @@ func Test_Fill_AlreadyFilledFieldReturnsConflict(t *testing.T) {
 
 func Test_Fill_MultipleRejectedFields_AllListed(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	h, _, _ := newFillFixture(t)
 	body := map[string]any{
@@ -281,7 +280,7 @@ func Test_Fill_MultipleRejectedFields_AllListed(t *testing.T) {
 
 func Test_Fill_MissingFields_400(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	h, _, _ := newFillFixture(t)
 	rec := postFill(t, h, fillTestEntityID, map[string]any{})
@@ -291,7 +290,7 @@ func Test_Fill_MissingFields_400(t *testing.T) {
 
 func Test_Fill_EmptyFields_400(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	h, _, _ := newFillFixture(t)
 	rec := postFill(t, h, fillTestEntityID, map[string]any{"fields": map[string]any{}})
@@ -347,7 +346,7 @@ func Test_Fill_VaultNotConfigured_503(t *testing.T) {
 // the vault file was the source of truth all along.
 func Test_Fill_DurableCallback_AcrossStoreReopen(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	root := t.TempDir()

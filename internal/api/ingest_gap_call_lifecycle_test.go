@@ -152,7 +152,7 @@ func TestGapCallLifecycle_FlagCleared_ResumesNeedsFill(t *testing.T) {
 // the next cache-hit ingest correctly suppresses needs_fill.
 func TestGapCallLifecycle_FillSets_NextIngestSuppresses(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; re-adaptation tracked separately")
+	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	// Use the existing fill fixture (boardgame entity with three open
 	// gaps) — register a notation so the cache-hit path resolves it.
