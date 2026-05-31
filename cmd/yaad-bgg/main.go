@@ -645,6 +645,17 @@ func renderBody(bg *bgg.Boardgame, localID, thumbExt string) string {
 			sb.WriteString("\n")
 		}
 	}
+
+	// #367: surface the operator-side fields (rating, plays,
+	// status, acquisition, comments) as a visible "My Experience"
+	// section so the operator's own data isn't invisible in the
+	// rendered page. Renders nothing when no operator_* field is
+	// populated — the section only appears for entities the
+	// operator has actually touched.
+	if exp := renderOperatorExperience(bg.Data); exp != "" {
+		sb.WriteString("\n")
+		sb.WriteString(exp)
+	}
 	return sb.String()
 }
 
@@ -654,6 +665,105 @@ func renderBody(bg *bgg.Boardgame, localID, thumbExt string) string {
 func descriptionFromData(data map[string]any) string {
 	desc, _ := data["description"].(string)
 	return desc
+}
+
+// renderOperatorExperience composes the "My Experience" body
+// section from the operator_* fields the bgg enrichment path
+// stamps into entity.data (per #282 / mergeOperatorFields). Each
+// field is optional — only present ones render their line. Returns
+// "" when no operator_* field is populated so the caller can skip
+// emitting the section header entirely.
+//
+// Field shapes match mergeOperatorFields' writes:
+//
+//   - operator_rating: int 1-10
+//   - operator_num_plays: int
+//   - operator_status: []string of status flags (own, played, etc.)
+//   - operator_comment: string
+//   - operator_acquisition_date: string (YYYY-MM-DD per BGG)
+//   - operator_acquired_from: string
+//   - operator_price_paid + operator_price_currency: strings
+//   - operator_inventory_location + operator_private_comment kept
+//     in frontmatter only — operator-side notes that don't belong
+//     in a public-shaped page section.
+func renderOperatorExperience(data map[string]any) string {
+	var lines []string
+	if v, ok := data["operator_rating"].(int); ok && v > 0 {
+		lines = append(lines, fmt.Sprintf("- **Rating:** %d/10", v))
+	}
+	if v, ok := data["operator_num_plays"].(int); ok && v > 0 {
+		lines = append(lines, fmt.Sprintf("- **Plays:** %d", v))
+	}
+	if v, ok := data["operator_status"].([]string); ok && len(v) > 0 {
+		lines = append(lines, fmt.Sprintf("- **Status:** %s", strings.Join(v, ", ")))
+	}
+	if acq := operatorAcquisitionLine(data); acq != "" {
+		lines = append(lines, acq)
+	}
+	if v, ok := data["operator_comment"].(string); ok && v != "" {
+		lines = append(lines, fmt.Sprintf("- **Comment:** %s", v))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("## My Experience\n\n")
+	for _, line := range lines {
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// operatorAcquisitionLine merges the acquisition-related fields
+// into one "Acquired:" line. Renders only the parts present:
+// "Acquired: <date>", "Acquired: <date> from <source>",
+// "Acquired: <date> from <source> for <currency-symbol><price>",
+// etc. Returns "" when no acquisition field is populated.
+func operatorAcquisitionLine(data map[string]any) string {
+	date, _ := data["operator_acquisition_date"].(string)
+	from, _ := data["operator_acquired_from"].(string)
+	pricePaid, _ := data["operator_price_paid"].(string)
+	currency, _ := data["operator_price_currency"].(string)
+	if date == "" && from == "" && pricePaid == "" {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("- **Acquired:**")
+	if date != "" {
+		sb.WriteString(" ")
+		sb.WriteString(date)
+	}
+	if from != "" {
+		sb.WriteString(" from ")
+		sb.WriteString(from)
+	}
+	if pricePaid != "" {
+		sb.WriteString(" for ")
+		sb.WriteString(currencySymbol(currency))
+		sb.WriteString(pricePaid)
+	}
+	return sb.String()
+}
+
+// currencySymbol maps a 3-letter currency code to a visible
+// symbol when known; falls back to the bare code (with trailing
+// space) for currencies without a familiar single-character form.
+func currencySymbol(code string) string {
+	switch strings.ToUpper(code) {
+	case "EUR":
+		return "€"
+	case "USD":
+		return "$"
+	case "GBP":
+		return "£"
+	case "JPY":
+		return "¥"
+	case "":
+		return ""
+	default:
+		return code + " "
+	}
 }
 
 // stageThumbnail downloads thumbURL into attach.StagingDir() and
