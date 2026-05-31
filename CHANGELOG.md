@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.14.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.13.0...yaad-index-v0.14.0) (2026-05-31)
+
+
+### Features
+
+* **api:** operator-fill on non-canonical-kind entities ([#353](https://github.com/yaad-index/yaad-index/issues/353)) ([#354](https://github.com/yaad-index/yaad-index/issues/354)) ([0a2fe5b](https://github.com/yaad-index/yaad-index/commit/0a2fe5b5c495345b29119cfc10e1284bd7723f87))
+* **api:** unified /v1/fill endpoint + 410 gone ([#355](https://github.com/yaad-index/yaad-index/issues/355) Cut 2a) ([#357](https://github.com/yaad-index/yaad-index/issues/357)) ([20f843d](https://github.com/yaad-index/yaad-index/commit/20f843d333a9daf89c2b582e5a54724c47cf5013))
+* **mcp:** expose force_refetch on ingest tool ([#372](https://github.com/yaad-index/yaad-index/issues/372)) ([#373](https://github.com/yaad-index/yaad-index/issues/373)) ([8d28641](https://github.com/yaad-index/yaad-index/commit/8d286419beb0086838d044bd5648ceef4467e5cb))
+
+
+### Bug Fixes
+
+* **api:** gap-state-aware total on needs_fill ([#350](https://github.com/yaad-index/yaad-index/issues/350)) ([#351](https://github.com/yaad-index/yaad-index/issues/351)) ([aa07a19](https://github.com/yaad-index/yaad-index/commit/aa07a1915efb128ebe4b466476393e9c7b34f1b0))
+* **bgg:** strip bgg- prefix from canonical-id search queries ([#363](https://github.com/yaad-index/yaad-index/issues/363)) ([#364](https://github.com/yaad-index/yaad-index/issues/364)) ([2e2fd62](https://github.com/yaad-index/yaad-index/commit/2e2fd6211507f68febb865440d16603600bad562))
+* **tasks:** defensive unlink + atomic rollback on auto-archive ([#368](https://github.com/yaad-index/yaad-index/issues/368)) ([#371](https://github.com/yaad-index/yaad-index/issues/371)) ([9ab4692](https://github.com/yaad-index/yaad-index/commit/9ab469240ef5f3666177259e5d70b0e9ecb7d69f))
+
 ## [0.13.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.12.0...yaad-index-v0.13.0) (2026-05-29)
 
 
