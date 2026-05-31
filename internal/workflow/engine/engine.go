@@ -216,6 +216,22 @@ type Options struct {
 	// (1000). Operator config wires this from the
 	// workflow.graph_walk_cap knob.
 	GraphWalkCap int
+
+	// ArchiveStateProbe carries the typed entity view the
+	// ADR-0030 archive_when post-action hook evaluates against.
+	// Optional — nil leaves the hook a no-op (workflows that
+	// declare archive_when log a single WARN at evaluation
+	// time so the operator notices the missing wire). Production
+	// adapts store.GetEntity; tests substitute fakes.
+	ArchiveStateProbe ArchiveStateProbe
+
+	// ArchiveWriter is the same archive surface the archive_entity
+	// action runner consumes (see internal/workflow/actions).
+	// When the ADR-0030 archive_when predicate evaluates true,
+	// the engine invokes this writer with workflow name + entity
+	// id + a reason marker. Optional — nil leaves the hook a
+	// no-op alongside ArchiveStateProbe.
+	ArchiveWriter actions.ArchiveWriter
 }
 
 // DefaultIngestTimeout caps Engine.Dispatch's wait on the
@@ -237,16 +253,18 @@ const DefaultDecisionRingSize = 1024
 // Reconcile(workflows); use Decisions() to inspect the
 // recorded history.
 type Engine struct {
-	bus           eventbus.Bus
-	resolver      EntityResolver
-	runner        actions.Runner
-	errTaskWriter actions.ErrTaskWriter
-	ingestRouter  IngestRouter
-	ingestTimeout time.Duration
-	logger        *slog.Logger
-	ringSize      int
-	walker        decision.GraphWalker
-	graphWalkCap  int
+	bus               eventbus.Bus
+	resolver          EntityResolver
+	runner            actions.Runner
+	errTaskWriter     actions.ErrTaskWriter
+	ingestRouter      IngestRouter
+	ingestTimeout     time.Duration
+	logger            *slog.Logger
+	ringSize          int
+	walker            decision.GraphWalker
+	graphWalkCap      int
+	archiveStateProbe ArchiveStateProbe
+	archiveWriter     actions.ArchiveWriter
 
 	mu        sync.RWMutex
 	workflows map[string]*registeredWorkflow
@@ -408,21 +426,23 @@ func New(opts Options) (*Engine, error) {
 		ingestTimeout = DefaultIngestTimeout
 	}
 	e := &Engine{
-		bus:           opts.Bus,
-		resolver:      opts.Resolver,
-		runner:        runner,
-		errTaskWriter: actions.ErrTaskWriterFor(runner),
-		ingestRouter:  opts.IngestRouter,
-		ingestTimeout: ingestTimeout,
-		logger:        logger,
-		ringSize:      ring,
-		walker:        opts.Walker,
-		graphWalkCap:  opts.GraphWalkCap,
-		workflows:     make(map[string]*registeredWorkflow),
-		dedupSeen:     make(map[dedupID]struct{}),
-		cycleLogged:   make(map[string]struct{}),
-		queue:         make(chan queuedEvent, queueCapacity),
-		shutdownCh:    make(chan struct{}),
+		bus:               opts.Bus,
+		resolver:          opts.Resolver,
+		runner:            runner,
+		errTaskWriter:     actions.ErrTaskWriterFor(runner),
+		ingestRouter:      opts.IngestRouter,
+		ingestTimeout:     ingestTimeout,
+		logger:            logger,
+		ringSize:          ring,
+		walker:            opts.Walker,
+		graphWalkCap:      opts.GraphWalkCap,
+		archiveStateProbe: opts.ArchiveStateProbe,
+		archiveWriter:     opts.ArchiveWriter,
+		workflows:         make(map[string]*registeredWorkflow),
+		dedupSeen:         make(map[dedupID]struct{}),
+		cycleLogged:       make(map[string]struct{}),
+		queue:             make(chan queuedEvent, queueCapacity),
+		shutdownCh:        make(chan struct{}),
 	}
 	// Auto-start the worker + subscribe to bus topics so
 	// production main.go doesn't need an explicit Start +
@@ -1248,8 +1268,14 @@ func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow,
 	// state, then propagate the bool up to the worker so
 	// the per-event chain halts.
 	claimed := false
+	anyActionErrored := false
 	if dec.Fired && e.runner != nil && dispatch {
-		claimed = e.runActions(ctx, reg, dec, entity, edge, act)
+		claimed, anyActionErrored = e.runActions(ctx, reg, dec, entity, edge, act)
+		// ADR-0030 §3 archive_when hook — runs after the
+		// action set when the workflow opted in. No-op for
+		// workflows without archive_when; log-and-continue on
+		// any vault-side failure per §5.
+		e.maybeArchiveAfterActions(ctx, reg.workflow.Name, entityID, reg.workflow.ArchiveWhen, anyActionErrored)
 	}
 	dec.Claimed = claimed
 	e.recordDecision(dec)
@@ -1395,13 +1421,16 @@ func (e *Engine) applyDedupPolicy(ctx context.Context, reg *registeredWorkflow, 
 // including action errors (errors don't claim by design;
 // the err-task pattern handles the failure surface
 // separately).
-func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec Decision, entity, edge map[string]any, act decision.Activation) bool {
+func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec Decision, entity, edge map[string]any, act decision.Activation) (claimed, anyActionErrored bool) {
 	rendered, err := e.renderActionTemplates(ctx, reg, act)
 	if err != nil {
 		e.logger.Warn("workflow action templates render failed; skipping action dispatch",
 			"workflow", dec.Workflow,
 			"err", err.Error())
-		return false
+		// Template render failure means the action set didn't
+		// run; treat as a chain-level failure so the
+		// archive_when hook (ADR-0030 §3) holds off archiving.
+		return false, true
 	}
 	missingRefIDs := make([]string, 0, len(dec.MissingRefs))
 	for _, mr := range dec.MissingRefs {
@@ -1422,12 +1451,12 @@ func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec De
 			Bindings:          act.Bindings,
 			RenderedTemplates: rendered,
 		})
-	claimed := false
 	for _, r := range results {
 		if r.Claim {
 			claimed = true
 		}
 		if r.Err != nil {
+			anyActionErrored = true
 			e.logger.Warn("workflow action failed",
 				"workflow", dec.Workflow,
 				"action_idx", r.ActionIdx,
@@ -1471,7 +1500,7 @@ func (e *Engine) runActions(ctx context.Context, reg *registeredWorkflow, dec De
 			"action_idx", r.ActionIdx,
 			"type", r.Type)
 	}
-	return claimed
+	return claimed, anyActionErrored
 }
 
 // compileActionTemplates picks out the CEL-templated fields
