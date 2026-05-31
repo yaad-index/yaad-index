@@ -125,7 +125,14 @@ func (c *recordingTasksCommitter) OnWrite(_ context.Context, relPath, message, _
 // the resolve-and-archive path: the resolve-stamp write signals
 // once, then the archive-move signals BOTH the source (deletion)
 // + destination (creation) paths so the auto-committer captures
-// the move in one staging pass.
+// the move in one staging pass. Per #374 the two archive-move
+// signals carry distinct messages — the source unlink lands as
+// "task: <id>: archive (unlink source)" and the dest lands as
+// the primary "task: <id>: archive" line. The dest signal MUST
+// fire last: `git log --oneline` is newest-first, so the LAST
+// notifyCommit produces the top line; emitting the primary
+// archive line last is what makes the batch-resolve log
+// scannable (the scannability goal of #374).
 func TestWriter_Resolve_NotifiesCommitterOnArchive(t *testing.T) {
 	t.Parallel()
 	vault := t.TempDir()
@@ -133,13 +140,22 @@ func TestWriter_Resolve_NotifiesCommitterOnArchive(t *testing.T) {
 	c := &recordingTasksCommitter{}
 	w := NewWriter(vault, WithCommitter(c))
 	require.NoError(t, w.Resolve("wf-s", time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC), true))
-	require.Len(t, c.calls, 3, "stamp + archive-source + archive-dest")
+	require.Len(t, c.calls, 3, "stamp + archive-source-unlink + archive-dest")
 	assert.Equal(t, "tasks/wf-s.md", c.calls[0].relPath)
 	assert.Contains(t, c.calls[0].message, ": resolve-stamp")
+
+	// #374 archive-source-unlink signal fires FIRST so the dest
+	// commit lands newer + tops `git log --oneline`.
 	assert.Equal(t, "tasks/wf-s.md", c.calls[1].relPath)
-	assert.Contains(t, c.calls[1].message, ": archive")
+	assert.Equal(t, "task: wf-s: archive (unlink source)", c.calls[1].message,
+		"source-unlink message is distinct from the dest archive message")
+
+	// #374 archive-dest signal fires LAST — primary archive line
+	// becomes the newest commit so `git log --oneline` after a
+	// batch resolve reads as one scannable "archive" line per task.
 	assert.Equal(t, filepath.Join("tasks", "_archive", "wf-s.md"), c.calls[2].relPath)
-	assert.Contains(t, c.calls[2].message, ": archive")
+	assert.Equal(t, "task: wf-s: archive", c.calls[2].message,
+		"archive-dest carries the primary archive message + lands newest")
 }
 
 // TestWriter_Resolve_NotifiesCommitterOnStampOnly pins that
