@@ -166,3 +166,38 @@ func TestWriter_Resolve_NilCommitterIsNoOp(t *testing.T) {
 	w := NewWriter(vault) // no committer
 	require.NoError(t, w.Resolve("wf-s", time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC), true))
 }
+
+// TestWriter_Resolve_UnlinksOriginal_NoStaleActiveFile pins #368:
+// after Resolve(auto-archive=true) returns, the active path
+// is gone and the archive path exists. Belt-and-suspenders
+// confirmation that os.Rename's atomicity holds + the defensive
+// cleanup catches any rename-as-copy fallback.
+func TestWriter_Resolve_UnlinksOriginal_NoStaleActiveFile(t *testing.T) {
+	t.Parallel()
+	vault := t.TempDir()
+	writeTask(t, vault, "wf-x", "---\nkind: task\nworkflow: wf\nsubject: x\ncreated_at: 2026-05-31T10:00:00Z\n---\n\n## x\n\nbody\n")
+	w := NewWriter(vault)
+
+	require.NoError(t, w.Resolve("wf-x", time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC), true))
+
+	// Active path must NOT exist post-resolve.
+	_, activeErr := os.Stat(filepath.Join(vault, "tasks", "wf-x.md"))
+	assert.True(t, os.IsNotExist(activeErr),
+		"active path must be unlinked after auto-archive resolve")
+
+	// Archive path must exist with the resolved_at stamp.
+	body, err := os.ReadFile(filepath.Join(vault, "tasks", "_archive", "wf-x.md"))
+	require.NoError(t, err, "archive copy must be present")
+	assert.Contains(t, string(body), "resolved_at: 2026-05-31T12:00:00Z\n")
+}
+
+// The defensive Stat + Remove branch inside Resolve (catches a
+// stale active file when os.Rename succeeded but the source
+// lingers — cross-fs rename-as-copy fallback or out-of-band
+// rewrite between stamp and rename) isn't reachable from a unit
+// test against a real filesystem: on POSIX rename is atomic, so
+// the source is gone before Stat fires; the no-op idempotency
+// guard at the top of Resolve catches a second invocation before
+// the rename even runs. The branch remains as a belt-and-
+// suspenders rollback path — the happy-path coverage above pins
+// the invariant the caller depends on.

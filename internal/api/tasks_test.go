@@ -301,3 +301,54 @@ func TestTaskResolve_NotFound(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusNotFound, rec.Code)
 }
+
+// TestTaskResolve_AutoArchive_RemovesFromTaskList pins #368: after
+// a successful auto-archive resolve, (a) the archive copy exists,
+// (b) the active file is gone, (c) GET /v1/tasks no longer
+// includes the resolved id in its listing — closing the
+// "task_list keeps showing resolved task" symptom #368 records.
+func TestTaskResolve_AutoArchive_RemovesFromTaskList(t *testing.T) {
+	t.Parallel()
+	h, vault := newTaskResolveFixture(t,
+		map[string]string{
+			"wf-archive-test": "---\nkind: task\nworkflow: wf\nsubject: archive-test\ncreated_at: 2026-05-31T10:00:00Z\n---\n\n## archive-test\n\nx\n",
+		},
+		&parser.Workflow{
+			Name:           "wf",
+			Version:        1,
+			Status:         parser.StatusActive,
+			AllowedPlugins: []string{"yaad-gmail"},
+			Trigger:        parser.Trigger{Type: parser.TriggerTypeManual},
+			Subject:        "entity.id",
+			Actions:        []parser.Action{{AddNote: &parser.AddNoteAction{Content: "'x'"}}},
+		},
+	)
+
+	// Pre-resolve: task_list MUST include the id.
+	pre := httptest.NewRecorder()
+	h.ServeHTTP(pre, httptest.NewRequest(http.MethodGet, "/v1/tasks", nil))
+	require.Equal(t, http.StatusOK, pre.Code, "pre-resolve list body=%s", pre.Body.String())
+	assert.Contains(t, pre.Body.String(), `"id":"wf-archive-test"`,
+		"task_list must show the task before resolve")
+
+	// Resolve.
+	resolveRec := httptest.NewRecorder()
+	h.ServeHTTP(resolveRec, httptest.NewRequest(http.MethodPost, "/v1/tasks/wf-archive-test/resolve", nil))
+	require.Equal(t, http.StatusOK, resolveRec.Code, "resolve body=%s", resolveRec.Body.String())
+
+	// (a) Archive copy exists.
+	_, archiveErr := os.Stat(filepath.Join(vault, "tasks", "_archive", "wf-archive-test.md"))
+	assert.NoError(t, archiveErr, "archive copy must exist post-resolve")
+
+	// (b) Active file is GONE.
+	_, activeErr := os.Stat(filepath.Join(vault, "tasks", "wf-archive-test.md"))
+	assert.True(t, os.IsNotExist(activeErr),
+		"active file must NOT exist post-resolve (the #368 fix)")
+
+	// (c) task_list no longer includes the id.
+	post := httptest.NewRecorder()
+	h.ServeHTTP(post, httptest.NewRequest(http.MethodGet, "/v1/tasks", nil))
+	require.Equal(t, http.StatusOK, post.Code, "post-resolve list body=%s", post.Body.String())
+	assert.NotContains(t, post.Body.String(), `"id":"wf-archive-test"`,
+		"task_list must NOT include the resolved task")
+}
