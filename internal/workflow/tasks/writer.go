@@ -134,6 +134,21 @@ func (w *Writer) Resolve(id string, now time.Time, autoArchive bool) error {
 	if err := os.Rename(activePath, archivePath); err != nil {
 		return fmt.Errorf("archive task %q → %q: %w", activePath, archivePath, err)
 	}
+	// #368 defensive unlink: os.Rename on POSIX atomically
+	// unlinks the source, but explicit Stat + Remove catches
+	// the edge cases where the rename succeeded but a stale
+	// active file lingers (cross-fs rename-as-copy fallback on
+	// some filesystems; out-of-band workflow trigger that
+	// re-wrote the active path between the stamp and the
+	// rename). Atomic-or-fail: if the cleanup unlink fails, we
+	// also remove the archive copy so the caller doesn't see
+	// `auto_archived: true` while both files coexist.
+	if _, statErr := os.Stat(activePath); statErr == nil {
+		if rmErr := os.Remove(activePath); rmErr != nil {
+			_ = os.Remove(archivePath)
+			return fmt.Errorf("unlink original task %q after archive: %w (archive copy rolled back)", activePath, rmErr)
+		}
+	}
 	// Auto-commit the archive move per #314. Both the old (deleted)
 	// path and the new (created) path need staging; the auto-
 	// committer's `git add -A -- <path>` shape stages a deletion at
