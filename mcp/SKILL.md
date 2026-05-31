@@ -230,8 +230,8 @@ The daemon NFC-normalizes + slugifies `name` and creates a canonical-label edge 
 
 Append a note to an existing entity. Server stamps the date (UTC), the agent identity (`author`, from your JWT subject), and the human resource owner (`operator`, from your JWT pair-claim). Returns `{ok, note, entity}` where `note` is the just-appended entry and `entity` is the merged-note-included fresh copy of the entity (so you don't need a follow-up `get_entity`).
 
-- **`author` is optional and recommended-omitted.** When you leave it out, the server fills it from your JWT subject. When you set it, it MUST equal your JWT subject — passing someone else's name returns the upstream `{ok: false, error: "author_mismatch"}` envelope verbatim. The server enforces this cryptographically; there's no way to claim to be another agent.
-- **Errors pass through structured.** Unlike most tools, `add_note` does NOT throw on auth errors. A 4xx from yaad-index returns `{ok: false, error, message}` directly so you can branch on `error === "author_mismatch"` / `"missing_authorization"` / etc. Successful calls return `{ok: true, note, entity}`. Read `ok` first.
+- **`author` is optional and recommended-omitted.** When you leave it out, the server fills it from your JWT subject. When you set it, it MUST equal your JWT subject — passing someone else's name returns the upstream `{ok: false, error: "author_impersonation"}` envelope verbatim. This is an anti-impersonation guard at note-creation time so provenance survives multi-agent setups; it is distinct from the operator-keyed edit-permission rule on UGC entities (below).
+- **Errors pass through structured.** Unlike most tools, `add_note` does NOT throw on auth errors. A 4xx from yaad-index returns `{ok: false, error, message}` directly so you can branch on `error === "author_impersonation"` / `"missing_authorization"` / etc. Successful calls return `{ok: true, note, entity}`. Read `ok` first.
 - **Append-only in v1.** No edit, no delete, no threading — yaad-index v1 doesn't expose those surfaces. Re-posting the same text adds a new entry.
 
 **When to use.** Reach for `add_note` when you want to leave human-readable context on an entity that survives reindex (vault-frontmatter-mirrored). Notes aren't gap fills — gap fills carry structured derivable data with a defined shape; notes are free-form prose for "I noticed X" / "this looks wrong" / "operator should verify". Don't use notes to encode structured data the gap mechanism could carry.
@@ -280,7 +280,7 @@ Replace one section's body. **The `etag` parameter is REQUIRED** — read it fro
 
 - `error: "precondition_failed"` (412, stale etag) — `current_etag` rides on the envelope. Refetch + retry.
 - `error: "precondition_required"` (428, missing etag) — caller forgot to pass the etag arg.
-- `error: "author_mismatch"` (403) — JWT claim doesn't match the entity's author/operator. Operator-on-behalf is allowed when the JWT operator equals the entity's stored operator.
+- `error: "operator_mismatch"` (403) — caller's JWT operator pair-claim does not match the entity's stored operator. The author field is provenance, not a permission grant: any agent under the entity's operator can edit. Cross-operator edits are blocked.
 
 5xx still throws (transient infrastructure failures).
 
@@ -358,7 +358,7 @@ Inverse of `archive_entity`. The vault file moves back from `_archive/<kind>/<sl
 
 Hard-destroy a UGC entity. **Two-step state-machine: `archive_entity` first, then `delete_user_content`.** On an active entity the call returns `{ok: false, error: "must archive before delete", message: "POST /v1/entities/<id>/archive first; ..."}` — surfaced verbatim, not thrown, so the agent branches on `error`. On an archived UGC entity the call removes the `_archive/...` vault file and cascade-drops the store row; returns `{ok, id, deleted: true}`.
 
-403 author_mismatch (cross-author destroy; operator-on-behalf still allowed) still throws — and runs *before* the archive-first gate so an intruder can't probe other authors' archive state. 404 on already-gone is a real failure (NOT silently ok).
+403 operator_mismatch (cross-operator destroy) still throws — and runs *before* the archive-first gate so an intruder can't probe other operators' archive state. Per #377 the gate keys on operator pair-claim equality, not author; any agent under the entity's operator can destroy. 404 on already-gone is a real failure (NOT silently ok).
 
 ### `delete_entity(id)`
 
@@ -366,7 +366,7 @@ Hard-destroy a generic yaad-index entity (any kind: `boardgame:`, `wikipedia:`, 
 
 On an active entity the daemon returns the structured `{ok: false, error: "must archive before delete", ...}` envelope — surfaced verbatim so the agent can branch on `error`. On an archived entity the call removes the `_archive/...` vault file (with a `destroy: <id> [<kind>] by <agent>` git commit) and cascade-drops the DB row + inbound/outbound edges + provenance. Returns `{ok, id, deleted: true}`. **Destructive and irreversible** at this point.
 
-Other non-2xx (401, 404 already-gone, 503 vault not configured) still throw YaadIndexError. Unlike `delete_user_content`, there's no 403 author_mismatch path on the destroy itself: the surface is agent-callable-by-anyone (the WARN audit log + commit is the post-hoc accountability surface).
+Other non-2xx (401, 404 already-gone, 503 vault not configured) still throw YaadIndexError. Unlike `delete_user_content`, there's no 403 operator_mismatch path on the destroy itself: the surface is agent-callable-by-anyone (the WARN audit log + commit is the post-hoc accountability surface).
 
 ### `list_entities(kind)`
 

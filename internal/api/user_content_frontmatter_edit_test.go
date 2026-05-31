@@ -286,11 +286,11 @@ func TestUserContentFrontmatterEdit_RejectsTitleMutation(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "set-once at create time")
 }
 
-// TestUserContentFrontmatterEdit_AuthorMismatchForbidden covers
-// the auth gate: only the original author or the entity's
-// operator may edit. A different subject's token rejects with
-// 403 author_mismatch.
-func TestUserContentFrontmatterEdit_AuthorMismatchForbidden(t *testing.T) {
+// TestUserContentFrontmatterEdit_OperatorMismatchForbidden covers
+// the auth gate per #377: only a JWT whose operator pair-claim
+// matches the entity's stored operator may edit. A token with a
+// different operator rejects with 403 operator_mismatch.
+func TestUserContentFrontmatterEdit_OperatorMismatchForbidden(t *testing.T) {
 	t.Parallel()
 	h, _, _, signer := newUGCFrontmatterEdgesFixture(t, defaultUGCMappings())
 
@@ -306,7 +306,7 @@ func TestUserContentFrontmatterEdit_AuthorMismatchForbidden(t *testing.T) {
 			},
 		}, nil)
 	require.Equal(t, http.StatusForbidden, rec.Code, "edit body=%s", rec.Body.String())
-	assert.Contains(t, rec.Body.String(), "author_mismatch")
+	assert.Contains(t, rec.Body.String(), "operator_mismatch")
 
 	_ = tok // suppress "declared but not used" if go vet complains
 }

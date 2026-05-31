@@ -18,11 +18,11 @@
 // `data.operator` from the pair-claim. The first provenance entry
 // is `source: user`, fetched_at=now, ok=true.
 //
-// - **Edit / delete** is allowed when (a) the JWT subject matches
-// the entity's stored author OR (b) the JWT operator matches the
-// entity's stored operator (operator-on-behalf-of-any-agent path
-// per ADR-0012's amended "Auth" section). Otherwise the call
-// returns 403 author_mismatch.
+// - **Edit / delete** is allowed when the JWT operator matches the
+// entity's stored operator (per #377, the prior author-OR-operator
+// check is replaced by operator-only — see canEditUserContent).
+// Otherwise the call returns 403 operator_mismatch. The author
+// field on each section / entity stays for provenance.
 //
 // Concurrency:
 //
@@ -406,8 +406,8 @@ func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultR
 			return
 		}
 		if !canEditUserContent(claim, ve) {
-			writeError(w, http.StatusForbidden, "author_mismatch",
-				"only the original author or the entity's operator may edit this user-content entity")
+			writeError(w, http.StatusForbidden, "operator_mismatch",
+				"caller's operator does not match this user-content entity's operator")
 			return
 		}
 
@@ -608,8 +608,8 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 			return
 		}
 		if !canEditUserContent(claim, ve) {
-			writeError(w, http.StatusForbidden, "author_mismatch",
-				"only the original author or the entity's operator may edit this user-content entity")
+			writeError(w, http.StatusForbidden, "operator_mismatch",
+				"caller's operator does not match this user-content entity's operator")
 			return
 		}
 
@@ -784,8 +784,8 @@ func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, 
 			return
 		}
 		if !canEditUserContent(claim, ve) {
-			writeError(w, http.StatusForbidden, "author_mismatch",
-				"only the original author or the entity's operator may edit this user-content entity")
+			writeError(w, http.StatusForbidden, "operator_mismatch",
+				"caller's operator does not match this user-content entity's operator")
 			return
 		}
 
@@ -945,8 +945,8 @@ func handleUserContentSectionDelete(logger *slog.Logger, st store.Store, vaultRe
 			return
 		}
 		if !canEditUserContent(claim, ve) {
-			writeError(w, http.StatusForbidden, "author_mismatch",
-				"only the original author or the entity's operator may edit this user-content entity")
+			writeError(w, http.StatusForbidden, "operator_mismatch",
+				"caller's operator does not match this user-content entity's operator")
 			return
 		}
 
@@ -1123,8 +1123,8 @@ func handleUserContentFrontmatterEdit(
 			return
 		}
 		if !canEditUserContent(claim, ve) {
-			writeError(w, http.StatusForbidden, "author_mismatch",
-				"only the original author or the entity's operator may edit this user-content entity")
+			writeError(w, http.StatusForbidden, "operator_mismatch",
+				"caller's operator does not match this user-content entity's operator")
 			return
 		}
 
@@ -1356,12 +1356,12 @@ func handleUserContentDelete(logger *slog.Logger, st store.Store, vaultReader *v
 				"auth claim missing on request — server misconfiguration")
 			return
 		}
-		// Authorization first — a cross-author intruder must learn
+		// Authorization first — a cross-operator intruder must learn
 		// 403, not the lifecycle hint (knowing whether *someone else's*
 		// entity is archived is an information leak).
 		if !canEditUserContent(claim, ve) {
-			writeError(w, http.StatusForbidden, "author_mismatch",
-				"only the original author or the entity's operator may delete this user-content entity")
+			writeError(w, http.StatusForbidden, "operator_mismatch",
+				"caller's operator does not match this user-content entity's operator")
 			return
 		}
 
@@ -1426,22 +1426,40 @@ func handleUserContentDelete(logger *slog.Logger, st store.Store, vaultReader *v
 }
 
 // canEditUserContent returns true if the claim is allowed to mutate
-// the entity Per the prior design,'s auth contract: same agent OR same operator.
-// Anonymous claims (dev-mode AnonymousAuth bypass) always return
-// true so existing tests + non-auth deploys keep working.
+// the entity. Thin adapter over canEditByOperator that sources the
+// stored operator from the vault entity's `Data["operator"]`. The
+// generic entity-lifecycle handlers (handleEntityArchive +
+// handleEntityDelete) gate against the same rule via
+// canEditByOperator directly, sourcing from the store row so they
+// don't need a vault reader (#377 nava-catch: the prior PR rev
+// gated only UGC-specific routes; generic routes were a bypass).
 func canEditUserContent(claim *auth.Claim, ve *vault.Entity) bool {
+	operator, _ := ve.Data["operator"].(string)
+	return canEditByOperator(claim, operator)
+}
+
+// canEditByOperator is the operator-equality core of the UGC edit
+// permission rule per #377: any JWT whose `operator` pair-claim
+// matches the entity's stored operator may edit, regardless of
+// which agent originally wrote the entity. The `author` field
+// stays on the entity for provenance but no longer grants edit
+// privilege. This unblocks multi-agent setups under a shared
+// operator (one operator's assistant + reviewer + scratchpad
+// agents share the edit boundary). Cross-operator boundary stays
+// intact — agent foo (operator=alice) cannot edit an entity
+// tagged operator=bob.
+//
+// Anonymous claims (dev-mode AnonymousAuth bypass) always return
+// true so existing tests + non-auth deploys keep working. Empty
+// stored operator rejects (no implicit grant for legacy rows).
+func canEditByOperator(claim *auth.Claim, storedOperator string) bool {
 	if IsAnonymousClaim(claim) {
 		return true
 	}
-	author, _ := ve.Data["author"].(string)
-	operator, _ := ve.Data["operator"].(string)
-	if claim.Subject != "" && claim.Subject == author {
-		return true
+	if storedOperator == "" {
+		return false
 	}
-	if operator != "" && claim.Operator == operator {
-		return true
-	}
-	return false
+	return claim.Operator == storedOperator
 }
 
 // parseUserContentFrontmatterEdges walks the operator-config-

@@ -234,7 +234,7 @@ func TestUserContent_SectionReplace_428WhenIfMatchMissing(t *testing.T) {
 }
 
 // PUT 403 when a different agent (different operator) tries to edit.
-func TestUserContent_SectionReplace_403OnCrossAuthor(t *testing.T) {
+func TestUserContent_SectionReplace_403OnCrossOperator(t *testing.T) {
 	t.Parallel()
 	h, _, _, signer := newAuthedUGCFixture(t)
 	forgeTok := mintToken(t, signer, "the implementer", "alice")
@@ -253,18 +253,21 @@ func TestUserContent_SectionReplace_403OnCrossAuthor(t *testing.T) {
 		map[string]string{"If-Match": etag},
 	)
 	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
-	assert.Contains(t, rec.Body.String(), "author_mismatch")
+	assert.Contains(t, rec.Body.String(), "operator_mismatch")
 }
 
-// PUT succeeds when a different agent shares the same operator (the
-// "operator on behalf of any agent" path per ADR-0012).
+// PUT succeeds when a different agent shares the same operator —
+// per #377 the edit gate keys on operator pair-claim equality only;
+// the original author is provenance, not a permission grant.
+// Also pins the AC that the entity's stored `author` is preserved
+// after a co-operator edit (provenance survives the operation).
 func TestUserContent_SectionReplace_OperatorCanEditAcrossAgents(t *testing.T) {
 	t.Parallel()
-	h, _, _, signer := newAuthedUGCFixture(t)
-	forgeTok := mintToken(t, signer, "the implementer", "alice")
-	alice2Tok := mintToken(t, signer, "alice2", "alice") // same operator as charlie
+	h, _, root, signer := newAuthedUGCFixture(t)
+	creatorTok := mintToken(t, signer, "agent-creator", "alice")
+	otherAgentTok := mintToken(t, signer, "agent-editor", "alice") // same operator, different agent
 
-	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content", forgeTok, map[string]any{
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content", creatorTok, map[string]any{
 		"title": "Shared",
 		"body": "## a\nA\n",
 		"tags": []string{"x"},
@@ -272,11 +275,17 @@ func TestUserContent_SectionReplace_OperatorCanEditAcrossAgents(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code)
 	etag := rec.Header().Get("ETag")
 
-	rec = ugcReq(t, h, http.MethodPut, "/v1/user-content/user-content:shared/sections/a", alice2Tok,
-		map[string]any{"body": "alice2's edit on charlie's UGC\n"},
+	rec = ugcReq(t, h, http.MethodPut, "/v1/user-content/user-content:shared/sections/a", otherAgentTok,
+		map[string]any{"body": "co-operator edit lands\n"},
 		map[string]string{"If-Match": etag},
 	)
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	// #377 AC: original author preserved on the entity after a
+	// co-operator edit (provenance, not permission).
+	got := readVaultByID(t, root, "user-content", "user-content:shared")
+	assert.Equal(t, "agent-creator", got.Data["author"],
+		"entity author must survive co-operator edits as provenance record")
 }
 
 // PUT 404 when the section address doesn't resolve.
@@ -367,7 +376,7 @@ func TestUserContent_Delete_ConflictOnActive(t *testing.T) {
 }
 
 // DELETE 403 on cross-author attempt.
-func TestUserContent_Delete_403OnCrossAuthor(t *testing.T) {
+func TestUserContent_Delete_403OnCrossOperator(t *testing.T) {
 	t.Parallel()
 	h, _, _, signer := newAuthedUGCFixture(t)
 	ownerTok := mintToken(t, signer, "the implementer", "alice")
@@ -382,7 +391,7 @@ func TestUserContent_Delete_403OnCrossAuthor(t *testing.T) {
 
 	rec = ugcReq(t, h, http.MethodDelete, "/v1/user-content/user-content:protected", intruderTok, nil, nil)
 	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
-	assert.Contains(t, rec.Body.String(), "author_mismatch")
+	assert.Contains(t, rec.Body.String(), "operator_mismatch")
 }
 
 // DELETE allowed for a different agent sharing the same operator.
@@ -611,7 +620,7 @@ func TestUserContent_SectionAdd_428WhenIfMatchMissing(t *testing.T) {
 	require.Equal(t, http.StatusPreconditionRequired, rec.Code, "body=%s", rec.Body.String())
 }
 
-func TestUserContent_SectionAdd_403OnCrossAuthor(t *testing.T) {
+func TestUserContent_SectionAdd_403OnCrossOperator(t *testing.T) {
 	t.Parallel()
 	h, _, _, signer := newAuthedUGCFixture(t)
 	forgeTok := mintToken(t, signer, "the implementer", "alice")
@@ -623,7 +632,7 @@ func TestUserContent_SectionAdd_403OnCrossAuthor(t *testing.T) {
 		map[string]string{"If-Match": etag},
 	)
 	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
-	require.Contains(t, rec.Body.String(), "author_mismatch")
+	require.Contains(t, rec.Body.String(), "operator_mismatch")
 }
 
 // Pin the containment-aware sibling check: same slug at the same
@@ -754,7 +763,7 @@ func TestUserContent_SectionRename_412OnStaleEtag(t *testing.T) {
 	require.Equal(t, http.StatusPreconditionFailed, rec.Code, "body=%s", rec.Body.String())
 }
 
-func TestUserContent_SectionRename_403OnCrossAuthor(t *testing.T) {
+func TestUserContent_SectionRename_403OnCrossOperator(t *testing.T) {
 	t.Parallel()
 	h, _, _, signer := newAuthedUGCFixture(t)
 	forgeTok := mintToken(t, signer, "the implementer", "alice")
@@ -897,7 +906,7 @@ func TestUserContent_SectionDelete_428WhenIfMatchMissing(t *testing.T) {
 	require.Equal(t, http.StatusPreconditionRequired, rec.Code, "body=%s", rec.Body.String())
 }
 
-func TestUserContent_SectionDelete_403OnCrossAuthor(t *testing.T) {
+func TestUserContent_SectionDelete_403OnCrossOperator(t *testing.T) {
 	t.Parallel()
 	h, _, _, signer := newAuthedUGCFixture(t)
 	forgeTok := mintToken(t, signer, "the implementer", "alice")
@@ -970,4 +979,92 @@ func TestUserContent_Section_RoundTrip_GetAddGetDeleteGet(t *testing.T) {
 	rec = ugcReq(t, h, http.MethodGet, "/v1/user-content/user-content:rt1/sections", tok, nil, nil)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.NotContains(t, rec.Body.String(), `"heading":"B"`)
+}
+
+// TestUserContent_GenericArchive_403OnCrossOperator pins the nava-
+// catch bypass closed per #377: a UGC entity reachable via
+// POST /v1/entities/{id}/archive must enforce the same
+// operator-equality gate as POST /v1/user-content/{id}/archive,
+// otherwise a cross-operator caller can archive a UGC entity through
+// the generic surface without ever hitting `operator_mismatch`.
+func TestUserContent_GenericArchive_403OnCrossOperator(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	ownerTok := mintToken(t, signer, "the implementer", "alice")
+	intruderTok := mintToken(t, signer, "stranger", "different-op")
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content", ownerTok, map[string]any{
+		"title": "Cross-op archive bait",
+		"body": "x",
+		"tags": []string{"x"},
+	}, nil)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	rec = ugcReq(t, h, http.MethodPost,
+		"/v1/entities/user-content:cross-op-archive-bait/archive", intruderTok, nil, nil)
+	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "operator_mismatch")
+}
+
+// TestUserContent_GenericDelete_403OnCrossOperator pins the second
+// half of the nava-catch closure: DELETE /v1/entities/{id} also
+// gates UGC kind through canEditByOperator. Archiving via the
+// owner first (legitimate) so the destroy-side gate is the only
+// thing that can let the intruder through; intruder must hit 403
+// before the archive-state check ever runs.
+func TestUserContent_GenericDelete_403OnCrossOperator(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	ownerTok := mintToken(t, signer, "the implementer", "alice")
+	intruderTok := mintToken(t, signer, "stranger", "different-op")
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content", ownerTok, map[string]any{
+		"title": "Cross-op delete bait",
+		"body": "x",
+		"tags": []string{"x"},
+	}, nil)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	// Legitimate archive via owner so the row is in destroy-eligible state.
+	rec = ugcReq(t, h, http.MethodPost,
+		"/v1/entities/user-content:cross-op-delete-bait/archive", ownerTok, nil, nil)
+	require.Equal(t, http.StatusOK, rec.Code, "owner-archive must succeed")
+
+	// Intruder hits the generic delete on an archived UGC entity —
+	// must get 403 from the operator gate, NOT 200 (silent destroy)
+	// and NOT 409 (must-archive-first bypass on a fresh entity).
+	rec = ugcReq(t, h, http.MethodDelete,
+		"/v1/entities/user-content:cross-op-delete-bait", intruderTok, nil, nil)
+	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "operator_mismatch")
+}
+
+// TestUserContent_GenericDelete_ActiveRow_403BeforeArchiveCheck pins
+// the order-of-checks fix from the second nava-catch on #377:
+// the operator gate must run BEFORE the ADR-0018 archive-first
+// gate so a cross-operator intruder learns 403 (operator_mismatch),
+// not 409 (must archive before delete). Otherwise the lifecycle hint
+// leaks existence + active state of someone else's UGC entity. The
+// UGC-specific delete path puts authorization first for the same
+// reason — see user_content_write.go:1356.
+func TestUserContent_GenericDelete_ActiveRow_403BeforeArchiveCheck(t *testing.T) {
+	t.Parallel()
+	h, _, _, signer := newAuthedUGCFixture(t)
+	ownerTok := mintToken(t, signer, "the implementer", "alice")
+	intruderTok := mintToken(t, signer, "stranger", "different-op")
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content", ownerTok, map[string]any{
+		"title": "Cross-op active probe",
+		"body": "x",
+		"tags": []string{"x"},
+	}, nil)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	// Intruder hits generic delete on the ACTIVE row. Must get 403
+	// from the operator gate, NOT 409 from the archive-first check.
+	rec = ugcReq(t, h, http.MethodDelete,
+		"/v1/entities/user-content:cross-op-active-probe", intruderTok, nil, nil)
+	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "operator_mismatch")
+	assert.NotContains(t, rec.Body.String(), "must archive before delete",
+		"lifecycle hint must not leak to a cross-operator caller")
 }

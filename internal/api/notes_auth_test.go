@@ -149,7 +149,7 @@ func TestCommentsAuth_MismatchedAuthor_403(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
 	var er errorResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&er))
-	assert.Equal(t, "author_mismatch", er.Error)
+	assert.Equal(t, "author_impersonation", er.Error)
 
 	// Vault file must NOT have grown.
 	v := readVaultByID(t, root, "boardgame", commentsAuthTestEntityID)
