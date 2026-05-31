@@ -44,7 +44,7 @@ Source-shape entities answer "where did the data come from"; canonical-shape ent
 
 ## Tools
 
-### `ingest(url)`
+### `ingest(url, force_refetch?)`
 
 Tells yaad-index to fetch a URL into the graph. Returns one of four states:
 
@@ -56,6 +56,8 @@ Tells yaad-index to fetch a URL into the graph. Returns one of four states:
 Always honor whichever state comes back. Don't auto-pick a disambiguation option — surface the options to your operator (or your own reasoning) before re-calling ingest.
 
 **Disambiguation rendering.** When `state: disambiguation`, render `options` to your operator as a numbered list — `1.`, `2.`, `3.`, …, one per line, label first and the optional `summary` on a subsequent indented line. The operator picks by number; you re-call `ingest` with the chosen option's `<plugin>: <id>` shorthand. Don't auto-pick.
+
+**`force_refetch` (optional, default `false`).** Pass `true` to bypass the cache lookup and force a fresh plugin Fetch even when a fresh entity row already exists. Use it when upstream content has changed and the cached entity is stale (cache TTL hasn't expired yet) or when you need to recover from a botched prior fetch. The flag is orthogonal to disambiguation — `force_refetch` on a disambiguation-shorthand still re-fetches the chosen candidate. Default `false` keeps the existing cache-first behavior.
 
 ### `get_entity(id)`
 
