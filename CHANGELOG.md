@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.15.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.14.0...yaad-index-v0.15.0) (2026-05-31)
+
+
+### Features
+
+* **auth:** operator-keyed UGC edit permission + disambiguate add_note ([#377](https://github.com/yaad-index/yaad-index/issues/377)) ([#378](https://github.com/yaad-index/yaad-index/issues/378)) ([af7753a](https://github.com/yaad-index/yaad-index/commit/af7753a513b6df6a7ce09767b1fdf3ef8a9dd180))
+* **workflow:** archive_when engine hook + e2e ([#376](https://github.com/yaad-index/yaad-index/issues/376) Cut 3) ([#382](https://github.com/yaad-index/yaad-index/issues/382)) ([f1158f0](https://github.com/yaad-index/yaad-index/commit/f1158f0c82c6245569c39510c15a1efb69636616))
+* **workflow:** archive_when parser + predicate evaluator ([#376](https://github.com/yaad-index/yaad-index/issues/376) Cut 2) ([#381](https://github.com/yaad-index/yaad-index/issues/381)) ([4cb78d3](https://github.com/yaad-index/yaad-index/commit/4cb78d34d848bb93ea9d647329b31c86c9e537a3))
+
 ## [0.14.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.13.0...yaad-index-v0.14.0) (2026-05-31)
 
 
