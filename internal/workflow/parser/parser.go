@@ -131,16 +131,30 @@ type frontmatterShape struct {
 // half. Mirrors the ADR-0024 schema; the parser fuses this into
 // Workflow + runs Validate.
 type bodyShape struct {
-	AllowedPlugins    []string         `yaml:"allowed_plugins"`
-	Trigger           triggerShape     `yaml:"trigger"`
-	Subject           string           `yaml:"subject"`
-	Context           []ctxShape       `yaml:"context"`
-	Condition         string           `yaml:"condition"`
-	Dedup             *dedupShape      `yaml:"dedup"`
-	Actions           []actionShape    `yaml:"actions"`
-	AddableGaps       []string         `yaml:"addable_gaps"`
-	AutoArchiveOnDone *bool            `yaml:"auto_archive_on_done"`
-	CatchAll          bool             `yaml:"catch_all"`
+	AllowedPlugins    []string           `yaml:"allowed_plugins"`
+	Trigger           triggerShape       `yaml:"trigger"`
+	Subject           string             `yaml:"subject"`
+	Context           []ctxShape         `yaml:"context"`
+	Condition         string             `yaml:"condition"`
+	Dedup             *dedupShape        `yaml:"dedup"`
+	Actions           []actionShape      `yaml:"actions"`
+	AddableGaps       []string           `yaml:"addable_gaps"`
+	AutoArchiveOnDone *bool              `yaml:"auto_archive_on_done"`
+	CatchAll          bool               `yaml:"catch_all"`
+	ArchiveWhen       *archiveWhenShape  `yaml:"archive_when"`
+}
+
+// archiveWhenShape is the YAML wire shape for ADR-0030's per-
+// workflow archive predicate. Recursively self-referential to allow
+// nested any_of / all_of composition. Each field is `omitempty` so
+// operators can declare only the primitives they need; siblings
+// AND implicitly at parse + evaluator time.
+type archiveWhenShape struct {
+	AllGapsResolved bool                `yaml:"all_gaps_resolved,omitempty"`
+	HasEdges        []string            `yaml:"has_edges,omitempty"`
+	FieldEquals     map[string]any      `yaml:"field_equals,omitempty"`
+	AnyOf           []archiveWhenShape  `yaml:"any_of,omitempty"`
+	AllOf           []archiveWhenShape  `yaml:"all_of,omitempty"`
 }
 
 type triggerShape struct {
@@ -316,6 +330,7 @@ func decode(frontmatter, yamlBody []byte) (*Workflow, error) {
 		AddableGaps:       body.AddableGaps,
 		AutoArchiveOnDone: body.AutoArchiveOnDone,
 		CatchAll:          body.CatchAll,
+		ArchiveWhen:       archiveWhenFromShape(body.ArchiveWhen),
 	}
 	if wf.Version == 0 {
 		wf.Version = 1
@@ -585,4 +600,40 @@ func claimEntityFromShape(s *claimEntityShape) *ClaimEntityAction {
 		return nil
 	}
 	return &ClaimEntityAction{}
+}
+
+// archiveWhenFromShape lifts the wire-shape's recursive YAML into
+// the public ArchiveWhen tree per ADR-0030. nil input → nil output
+// (the workflow opted out). The wire shape and the public shape
+// share the same recursive structure; this helper walks the
+// AnyOf / AllOf children + preserves the nil-vs-empty distinction
+// so the validator can reject `any_of: []` / `all_of: []` shapes
+// even when the operator pairs them with sibling primitives that
+// would otherwise satisfy archiveWhenHasAnyPrimitive (#376 Cut 2
+// review finding — gating on `len > 0` collapsed empty-with-siblings
+// to nil, hiding the bad shape from validation).
+func archiveWhenFromShape(s *archiveWhenShape) *ArchiveWhen {
+	if s == nil {
+		return nil
+	}
+	aw := &ArchiveWhen{
+		AllGapsResolved: s.AllGapsResolved,
+		HasEdges:        s.HasEdges,
+		FieldEquals:     s.FieldEquals,
+	}
+	if s.AnyOf != nil {
+		aw.AnyOf = make([]ArchiveWhen, len(s.AnyOf))
+		for i := range s.AnyOf {
+			child := archiveWhenFromShape(&s.AnyOf[i])
+			aw.AnyOf[i] = *child
+		}
+	}
+	if s.AllOf != nil {
+		aw.AllOf = make([]ArchiveWhen, len(s.AllOf))
+		for i := range s.AllOf {
+			child := archiveWhenFromShape(&s.AllOf[i])
+			aw.AllOf[i] = *child
+		}
+	}
+	return aw
 }

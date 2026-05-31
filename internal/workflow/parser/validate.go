@@ -68,7 +68,70 @@ func Validate(wf *Workflow) error {
 	if err := validateCatchAll(wf); err != nil {
 		return err
 	}
+	if err := validateArchiveWhen(wf.ArchiveWhen, "archive_when"); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateArchiveWhen enforces the ADR-0030 predicate-shape rules
+// on a single ArchiveWhen tree. Nil input is a no-op (workflow
+// opted out); a non-nil predicate must populate at least one
+// primitive — the empty predicate is a file-shape error. AnyOf
+// and AllOf each require at least one nested branch when present,
+// and each branch recursively passes the same shape rules.
+//
+// path names where the predicate sits within the validator's tree
+// (e.g. `archive_when`, `archive_when.any_of[0]`); error messages
+// thread it so a deeply-nested empty branch points the operator
+// at the exact YAML location.
+func validateArchiveWhen(aw *ArchiveWhen, path string) error {
+	if aw == nil {
+		return nil
+	}
+	if !archiveWhenHasAnyPrimitive(aw) {
+		return fmt.Errorf("workflow: %s: at least one of all_gaps_resolved, has_edges, field_equals, any_of, all_of must populate; empty predicate is rejected", path)
+	}
+	if aw.AnyOf != nil && len(aw.AnyOf) == 0 {
+		return fmt.Errorf("workflow: %s.any_of: at least one nested predicate required", path)
+	}
+	if aw.AllOf != nil && len(aw.AllOf) == 0 {
+		return fmt.Errorf("workflow: %s.all_of: at least one nested predicate required", path)
+	}
+	for i := range aw.AnyOf {
+		child := aw.AnyOf[i]
+		if err := validateArchiveWhen(&child, fmt.Sprintf("%s.any_of[%d]", path, i)); err != nil {
+			return err
+		}
+	}
+	for i := range aw.AllOf {
+		child := aw.AllOf[i]
+		if err := validateArchiveWhen(&child, fmt.Sprintf("%s.all_of[%d]", path, i)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// archiveWhenHasAnyPrimitive reports whether the predicate populates
+// at least one primitive that would carry semantics. Zero-valued
+// AllGapsResolved (`false`) does NOT count — the operator must
+// explicitly set `true` for it to participate; the zero value is
+// indistinguishable from "field omitted" in YAML.
+func archiveWhenHasAnyPrimitive(aw *ArchiveWhen) bool {
+	switch {
+	case aw.AllGapsResolved:
+		return true
+	case len(aw.HasEdges) > 0:
+		return true
+	case len(aw.FieldEquals) > 0:
+		return true
+	case len(aw.AnyOf) > 0:
+		return true
+	case len(aw.AllOf) > 0:
+		return true
+	}
+	return false
 }
 
 // validateCatchAll enforces the #169 catch-all constraints on a
