@@ -543,3 +543,111 @@ func TestRenderBody_ThumbnailRefMatchesOnDiskPath(t *testing.T) {
 	assert.Equal(t, wantPath, resolved,
 		"markdown ref must resolve relative to .md file to the on-disk attachment path")
 }
+
+// TestRenderBody_OperatorExperience_PopulatedRendersSection pins
+// #367: when ≥1 operator_* field is set, renderBody emits the
+// "My Experience" section with the lines for each present field.
+func TestRenderBody_OperatorExperience_PopulatedRendersSection(t *testing.T) {
+	t.Parallel()
+
+	bg := &bgg.Boardgame{
+		Name:  "Foo Bar (2026)",
+		BGGID: "999999",
+		Data: map[string]any{
+			"title":                     "Foo Bar",
+			"description":               "Acme.",
+			"operator_rating":           8,
+			"operator_num_plays":        18,
+			"operator_status":           []string{"own", "played"},
+			"operator_acquisition_date": "2021-10-09",
+			"operator_acquired_from":    "Online retailer",
+			"operator_price_paid":       "34",
+			"operator_price_currency":   "EUR",
+			"operator_comment":          "Heavy economic euro that grows on you.",
+		},
+	}
+
+	got := renderBody(bg, slug.Slug(bg.Name), "jpg")
+
+	assert.Contains(t, got, "## My Experience", "operator section header present")
+	assert.Contains(t, got, "- **Rating:** 8/10")
+	assert.Contains(t, got, "- **Plays:** 18")
+	assert.Contains(t, got, "- **Status:** own, played")
+	assert.Contains(t, got, "- **Acquired:** 2021-10-09 from Online retailer for €34")
+	assert.Contains(t, got, "- **Comment:** Heavy economic euro that grows on you.")
+}
+
+// TestRenderBody_OperatorExperience_EmptyOmitsSection pins that
+// the section is skipped when no operator_* field is populated —
+// the body for a BGG-only fetch stays unchanged from pre-#367.
+func TestRenderBody_OperatorExperience_EmptyOmitsSection(t *testing.T) {
+	t.Parallel()
+
+	bg := &bgg.Boardgame{
+		Name:  "Foo Bar (2026)",
+		BGGID: "999999",
+		Data: map[string]any{
+			"title":       "Foo Bar",
+			"description": "Acme.",
+		},
+	}
+	got := renderBody(bg, slug.Slug(bg.Name), "jpg")
+	assert.NotContains(t, got, "## My Experience",
+		"no operator section when no operator_* field populated")
+}
+
+// TestRenderBody_OperatorExperience_PartialOnlyRendersPresent
+// pins the per-field optionality: only the present operator_*
+// fields render lines; absent fields don't leave blank lines or
+// "Acquired:" with no value.
+func TestRenderBody_OperatorExperience_PartialOnlyRendersPresent(t *testing.T) {
+	t.Parallel()
+
+	bg := &bgg.Boardgame{
+		Name:  "Foo Bar (2026)",
+		BGGID: "999999",
+		Data: map[string]any{
+			"title":           "Foo Bar",
+			"operator_rating": 7,
+			// no num_plays, status, comment, acquisition.
+		},
+	}
+	got := renderBody(bg, slug.Slug(bg.Name), "")
+	assert.Contains(t, got, "## My Experience")
+	assert.Contains(t, got, "- **Rating:** 7/10")
+	assert.NotContains(t, got, "- **Plays:**")
+	assert.NotContains(t, got, "- **Status:**")
+	assert.NotContains(t, got, "- **Acquired:**")
+	assert.NotContains(t, got, "- **Comment:**")
+}
+
+// TestRenderOperatorExperience_CurrencyVariants pins the
+// currency-symbol mapping: EUR/USD/GBP/JPY get single-character
+// symbols; other codes get a bare code + space; missing code
+// drops the price line silently.
+func TestRenderOperatorExperience_CurrencyVariants(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		currency string
+		want     string
+	}{
+		{"EUR", "EUR", "for €30"},
+		{"USD", "USD", "for $30"},
+		{"GBP", "GBP", "for £30"},
+		{"JPY", "JPY", "for ¥30"},
+		{"unknown 3-letter code", "CHF", "for CHF 30"},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := renderOperatorExperience(map[string]any{
+				"operator_price_paid":     "30",
+				"operator_price_currency": c.currency,
+			})
+			assert.Contains(t, got, c.want)
+		})
+	}
+}
