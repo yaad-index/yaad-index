@@ -1456,3 +1456,197 @@ status: active
 	assert.NotEqual(t, wf1.ContentHash, wf3.ContentHash,
 		"different input bytes produce different ContentHash")
 }
+
+// archiveWhenWorkflowMarkdown threads archive_when through the full
+// ADR-0024 worked-example shape so Parse exercises the complete
+// frontmatter → body → validate pipeline including the new
+// predicate fields.
+func archiveWhenWorkflowMarkdown(predicate string) string {
+	return "---\n" +
+		"name: gmail-catch-all\n" +
+		"version: 1\n" +
+		"status: active\n" +
+		"---\n" +
+		"\n" +
+		"# Gmail catch-all archive\n" +
+		"\n" +
+		"```yaml\n" +
+		"allowed_plugins:\n" +
+		"  - yaad-gmail\n" +
+		"\n" +
+		"trigger:\n" +
+		"  type: entity_created\n" +
+		"  match:\n" +
+		"    canonical_kind: gmail\n" +
+		"\n" +
+		"actions:\n" +
+		"  - add_note:\n" +
+		"      content: 'observed'\n" +
+		"\n" +
+		predicate +
+		"```\n"
+}
+
+// TestParse_ArchiveWhen_AllGapsResolved pins the most-common shape
+// per ADR-0030 §2: `archive_when: { all_gaps_resolved: true }`.
+// Validates that the parser carries the predicate onto the
+// Workflow value with the correct primitive populated.
+func TestParse_ArchiveWhen_AllGapsResolved(t *testing.T) {
+	t.Parallel()
+	md := archiveWhenWorkflowMarkdown("archive_when:\n  all_gaps_resolved: true\n")
+	wf, err := Parse([]byte(md))
+	require.NoError(t, err, "parse should accept archive_when: all_gaps_resolved")
+	require.NotNil(t, wf.ArchiveWhen, "archive_when must carry through to the Workflow value")
+	assert.True(t, wf.ArchiveWhen.AllGapsResolved)
+	assert.Empty(t, wf.ArchiveWhen.HasEdges)
+	assert.Empty(t, wf.ArchiveWhen.FieldEquals)
+	assert.Empty(t, wf.ArchiveWhen.AnyOf)
+	assert.Empty(t, wf.ArchiveWhen.AllOf)
+}
+
+// TestParse_ArchiveWhen_AllPrimitives pins that sibling primitives
+// AND together implicitly per ADR-0030 §2 — declaring multiple at
+// the top level decodes onto the value verbatim.
+func TestParse_ArchiveWhen_AllPrimitives(t *testing.T) {
+	t.Parallel()
+	md := archiveWhenWorkflowMarkdown(
+		"archive_when:\n" +
+			"  all_gaps_resolved: true\n" +
+			"  has_edges:\n" +
+			"    - is_about\n" +
+			"    - is_actionable_for\n" +
+			"  field_equals:\n" +
+			"    is_actionable: 'no'\n" +
+			"    state: closed\n",
+	)
+	wf, err := Parse([]byte(md))
+	require.NoError(t, err)
+	require.NotNil(t, wf.ArchiveWhen)
+	assert.True(t, wf.ArchiveWhen.AllGapsResolved)
+	assert.Equal(t, []string{"is_about", "is_actionable_for"}, wf.ArchiveWhen.HasEdges)
+	assert.Equal(t, map[string]any{"is_actionable": "no", "state": "closed"}, wf.ArchiveWhen.FieldEquals)
+}
+
+// TestParse_ArchiveWhen_NestedAnyOfAllOf pins that the recursive
+// composition shape decodes verbatim, including the inner branches.
+func TestParse_ArchiveWhen_NestedAnyOfAllOf(t *testing.T) {
+	t.Parallel()
+	md := archiveWhenWorkflowMarkdown(
+		"archive_when:\n" +
+			"  any_of:\n" +
+			"    - all_of:\n" +
+			"        - all_gaps_resolved: true\n" +
+			"        - field_equals:\n" +
+			"            category: auto\n" +
+			"    - field_equals:\n" +
+			"        state: closed\n",
+	)
+	wf, err := Parse([]byte(md))
+	require.NoError(t, err)
+	require.NotNil(t, wf.ArchiveWhen)
+	require.Len(t, wf.ArchiveWhen.AnyOf, 2)
+	require.Len(t, wf.ArchiveWhen.AnyOf[0].AllOf, 2)
+	assert.True(t, wf.ArchiveWhen.AnyOf[0].AllOf[0].AllGapsResolved)
+	assert.Equal(t, map[string]any{"category": "auto"}, wf.ArchiveWhen.AnyOf[0].AllOf[1].FieldEquals)
+	assert.Equal(t, map[string]any{"state": "closed"}, wf.ArchiveWhen.AnyOf[1].FieldEquals)
+}
+
+// TestParse_ArchiveWhen_Omitted pins that workflows without
+// archive_when keep working — Validate accepts the workflow and
+// ArchiveWhen on the result is nil (the opt-out signal the engine
+// reads to skip evaluation).
+func TestParse_ArchiveWhen_Omitted(t *testing.T) {
+	t.Parallel()
+	wf, err := Parse([]byte(validWorkflowMarkdown))
+	require.NoError(t, err)
+	assert.Nil(t, wf.ArchiveWhen, "archive_when omitted → nil (workflow opted out)")
+}
+
+// TestValidate_ArchiveWhen_EmptyPredicateRejected pins the
+// no-primitive-populated guard per ADR-0030 §2. An archive_when
+// block with no fields set has no semantic meaning; the parser
+// must reject it so the operator gets a fail-fast file-shape error
+// rather than a silently-no-op workflow.
+func TestValidate_ArchiveWhen_EmptyPredicateRejected(t *testing.T) {
+	t.Parallel()
+	md := archiveWhenWorkflowMarkdown("archive_when: {}\n")
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "archive_when")
+	assert.Contains(t, err.Error(), "empty predicate")
+}
+
+// TestValidate_ArchiveWhen_EmptyAnyOfRejected pins that a non-nil
+// any_of must contain at least one branch.
+func TestValidate_ArchiveWhen_EmptyAnyOfRejected(t *testing.T) {
+	t.Parallel()
+	md := archiveWhenWorkflowMarkdown("archive_when:\n  any_of: []\n")
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "archive_when")
+	// any_of branch must populate; root-level empty triggers the
+	// no-primitive guard, not the empty-any_of one — match on the
+	// generic predicate error which covers both.
+}
+
+// TestValidate_ArchiveWhen_EmptyAllOfRejected pins that a non-nil
+// all_of must contain at least one branch.
+func TestValidate_ArchiveWhen_EmptyAllOfRejected(t *testing.T) {
+	t.Parallel()
+	md := archiveWhenWorkflowMarkdown("archive_when:\n  all_of: []\n")
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "archive_when")
+}
+
+// TestValidate_ArchiveWhen_NestedEmptyPredicateRejected pins that
+// a deeply-nested empty predicate also rejects + the error path
+// names the branch (so the operator can find it in their YAML).
+func TestValidate_ArchiveWhen_NestedEmptyPredicateRejected(t *testing.T) {
+	t.Parallel()
+	md := archiveWhenWorkflowMarkdown(
+		"archive_when:\n" +
+			"  any_of:\n" +
+			"    - all_gaps_resolved: true\n" +
+			"    - {}\n",
+	)
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "any_of[1]",
+		"error path must name the nested empty branch so operator can find it")
+}
+
+// TestValidate_ArchiveWhen_EmptyAnyOfWithSiblingRejected pins the
+// #376 Cut 2 review finding: when archive_when has a populated sibling
+// primitive AND a present-empty `any_of: []`, the present-empty
+// branch must still reject. The wire-shape's nil-vs-empty slice
+// distinction now threads faithfully into the public type so the
+// validator's `aw.AnyOf != nil && len(aw.AnyOf) == 0` reject fires
+// correctly.
+func TestValidate_ArchiveWhen_EmptyAnyOfWithSiblingRejected(t *testing.T) {
+	t.Parallel()
+	md := archiveWhenWorkflowMarkdown(
+		"archive_when:\n" +
+			"  all_gaps_resolved: true\n" +
+			"  any_of: []\n",
+	)
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "archive_when.any_of",
+		"present-empty any_of with populated sibling primitive must reject + name the bad branch")
+}
+
+// TestValidate_ArchiveWhen_EmptyAllOfWithSiblingRejected is the
+// AllOf counterpart of the above #376 Cut 2 review finding.
+func TestValidate_ArchiveWhen_EmptyAllOfWithSiblingRejected(t *testing.T) {
+	t.Parallel()
+	md := archiveWhenWorkflowMarkdown(
+		"archive_when:\n" +
+			"  all_gaps_resolved: true\n" +
+			"  all_of: []\n",
+	)
+	_, err := Parse([]byte(md))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "archive_when.all_of",
+		"present-empty all_of with populated sibling primitive must reject + name the bad branch")
+}

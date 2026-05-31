@@ -158,6 +158,58 @@ type Workflow struct {
 	// type + kind combination; the global wildcard slot
 	// (kind-empty) is its own unique entry.
 	CatchAll bool
+
+	// ArchiveWhen is the post-run predicate per ADR-0030 that, when
+	// true after the workflow's action set completes successfully,
+	// auto-archives the source entity via the same code path as the
+	// existing /v1/entities/{id}/archive surface. Optional; nil
+	// means the workflow does not opt in (current behavior — no
+	// archive evaluation runs). When non-nil at least one primitive
+	// must populate; the empty predicate is a file-shape error.
+	ArchiveWhen *ArchiveWhen
+}
+
+// ArchiveWhen captures the predicate vocabulary per ADR-0030 §2.
+// Sibling primitives at the top level AND together implicitly —
+// declaring `AllGapsResolved: true` + `FieldEquals: { ... }` on
+// the same value means both must hold. AnyOf / AllOf give explicit
+// composition for nested branches; AnyOf is OR, AllOf is AND.
+//
+// At least one of (AllGapsResolved, HasEdges, FieldEquals, AnyOf,
+// AllOf) must populate; the empty predicate is a parse-time error
+// (Validate rejects it). AnyOf / AllOf themselves must each contain
+// at least one nested predicate when present.
+type ArchiveWhen struct {
+	// AllGapsResolved, when true, requires the entity to have no
+	// remaining unfilled gaps (every registered gap either filled
+	// or deferred). The most common predicate.
+	AllGapsResolved bool
+
+	// HasEdges names outgoing edge types that must ALL be present
+	// on the entity for the predicate to fire. Each type is a
+	// canonical edge name (`is_about`, `is_actionable_for`, …).
+	// Empty list means "no edge-presence requirement"; the
+	// primitive is treated as unset.
+	HasEdges []string
+
+	// FieldEquals maps `data.<field>` names to required values.
+	// All listed fields must equal the given value for the
+	// primitive to fire. Empty map means "no field requirement";
+	// the primitive is treated as unset.
+	FieldEquals map[string]any
+
+	// AnyOf composes child predicates with OR. The composite is
+	// true iff at least one nested predicate evaluates true.
+	// Empty list rejects at validation time (a non-nil any_of
+	// must contain at least one branch).
+	AnyOf []ArchiveWhen
+
+	// AllOf composes child predicates with AND. Equivalent to
+	// declaring multiple sibling primitives on the same value
+	// (which already AND together); AllOf is the explicit form
+	// for nested compositions. Empty list rejects at validation
+	// time (a non-nil all_of must contain at least one branch).
+	AllOf []ArchiveWhen
 }
 
 // Trigger names the event the workflow subscribes to.
