@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/yaad-index/yaad-index/compare/yaad-bgg-v0.3.0...yaad-bgg-v0.4.0) (2026-05-31)
+
+
+### Features
+
+* **bgg:** render My Experience section for operator fields ([#367](https://github.com/yaad-index/yaad-index/issues/367)) ([#370](https://github.com/yaad-index/yaad-index/issues/370)) ([5c763eb](https://github.com/yaad-index/yaad-index/commit/5c763ebf30431759fbd6025d37346653360c2d54))
+
+
+### Bug Fixes
+
+* **bgg:** emit thumbnail markdown ref against entity slug, not BGG id ([#365](https://github.com/yaad-index/yaad-index/issues/365)) ([#366](https://github.com/yaad-index/yaad-index/issues/366)) ([147dcc0](https://github.com/yaad-index/yaad-index/commit/147dcc04b3fd0dacc1049e15e5c4b4e2f2a9ff24))
+
 ## [0.3.0](https://github.com/yaad-index/yaad-index/compare/yaad-bgg-v0.2.0...yaad-bgg-v0.3.0) (2026-05-29)
 
 
