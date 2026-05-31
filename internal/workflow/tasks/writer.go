@@ -153,8 +153,15 @@ func (w *Writer) Resolve(id string, now time.Time, autoArchive bool) error {
 	// path and the new (created) path need staging; the auto-
 	// committer's `git add -A -- <path>` shape stages a deletion at
 	// activePath when we signal that path AFTER the rename — so we
-	// notify on both so the commit captures the move.
-	w.notifyCommit(context.Background(), activePath, fmt.Sprintf("task: %s: archive", id), "")
+	// notify on both so the commit captures the move. The two signals
+	// carry distinct messages per #374: the source-unlink lands as
+	// "task: <id>: archive (unlink source)" and the archive-create
+	// lands as the primary "task: <id>: archive" line. Order matters:
+	// `git log --oneline` is newest-first, so the LAST notifyCommit
+	// produces the top line — emit the source-unlink first so the
+	// primary archive line lands newer + reads as the top entry after
+	// a batch resolve (the scannability goal of #374).
+	w.notifyCommit(context.Background(), activePath, fmt.Sprintf("task: %s: archive (unlink source)", id), "")
 	w.notifyCommit(context.Background(), archivePath, fmt.Sprintf("task: %s: archive", id), "")
 	return nil
 }
