@@ -5,11 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/yaad-index/yaad-index/internal/bgg"
+	"github.com/yaad-index/yaad-index/internal/slug"
 )
 
 // TestRenderBody_HappyPath pins's expected body shape:
@@ -495,4 +499,47 @@ func TestWriteFetchResponse_NDJSONShape(t *testing.T) {
 	if !got.OK || got.Structured == nil || got.Structured.Name != "Brass: Birmingham" {
 		t.Errorf("envelope round-trip failed: ok=%v structured=%+v", got.OK, got.Structured)
 	}
+}
+
+// TestRenderBody_ThumbnailRefMatchesOnDiskPath pins #365: the
+// markdown image-ref emitted by renderBody resolves, relative
+// to the .md file at <kind>/<slug>.md, to the on-disk
+// attachment at <kind>/<slug>/attachments/thumb.<ext> that the
+// daemon's writer places.
+func TestRenderBody_ThumbnailRefMatchesOnDiskPath(t *testing.T) {
+	t.Parallel()
+
+	bg := &bgg.Boardgame{
+		Name:  "Foo Bar (2026)",
+		BGGID: "999999",
+		Data: map[string]any{
+			"title":       "Foo Bar",
+			"description": "Acme.",
+		},
+	}
+
+	// Production caller (handleFetch) derives the slug from bg.Name
+	// via slug.Slug — the same derivation the daemon uses per
+	// ADR-0021, so the markdown ref + the daemon-placed attachment
+	// dir converge. Mirror the production call shape here.
+	want := "foo-bar-2026"
+	got := renderBody(bg, slug.Slug(bg.Name), "jpg")
+
+	// 1. The image-ref directory segment must equal the slug —
+	// pre-#365 it was bg.BGGID (numeric), which created a path the
+	// daemon never materializes.
+	wantRef := "![thumbnail](" + want + "/attachments/thumb.jpg)"
+	assert.Contains(t, got, wantRef,
+		"body must contain slug-shaped path")
+	assert.NotContains(t, got, bg.BGGID+"/attachments/",
+		"body must NOT contain bgg_id-shaped path (the #365 bug)")
+
+	// 2. The relative path must resolve, from the .md file at
+	// `<kind>/<slug>.md`, to `<kind>/<slug>/attachments/thumb.jpg`.
+	mdPath := filepath.Join("boardgame", want+".md")
+	mdDir := filepath.Dir(mdPath)
+	resolved := filepath.Join(mdDir, want+"/attachments/thumb.jpg")
+	wantPath := filepath.Join("boardgame", want, "attachments", "thumb.jpg")
+	assert.Equal(t, wantPath, resolved,
+		"markdown ref must resolve relative to .md file to the on-disk attachment path")
 }

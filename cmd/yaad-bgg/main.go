@@ -49,6 +49,7 @@ import (
 	"github.com/yaad-index/yaad-index/pkg/plugin/data"
 
 	"github.com/yaad-index/yaad-index/internal/bgg"
+	"github.com/yaad-index/yaad-index/internal/slug"
 )
 
 // EnvAPIKey is the env var operators set to supply the BGG API key.
@@ -499,15 +500,15 @@ func runFetch(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) er
 	// path. Empty when staging was skipped or failed — the body
 	// renderer omits the image line in that case.
 	//
-	// localID for staging-file naming uses the BGG numeric id —
-	// stable across re-fetches AND distinct per game without
+	// stagingLabel for staging-file naming uses the BGG numeric
+	// id — stable across re-fetches AND distinct per game without
 	// reaching into the daemon-derived source slug. Pre-ADR-0021
 	// the entity ID's local part doubled as the staging label;
 	// post-rewrite the BGG numeric is the closest equivalent.
 	var thumbExt string
-	localID := bg.BGGID
+	stagingLabel := bg.BGGID
 	if bg.ThumbnailURL != "" {
-		stagedPath, ext, terr := stageThumbnail(ctx, bg.ThumbnailURL, localID)
+		stagedPath, ext, terr := stageThumbnail(ctx, bg.ThumbnailURL, stagingLabel)
 		if terr != nil {
 			_, _ = fmt.Fprintf(stderr, "yaad-bgg: skipping thumbnail attachment: %v\n", terr)
 		} else {
@@ -526,7 +527,17 @@ func runFetch(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) er
 	// hand-edits to the body survive re-ingest because the daemon
 	// (ADR-0015) wraps this content in marker pair on write; the
 	// plugin doesn't see or care about the markers.
-	resp.RawContent = renderBody(bg, localID, thumbExt)
+	//
+	// #365: the markdown image-ref uses the daemon-derived entity
+	// slug (not the BGG numeric id) so the path resolves to the
+	// actual on-disk attachment at <kind>/<slug>/attachments/
+	// thumb.<ext> rather than the bggID-shaped path that pre-#365
+	// emitted (no such directory existed; thumbnails rendered
+	// broken on every BGG entity). The slug is derived locally
+	// via slug.Slug(bg.Name); the daemon's slug derivation matches
+	// per ADR-0021, so the markdown ref + the daemon-placed
+	// attachment dir converge.
+	resp.RawContent = renderBody(bg, slug.Slug(bg.Name), thumbExt)
 
 	return writeFetchResponse(stdout, resp)
 }
