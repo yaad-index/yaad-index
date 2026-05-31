@@ -100,6 +100,24 @@ func handleEntityArchiveTransition(logger *slog.Logger, st store.Store, vaultWri
 				"auth claim missing on request — server misconfiguration")
 			return
 		}
+
+		// #377 nava-catch: UGC entities reach archive + restore via
+		// this generic /v1/entities/{id}/(archive|restore) route in
+		// addition to the UGC-specific delete path (which uses the
+		// archive route directly). Without this gate a cross-operator
+		// caller can archive a UGC entity through the generic surface
+		// and chain it with the generic destroy to bypass the
+		// canEditUserContent check entirely. Mirror the UGC permission
+		// rule here keyed on the store row's operator.
+		if got.Kind == "user-content" {
+			storedOperator, _ := got.Data["operator"].(string)
+			if !canEditByOperator(claim, storedOperator) {
+				writeError(w, http.StatusForbidden, "operator_mismatch",
+					"caller's operator does not match this user-content entity's operator")
+				return
+			}
+		}
+
 		var author string
 		if !IsAnonymousClaim(claim) {
 			author = claim.Subject

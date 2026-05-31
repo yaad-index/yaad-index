@@ -21,7 +21,9 @@ func registerAddNote(s *server.MCPServer, b *bridge) {
 				"(UTC), the JWT subject as author, and the operator from "+
 				"the pair-claim. Empty author is server-filled; an explicit "+
 				"author MUST equal the JWT subject or the call returns the "+
-				"upstream 403 `author_mismatch` envelope verbatim. "+
+				"upstream 403 `author_impersonation` envelope verbatim "+
+				"(anti-impersonation guard at create time — distinct from "+
+				"the operator-keyed edit-permission rule on UGC mutations). "+
 				"Optional `field` scopes the note to a specific entity "+
 				"field (e.g. `birth_date`); `kind=annotation` flags the "+
 				"note as agent feedback (use the read-side `kind` filter "+

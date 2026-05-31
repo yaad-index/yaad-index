@@ -19,12 +19,14 @@ import (
 // commentsRequest is the POST /v1/entities/{id}/notes body. The
 // server stamps `date` (UTC) — clients never send it.
 //
-// Per yaad-index a prior PR, `author` must match the JWT subject
-// attached by the auth middleware. Empty `author` is filled from the
-// claim's Subject for client convenience; a non-empty `author` that
-// disagrees with the claim returns 403 author_mismatch. Clients have
-// no way to set `operator` — that field is stamped server-side from
-// the claim's Operator and is read-only on the wire.
+// `author` must match the JWT subject attached by the auth
+// middleware. Empty `author` is filled from the claim's Subject for
+// client convenience; a non-empty `author` that disagrees with the
+// claim returns 403 author_impersonation (per #377 — this is an
+// anti-impersonation guard at create time, distinct from the
+// operator-keyed edit-permission rule on UGC mutations). Clients
+// have no way to set `operator` — that field is stamped server-side
+// from the claim's Operator and is read-only on the wire.
 type commentsRequest struct {
 	Text string `json:"text"`
 	Author string `json:"author,omitempty"`
@@ -178,8 +180,8 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 			if author == "" {
 				author = claim.Subject
 			} else if author != claim.Subject {
-				writeError(w, http.StatusForbidden, "author_mismatch",
-					"author claim does not match authenticated agent")
+				writeError(w, http.StatusForbidden, "author_impersonation",
+					"author field does not match the authenticated agent's JWT subject")
 				return
 			}
 			operator = claim.Operator

@@ -185,7 +185,7 @@ func registerAddUserContentSection(s *server.MCPServer, b *bridge) {
 				"inserted section's index + a fresh `etag`. Error "+
 				"envelopes: `precondition_failed` (412, stale etag), "+
 				"`precondition_required` (428, missing etag), "+
-				"`author_mismatch` (403), `conflict` (409 when the "+
+				"`operator_mismatch` (403), `conflict` (409 when the "+
 				"new heading slugifies to an existing sibling at the "+
 				"same depth).",
 		),
@@ -254,7 +254,7 @@ func registerRenameUserContentSection(s *server.MCPServer, b *bridge) {
 				"rewrites the heading line. The depth (`#`-count) is "+
 				"preserved. Returns the renamed section + a fresh "+
 				"`etag`. Error envelopes: `precondition_failed` (412), "+
-				"`precondition_required` (428), `author_mismatch` "+
+				"`precondition_required` (428), `operator_mismatch` "+
 				"(403), `conflict` (409 when the new heading slugifies "+
 				"to a sibling's existing slug), `invalid_argument` "+
 				"(400 for renaming the pre-heading section).",
@@ -312,7 +312,7 @@ func registerDeleteUserContentSection(s *server.MCPServer, b *bridge) {
 				"`edit_user_content_section`). Returns the entity's "+
 				"new etag + the removed section's old index. Error "+
 				"envelopes: `precondition_failed` (412), "+
-				"`precondition_required` (428), `author_mismatch` "+
+				"`precondition_required` (428), `operator_mismatch` "+
 				"(403), `not_found` (404), `invalid_argument` (400 "+
 				"for deleting the pre-heading section — clear it via "+
 				"`edit_user_content_section` with empty body instead).",
@@ -360,7 +360,7 @@ func registerEditUserContentSection(s *server.MCPServer, b *bridge) {
 				"envelopes: `precondition_failed` (412, stale etag — "+
 				"envelope carries `current_etag` for retry), "+
 				"`precondition_required` (428, missing etag), "+
-				"`author_mismatch` (403, JWT doesn't match author/operator).",
+				"`operator_mismatch` (403, JWT operator doesn't match entity's operator).",
 		),
 		mcp.WithString("id",
 			mcp.Required(),

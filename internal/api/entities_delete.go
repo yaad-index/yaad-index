@@ -88,6 +88,32 @@ func handleEntityDelete(logger *slog.Logger, st store.Store, vaultWriter *vault.
 			return
 		}
 
+		claim, ok := ClaimFromContext(r.Context())
+		if !ok || claim == nil {
+			logger.ErrorContext(r.Context(),
+				"delete-entity reached without an auth claim", "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"auth claim missing on request — server misconfiguration")
+			return
+		}
+
+		// #377 nava-catch: UGC entities reach this generic destroy
+		// route via DELETE /v1/entities/{id} just as they reach the
+		// UGC-specific DELETE /v1/user-content/{id}. The UGC-specific
+		// path gates on canEditUserContent BEFORE any lifecycle-state
+		// check so a cross-operator intruder learns 403, not the 409
+		// "must archive first" hint that would leak existence + active
+		// state of the entity. Mirror that order here: operator gate
+		// FIRST, then the ADR-0018 archive-state gate.
+		if got.Kind == "user-content" {
+			storedOperator, _ := got.Data["operator"].(string)
+			if !canEditByOperator(claim, storedOperator) {
+				writeError(w, http.StatusForbidden, "operator_mismatch",
+					"caller's operator does not match this user-content entity's operator")
+				return
+			}
+		}
+
 		// ADR-0018 step 4 state-machine: DELETE is only valid on
 		// archived entities. An active entity (archived_at IS NULL)
 		// is rejected with 409 + a hint pointing at the
@@ -101,14 +127,6 @@ func handleEntityDelete(logger *slog.Logger, st store.Store, vaultWriter *vault.
 			return
 		}
 
-		claim, ok := ClaimFromContext(r.Context())
-		if !ok || claim == nil {
-			logger.ErrorContext(r.Context(),
-				"delete-entity reached without an auth claim", "id", id)
-			writeError(w, http.StatusInternalServerError, "internal_error",
-				"auth claim missing on request — server misconfiguration")
-			return
-		}
 		var author string
 		if !IsAnonymousClaim(claim) {
 			author = claim.Subject

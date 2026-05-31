@@ -61,7 +61,7 @@ DELETE /v1/user-content/{id} — delete entity
 
 `{sec}` addressing: heading-text-slug for unique-heading sections OR positional index (`0`, `1`, …). Server canonicalizes either form. Positional is the disambiguating fallback when two headings slugify identically (rare for UGC, but possible).
 
-**Auth (per yaad-index–, mirrors note author validation from a prior PR).** All endpoints require Bearer JWT. Create stamps the JWT subject as `author` and the operator from the pair-claim. Edit / delete is restricted to (a) the original author OR (b) the operator on behalf of any agent. Cross-author edit returns 403 `author_mismatch`.
+**Auth.** All endpoints require Bearer JWT. Create stamps the JWT subject as `author` and the operator from the pair-claim. Edit / delete is restricted to callers whose JWT operator pair-claim equals the entity's stored operator — any agent under that operator may mutate, regardless of which agent originally wrote the entity. The `author` field stays as provenance (who wrote what) but is not part of the permission check. Cross-operator edit returns 403 `operator_mismatch`. (Amended #377: the prior rule conflated author-as-identity with author-as-edit-grant; the conflation blocked legitimate multi-agent flows under a shared operator and the explicit author check is redundant — operator-equality already prevents cross-operator tampering.)
 
 **Concurrency.** PUT requires `If-Match: <etag>` to prevent lost-update on simultaneous section edits; the etag scheme (per-section body hash vs. whole-entity content-hash) is settled by the write-endpoint implementation PR. 412 on mismatch.
 
