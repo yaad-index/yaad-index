@@ -186,6 +186,64 @@ func entityToCELMap(e *store.Entity) map[string]any {
 //
 // nil store → every method returns the empty result; useful for
 // dev binaries that don't wire a store.
+
+// storeArchiveStateProbe satisfies engine.ArchiveStateProbe against
+// the production store per ADR-0030. Reads the entity via the same
+// store.GetEntity call the rest of the daemon uses + projects the
+// fields the predicate vocabulary inspects (unfilled-gaps signal,
+// outgoing edge types, data map) into a decision.EntityView.
+//
+// Entity-not-found returns a zero view + nil error so the predicate
+// evaluates "false" cleanly — a deleted-between-fill-and-archive
+// race degrades to "no archive," matching the no-op-on-drift
+// design.
+type storeArchiveStateProbe struct {
+	st store.Store
+}
+
+func (p *storeArchiveStateProbe) EntityArchiveState(ctx context.Context, entityID string) (decision.EntityView, error) {
+	e, err := p.st.GetEntity(ctx, entityID)
+	if errors.Is(err, store.ErrNotFound) {
+		return decision.EntityView{}, nil
+	}
+	if err != nil {
+		return decision.EntityView{}, err
+	}
+	view := decision.EntityView{
+		Data: e.Data,
+	}
+	// HasUnfilledGaps: walk the GapState map; any entry that is
+	// neither filled (FilledAt non-nil) nor deferred counts as
+	// still-unfilled. Empty map → no gaps registered → no
+	// unfilled gaps.
+	for _, g := range e.GapState {
+		if g.FilledAt == nil && !g.Deferred {
+			view.HasUnfilledGaps = true
+			break
+		}
+	}
+	// OutgoingEdgeTypes: unique edge types on the entity's
+	// outbound edges. Edges live in a separate table from the
+	// entity row; GetEntity returns an empty Edges slice, so
+	// fetch separately via GetEdgesFor. Order is not meaningful
+	// to the predicate.
+	edges, edgeErr := p.st.GetEdgesFor(ctx, entityID, nil)
+	if edgeErr != nil {
+		return decision.EntityView{}, edgeErr
+	}
+	if len(edges) > 0 {
+		seen := make(map[string]struct{}, len(edges))
+		for _, edge := range edges {
+			if _, ok := seen[edge.Type]; ok {
+				continue
+			}
+			seen[edge.Type] = struct{}{}
+			view.OutgoingEdgeTypes = append(view.OutgoingEdgeTypes, edge.Type)
+		}
+	}
+	return view, nil
+}
+
 type storeGraphWalker struct {
 	st       store.Store
 	resolver *storeEntityResolver
@@ -833,6 +891,13 @@ func (s *ServeCmd) Run() error {
 		wfErrTaskWriter := actions.NewFileErrTaskWriter(cfg.Vault.Path, st, committer, logger)
 		edgeService.SetResolutionTaskWriter(wfTaskWriter)
 		edgeService.SetErrTaskWriter(wfErrTaskWriter)
+		// Single archive writer reused for both the runner's
+		// archive_entity action surface and the engine's ADR-0030
+		// archive_when post-action hook. The hook lands in the
+		// same archived state as the action vocabulary's archive,
+		// per ADR-0030 §4 ("no new lower-level archive primitive
+		// is introduced").
+		wfArchiveWriter := actions.NewVaultArchiveWriter(wfWriterBackend)
 		wfRunner := actions.New(actions.Options{
 			TaskWriter:           wfTaskWriter,
 			ResolutionTaskWriter: wfTaskWriter,
@@ -843,7 +908,7 @@ func (s *ServeCmd) Run() error {
 				st, edgeService, reader, writer, wfWriteLocks,
 				mergedRegistry, bus, logger,
 			),
-			ArchiveWriter:    actions.NewVaultArchiveWriter(wfWriterBackend),
+			ArchiveWriter:    wfArchiveWriter,
 			RestoreWriter:    actions.NewVaultRestoreWriter(wfWriterBackend),
 			PluginDispatcher: wfPluginDispatcher,
 			Bus:              bus,
@@ -860,14 +925,17 @@ func (s *ServeCmd) Run() error {
 			Logger: logger,
 		})
 		wfWalker := &storeGraphWalker{st: st, resolver: wfResolver}
+		wfArchiveProbe := &storeArchiveStateProbe{st: st}
 		wfEngine, err = engine.New(engine.Options{
-			Bus:          bus,
-			Resolver:     wfResolver,
-			Runner:       wfRunner,
-			IngestRouter: syncIngester,
-			Logger:       logger,
-			Walker:       wfWalker,
-			GraphWalkCap: cfg.Workflow.GraphWalkCap,
+			Bus:               bus,
+			Resolver:          wfResolver,
+			Runner:            wfRunner,
+			IngestRouter:      syncIngester,
+			Logger:            logger,
+			Walker:            wfWalker,
+			GraphWalkCap:      cfg.Workflow.GraphWalkCap,
+			ArchiveStateProbe: wfArchiveProbe,
+			ArchiveWriter:     wfArchiveWriter,
 		})
 		if err != nil {
 			return fmt.Errorf("init workflow engine: %w", err)

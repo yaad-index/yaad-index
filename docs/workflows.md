@@ -554,6 +554,35 @@ auto_archive_on_done: false
 
 Controls whether `task_resolve` on a task spawned by this workflow auto-archives the task file to `tasks/_archive/<id>.md` (per the task surface in [`docs/tasks.md`](./tasks.md)). **Default `true`** per ADR-0024 §"Task" — auto-archive on done is the standard path. Workflows that want the operator's completed-tasks audit trail to stick around explicitly opt OUT via `auto_archive_on_done: false`. Err-tasks always auto-archive regardless of the opt-out (per ADR-0024 §"Runtime errors").
 
+## 10a. `archive_when` — post-run source-entity archive
+
+```yaml
+archive_when:
+  all_gaps_resolved: true
+```
+
+Per [ADR-0030](../adr/0030-workflow-archive-when.md). Workflows that have served their purpose on the source entity (gaps filled, canonical edges written, terminal-state fields set) opt in to auto-archive the source via this block. After the workflow's action set runs successfully, the engine evaluates the predicate against the post-action entity state; on true, it invokes the same archive code path as `POST /v1/entities/{id}/archive` — the entity row gets `archived_at` stamped and the vault file relocates from `vault/<kind>/<slug>.md` to `vault/_archive/<kind>/<slug>.md`.
+
+The audit commit carries `workflow:<name>` as the author (parallel to `agent:<subject>` for agent-driven archives and the empty/operator-only author for operator UI archives), so `git log --follow` distinguishes the three trigger sources.
+
+**Predicate vocabulary** — small composable set per ADR-0030 §2:
+
+- `all_gaps_resolved: true` — entity has no remaining unfilled gaps (every registered gap either filled or deferred).
+- `has_edges: [<edge_type>, …]` — entity has at least one outgoing edge of EACH listed type.
+- `field_equals: { <field>: <value>, … }` — each listed `data.<field>` equals the given value.
+- `any_of: [<predicate>, …]` — OR composition.
+- `all_of: [<predicate>, …]` — AND composition. Equivalent to declaring multiple sibling primitives on the same map (which already AND together); `all_of` is the explicit form for nested branches.
+
+**Sibling primitives at the top level AND together implicitly.** Declaring `all_gaps_resolved: true` next to `field_equals: { is_actionable: "no" }` means both must hold.
+
+**YAML coercion gotcha for `field_equals`.** Equality is deep — the comparison runs against the YAML-decoded value. YAML coerces unquoted `yes` / `no` / `on` / `off` to bool, unquoted `null` / `~` to nil, and unquoted numbers to numeric types. If the entity's data field came in via a JSON API as the string `"no"`, write `field_equals: { is_actionable: "no" }` (quoted) — unquoted `no` matches the bool `false`, not the string. Same goes for booleans-as-strings (`"true"` vs `true`) and numeric strings (`"7"` vs `7`).
+
+**Failure mode.** Vault-side archive failure is logged at WARN and does NOT invalidate the workflow's overall run — the archive is advisory housekeeping per ADR-0030 §5. The workflow's actual outputs (gaps filled, edges written, tasks spawned) are the operator-facing contract; vault-DB drift is reindex-recoverable.
+
+**Action-failure interaction.** A workflow whose action set had ANY per-action failure does not trigger archive evaluation (ADR-0030 §3). The source row stays in place so the operator can inspect the partial state.
+
+**Backward-compat.** Workflows that omit `archive_when` behave exactly as today — no archive evaluation runs, no archive move attempts. This is opt-in.
+
 ## 11. Worked example: GitHub notification classifier
 
 ```markdown
