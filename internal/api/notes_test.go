@@ -59,6 +59,54 @@ func postComments(t *testing.T, h http.Handler, id string, body any) *httptest.R
 	return rec
 }
 
+// TestNotes_StampNoteID_AndBackfillLegacy pins ADR-0015 §Note identity
+// (#390): add_note returns an 8-hex note_id, and a legacy id-less note
+// in the same block is back-stamped on that write (stamp-on-next-block-
+// write) so get_entity surfaces ids on every note.
+func TestNotes_StampNoteID_AndBackfillLegacy(t *testing.T) {
+	t.Parallel()
+	h, _, root := newNotesFixture(t)
+
+	// Seed a legacy, id-less note directly in the vault (pre-#390 shape).
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	require.NoError(t, w.Write(&vault.Entity{
+		ID:     commentsTestEntityID,
+		Kind:   "boardgame",
+		Source: []string{"test-fixture/default"},
+		Data:   map[string]any{"id": commentsTestEntityID, "title": "Note Test Game"},
+		Notes: []vault.Note{
+			{Date: time.Now().UTC().Truncate(time.Second), Text: "legacy note", Author: "bob"},
+		},
+	}))
+
+	rec := postComments(t, h, commentsTestEntityID, map[string]any{
+		"text": "a fresh note", "author": "alice",
+	})
+	require.Equal(t, http.StatusCreated, rec.Code, "body=%s", rec.Body.String())
+	var got commentsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	assert.Regexp(t, "^[0-9a-f]{8}$", got.Note.ID, "add_note returns an 8-hex note_id")
+
+	// get_entity: both notes now carry ids (legacy one back-stamped).
+	gr := httptest.NewRequest(http.MethodGet, "/v1/entities/"+commentsTestEntityID, nil)
+	grec := httptest.NewRecorder()
+	h.ServeHTTP(grec, gr)
+	require.Equal(t, http.StatusOK, grec.Code, "body=%s", grec.Body.String())
+	var ent struct {
+		Notes []struct {
+			NoteID string `json:"note_id"`
+			Text   string `json:"text"`
+		} `json:"notes"`
+	}
+	require.NoError(t, json.NewDecoder(grec.Body).Decode(&ent))
+	require.Len(t, ent.Notes, 2)
+	for _, n := range ent.Notes {
+		assert.Regexp(t, "^[0-9a-f]{8}$", n.NoteID,
+			"every note carries an id after a note op (text=%q)", n.Text)
+	}
+}
+
 func TestComments_HappyPath(t *testing.T) {
 	t.Parallel()
 

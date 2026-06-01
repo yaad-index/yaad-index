@@ -236,13 +236,24 @@ func (w *VaultNoteWriter) AppendNote(ctx context.Context, workflow, entityID, bo
 	// nanos and the next read-modify-write cycle would
 	// see a "new" note on dedup).
 	now := w.backend.clock().Truncate(time.Second)
+	nid, err := vault.NewNoteID()
+	if err != nil {
+		return fmt.Errorf("generate note id for %s: %w", entityID, err)
+	}
 	ve.Notes = append(ve.Notes, vault.Note{
+		ID:     nid,
 		Date:   now,
 		Text:   body,
 		Author: workflowAuthor(workflow),
 		Field:  field,
 		Kind:   kind,
 	})
+	// ADR-0015 §Note identity (#390) back-compat: re-stamp any legacy
+	// id-less notes in this block on this write, mirroring the API
+	// add_note path so workflow-created notes also carry ids.
+	if err := vault.EnsureNoteIDs(ve.Notes); err != nil {
+		return fmt.Errorf("stamp note ids on %s: %w", entityID, err)
+	}
 
 	commitMsg := fmt.Sprintf("workflow note on %s by %s", ve.ID, workflowAuthor(workflow))
 	if err := w.backend.VaultWriter.WriteWithCommit(ctx, ve, commitMsg, workflowAuthor(workflow)); err != nil {

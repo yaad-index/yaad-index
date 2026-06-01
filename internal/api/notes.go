@@ -55,6 +55,10 @@ type commentsRequest struct {
 // pair-claim. Empty for legacy notes (vault entries written before
 // had no operator stamp). Always populated on new notes.
 type noteEntry struct {
+	// ID is the stable note identifier (ADR-0015 §Note identity,
+	// #390) — the handle edit_note / delete_note target. Omitempty so
+	// a legacy note not yet re-stamped decodes without the field.
+	ID string `json:"note_id,omitempty"`
 	Date string `json:"date"`
 	Text string `json:"text"`
 	Author string `json:"author,omitempty"`
@@ -253,7 +257,15 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 		// producing duplicate entries on every read-modify-write
 		// cycle.
 		now := clock.Now().Truncate(time.Second)
+		nid, err := vault.NewNoteID()
+		if err != nil {
+			logger.ErrorContext(r.Context(), "newNoteID", "err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to generate note id")
+			return
+		}
 		newNote := vault.Note{
+			ID:       nid,
 			Date:     now,
 			Text:     text,
 			Author:   author,
@@ -262,6 +274,15 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 			Kind:     kind,
 		}
 		ve.Notes = append(ve.Notes, newNote)
+		// ADR-0015 §Note identity (#390) back-compat: re-stamp any
+		// legacy id-less notes in this block on this write, so an
+		// entity's notes all carry ids after the first note operation.
+		if err := vault.EnsureNoteIDs(ve.Notes); err != nil {
+			logger.ErrorContext(r.Context(), "ensureNoteIDs", "err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to stamp note ids")
+			return
+		}
 
 		commitMsg := noteCommitMessage(ve.ID, author)
 		commitAuthor := agentAuthorRef(author)
@@ -310,6 +331,7 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 		if err := json.NewEncoder(w).Encode(commentsResponse{
 			OK: true,
 			Note: noteEntry{
+				ID:       newNote.ID,
 				Date:     newNote.Date.Format(time.RFC3339),
 				Text:     newNote.Text,
 				Author:   newNote.Author,
@@ -323,3 +345,4 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 		}
 	}
 }
+

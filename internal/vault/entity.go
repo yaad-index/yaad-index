@@ -290,6 +290,17 @@ type Edge struct {
 // legacy vault files omit Operator, and the parser leaves it empty
 // rather than inventing a value. New notes stamp both.
 type Note struct {
+	// ID is the stable per-note identifier per ADR-0015 §Note
+	// identity (#390): an 8-hex-char token stamped server-side at
+	// creation so edit_note / delete_note can target a specific note.
+	// Rendered in the heading-row metadata bracket (`[id=… kind=…
+	// field=…]`) and parsed back. Empty on legacy notes written
+	// before the contract existed; a note operation re-stamps any
+	// id-less notes in the same block on the next write (stamp-on-
+	// next-block-write back-compat). omitempty so the round-trip of a
+	// genuinely id-less note stays clean.
+	ID string `yaml:"id,omitempty"`
+
 	Date time.Time `yaml:"date"`
 	Text string `yaml:"text"`
 	Author string `yaml:"author,omitempty"`

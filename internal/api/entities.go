@@ -360,6 +360,7 @@ func mergeVaultEntity(out entity, ve *vault.Entity) entity {
 		out.Notes = make([]noteEntry, len(ve.Notes))
 		for i, c := range ve.Notes {
 			out.Notes[i] = noteEntry{
+				ID:       c.ID,
 				Date:     c.Date.UTC().Format(time.RFC3339),
 				Text:     c.Text,
 				Author:   c.Author,

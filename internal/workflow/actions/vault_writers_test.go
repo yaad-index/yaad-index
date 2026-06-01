@@ -348,6 +348,41 @@ func TestVaultNoteWriter_HappyPath(t *testing.T) {
 	assert.Equal(t, "pr:1", upserts[0].ID)
 }
 
+// TestVaultNoteWriter_StampsNoteID pins ADR-0015 §Note identity (#390):
+// the workflow add_note path stamps an 8-hex note_id on the new note AND
+// back-stamps any legacy id-less note already in the same block (the
+// same contract as the API add_note path).
+func TestVaultNoteWriter_StampsNoteID(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	b, _, _, vw := newVaultWriterBackend(t,
+		map[string]*store.Entity{
+			"pr:1": {ID: "pr:1", Kind: "pr", CreatedAt: now},
+		},
+		map[string]*vault.Entity{
+			"pr:1": {
+				ID:   "pr:1",
+				Kind: "pr",
+				Notes: []vault.Note{
+					{Date: now, Text: "legacy id-less note", Author: "alice"},
+				},
+			},
+		},
+		now,
+	)
+	w := NewVaultNoteWriter(b)
+	require.NoError(t, w.AppendNote(context.Background(), "bgg-news", "pr:1", "fresh workflow note", "", ""))
+
+	writes := vw.snapshot()
+	require.Len(t, writes, 1)
+	notes := writes[0].entity.Notes
+	require.Len(t, notes, 2)
+	for _, n := range notes {
+		assert.Regexp(t, "^[0-9a-f]{8}$", n.ID,
+			"workflow add_note must stamp an id on every note in the block (text=%q)", n.Text)
+	}
+}
+
 // TestVaultNoteWriter_EntityNotFound: workflows targeting
 // an unknown entity surface ErrEntityNotFound (the runner's
 // caller propagates it through ActionResult.Err).
