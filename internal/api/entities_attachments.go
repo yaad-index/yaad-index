@@ -41,6 +41,12 @@ func handleEntityAttachment(logger *slog.Logger, st store.Store, vaultReader *va
 			return
 		}
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 		name := r.PathValue("name")
 		if id == "" {
 			writeError(w, http.StatusBadRequest, "missing_id", "path missing entity id")

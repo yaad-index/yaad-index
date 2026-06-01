@@ -261,3 +261,38 @@ func TestAlias_ReplaceUnknownEntityRollsBack(t *testing.T) {
 	require.Error(t, err, "FK to entities(id) must reject")
 	_ = errors.Unwrap(err) // ensure error is well-formed
 }
+
+// TestAlias_ResolveAlias pins #392 reverse lookup: exact alias →
+// entity id, kind-scoped (the join to entities.kind), "" on no match.
+func TestAlias_ResolveAlias(t *testing.T) {
+	t.Parallel()
+	s := newMemoryStore(t)
+	ctx := context.Background()
+	seedEntityForAlias(t, s, "boardgame:brass-birmingham", "boardgame")
+	require.NoError(t, s.ReplaceAliases(ctx, "boardgame:brass-birmingham",
+		[]Alias{{Alias: "Brass: Birmingham"}}))
+
+	// Match within the kind namespace.
+	got, err := s.ResolveAlias(ctx, "Brass: Birmingham", "boardgame")
+	require.NoError(t, err)
+	assert.Equal(t, "boardgame:brass-birmingham", got)
+
+	// Match with no kind filter.
+	got, err = s.ResolveAlias(ctx, "Brass: Birmingham", "")
+	require.NoError(t, err)
+	assert.Equal(t, "boardgame:brass-birmingham", got)
+
+	// Wrong kind → no match (kind-scoped).
+	got, err = s.ResolveAlias(ctx, "Brass: Birmingham", "person")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	// Unknown alias → no match.
+	got, err = s.ResolveAlias(ctx, "Nonexistent", "boardgame")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	// Empty alias → error (caller bug).
+	_, err = s.ResolveAlias(ctx, "", "boardgame")
+	require.Error(t, err)
+}

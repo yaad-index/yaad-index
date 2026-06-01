@@ -391,6 +391,12 @@ func handleUserContentCreate(
 func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 		if vaultWriter == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_required",
 				"user-content endpoints require vault.path configuration; the body lives in vault files")
@@ -598,6 +604,12 @@ type userContentSectionRenameRequest struct {
 func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 		if vaultWriter == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_required",
 				"user-content endpoints require vault.path configuration; the body lives in vault files")
@@ -781,6 +793,12 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 		if vaultWriter == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_required",
 				"user-content endpoints require vault.path configuration; the body lives in vault files")
@@ -952,6 +970,12 @@ func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, 
 func handleUserContentSectionDelete(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 		if vaultWriter == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_required",
 				"user-content endpoints require vault.path configuration; the body lives in vault files")
@@ -1126,6 +1150,12 @@ func handleUserContentFrontmatterEdit(
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 		if vaultWriter == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_required",
 				"user-content endpoints require vault.path configuration; the body lives in vault files")
@@ -1368,6 +1398,12 @@ func buildFullEditOpsFromMappings(
 func handleUserContentDelete(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 		if vaultWriter == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_required",
 				"user-content endpoints require vault.path configuration; the body lives in vault files")

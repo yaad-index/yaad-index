@@ -42,6 +42,16 @@ Source-shape entities answer "where did the data come from"; canonical-shape ent
 
 **Operator-typical canonical_kinds.** Operators declare what canonical kinds they want indexed in their `canonical_kinds:` config block. The ones plugins typically emit and that operator configs typically enable are: `person`, `city`, `country`, `book`, `boardgame`. Reach for `structure()` to read the live operator-configured allowlist on a running yaad-index — that's authoritative; this list is operator-typical guidance. The system-reserved kind `source-type` (used as the target of every source-shape entity's `is_a` edge — e.g. `source-type:bgg-record`, `source-type:wikipedia-article-record`) bypasses the operator's `canonical_kinds:` gate and is filtered out of operator-facing list / search surfaces.
 
+## Entity references: alias resolution (#392)
+
+The id-taking tools (`get_entity`, `get_entity_with_context`, `add_note`, `edit_note`, `delete_note`, `fill`, `archive_entity` / `restore_entity` / `delete_entity`, the attachment + user-content section tools) resolve an entity reference in this order:
+
+1. **Exact id** — `<kind>:<slug>` that already exists wins (fast path, unchanged; an alias never shadows a real id).
+2. **Alias, kind-scoped** — split `<kind>:<rest>` on the first colon and exact-match `<rest>` against the entity's `aliases:` within that kind. So the human-readable form resolves: `get_entity boardgame:Brass: Birmingham` → the canonical `boardgame:brass-birmingham`. The alias must match *within* the kind namespace — `person:Brass: Birmingham` does NOT resolve a boardgame alias.
+3. **No match → `not_found`** (unchanged).
+
+Exact aliases are globally unique, so the alias step is never ambiguous; case-insensitive / normalized-name matching and multi-candidate disambiguation are a deferred follow-up. Resolution is **scoped to the user-facing tools only** — the create-collision check (`create_canonical_entity`'s 409), `ingest` (which has its own disambiguation), reindex, and internal paths see raw ids and never alias-resolve.
+
 ## Tools
 
 ### `ingest(url, force_refetch?)`
