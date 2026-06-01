@@ -52,6 +52,15 @@ The id-taking tools (`get_entity`, `get_entity_with_context`, `add_note`, `edit_
 
 Exact aliases are globally unique, so the alias step is never ambiguous; case-insensitive / normalized-name matching and multi-candidate disambiguation are a deferred follow-up. Resolution is **scoped to the user-facing tools only** — the create-collision check (`create_canonical_entity`'s 409), `ingest` (which has its own disambiguation), reindex, and internal paths see raw ids and never alias-resolve.
 
+**Where aliases come from (#405).** Every entity is auto-aliased to the original name its slug was derived from, registered at creation so the alias resolves immediately (no reindex wait):
+
+- **Plugin-source entities** — synthesized from `data.title` at ingest (pre-existing).
+- **Canonical thin-edges** — when a `fill` / workflow names a canonical target (`{name, kind, data}`), the materialized entity captures that name as `data.name`, so `boardgame:Moon Colony Bloodbath` resolves to `boardgame:moon-colony-bloodbath`. Only on first materialize (the entry carries `data`); a bare edge stays a thin row until materialized.
+- **`create_canonical_entity`** — the slug is operator-supplied (no name→slug step), so an alias is registered only when `data` seeds a `name` field.
+- **UGC (`create_user_content`)** — the `title` the slug derived from is registered.
+
+Only the source-of-slug name (one alias per entity). Multi-language, post-create title changes, and cross-kind dedup are out of scope.
+
 ## Tools
 
 ### `ingest(url, force_refetch?)`

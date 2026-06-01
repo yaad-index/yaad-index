@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/yaad-index/yaad-index/internal/auth"
+	"github.com/yaad-index/yaad-index/internal/canonical"
 	"github.com/yaad-index/yaad-index/internal/clock"
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/edgewrite"
@@ -310,6 +311,20 @@ func handleUserContentCreate(
 				"err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",
 				"failed to mirror entity to DB")
+			return
+		}
+
+		// #405: mirror the resolver alias for the title the slug
+		// derived from. UGC is source-shape (user-content is not a
+		// canonical kind), so synthesizeAliases reads data.title —
+		// operatorAllKinds (built above) excludes user-content,
+		// keeping it on the title branch. After the upsert so the
+		// entity_aliases FK is satisfied.
+		if err := canonical.MirrorAliases(r.Context(), st, id, userContentKind, ve.Data, ve.Aliases, operatorAllKinds); err != nil {
+			logger.ErrorContext(r.Context(), "canonical.MirrorAliases from user-content create",
+				"err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to mirror entity aliases")
 			return
 		}
 

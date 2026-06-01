@@ -185,6 +185,24 @@ func handleCreateCanonicalEntity(logger *slog.Logger, st store.Store, vaultWrite
 			return
 		}
 
+		// #405: mirror the resolver alias. The slug is operator-
+		// supplied (no name→slug derivation to capture), so this
+		// registers an alias only when `data` seeded a `name` field
+		// — synthesizeAliases derives it for canonical-shape kinds.
+		// No seed → empty merged set → no alias. Runs after the
+		// upsert so the entity_aliases FK is satisfied.
+		canonicalKinds := make([]string, 0, len(canonicalKindReg))
+		for k := range canonicalKindReg {
+			canonicalKinds = append(canonicalKinds, k)
+		}
+		if err := canonical.MirrorAliases(r.Context(), st, ve.ID, ve.Kind, ve.Data, ve.Aliases, canonicalKinds); err != nil {
+			logger.ErrorContext(r.Context(), "canonical.MirrorAliases from create-canonical-entity",
+				"err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to mirror entity aliases")
+			return
+		}
+
 		// entity.created per ADR-0024 — direct creation fires the same
 		// trigger every other create path does. SourceTag reflects the
 		// caller's trigger mode; CausedByEntityID self-references (the

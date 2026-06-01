@@ -968,7 +968,12 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 		Bus:         w.bus,
 		Logger:      w.logger,
 	}
-	appended, err := canonical.AppendDataviewParagraph(ctx, deps, targetID, data, edgeType, workflow)
+	// #405: targetName is the name targetID's slug derived from on
+	// the slugify path; AppendDataviewParagraph captures it as
+	// data.name iff it materializes the target fresh. On the auto-
+	// resolve path the plugin already materialized + aliased the
+	// entity, so the read hits and targetName is ignored.
+	appended, err := canonical.AppendDataviewParagraph(ctx, deps, targetID, data, edgeType, workflow, targetName)
 	if err != nil {
 		return fmt.Errorf("append dataview paragraph on %s: %w", targetID, err)
 	}
