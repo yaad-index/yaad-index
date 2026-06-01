@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.16.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.15.0...yaad-index-v0.16.0) (2026-06-01)
+
+
+### Features
+
+* **api,mcp:** create_canonical_entity — direct canonical-entity creation ([#389](https://github.com/yaad-index/yaad-index/issues/389)) ([#398](https://github.com/yaad-index/yaad-index/issues/398)) ([2c67f50](https://github.com/yaad-index/yaad-index/commit/2c67f5004dc7578538197422db5595b829bfd8f9))
+* **api,mcp:** edit_note + delete_note ([#390](https://github.com/yaad-index/yaad-index/issues/390) Cut 2) ([#401](https://github.com/yaad-index/yaad-index/issues/401)) ([97143e7](https://github.com/yaad-index/yaad-index/commit/97143e7a42ed9ec07f95340bcc77a255ebf1f19f))
+* **api,store:** alias-as-resolver — id tools resolve aliases ([#392](https://github.com/yaad-index/yaad-index/issues/392)) ([#402](https://github.com/yaad-index/yaad-index/issues/402)) ([b24796f](https://github.com/yaad-index/yaad-index/commit/b24796f45d0b0f56fa927e850ab45ab7e6a5962a))
+* **api:** auto-materialize canonical thin-edges on first body write ([#388](https://github.com/yaad-index/yaad-index/issues/388) Cut 2b) ([#396](https://github.com/yaad-index/yaad-index/issues/396)) ([fa57bb5](https://github.com/yaad-index/yaad-index/commit/fa57bb571b82f505749f4d5314f09a1de1cbda5e))
+* **api:** canonical entities accept operator-authored body sections ([#388](https://github.com/yaad-index/yaad-index/issues/388) Cut 2a) ([#394](https://github.com/yaad-index/yaad-index/issues/394)) ([e43ea85](https://github.com/yaad-index/yaad-index/commit/e43ea85927bb497b170d70ea69f823b4d52611ed))
+* **vault,api,workflow:** note identity — stable note_id per note ([#390](https://github.com/yaad-index/yaad-index/issues/390) Cut 1) ([#400](https://github.com/yaad-index/yaad-index/issues/400)) ([b0abbb6](https://github.com/yaad-index/yaad-index/commit/b0abbb645c309b7bbc27789c7da389f2e2e30240))
+
 ## [0.15.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.14.0...yaad-index-v0.15.0) (2026-05-31)
 
 
