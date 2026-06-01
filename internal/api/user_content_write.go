@@ -283,6 +283,11 @@ func handleUserContentCreate(
 			Provenance: []vault.ProvenanceEntry{
 				{Source: "user", FetchedAt: &now, OK: true},
 			},
+			// ADR-0031: make the implicit-by-kind UGC flag explicit on
+			// new creates. The section-tool gate also accepts kind ==
+			// user-content, so pre-flag UGC stays editable; this is the
+			// forward-looking stamp so canonical and UGC share one flag.
+			UGC: true,
 		}
 
 		commitMsg := userContentCreateCommitMessage(id, author)
@@ -391,7 +396,20 @@ func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultR
 				"user-content endpoints require vault.path configuration; the body lives in vault files")
 			return
 		}
-		ve, status, errCode, errMsg := loadUserContentVaultEntity(logger, r, st, vaultReader, id)
+		// Entity-level write-lock per ADR-0031 §5: the load + auth +
+		// etag CAS + first-write ownership claim + body write is a
+		// single read-modify-write that must serialize against one
+		// file snapshot. A pre-lock load would let two callers both
+		// observe an unowned canonical body and both claim ownership;
+		// taking the whole-entity lock before the load closes that
+		// window (and the same lost-update window for UGC bodies).
+		release, lockOK := acquireWriteLock(w, r, writeLocks, id)
+		if !lockOK {
+			return
+		}
+		defer release()
+
+		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
 			return
@@ -405,10 +423,14 @@ func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultR
 				"auth claim missing on request — server misconfiguration")
 			return
 		}
-		if !canEditUserContent(claim, ve) {
+		allowed, claimOwnership := canEditSectionBody(claim, ve)
+		if !allowed {
 			writeError(w, http.StatusForbidden, "operator_mismatch",
-				"caller's operator does not match this user-content entity's operator")
+				"caller's operator does not match this entity's operator")
 			return
+		}
+		if claimOwnership {
+			stampSectionBodyOwner(ve, claim)
 		}
 
 		// If-Match concurrency gate — required on PUT Per the prior design,. Compare
@@ -451,18 +473,6 @@ func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultR
 			return
 		}
 
-		// Section-scoped write-lock (yaad-index #23 + ADR-0024).
-		// Key on the resolved index (not the raw addr) so two writers
-		// targeting the same section via slug + positional forms
-		// collide correctly. Two writers on DIFFERENT sections of the
-		// same UGC file proceed concurrently — the OS-rename layer
-		// serializes the final disk write per ADR-0008.
-		artifactKey := fmt.Sprintf("%s#%d", id, idx)
-		release, lockOK := acquireWriteLock(w, r, writeLocks, artifactKey)
-		if !lockOK {
-			return
-		}
-		defer release()
 
 		newBody, err := vault.ReplaceSectionBody(ve.CleanContent, sections, idx, req.Body)
 		if err != nil {
@@ -499,7 +509,7 @@ func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultR
 
 		if err := st.UpsertEntity(r.Context(), &store.Entity{
 			ID: id,
-			Kind: userContentKind,
+			Kind: ve.Kind,
 			Data: ve.Data,
 		}); err != nil {
 			logger.ErrorContext(r.Context(), "store.UpsertEntity from user-content section-replace",
@@ -593,7 +603,20 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 				"user-content endpoints require vault.path configuration; the body lives in vault files")
 			return
 		}
-		ve, status, errCode, errMsg := loadUserContentVaultEntity(logger, r, st, vaultReader, id)
+		// Entity-level write-lock per ADR-0031 §5: the load + auth +
+		// etag CAS + first-write ownership claim + body write is a
+		// single read-modify-write that must serialize against one
+		// file snapshot. A pre-lock load would let two callers both
+		// observe an unowned canonical body and both claim ownership;
+		// taking the whole-entity lock before the load closes that
+		// window (and the same lost-update window for UGC bodies).
+		release, lockOK := acquireWriteLock(w, r, writeLocks, id)
+		if !lockOK {
+			return
+		}
+		defer release()
+
+		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
 			return
@@ -607,10 +630,14 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 				"auth claim missing on request — server misconfiguration")
 			return
 		}
-		if !canEditUserContent(claim, ve) {
+		allowed, claimOwnership := canEditSectionBody(claim, ve)
+		if !allowed {
 			writeError(w, http.StatusForbidden, "operator_mismatch",
-				"caller's operator does not match this user-content entity's operator")
+				"caller's operator does not match this entity's operator")
 			return
+		}
+		if claimOwnership {
+			stampSectionBodyOwner(ve, claim)
 		}
 
 		ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
@@ -675,16 +702,6 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 			return
 		}
 
-		// Section-scoped write-lock keyed on a synthetic "add" marker so
-		// concurrent adds to the same entity serialize. Other section
-		// edits on different sections still proceed in parallel.
-		artifactKey := fmt.Sprintf("%s#add", id)
-		release, lockOK := acquireWriteLock(w, r, writeLocks, artifactKey)
-		if !lockOK {
-			return
-		}
-		defer release()
-
 		newBody, insertedOffset, err := vault.InsertSection(ve.CleanContent, sections, afterIdx, depth, req.Heading, req.Body)
 		if err != nil {
 			logger.ErrorContext(r.Context(), "vault.InsertSection", "err", err, "id", id)
@@ -717,7 +734,7 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 
 		if err := st.UpsertEntity(r.Context(), &store.Entity{
 			ID:   id,
-			Kind: userContentKind,
+			Kind: ve.Kind,
 			Data: ve.Data,
 		}); err != nil {
 			logger.ErrorContext(r.Context(), "store.UpsertEntity from user-content section-add",
@@ -769,7 +786,20 @@ func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, 
 				"user-content endpoints require vault.path configuration; the body lives in vault files")
 			return
 		}
-		ve, status, errCode, errMsg := loadUserContentVaultEntity(logger, r, st, vaultReader, id)
+		// Entity-level write-lock per ADR-0031 §5: the load + auth +
+		// etag CAS + first-write ownership claim + body write is a
+		// single read-modify-write that must serialize against one
+		// file snapshot. A pre-lock load would let two callers both
+		// observe an unowned canonical body and both claim ownership;
+		// taking the whole-entity lock before the load closes that
+		// window (and the same lost-update window for UGC bodies).
+		release, lockOK := acquireWriteLock(w, r, writeLocks, id)
+		if !lockOK {
+			return
+		}
+		defer release()
+
+		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
 			return
@@ -783,10 +813,14 @@ func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, 
 				"auth claim missing on request — server misconfiguration")
 			return
 		}
-		if !canEditUserContent(claim, ve) {
+		allowed, claimOwnership := canEditSectionBody(claim, ve)
+		if !allowed {
 			writeError(w, http.StatusForbidden, "operator_mismatch",
-				"caller's operator does not match this user-content entity's operator")
+				"caller's operator does not match this entity's operator")
 			return
+		}
+		if claimOwnership {
+			stampSectionBodyOwner(ve, claim)
 		}
 
 		ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
@@ -847,13 +881,6 @@ func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, 
 			return
 		}
 
-		artifactKey := fmt.Sprintf("%s#%d", id, idx)
-		release, lockOK := acquireWriteLock(w, r, writeLocks, artifactKey)
-		if !lockOK {
-			return
-		}
-		defer release()
-
 		oldHeading := sections[idx].Heading
 		newBody, err := vault.RenameSectionHeading(ve.CleanContent, sections, idx, req.NewHeading)
 		if err != nil {
@@ -887,7 +914,7 @@ func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, 
 
 		if err := st.UpsertEntity(r.Context(), &store.Entity{
 			ID:   id,
-			Kind: userContentKind,
+			Kind: ve.Kind,
 			Data: ve.Data,
 		}); err != nil {
 			logger.ErrorContext(r.Context(), "store.UpsertEntity from user-content section-rename",
@@ -930,7 +957,20 @@ func handleUserContentSectionDelete(logger *slog.Logger, st store.Store, vaultRe
 				"user-content endpoints require vault.path configuration; the body lives in vault files")
 			return
 		}
-		ve, status, errCode, errMsg := loadUserContentVaultEntity(logger, r, st, vaultReader, id)
+		// Entity-level write-lock per ADR-0031 §5: the load + auth +
+		// etag CAS + first-write ownership claim + body write is a
+		// single read-modify-write that must serialize against one
+		// file snapshot. A pre-lock load would let two callers both
+		// observe an unowned canonical body and both claim ownership;
+		// taking the whole-entity lock before the load closes that
+		// window (and the same lost-update window for UGC bodies).
+		release, lockOK := acquireWriteLock(w, r, writeLocks, id)
+		if !lockOK {
+			return
+		}
+		defer release()
+
+		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
 			return
@@ -944,10 +984,14 @@ func handleUserContentSectionDelete(logger *slog.Logger, st store.Store, vaultRe
 				"auth claim missing on request — server misconfiguration")
 			return
 		}
-		if !canEditUserContent(claim, ve) {
+		allowed, claimOwnership := canEditSectionBody(claim, ve)
+		if !allowed {
 			writeError(w, http.StatusForbidden, "operator_mismatch",
-				"caller's operator does not match this user-content entity's operator")
+				"caller's operator does not match this entity's operator")
 			return
+		}
+		if claimOwnership {
+			stampSectionBodyOwner(ve, claim)
 		}
 
 		ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
@@ -983,13 +1027,6 @@ func handleUserContentSectionDelete(logger *slog.Logger, st store.Store, vaultRe
 			return
 		}
 
-		artifactKey := fmt.Sprintf("%s#%d", id, idx)
-		release, lockOK := acquireWriteLock(w, r, writeLocks, artifactKey)
-		if !lockOK {
-			return
-		}
-		defer release()
-
 		removedHeading := sections[idx].Heading
 		removedIdx := sections[idx].Index
 		newBody, err := vault.DeleteSection(ve.CleanContent, sections, idx)
@@ -1024,7 +1061,7 @@ func handleUserContentSectionDelete(logger *slog.Logger, st store.Store, vaultRe
 
 		if err := st.UpsertEntity(r.Context(), &store.Entity{
 			ID:   id,
-			Kind: userContentKind,
+			Kind: ve.Kind,
 			Data: ve.Data,
 		}); err != nil {
 			logger.ErrorContext(r.Context(), "store.UpsertEntity from user-content section-delete",
@@ -1460,6 +1497,60 @@ func canEditByOperator(claim *auth.Claim, storedOperator string) bool {
 		return false
 	}
 	return claim.Operator == storedOperator
+}
+
+// canEditSectionBody decides write permission for a section-editable
+// entity per ADR-0031 §5, branching on the ownership model by kind:
+//
+//   - Pure UGC (`kind == user-content`): plain operator-equality via
+//     canEditByOperator — an empty stored operator is rejected, the
+//     legacy-row protection ADR-0012 §Auth relies on.
+//   - Canonical body (any other kind, reached only when ugc:true
+//     gated it in): operator-equality with first-write-claims-
+//     ownership. An empty stored operator is allowed and the caller
+//     claims it (claimOwnership=true) — safe because a canonical body
+//     is a brand-new surface, so "no stored operator" can only mean
+//     "no body author yet," never "owned by someone unidentifiable."
+//
+// Returns (allowed, claimOwnership). When claimOwnership is true the
+// caller must stamp `Data["operator"] = claim.Operator` in the same
+// write so the next edit falls back to plain operator-equality.
+// Anonymous claims pass without claiming (no operator identity to
+// stamp).
+func canEditSectionBody(claim *auth.Claim, ve *vault.Entity) (allowed, claimOwnership bool) {
+	if IsAnonymousClaim(claim) {
+		return true, false
+	}
+	operator, _ := ve.Data["operator"].(string)
+	if operator != "" {
+		return claim.Operator == operator, false
+	}
+	// No stored operator.
+	if ve.Kind == userContentKind {
+		return false, false // UGC legacy row: no implicit grant.
+	}
+	if claim.Operator == "" {
+		return false, false // canonical body, but no operator to claim with.
+	}
+	return true, true // canonical body, unowned: first writer claims it.
+}
+
+// stampSectionBodyOwner records first-write ownership on a canonical
+// body per ADR-0031 §5: the claiming caller's operator (and author,
+// if not already set) is written into Data so the vault frontmatter +
+// DB mirror carry it, and the next edit falls back to plain operator-
+// equality via canEditSectionBody. Only invoked when canEditSectionBody
+// returned claimOwnership=true (non-anonymous caller, unowned canonical
+// body). Pure UGC never reaches here — it either has a stored operator
+// already or is rejected.
+func stampSectionBodyOwner(ve *vault.Entity, claim *auth.Claim) {
+	if ve.Data == nil {
+		ve.Data = map[string]any{}
+	}
+	ve.Data["operator"] = claim.Operator
+	if _, ok := ve.Data["author"]; !ok && claim.Subject != "" {
+		ve.Data["author"] = claim.Subject
+	}
 }
 
 // parseUserContentFrontmatterEdges walks the operator-config-
