@@ -1,5 +1,5 @@
 {
-  ".": "0.16.0",
+  ".": "0.17.0",
   "cmd/yaad-wikipedia": "0.3.0",
   "cmd/yaad-bgg": "0.4.0",
   "cmd/yaad-gmail": "0.4.0"
