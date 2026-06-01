@@ -388,7 +388,7 @@ func handleUserContentCreate(
 // handleUserContentSectionReplace implements PUT
 // /v1/user-content/{id}/sections/{sec}. Validates author/operator,
 // honors If-Match, applies vault.ReplaceSectionBody, persists.
-func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
+func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if vaultWriter == nil {
@@ -409,7 +409,7 @@ func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultR
 		}
 		defer release()
 
-		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, id)
+		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, canonicalKindReg, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
 			return
@@ -595,7 +595,7 @@ type userContentSectionRenameRequest struct {
 // matches an existing same-depth sibling's slug at the same
 // containment level, reject before write so the agent picks a
 // different heading rather than addressing-by-slug-now-ambiguous.
-func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
+func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if vaultWriter == nil {
@@ -616,7 +616,7 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 		}
 		defer release()
 
-		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, id)
+		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, canonicalKindReg, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
 			return
@@ -778,7 +778,7 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 // Rewrites only the heading line of the addressed section; body
 // + nested headings preserved verbatim. Etag-gated. 409 conflict
 // when the new slug collides with a sibling.
-func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
+func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if vaultWriter == nil {
@@ -799,7 +799,7 @@ func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, 
 		}
 		defer release()
 
-		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, id)
+		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, canonicalKindReg, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
 			return
@@ -949,7 +949,7 @@ func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, 
 // addressed section and every textually contained nested section
 // (containment model). Etag-gated. Returns the entity's new etag
 // + the removed section's old index.
-func handleUserContentSectionDelete(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
+func handleUserContentSectionDelete(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if vaultWriter == nil {
@@ -970,7 +970,7 @@ func handleUserContentSectionDelete(logger *slog.Logger, st store.Store, vaultRe
 		}
 		defer release()
 
-		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, id)
+		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, canonicalKindReg, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
 			return
