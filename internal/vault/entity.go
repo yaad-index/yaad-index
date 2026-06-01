@@ -180,6 +180,19 @@ type Entity struct {
 	// store mirrors this map (see store.Entity.GapState) so reindex
 	// can reconstitute the DB column from the vault.
 	GapState map[string]GapStateEntry
+
+	// UGC marks the entity as carrying an operator-authored,
+	// section-editable markdown body per ADR-0031. It is the flag
+	// arm of the section-tool gate (`ve.UGC || kind ==
+	// user-content`); the kind arm keeps pre-existing UGC files
+	// editable with no migration, and this flag admits canonical
+	// thin-edges (boardgame/person/etc.) into the editable set.
+	//
+	// Daemon-stamped only — at UGC create and at canonical-label
+	// vault materialize for canonical kinds. Plugins never emit it,
+	// so plugin source entities stay read-only bodies. false/absent
+	// → frontmatter omits the `ugc:` field via omitempty.
+	UGC bool
 }
 
 // GapStateEntry mirrors store.GapStateEntry per ADR-0019 §Storage —

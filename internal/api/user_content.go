@@ -194,7 +194,7 @@ func handleUserContentRead(logger *slog.Logger, st store.Store, vaultReader *vau
 func handleUserContentSectionsList(logger *slog.Logger, st store.Store, vaultReader *vault.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		ve, status, errCode, errMsg := loadUserContentVaultEntity(logger, r, st, vaultReader, id)
+		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
 			return
@@ -236,7 +236,7 @@ func handleUserContentSectionsList(logger *slog.Logger, st store.Store, vaultRea
 func handleUserContentSection(logger *slog.Logger, st store.Store, vaultReader *vault.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		ve, status, errCode, errMsg := loadUserContentVaultEntity(logger, r, st, vaultReader, id)
+		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
 			return
@@ -315,6 +315,58 @@ func loadUserContentVaultEntity(logger *slog.Logger, r *http.Request, st store.S
 			"err", err, "id", id)
 		return nil, http.StatusInternalServerError, "internal_error",
 			"failed to read vault file"
+	}
+	return ve, 0, "", ""
+}
+
+// loadSectionEditableVaultEntity is the section-tool loader per
+// ADR-0031 §2. Unlike loadUserContentVaultEntity (which gates strictly
+// on the user-content kind for the UGC-entity-level endpoints), this
+// one gates the six section endpoints on the broadened rule
+// `ve.UGC || ve.Kind == user-content`:
+//
+//   - the kind arm keeps every pre-existing UGC vault file editable
+//     with no migration (they carry kind=user-content but predate the
+//     ugc:true flag);
+//   - the flag arm admits canonical thin-edges that the daemon stamped
+//     ugc:true at materialize.
+//
+// Plugin source entities match neither and are refused with the
+// reworded invalid_argument envelope (the old "id must start with
+// user-content:" message is wrong now that canonical ids are valid).
+//
+// no-vault-file still 404s here; the auto-materialize-on-write path
+// (ADR-0031 §4) lands in the follow-up cut.
+func loadSectionEditableVaultEntity(logger *slog.Logger, r *http.Request, st store.Store, vaultReader *vault.Reader, id string) (*vault.Entity, int, string, string) {
+	if vaultReader == nil {
+		return nil, http.StatusServiceUnavailable, "vault_required",
+			"user-content endpoints require vault.path configuration; the body lives in vault files"
+	}
+	got, err := st.GetEntity(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, http.StatusNotFound, "not_found",
+			fmt.Sprintf("no entity with id %s", id)
+	}
+	if err != nil {
+		logger.ErrorContext(r.Context(), "store.GetEntity from section-editable lookup",
+			"err", err, "id", id)
+		return nil, http.StatusInternalServerError, "internal_error",
+			"failed to look up entity"
+	}
+	ve, err := vaultReader.ReadByID(got.Kind, id)
+	if err != nil {
+		if vault.IsNotExist(err) {
+			return nil, http.StatusNotFound, "not_found",
+				fmt.Sprintf("no vault file for id %s", id)
+		}
+		logger.ErrorContext(r.Context(), "vault.Reader.ReadByID from section-editable lookup",
+			"err", err, "id", id)
+		return nil, http.StatusInternalServerError, "internal_error",
+			"failed to read vault file"
+	}
+	if !ve.UGC && ve.Kind != userContentKind {
+		return nil, http.StatusBadRequest, "invalid_argument",
+			fmt.Sprintf("entity %s does not accept user-content sections (no ugc body surface)", id)
 	}
 	return ve, 0, "", ""
 }

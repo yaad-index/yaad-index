@@ -101,6 +101,10 @@ type frontmatter struct {
 	LegacyPlugin string `yaml:"plugin,omitempty"`
 	Aliases []string `yaml:"aliases,omitempty"`
 	Notations []string `yaml:"notations,omitempty"`
+	// UGC per ADR-0031 — true when the entity carries an operator-
+	// authored section-editable body. omitempty so non-UGC files
+	// never gain a `ugc: false` artifact.
+	UGC bool `yaml:"ugc,omitempty"`
 	Data map[string]any `yaml:"data,omitempty"`
 	Provenance []ProvenanceEntry `yaml:"provenance,omitempty"`
 	Summary string `yaml:"summary,omitempty"`
@@ -145,6 +149,7 @@ func Marshal(e *Entity, canonicalKinds []string) ([]byte, error) {
 		Source: sourceField(e.Source),
 		Aliases: aliases,
 		Notations: e.Notations,
+		UGC: e.UGC,
 		Data: e.Data,
 		Provenance: e.Provenance,
 		Summary: e.Summary,
@@ -219,6 +224,7 @@ func Unmarshal(b []byte) (*Entity, error) {
 		Source: source,
 		Aliases: fm.Aliases,
 		Notations: fm.Notations,
+		UGC: fm.UGC,
 		Data: fm.Data,
 		Provenance: fm.Provenance,
 		Summary: fm.Summary,

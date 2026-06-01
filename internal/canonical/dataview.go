@@ -163,6 +163,12 @@ func NewCanonicalLabelEntity(id, kind string, kindCfg config.CanonicalKindConfig
 		Source: []string{CanonicalLabelPlugin + "/default"},
 		Data:   map[string]any{},
 		Gaps:   gaps,
+		// ADR-0031: a materialized canonical thin-edge accepts an
+		// operator-authored section-editable body. The flag is the
+		// gate arm the section tools check; the operator/owner is
+		// not stamped here (it's claimed on the first body write,
+		// ADR-0031 §5) since materialize can run with no caller.
+		UGC: true,
 	}
 }
 

@@ -102,6 +102,50 @@ func TestMarshal_RoundTrip(t *testing.T) {
 	assert.Equal(t, expectedClean, got.CleanContent)
 }
 
+// TestMarshal_UGCFlagRoundTrip pins the ADR-0031 `ugc` frontmatter
+// flag: true survives a Marshal→Unmarshal cycle and renders as
+// `ugc: true` in the YAML; false omits the key entirely (omitempty)
+// so non-UGC files never gain a `ugc: false` artifact.
+func TestMarshal_UGCFlagRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	t.Run("true round-trips and renders", func(t *testing.T) {
+		t.Parallel()
+		e := &Entity{
+			ID:     "boardgame:moon-colony-bloodbath",
+			Kind:   "boardgame",
+			Source: []string{"user/default"},
+			Data:   map[string]any{"operator": "alice"},
+			UGC:    true,
+		}
+		b, err := Marshal(e, nil)
+		require.NoError(t, err)
+		assert.Contains(t, string(b), "ugc: true")
+
+		got, err := Unmarshal(b)
+		require.NoError(t, err)
+		assert.True(t, got.UGC, "ugc flag must survive round-trip")
+	})
+
+	t.Run("false omits the key", func(t *testing.T) {
+		t.Parallel()
+		e := &Entity{
+			ID:     "wikipedia:susanna-clarke",
+			Kind:   "wikipedia-article",
+			Source: []string{"wikipedia/default"},
+			UGC:    false,
+		}
+		b, err := Marshal(e, nil)
+		require.NoError(t, err)
+		assert.NotContains(t, string(b), "ugc:",
+			"a non-UGC entity must not emit a ugc: false artifact")
+
+		got, err := Unmarshal(b)
+		require.NoError(t, err)
+		assert.False(t, got.UGC)
+	})
+}
+
 // TestMarshal_CacheExpiresRoundTrip pins the new yaad-index
 // `cache_expires:` frontmatter field: nil / Never / dated values
 // all round-trip through Marshal → Unmarshal cleanly.
