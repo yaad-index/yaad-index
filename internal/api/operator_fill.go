@@ -862,6 +862,20 @@ func vaultGapStateToStore(in map[string]vault.GapStateEntry) map[string]store.Ga
 			FilledAt: e.FilledAt,
 			Deferred: e.Deferred,
 			DeferredAt: e.DeferredAt,
+			// Workflow-injected GapSpec metadata (#142) that
+			// /v1/needs-fill surfaces to the fill-prompt builder.
+			// Must carry through every vault→store mirror or a
+			// note/fill write would strip the gap's shape from the DB
+			// (the #390 review finding — this is the single shared
+			// translator, so the fix covers all callers).
+			DataSchema: e.DataSchema,
+			Type: e.Type,
+			Description: e.Description,
+			FillStrategy: e.FillStrategy,
+			Range: e.Range,
+			MaxLength: e.MaxLength,
+			Values: e.Values,
+			Kinds: e.Kinds,
 		}
 	}
 	return out

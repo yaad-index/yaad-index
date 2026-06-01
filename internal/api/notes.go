@@ -60,6 +60,9 @@ type noteEntry struct {
 	// a legacy note not yet re-stamped decodes without the field.
 	ID string `json:"note_id,omitempty"`
 	Date string `json:"date"`
+	// LastEditedAt (RFC3339 UTC) is set once edit_note has touched the
+	// note; omitted on a never-edited note (ADR-0015 §Note identity).
+	LastEditedAt string `json:"last_edited_at,omitempty"`
 	Text string `json:"text"`
 	Author string `json:"author,omitempty"`
 	Operator string `json:"operator,omitempty"`
@@ -307,6 +310,11 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 			ID: ve.ID,
 			Kind: ve.Kind,
 			Data: vaultEntityDataForDB(ve),
+			// Mirror gap_state too: the UpsertEntity UPSERT path nulls
+			// any column it isn't handed, so omitting it would erase
+			// workflow-injected / fill gap state on a note append (same
+			// class of bug as the #390 edit/delete review finding).
+			GapState: vaultGapStateToStore(ve.GapState),
 			CreatedAt: got.CreatedAt,
 		}); err != nil {
 			logger.ErrorContext(r.Context(), "store.UpsertEntity from notes (vault already written)",

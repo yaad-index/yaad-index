@@ -167,6 +167,9 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
 	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleOperatorFillGone)))
 	mux.Handle("POST /v1/entities/{id}/notes", protect(http.HandlerFunc(handleNotes(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg))))
+	// #390 Cut 2: edit / delete a note by note_id (author-gated).
+	mux.Handle("PUT /v1/entities/{id}/notes/{note_id}", protect(http.HandlerFunc(handleEditNote(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
+	mux.Handle("DELETE /v1/entities/{id}/notes/{note_id}", protect(http.HandlerFunc(handleDeleteNote(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
 
 	// User-content (UGC) read + write surface per yaad-index
 	// (PR-B added the GETs; PR-C added the writes).
