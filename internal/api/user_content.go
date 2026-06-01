@@ -31,6 +31,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yaad-index/yaad-index/internal/canonical"
+	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
 )
@@ -191,10 +193,10 @@ func handleUserContentRead(logger *slog.Logger, st store.Store, vaultReader *vau
 // handleUserContentSectionsList implements GET
 // /v1/user-content/{id}/sections — same paginated section shape as
 // the embedded one on the entity GET, but with no entity envelope.
-func handleUserContentSectionsList(logger *slog.Logger, st store.Store, vaultReader *vault.Reader) http.HandlerFunc {
+func handleUserContentSectionsList(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, id)
+		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, canonicalKindReg, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
 			return
@@ -233,10 +235,10 @@ func handleUserContentSectionsList(logger *slog.Logger, st store.Store, vaultRea
 // index OR heading slug. Returns 404 when the address doesn't
 // resolve (out-of-range index, unknown slug, or duplicate slug —
 // duplicates require the agent to address by positional index).
-func handleUserContentSection(logger *slog.Logger, st store.Store, vaultReader *vault.Reader) http.HandlerFunc {
+func handleUserContentSection(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, id)
+		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, canonicalKindReg, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
 			return
@@ -337,7 +339,7 @@ func loadUserContentVaultEntity(logger *slog.Logger, r *http.Request, st store.S
 //
 // no-vault-file still 404s here; the auto-materialize-on-write path
 // (ADR-0031 §4) lands in the follow-up cut.
-func loadSectionEditableVaultEntity(logger *slog.Logger, r *http.Request, st store.Store, vaultReader *vault.Reader, id string) (*vault.Entity, int, string, string) {
+func loadSectionEditableVaultEntity(logger *slog.Logger, r *http.Request, st store.Store, vaultReader *vault.Reader, canonicalKindReg map[string]config.CanonicalKindConfig, id string) (*vault.Entity, int, string, string) {
 	if vaultReader == nil {
 		return nil, http.StatusServiceUnavailable, "vault_required",
 			"user-content endpoints require vault.path configuration; the body lives in vault files"
@@ -356,6 +358,17 @@ func loadSectionEditableVaultEntity(logger *slog.Logger, r *http.Request, st sto
 	ve, err := vaultReader.ReadByID(got.Kind, id)
 	if err != nil {
 		if vault.IsNotExist(err) {
+			// Never-materialized canonical thin-edge per ADR-0031 §4: a
+			// canonical kind with a DB row but no vault file yet. Return
+			// an in-memory ugc:true entity (empty body) so reads see an
+			// empty section set and the first section write materializes
+			// the vault file via the handler's existing WriteWithCommit.
+			// Non-canonical kinds (a user-content id with a missing file,
+			// a plugin source) stay a 404 — the daemon never fabricates
+			// their bodies.
+			if kindCfg, ok := canonicalKindReg[got.Kind]; ok {
+				return canonical.NewCanonicalLabelEntity(id, got.Kind, kindCfg), 0, "", ""
+			}
 			return nil, http.StatusNotFound, "not_found",
 				fmt.Sprintf("no vault file for id %s", id)
 		}

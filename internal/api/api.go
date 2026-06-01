@@ -168,13 +168,13 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	// User-content (UGC) read + write surface per yaad-index
 	// (PR-B added the GETs; PR-C added the writes).
 	mux.Handle("GET /v1/user-content/{id}", protect(http.HandlerFunc(handleUserContentRead(logger, st, cfg.vaultReader))))
-	mux.Handle("GET /v1/user-content/{id}/sections", protect(http.HandlerFunc(handleUserContentSectionsList(logger, st, cfg.vaultReader))))
-	mux.Handle("GET /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSection(logger, st, cfg.vaultReader))))
+	mux.Handle("GET /v1/user-content/{id}/sections", protect(http.HandlerFunc(handleUserContentSectionsList(logger, st, cfg.vaultReader, cfg.canonicalKindReg))))
+	mux.Handle("GET /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSection(logger, st, cfg.vaultReader, cfg.canonicalKindReg))))
 	mux.Handle("POST /v1/user-content", protect(http.HandlerFunc(handleUserContentCreate(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.userContentFrontmatterEdges, cfg.writeLocks, cfg.eventBus))))
-	mux.Handle("PUT /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSectionReplace(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
-	mux.Handle("POST /v1/user-content/{id}/sections", protect(http.HandlerFunc(handleUserContentSectionAdd(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
-	mux.Handle("PATCH /v1/user-content/{id}/sections/{sec}/heading", protect(http.HandlerFunc(handleUserContentSectionRenameHeading(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
-	mux.Handle("DELETE /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSectionDelete(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
+	mux.Handle("PUT /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSectionReplace(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks, cfg.canonicalKindReg))))
+	mux.Handle("POST /v1/user-content/{id}/sections", protect(http.HandlerFunc(handleUserContentSectionAdd(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks, cfg.canonicalKindReg))))
+	mux.Handle("PATCH /v1/user-content/{id}/sections/{sec}/heading", protect(http.HandlerFunc(handleUserContentSectionRenameHeading(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks, cfg.canonicalKindReg))))
+	mux.Handle("DELETE /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSectionDelete(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks, cfg.canonicalKindReg))))
 	mux.Handle("PUT /v1/user-content/{id}/frontmatter", protect(http.HandlerFunc(handleUserContentFrontmatterEdit(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.userContentFrontmatterEdges, cfg.eventBus, cfg.writeLocks))))
 	mux.Handle("DELETE /v1/user-content/{id}", protect(http.HandlerFunc(handleUserContentDelete(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
 	// Archive lifecycle for user-content per ADR-0018 step 2. Same
