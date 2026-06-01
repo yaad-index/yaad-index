@@ -479,6 +479,9 @@ func renderNoteMetadata(n Note) string {
 	if n.Kind != "" && n.Kind != NoteKindNote {
 		parts = append(parts, "kind="+n.Kind)
 	}
+	if !n.LastEditedAt.IsZero() {
+		parts = append(parts, "edited="+n.LastEditedAt.UTC().Format(time.RFC3339))
+	}
 	if len(parts) == 0 {
 		return ""
 	}
@@ -489,7 +492,7 @@ func renderNoteMetadata(n Note) string {
 // string into a `(field, kind, id)` tuple. Unknown keys are silently
 // ignored — the format is forward-compatible with future tag
 // additions; the parser doesn't reject what it doesn't recognise.
-func parseNoteMetadata(raw string) (field, kind, id string) {
+func parseNoteMetadata(raw string) (field, kind, id string, lastEdited time.Time) {
 	for _, token := range strings.Fields(raw) {
 		m := noteMetadataPair.FindStringSubmatch(token)
 		if m == nil {
@@ -502,9 +505,17 @@ func parseNoteMetadata(raw string) (field, kind, id string) {
 			kind = m[2]
 		case "id":
 			id = m[2]
+		case "edited":
+			// Best-effort: a malformed timestamp leaves lastEdited
+			// zero (treated as never-edited) rather than failing the
+			// whole parse — consistent with the metadata bracket's
+			// forward-compatible, lenient contract.
+			if t, err := time.Parse(time.RFC3339, m[2]); err == nil {
+				lastEdited = t
+			}
 		}
 	}
-	return field, kind, id
+	return field, kind, id, lastEdited
 }
 
 // splitBody walks the body bytes and extracts (clean_content, edges,
@@ -555,6 +566,7 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 		curField string
 		curKind string
 		curID string
+		curLastEdited time.Time
 	)
 
 	// flushOrphanedHeading recovers from the edge case where the
@@ -575,13 +587,14 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 			return
 		}
 		notesB = append(notesB, Note{
-			ID:       curID,
-			Date:     curDate,
-			Author:   curAuthor,
-			Operator: curOperator,
-			Field:    curField,
-			Kind:     curKind,
-			Text:     "",
+			ID:           curID,
+			Date:         curDate,
+			LastEditedAt: curLastEdited,
+			Author:       curAuthor,
+			Operator:     curOperator,
+			Field:        curField,
+			Kind:         curKind,
+			Text:         "",
 		})
 		curDate = time.Time{}
 		curAuthor = ""
@@ -589,6 +602,7 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 		curField = ""
 		curKind = ""
 		curID = ""
+		curLastEdited = time.Time{}
 		noteExpectHeading = true
 	}
 
@@ -725,7 +739,7 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 					curDate = parseCommentDate(hm[1])
 					curAuthor = strings.TrimSpace(hm[2])
 					curOperator = strings.TrimSpace(hm[3])
-					curField, curKind, curID = parseNoteMetadata(hm[4])
+					curField, curKind, curID, curLastEdited = parseNoteMetadata(hm[4])
 				} else {
 					// Malformed heading row — keep the cell as the
 					// date string so a hand-edit doesn't silently swallow
@@ -736,19 +750,21 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 					curField = ""
 					curKind = ""
 					curID = ""
+					curLastEdited = time.Time{}
 				}
 				noteExpectHeading = false
 				continue
 			}
 			// Body row — pair with the buffered heading.
 			notesB = append(notesB, Note{
-				ID:       curID,
-				Date:     curDate,
-				Author:   curAuthor,
-				Operator: curOperator,
-				Field:    curField,
-				Kind:     curKind,
-				Text:     cell,
+				ID:           curID,
+				Date:         curDate,
+				LastEditedAt: curLastEdited,
+				Author:       curAuthor,
+				Operator:     curOperator,
+				Field:        curField,
+				Kind:         curKind,
+				Text:         cell,
 			})
 			curDate = time.Time{}
 			curAuthor = ""
@@ -756,6 +772,7 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 			curField = ""
 			curKind = ""
 			curID = ""
+			curLastEdited = time.Time{}
 			noteExpectHeading = true
 		case "dataview":
 			if fields := parseDataviewLine(line); len(fields) > 0 {

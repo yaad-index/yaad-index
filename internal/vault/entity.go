@@ -302,6 +302,14 @@ type Note struct {
 	ID string `yaml:"id,omitempty"`
 
 	Date time.Time `yaml:"date"`
+
+	// LastEditedAt is the most-recent edit_note timestamp per ADR-0015
+	// §Note identity (#390). Zero (omitted) on a never-edited note;
+	// set by edit_note alongside the original `Date` (created_at).
+	// Rendered with full RFC3339 precision in the heading-row bracket
+	// (`edited=…`), distinct from the date-only created stamp.
+	LastEditedAt time.Time `yaml:"last_edited_at,omitempty"`
+
 	Text string `yaml:"text"`
 	Author string `yaml:"author,omitempty"`
 	Operator string `yaml:"operator,omitempty"`

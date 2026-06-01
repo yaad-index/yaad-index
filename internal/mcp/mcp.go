@@ -118,6 +118,8 @@ func registerAll(s *server.MCPServer, b *bridge) {
 
 	// Notes (entity-level ADR-0020 notes).
 	registerAddNote(s, b)
+	registerEditNote(s, b)
+	registerDeleteNote(s, b)
 
 	// System metadata.
 	registerStructure(s, b)

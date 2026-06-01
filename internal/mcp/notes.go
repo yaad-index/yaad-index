@@ -73,3 +73,98 @@ func registerAddNote(s *server.MCPServer, b *bridge) {
 		return b.callTool(ctx, "POST", "/v1/entities/"+url.PathEscape(id)+"/notes", bytes.NewReader(body))
 	})
 }
+
+func registerEditNote(s *server.MCPServer, b *bridge) {
+	tool := mcp.NewTool("edit_note",
+		mcp.WithDescription(
+			"Edit an existing note in place, targeted by its `note_id` "+
+				"(from a prior `add_note` response or `get_entity`'s "+
+				"`notes[]`). Replaces `text` (and `field` / `kind` — a "+
+				"note edit is a whole-note replace of the mutable fields, "+
+				"not a patch) and stamps `last_edited_at` alongside the "+
+				"original created date. **Author-gated**: only the note's "+
+				"author may edit it — otherwise 403 `author_mismatch`. 404 "+
+				"`not_found` when the entity or `note_id` doesn't exist. "+
+				"Returns the edited note + the merged entity.",
+		),
+		mcp.WithString("entity_id",
+			mcp.Required(),
+			mcp.Description("Entity the note lives on, e.g. `boardgame:acme-game`."),
+		),
+		mcp.WithString("note_id",
+			mcp.Required(),
+			mcp.Description("The note's 8-hex id (from add_note / get_entity)."),
+		),
+		mcp.WithString("text",
+			mcp.Required(),
+			mcp.Description("New note body. Server trims surrounding whitespace."),
+		),
+		mcp.WithString("field",
+			mcp.Description("Optional per-field scope; replaces the existing value (omit/empty clears it)."),
+		),
+		mcp.WithString("kind",
+			mcp.Description("Optional `note` (default) or `annotation`; replaces the existing kind."),
+		),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id := req.GetString("entity_id", "")
+		if id == "" {
+			return mcp.NewToolResultError("`entity_id` is required"), nil
+		}
+		noteID := req.GetString("note_id", "")
+		if noteID == "" {
+			return mcp.NewToolResultError("`note_id` is required"), nil
+		}
+		text := req.GetString("text", "")
+		if text == "" {
+			return mcp.NewToolResultError("`text` is required"), nil
+		}
+		args := map[string]any{"text": text}
+		if field := req.GetString("field", ""); field != "" {
+			args["field"] = field
+		}
+		if kind := req.GetString("kind", ""); kind != "" {
+			args["kind"] = kind
+		}
+		body, err := json.Marshal(args)
+		if err != nil {
+			return mcp.NewToolResultError("encode args: " + err.Error()), nil
+		}
+		return b.callTool(ctx, "PUT",
+			"/v1/entities/"+url.PathEscape(id)+"/notes/"+url.PathEscape(noteID),
+			bytes.NewReader(body))
+	})
+}
+
+func registerDeleteNote(s *server.MCPServer, b *bridge) {
+	tool := mcp.NewTool("delete_note",
+		mcp.WithDescription(
+			"Hard-delete a note by its `note_id` (no tombstone — the "+
+				"vault's git history covers audit). **Author-gated**: only "+
+				"the note's author may delete it — otherwise 403 "+
+				"`author_mismatch`. 404 `not_found` when the entity or "+
+				"`note_id` doesn't exist. Returns `{ok, id, note_id, "+
+				"deleted: true}`.",
+		),
+		mcp.WithString("entity_id",
+			mcp.Required(),
+			mcp.Description("Entity the note lives on."),
+		),
+		mcp.WithString("note_id",
+			mcp.Required(),
+			mcp.Description("The note's 8-hex id (from add_note / get_entity)."),
+		),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id := req.GetString("entity_id", "")
+		if id == "" {
+			return mcp.NewToolResultError("`entity_id` is required"), nil
+		}
+		noteID := req.GetString("note_id", "")
+		if noteID == "" {
+			return mcp.NewToolResultError("`note_id` is required"), nil
+		}
+		return b.callTool(ctx, "DELETE",
+			"/v1/entities/"+url.PathEscape(id)+"/notes/"+url.PathEscape(noteID), nil)
+	})
+}

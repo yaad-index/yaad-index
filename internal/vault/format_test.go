@@ -114,12 +114,13 @@ func TestMarshal_NoteIDRoundTrip(t *testing.T) {
 		Source: []string{"bgg/default"},
 		Notes: []Note{
 			{
-				ID:     "ab12cd34",
-				Date:   mustParseTime(t, "2026-05-01T00:00:00Z"),
-				Text:   "with id",
-				Author: "alice",
-				Kind:   "annotation",
-				Field:  "rating",
+				ID:           "ab12cd34",
+				Date:         mustParseTime(t, "2026-05-01T00:00:00Z"),
+				LastEditedAt: mustParseTime(t, "2026-05-03T09:30:00Z"),
+				Text:         "with id",
+				Author:       "alice",
+				Kind:         "annotation",
+				Field:        "rating",
 			},
 			{
 				ID:     "", // legacy, id-less
@@ -139,7 +140,10 @@ func TestMarshal_NoteIDRoundTrip(t *testing.T) {
 	assert.Equal(t, "ab12cd34", got.Notes[0].ID, "id round-trips")
 	assert.Equal(t, "rating", got.Notes[0].Field)
 	assert.Equal(t, "annotation", got.Notes[0].Kind)
+	assert.True(t, got.Notes[0].LastEditedAt.Equal(mustParseTime(t, "2026-05-03T09:30:00Z")),
+		"last_edited_at round-trips at full precision")
 	assert.Empty(t, got.Notes[1].ID, "id-less legacy note round-trips empty (Marshal does not generate)")
+	assert.True(t, got.Notes[1].LastEditedAt.IsZero(), "never-edited note has zero last_edited_at")
 }
 
 // TestMarshal_UGCFlagRoundTrip pins the ADR-0031 `ugc` frontmatter
