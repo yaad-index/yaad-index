@@ -102,6 +102,46 @@ func TestMarshal_RoundTrip(t *testing.T) {
 	assert.Equal(t, expectedClean, got.CleanContent)
 }
 
+// TestMarshal_NoteIDRoundTrip pins ADR-0015 §Note identity (#390): a
+// note's `id` renders into the heading-row bracket and parses back; an
+// id-less (legacy) note round-trips with an empty id (Marshal never
+// generates one — id stamping is the API layer's job).
+func TestMarshal_NoteIDRoundTrip(t *testing.T) {
+	t.Parallel()
+	e := &Entity{
+		ID:     "boardgame:x",
+		Kind:   "boardgame",
+		Source: []string{"bgg/default"},
+		Notes: []Note{
+			{
+				ID:     "ab12cd34",
+				Date:   mustParseTime(t, "2026-05-01T00:00:00Z"),
+				Text:   "with id",
+				Author: "alice",
+				Kind:   "annotation",
+				Field:  "rating",
+			},
+			{
+				ID:     "", // legacy, id-less
+				Date:   mustParseTime(t, "2026-05-02T00:00:00Z"),
+				Text:   "no id",
+				Author: "bob",
+			},
+		},
+	}
+	b, err := Marshal(e, nil)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), "[id=ab12cd34", "note id renders in the heading bracket")
+
+	got, err := Unmarshal(b)
+	require.NoError(t, err)
+	require.Len(t, got.Notes, 2)
+	assert.Equal(t, "ab12cd34", got.Notes[0].ID, "id round-trips")
+	assert.Equal(t, "rating", got.Notes[0].Field)
+	assert.Equal(t, "annotation", got.Notes[0].Kind)
+	assert.Empty(t, got.Notes[1].ID, "id-less legacy note round-trips empty (Marshal does not generate)")
+}
+
 // TestMarshal_UGCFlagRoundTrip pins the ADR-0031 `ugc` frontmatter
 // flag: true survives a Marshal→Unmarshal cycle and renders as
 // `ugc: true` in the YAML; false omits the key entirely (omitempty)

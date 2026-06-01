@@ -1,6 +1,6 @@
 # ADR-0015 — Plugin body ownership: marker-pair contract for plugin-emitted markdown body content
 
-**Status:** Proposed (2026-05-06)
+**Status:** Proposed (2026-05-06; amended 2026-06-01 — §Note identity for #390)
 **Date:** 2026-05-06
 **Depends on:** [ADR-0008](./0008-vault-as-source-of-truth.md), [ADR-0012](./0012-user-generated-content.md), [ADR-0014](./0014-plugin-attachment-contract.md)
 **Tracked in:** yaad-index/(the trigger; the body-rendering work that surfaced the gap)
@@ -146,3 +146,52 @@ Punted to follow-ups, not blockers for v1:
 1. **Multi-region** — a future plugin emitting two distinct managed regions (e.g., a "live data" block + a "static reference" block). Marker-pair-with-id (`<!-- yaad:plugin id=live start -->`) handles this; not needed v1.
 2. **Multi-plugin same entity** — two plugins both emit body content for the same canonical entity. Punt; the canonical-vs-source-shape architecture (ADR-0008) doesn't allow two plugins to "own" the same entity today.
 3. **Operator-side opt-out** — an operator who wants the marker region wholesale-replaced (no preservation, classic clobber). Not needed v1; if they want clobber they can delete + re-ingest.
+
+## Addendum: Note identity (amended 2026-06-01, #390)
+
+The `## Notes` marker-wrapped block (this ADR's contract) renders each note as a
+heading row + a body row in a markdown table. Originally notes were
+append-only and had no stable identifier, so there was no way to target one for
+edit or deletion. #390 adds `edit_note` / `delete_note`; both need to address a
+specific note, so this addendum makes note identity part of the contract.
+
+### Id generation
+
+Every note carries a stable `note_id`: an **8 hex character** token (4 bytes of
+`crypto/rand`), generated **server-side at creation**. 8 hex chars are
+collision-safe at per-entity note scale and short enough to read in vault diffs
+and logs; no kind/entity prefix is needed (the id is only ever resolved within a
+single entity's note list).
+
+### Storage
+
+The id rides in the existing heading-row metadata bracket alongside the #186
+`kind` / `field` tags: `[id=<8hex> field=<f> kind=<k>]`. The bracket parser is
+already key=value and forward-compatible (unknown keys ignored), so the change
+is additive — pre-addendum vault files (no `id=`) parse with an empty id and
+round-trip unchanged. Serialization never *generates* an id (it only renders one
+that's set), keeping `Marshal` deterministic.
+
+### Back-compat: stamp-on-next-block-write
+
+Legacy id-less notes are not migrated by a sweep. Instead, any note operation
+(`add_note`, and the #390 `edit_note` / `delete_note`) re-stamps every id-less
+note in that entity's block on the write it performs. So after the first note
+operation on an entity, all of its notes carry ids. Until then, a legacy note
+surfaces with an empty `note_id` and can't be targeted by id — acceptable
+because it gets one the moment any note op touches the entity.
+
+### Read surface
+
+`note_id` is surfaced on every note-returning read so agents/operators can
+discover the handle: the `add_note` response (the new note's id) and the
+`notes[]` array on `GET /v1/entities/{id}`.
+
+### Edit / delete semantics (#390 Cut 2)
+
+Building on the above: `edit_note(entity_id, note_id, …)` replaces the note's
+text/field/kind in place and stamps `last_edited_at` alongside the original
+`created_at`; `delete_note(entity_id, note_id)` **hard-deletes** the note (no
+tombstone — the vault's git history plus `last_edited_at` cover audit). Both are
+author-gated: only the note's `author` may edit or delete it (`author_mismatch`
+otherwise), matching the rest of the system's authorship rule.

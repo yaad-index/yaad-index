@@ -470,6 +470,9 @@ var noteMetadataPair = regexp.MustCompile(`^(\S+?)=(\S*)$`)
 // existing-shape note.
 func renderNoteMetadata(n Note) string {
 	var parts []string
+	if n.ID != "" {
+		parts = append(parts, "id="+n.ID)
+	}
 	if n.Field != "" {
 		parts = append(parts, "field="+n.Field)
 	}
@@ -483,10 +486,10 @@ func renderNoteMetadata(n Note) string {
 }
 
 // parseNoteMetadata splits a `key=value key=value` metadata-suffix
-// string into a `(field, kind)` pair. Unknown keys are silently
+// string into a `(field, kind, id)` tuple. Unknown keys are silently
 // ignored — the format is forward-compatible with future tag
 // additions; the parser doesn't reject what it doesn't recognise.
-func parseNoteMetadata(raw string) (field, kind string) {
+func parseNoteMetadata(raw string) (field, kind, id string) {
 	for _, token := range strings.Fields(raw) {
 		m := noteMetadataPair.FindStringSubmatch(token)
 		if m == nil {
@@ -497,9 +500,11 @@ func parseNoteMetadata(raw string) (field, kind string) {
 			field = m[2]
 		case "kind":
 			kind = m[2]
+		case "id":
+			id = m[2]
 		}
 	}
-	return field, kind
+	return field, kind, id
 }
 
 // splitBody walks the body bytes and extracts (clean_content, edges,
@@ -549,6 +554,7 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 		curOperator string
 		curField string
 		curKind string
+		curID string
 	)
 
 	// flushOrphanedHeading recovers from the edge case where the
@@ -569,6 +575,7 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 			return
 		}
 		notesB = append(notesB, Note{
+			ID:       curID,
 			Date:     curDate,
 			Author:   curAuthor,
 			Operator: curOperator,
@@ -581,6 +588,7 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 		curOperator = ""
 		curField = ""
 		curKind = ""
+		curID = ""
 		noteExpectHeading = true
 	}
 
@@ -717,7 +725,7 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 					curDate = parseCommentDate(hm[1])
 					curAuthor = strings.TrimSpace(hm[2])
 					curOperator = strings.TrimSpace(hm[3])
-					curField, curKind = parseNoteMetadata(hm[4])
+					curField, curKind, curID = parseNoteMetadata(hm[4])
 				} else {
 					// Malformed heading row — keep the cell as the
 					// date string so a hand-edit doesn't silently swallow
@@ -727,12 +735,14 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 					curOperator = ""
 					curField = ""
 					curKind = ""
+					curID = ""
 				}
 				noteExpectHeading = false
 				continue
 			}
 			// Body row — pair with the buffered heading.
 			notesB = append(notesB, Note{
+				ID:       curID,
 				Date:     curDate,
 				Author:   curAuthor,
 				Operator: curOperator,
@@ -745,6 +755,7 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 			curOperator = ""
 			curField = ""
 			curKind = ""
+			curID = ""
 			noteExpectHeading = true
 		case "dataview":
 			if fields := parseDataviewLine(line); len(fields) > 0 {
