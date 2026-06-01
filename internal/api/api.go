@@ -135,6 +135,9 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("GET /v1/kinds", protect(http.HandlerFunc(handleKinds(logger, registry))))
 	mux.Handle("GET /v1/plugins", protect(http.HandlerFunc(handlePlugins(logger, registry, cfg.pluginInstanceConfigs))))
 	mux.Handle("POST /v1/entities/batch", protect(http.HandlerFunc(handleEntitiesBatch(logger, st))))
+	// #389: direct canonical-entity creation (no plugin / edge / UGC
+	// indirection). Edge-side-effect-free; any-authenticated.
+	mux.Handle("POST /v1/canonical-entities", protect(http.HandlerFunc(handleCreateCanonicalEntity(logger, st, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
 	// /v1/entities/batch is a method-target path, not an entity id. The
 	// explicit GET handler below carves it out from the {id} matcher so a
 	// stray GET on this path returns the canonical 405 envelope rather than

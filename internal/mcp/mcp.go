@@ -110,6 +110,7 @@ func registerAll(s *server.MCPServer, b *bridge) {
 	registerCVStatus(s, b)
 	registerCanonicalRegistryEffective(s, b)
 	registerCanonicalRegistryAvailable(s, b)
+	registerCreateCanonicalEntity(s, b)
 
 	// Edges.
 	registerEdges(s, b)
