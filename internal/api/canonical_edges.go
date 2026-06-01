@@ -235,7 +235,7 @@ func appendDataviewParagraphs(
 			appended, err := canonical.AppendDataviewParagraph(
 				ctx, deps, e.ID,
 				canonical.StringifyMap(e.Data),
-				op.Field, sourceWorkflow,
+				op.Field, sourceWorkflow, e.Name,
 			)
 			if err != nil {
 				return fmt.Errorf("append dataview paragraph on %s (gap=%q): %w", e.ID, op.Field, err)
@@ -433,6 +433,7 @@ func parseCanonicalLabelEntry(
 		}
 		return canonicalLabelEntry{
 			ID:   ref.Kind + ":" + slug.Slug(ref.Name),
+			Name: ref.Name,
 			Data: ref.Data,
 		}, nil
 	default:
@@ -467,8 +468,16 @@ type canonicalRef struct {
 // per yaad-index #119. Pre-formed-label string entries
 // (operator-fill / UGC paths) always emit empty Data — only
 // the object form `{name, kind, data}` carries it.
+//
+// Name is the source `name` the slug was derived from, carried
+// only by the object form (#405). It seeds data.name when this
+// entry materializes the target for the first time, so the
+// canonical entity resolves by its original name. Empty for the
+// pre-formed-string form — there a `<kind>:<slug>` id was
+// supplied directly, with no name→slug derivation to capture.
 type canonicalLabelEntry struct {
 	ID   string
+	Name string
 	Data map[string]any
 }
 

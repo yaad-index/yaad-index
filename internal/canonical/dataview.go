@@ -74,12 +74,22 @@ type DataviewAppendDeps struct {
 // append fires from a workflow action; empty when fired from
 // agent/operator fill (the api package callers). Surfaces in
 // the commit message and write-lock holder for audit traces.
+//
+// sourceName is the human name the target's slug was derived
+// from (the canonical_type ref's `name`), captured into
+// data.name when this call materializes the target for the
+// first time per #405. It seeds the synthesized alias (the
+// vault frontmatter via Marshal, then the DB resolver index
+// via MirrorAliases) so the entity resolves by its original
+// name immediately. Empty on the auto-resolve / pre-formed-id
+// paths where no name→slug derivation happened; empty also
+// leaves an already-materialized target's name untouched.
 func AppendDataviewParagraph(
 	ctx context.Context,
 	deps DataviewAppendDeps,
 	targetID string,
 	data map[string]string,
-	gapField, sourceWorkflow string,
+	gapField, sourceWorkflow, sourceName string,
 ) (appended bool, err error) {
 	if len(data) == 0 {
 		return false, nil
@@ -103,6 +113,7 @@ func AppendDataviewParagraph(
 		return false, fmt.Errorf("invalid canonical label id %q", targetID)
 	}
 
+	materialized := false
 	ve, readErr := deps.VaultReader.ReadByID(kind, targetID)
 	if readErr != nil {
 		if !vault.IsNotExist(readErr) {
@@ -114,6 +125,14 @@ func AppendDataviewParagraph(
 			return false, fmt.Errorf("target kind %q not in canonical_kinds; cannot auto-materialize", kind)
 		}
 		ve = NewCanonicalLabelEntity(targetID, kind, kindCfg)
+		// #405: capture the source-of-slug name as data.name on
+		// first materialize. Marshal then synthesizes the alias
+		// into the vault frontmatter; MirrorAliases (below)
+		// mirrors it to the DB resolver index in this same call.
+		if sourceName != "" {
+			ve.Data["name"] = sourceName
+		}
+		materialized = true
 	}
 
 	candidate := vault.DataviewParagraph{Fields: data}
@@ -136,6 +155,23 @@ func AppendDataviewParagraph(
 
 	if _, ensureErr := EnsureLabelRow(ctx, deps.Store, targetID, deps.Logger); ensureErr != nil {
 		return false, fmt.Errorf("ensure label row: %w", ensureErr)
+	}
+
+	// #405: mirror the freshly-synthesized name alias to the DB
+	// resolver index so the entity resolves by its source name
+	// without waiting for a reindex pass. Gated on a fresh
+	// materialize with a captured name — an existing target owns
+	// its own aliases (don't wipe them), and a nameless materialize
+	// has nothing to register. The thin row (ensured just above)
+	// satisfies the entity_aliases foreign key.
+	if materialized && sourceName != "" {
+		canonicalKinds := make([]string, 0, len(deps.KindReg))
+		for k := range deps.KindReg {
+			canonicalKinds = append(canonicalKinds, k)
+		}
+		if mirrorErr := MirrorAliases(ctx, deps.Store, ve.ID, ve.Kind, ve.Data, ve.Aliases, canonicalKinds); mirrorErr != nil {
+			return false, fmt.Errorf("mirror name alias: %w", mirrorErr)
+		}
 	}
 	return true, nil
 }
