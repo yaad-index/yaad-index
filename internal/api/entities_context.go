@@ -52,6 +52,12 @@ const (
 func handleEntityContext(logger *slog.Logger, st store.Store, vaultReader *vault.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 
 		depthRaw := r.URL.Query().Get("depth")
 		if depthRaw == "" {

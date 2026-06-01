@@ -195,6 +195,12 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 		}
 
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 
 		if vaultReader == nil || vaultWriter == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_required",

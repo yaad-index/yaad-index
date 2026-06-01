@@ -50,6 +50,12 @@ type entityDeleteResponse struct {
 func handleEntityDelete(logger *slog.Logger, st store.Store, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 		if id == "" {
 			writeError(w, http.StatusBadRequest, "missing_id", "path missing entity id")
 			return

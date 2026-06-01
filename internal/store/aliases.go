@@ -8,6 +8,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 )
@@ -43,6 +44,37 @@ func (s *sqliteStore) ListAliasesForEntity(ctx context.Context, entityID string)
 		return nil, fmt.Errorf("iterate entity_aliases for %s: %w", entityID, err)
 	}
 	return out, nil
+}
+
+// ResolveAlias reverse-looks-up an exact alias string to its entity id
+// per #392 (alias-as-resolver). When kind is non-empty the match is
+// scoped to entities of that kind (the join to entities.kind) — the
+// "alias within the kind namespace" rule; an empty kind matches any
+// kind. Returns "" (no error) when nothing matches.
+//
+// The entity_aliases PRIMARY KEY is on `alias`, so an exact alias is
+// globally unique — at most one row matches, hence at most one entity
+// here. (Multi-candidate disambiguation only becomes possible with the
+// deferred fuzzy name-normalized match, not this exact path.)
+func (s *sqliteStore) ResolveAlias(ctx context.Context, alias, kind string) (string, error) {
+	if alias == "" {
+		return "", errors.New("ResolveAlias: empty alias")
+	}
+	var entityID string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT ea.entity_id
+		FROM entity_aliases ea
+		JOIN entities e ON e.id = ea.entity_id
+		WHERE ea.alias = ? AND (? = '' OR e.kind = ?)
+		LIMIT 1
+	`, alias, kind, kind).Scan(&entityID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve alias %q (kind=%q): %w", alias, kind, err)
+	}
+	return entityID, nil
 }
 
 // ReplaceAliases transactionally wipes + rewrites the alias rows

@@ -108,6 +108,12 @@ func findNoteByID(notes []vault.Note, noteID string) int {
 func handleEditNote(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 		noteID := r.PathValue("note_id")
 		if vaultWriter == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_required",
@@ -236,6 +242,12 @@ func handleEditNote(logger *slog.Logger, st store.Store, vaultReader *vault.Read
 func handleDeleteNote(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 		noteID := r.PathValue("note_id")
 		if vaultWriter == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_required",

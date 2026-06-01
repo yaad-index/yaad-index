@@ -115,6 +115,12 @@ type userContentSectionResponse struct {
 func handleUserContentRead(logger *slog.Logger, st store.Store, vaultReader *vault.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 		if !strings.HasPrefix(id, userContentIDPrefix) {
 			writeError(w, http.StatusBadRequest, "invalid_argument",
 				fmt.Sprintf("id must start with %q", userContentIDPrefix))
@@ -196,6 +202,12 @@ func handleUserContentRead(logger *slog.Logger, st store.Store, vaultReader *vau
 func handleUserContentSectionsList(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, canonicalKindReg, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)
@@ -238,6 +250,12 @@ func handleUserContentSectionsList(logger *slog.Logger, st store.Store, vaultRea
 func handleUserContentSection(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 		ve, status, errCode, errMsg := loadSectionEditableVaultEntity(logger, r, st, vaultReader, canonicalKindReg, id)
 		if status != 0 {
 			writeError(w, status, errCode, errMsg)

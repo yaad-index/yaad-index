@@ -74,6 +74,12 @@ func handleEntityOperatorFill(
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		id, rerr := resolveEntityID(r.Context(), st, id)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to resolve entity reference")
+			return
+		}
 
 		if vaultReader == nil || vaultWriter == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_required",

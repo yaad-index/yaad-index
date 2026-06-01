@@ -602,6 +602,9 @@ type Store interface {
 	//     vault write + by reindex re-derive.
 	ListAliasesForEntity(ctx context.Context, entityID string) ([]Alias, error)
 	ReplaceAliases(ctx context.Context, entityID string, entries []Alias) error
+	// ResolveAlias reverse-looks-up an exact alias to its entity id,
+	// optionally scoped to a kind (#392). "" when no match.
+	ResolveAlias(ctx context.Context, alias, kind string) (string, error)
 
 	// Plugin capabilities cache . Operator-only — these
 	// methods aren't reachable from the agent-facing /v1 API surface;
