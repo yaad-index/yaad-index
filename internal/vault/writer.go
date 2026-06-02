@@ -195,7 +195,65 @@ func (w *Writer) writeAtomic(e *Entity) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// #415 location preservation: when the flat `<kind>/<slug>.md`
+	// doesn't exist but a same-slug file lives one level deep in a
+	// subfolder (an operator-organized user-content file), write back
+	// to that subfolder so an edit doesn't orphan the file to the flat
+	// path. New entities and normal flat files fall through to the flat
+	// dir (the flat file exists, or no subfolder match).
+	if subDir, ok := w.existingSubfolderDir(dir, slug); ok {
+		dir = subDir
+	}
 	return w.writeAtomicAt(e, dir, slug)
+}
+
+// existingSubfolderDir returns the directory of an existing
+// `<flatDir>/<subfolder>/<slug>.md` when the flat `<flatDir>/<slug>.md`
+// is absent and exactly one single-level-subfolder match exists (#415).
+// Returns ("", false) when the flat file exists or there is no unique
+// subfolder match — the caller then writes to the flat dir.
+func (w *Writer) existingSubfolderDir(flatDir, slug string) (string, bool) {
+	if _, err := os.Stat(filepath.Join(flatDir, slug+".md")); err == nil {
+		return "", false
+	}
+	matches, _ := filepath.Glob(filepath.Join(flatDir, "*", slug+".md"))
+	if len(matches) == 1 {
+		return filepath.Dir(matches[0]), true
+	}
+	return "", false
+}
+
+// WriteWithCommitInSubfolder writes the entity to
+// `<root>/<kind>/<subfolder>/<slug>.md` instead of the flat
+// `<root>/<kind>/<slug>.md`, for #415 operator-organized user-content.
+// The entity id stays flat (`<kind>:<slug>`); only the on-disk path
+// carries the subfolder. Same atomic + best-effort-commit semantics as
+// WriteWithCommit. An empty subfolder writes to the flat path.
+func (w *Writer) WriteWithCommitInSubfolder(ctx context.Context, e *Entity, subfolder, message, author string) error {
+	if e == nil {
+		return fmt.Errorf("%w: entity", ErrMissingRequiredField)
+	}
+	if e.Kind == "" {
+		return fmt.Errorf("%w: kind", ErrMissingRequiredField)
+	}
+	slug, err := slugFromID(e.ID)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(w.root, KindDir(e.Kind), subfolder)
+	relPath, err := w.writeAtomicAt(e, dir, slug)
+	if err != nil {
+		return err
+	}
+	if w.committer == nil || message == "" {
+		return nil
+	}
+	if err := w.committer.OnWrite(ctx, relPath, message, author); err != nil {
+		w.logger.Warn("auto-commit OnWrite failed",
+			"rel_path", relPath,
+			"err", err)
+	}
+	return nil
 }
 
 // writeAtomicAt is the shared atomic-write path used by both
@@ -402,6 +460,21 @@ func (w *Writer) moveBetweenArchive(ctx context.Context, kind, id, message, auth
 
 	activeRel := filepath.Join(KindDir(kind), slug+".md")
 	archiveRel := filepath.Join(ArchiveDir, KindDir(kind), slug+".md")
+	// #415: when archiving, the active file may live one level deep in a
+	// subfolder (operator-organized user-content). Resolve the real
+	// source so the move finds it; the archive destination stays flat
+	// (`_archive/<kind>/<slug>.md`). A restore therefore returns the file
+	// to the flat active path — the subfolder organization is not
+	// preserved across an archive round-trip in v1.
+	if archiving {
+		if _, statErr := os.Stat(filepath.Join(w.root, activeRel)); os.IsNotExist(statErr) {
+			if matches, _ := filepath.Glob(filepath.Join(w.root, KindDir(kind), "*", slug+".md")); len(matches) == 1 {
+				if rel, relErr := filepath.Rel(w.root, matches[0]); relErr == nil {
+					activeRel = rel
+				}
+			}
+		}
+	}
 	var srcRel, dstRel string
 	if archiving {
 		srcRel, dstRel = activeRel, archiveRel

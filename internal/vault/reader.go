@@ -84,6 +84,19 @@ func (r *Reader) ReadByID(kind, id string) (*Entity, error) {
 	} else if !IsNotExist(err) {
 		return nil, err
 	}
+	// #415 subfolder layout — operator-organized user-content at
+	// `<root>/<kind>/<subfolder>/<slug>.md`. The id stays flat, so the
+	// subfolder is discovered by globbing the slug one level deep. A
+	// unique match resolves; create-time collision-checking keeps the
+	// slug unique within the kind, so the glob never returns >1 for a
+	// real entity.
+	if subPath, ok := r.subfolderPathFor(kind, id); ok {
+		if e, err := r.ReadFile(subPath); err == nil {
+			return e, nil
+		} else if !IsNotExist(err) {
+			return nil, err
+		}
+	}
 	// Archive layout per ADR-0018 — same slug, same kind, but
 	// rooted under `_archive/`.
 	archivePath, err := r.archivePathFor(kind, id)
@@ -91,6 +104,22 @@ func (r *Reader) ReadByID(kind, id string) (*Entity, error) {
 		return nil, err
 	}
 	return r.ReadFile(archivePath)
+}
+
+// subfolderPathFor resolves the on-disk path of a user-content file
+// organized one level deep under `<root>/<kind>/<subfolder>/<slug>.md`
+// (#415). Returns ("", false) when there is no unique single-level
+// match — the id stays flat, so the slug is the only handle.
+func (r *Reader) subfolderPathFor(kind, id string) (string, bool) {
+	slug, err := slugFromID(id)
+	if err != nil {
+		return "", false
+	}
+	matches, err := filepath.Glob(filepath.Join(r.root, KindDir(kind), "*", slug+".md"))
+	if err != nil || len(matches) != 1 {
+		return "", false
+	}
+	return matches[0], true
 }
 
 // ReadFile loads the entity at the given file path. Path is taken as-is

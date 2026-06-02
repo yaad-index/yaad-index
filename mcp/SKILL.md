@@ -290,9 +290,11 @@ Fetch one section by address. `sec` accepts heading-text-slug (e.g. `books-i-lov
 
 **Disambiguation rendering.** When you list sections to your operator, render them as a numbered list — `1.`, `2.`, `3.`, …, one per line. The agent picks the section to address by either heading slug (when the heading is unique) or positional index (the canonical fallback when two headings slugify identically — server returns 404 on the slug in that case).
 
-### `create_user_content(title, tags, body, data?)`
+### `create_user_content(title, tags, body, data?, subfolder?)`
 
 Create a new UGC entity. Server slugifies `title` → `id = user-content:<slug>`, stamps `author` from the JWT subject and `operator` from the pair-claim. Returns the full entity envelope (same shape as `get_user_content`) plus an `etag` lifted from the HTTP ETag header — the agent can chain edits without an extra GET. 409 conflict on slug collision; the agent picks a new title (auto-suffix is a deferred follow-up).
+
+**`subfolder` — on-disk organization.** Optional. When set, the vault file lands at `user-content/<subfolder>/<slug>.md` instead of the flat `user-content/<slug>.md`. A single path segment of lowercase alphanumerics and hyphens (e.g. `notes`, `drafts`, `projects`); anything else is rejected. The **entity id stays flat** (`user-content:<slug>`) — the subfolder is operator-visible organization only, transparent to every id-taking surface (`get_user_content`, the section tools, `delete_user_content`, alias resolution, edges). Slugs stay globally unique within the kind: create rejects with 409 if the slug already exists in *any* subfolder (so the flat id never collides). Edits and delete resolve the file wherever it lives — no subfolder argument needed on those.
 
 **`data` field — frontmatter-edge derivation.** Optional map of frontmatter fields. When the operator's `user_content_frontmatter_edges:` config declares mappings, fields named in those mappings produce canonical-label edges from the new UGC entity to `<kind>:<slug>` labels. Each declared field's value is one of:
 
@@ -507,6 +509,7 @@ When the stubs above conflict with `plugins()` output, **prefer `plugins()`** �
 | Read one section of a UGC entity (capture the etag for editing) | `get_user_content_section(id, sec)` |
 | Create a canonical entity directly (seed `person:`/`boardgame:`/… before anything references it; no edges) | `create_canonical_entity(kind, slug, data?)` |
 | Create a new UGC entity (server stamps author + operator) | `create_user_content(title, tags, body)` |
+| Create a UGC entity organized in a vault subfolder | `create_user_content(title, tags, body, subfolder: "notes")` |
 | Replace one section of a UGC entity (If-Match concurrency required) | `edit_user_content_section(id, sec, body, etag)` |
 | Move an entity out of active queries (reversible) | `archive_entity(id)` |
 | Bring an archived entity back into active queries | `restore_entity(id)` |

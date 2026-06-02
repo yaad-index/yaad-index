@@ -44,6 +44,17 @@ func registerCreateUserContent(s *server.MCPServer, b *bridge) {
 			mcp.Description("Optional frontmatter map. See description for edge-derivation rules."),
 			mcp.AdditionalProperties(true),
 		),
+		mcp.WithString("subfolder",
+			mcp.Description(
+				"Optional organization folder. When set, the vault file "+
+					"lands at user-content/<subfolder>/<slug>.md instead of "+
+					"user-content/<slug>.md — operator-visible organization "+
+					"only. A single path segment of lowercase alphanumerics "+
+					"and hyphens (e.g. notes, drafts, projects). The entity "+
+					"id stays flat (user-content:<slug>), so every id-taking "+
+					"tool keeps working unchanged.",
+			),
+		),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		title := req.GetString("title", "")
@@ -62,6 +73,9 @@ func registerCreateUserContent(s *server.MCPServer, b *bridge) {
 		}
 		if data, ok := req.GetArguments()["data"].(map[string]any); ok && len(data) > 0 {
 			args["data"] = data
+		}
+		if sf := req.GetString("subfolder", ""); sf != "" {
+			args["subfolder"] = sf
 		}
 		bodyBytes, err := json.Marshal(args)
 		if err != nil {
