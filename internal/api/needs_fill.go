@@ -155,6 +155,14 @@ func handleNeedsFill(
 				"cursor: malformed or invalid base64 encoding")
 			return
 		}
+		// #385 filters — both optional, AND-composed, no-params
+		// behavior preserved. kind scopes at the store (indexed
+		// `entities.kind`); source matches the plugin namespace
+		// (PluginName — the bit before `/` in the entity's vault
+		// `source[0]`), applied to the vault entity the loop already
+		// reads since source isn't a DB column.
+		kindFilter := strings.TrimSpace(r.URL.Query().Get("kind"))
+		sourceFilter := strings.TrimSpace(r.URL.Query().Get("source"))
 
 		// Vault is the canonical source for `Gaps`-non-empty per
 		// ADR-0008; without a vault reader we can't filter
@@ -222,7 +230,7 @@ func handleNeedsFill(
 			if remaining := needsFillMaxCandidateScan - scanned; remaining < batch {
 				batch = remaining
 			}
-			candidates, err := st.ListGapCallableCandidates(r.Context(), lastConsidered, batch)
+			candidates, err := st.ListGapCallableCandidates(r.Context(), lastConsidered, batch, kindFilter)
 			if err != nil {
 				logger.ErrorContext(r.Context(), "store.ListGapCallableCandidates",
 					"err", err, "after_id", lastConsidered, "batch", batch)
@@ -261,6 +269,17 @@ func handleNeedsFill(
 					continue
 				}
 				if len(ve.Gaps) == 0 {
+					continue
+				}
+				// #385 source filter: skip entities not owned by the
+				// requested plugin namespace. PluginName() is the bit
+				// before `/` in the vault `source[0]`; matched here
+				// (not the store) because source lives in the vault
+				// frontmatter, not a DB column. A candidate that
+				// fails this still advances lastConsidered + scanned,
+				// so the cursor + scan-bound behave identically to an
+				// unmatched-gaps skip.
+				if sourceFilter != "" && ve.PluginName() != sourceFilter {
 					continue
 				}
 				entry, ok := buildNeedsFillEntry(
@@ -315,7 +334,7 @@ func handleNeedsFill(
 		// position. Logs at WARN on failure and surfaces total=0
 		// rather than failing the whole response — the entries
 		// payload is the load-bearing surface.
-		total, err := st.CountGapCallableCandidates(r.Context())
+		total, err := st.CountGapCallableCandidates(r.Context(), kindFilter)
 		if err != nil {
 			logger.WarnContext(r.Context(), "store.CountGapCallableCandidates failed; surfacing total=0",
 				"err", err)
