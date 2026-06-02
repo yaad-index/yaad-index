@@ -1,10 +1,10 @@
 # yaad-index
 
-> ⚠️ **DESIGN IN FLUX — WE WILL BREAK THINGS.**
->
-> This project is iterating on its plugin / cache / API surface and is **NOT stable**. Schemas, wire shapes, plugin contracts, and CLI flags may change without notice or migration path until a `stable` flag is set on a future release. Operators and downstream consumers should treat any version of these interfaces as ephemeral. Backward-compatibility shims you might expect (e.g., plugins-predating-legacy fallback, deprecated-but-supported config keys) may be removed at any time.
+> ⚠️ **Pre-release — interfaces are in flux.** Schemas, wire shapes, plugin contracts, and CLI flags may change without notice or a migration path until a stable release is cut. Treat any current interface as ephemeral; backward-compatibility shims you might expect may be removed at any time.
 
 Personal knowledge index for AI agents. Caches structured and unstructured sources (web pages, emails, board games, code repos, calendars, …) into a queryable graph that agents read via HTTP — not files.
+
+> **🤖 Built with AI.** This repository was designed and written by AI agents in collaboration with the project lead. The agents are contributors, not tooling — the design rationale, trade-offs, and review history live in the [Architecture Decision Records](adr/). If you're evaluating the code, read the ADRs first.
 
 ## Why "yaad"
 
@@ -18,11 +18,11 @@ The name was chosen deliberately rather than descriptively: `yaad-index` is more
 
 The tool is built for both humans and AIs to use. Its HTTP API exposes the same queries the CLI does — an AI agent and a person are equally first-class users of the knowledge graph. Not AI-as-bolt-on, not AI-as-main-act: equal access to the same surface.
 
-It's also an experiment: this project is being built *with* an AI (Yaad, which the tool is named for), not just *for* one. The ADR review history in this repo shows that across design decisions — the AI is a contributor, not a tool.
+It's also an experiment: this project is being built *with* AI, not just *for* it. The ADR review history in this repo shows that across design decisions — the AI agents are contributors, not tooling.
 
 ## Status
 
-Pre-release. Daemon + 4 bundled plugins (Wikipedia, BoardGameGeek, Gmail, GitHub) + MCP surface + workflow engine + agent-feedback notes are all live on `main`. Latest tagged cut is **v0.8.0**. Interfaces still in flux per the design-in-flux warning above.
+Pre-release. Daemon + 4 bundled plugins (Wikipedia, BoardGameGeek, Gmail, GitHub) + MCP surface + workflow engine + agent-feedback notes are all live on `main`. See the [releases page](https://github.com/yaad-index/yaad-index/releases) for the latest tagged cut. Interfaces still in flux per the warning above.
 
 An earlier prototype lived under a file-first design; this repo starts over from an **AI-first, remote-API** premise. See [ADR-0001](./adr/0001-fresh-rewrite-ai-first-remote-api.md) for the rewrite rationale.
 
@@ -156,15 +156,6 @@ see [`mcp/SKILL.md`](mcp/SKILL.md).
 }
 ```
 
-**Dual path during the transition.** The legacy `mcp/` TypeScript
-wrapper (a separate Node process speaking stdio MCP, forwarding
-to the daemon's `/v1/...` routes) is still bundled and still
-works. Until the direct `/mcp` path is field-tested across
-operators' integrations, both connection paths are supported. The
-TS wrapper's removal is a later operator-driven step (see
-[issue #101](https://github.com/yaad-index/yaad-index/issues/101)),
-not a near-term cutover.
-
 ## Repo layout
 
 - `adr/` — Architecture Decision Records. Read these before making design changes.
@@ -178,7 +169,7 @@ not a near-term cutover.
 - `internal/store/` — SQLite store, migrations, queries.
 - `internal/mcp/` — MCP tool registration (every HTTP route mirrored as an MCP tool).
 - `docs/` — operator + agent reference docs (getting-started, plugin-flow, configs, workflows, tasks, fill-gap, ingest, per-plugin notes).
-- `mcp/` — legacy TypeScript MCP wrapper (kept during the in-process MCP transition per [issue #101](https://github.com/yaad-index/yaad-index/issues/101)).
+- `mcp/` — `SKILL.md`, the agent-facing MCP tool reference.
 
 ## Building and running
 
