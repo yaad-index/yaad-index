@@ -75,7 +75,7 @@ A naive single UNIQUE on `(target_entity_id, source, fetched_at)` would NOT prot
 
 **Why two partial indexes (vs. alternatives):**
 
-- **Single UNIQUE on `(target_entity_id, source, fetched_at)`** — half-protection (the cold-reviewer's catch). Rejected.
+- **Single UNIQUE on `(target_entity_id, source, fetched_at)`** — half-protection. Rejected.
 - **Expand to `(target_entity_id, source, fetched_at, filled_at)`** — same NULL-distinct issue if both ever both-NULL; doesn't fully close the gap.
 - **`COALESCE(fetched_at, filled_at)` + CHECK at-least-one-set** — single index, more compact, but conflates the two semantics. Future readers querying "show me ingest-path provenance" lose a clean signal.
 - **Sentinel non-null timestamp** — fragile, wrong abstraction. Rejected.
@@ -146,7 +146,7 @@ Rejected. SQLite has no native time-window UNIQUE; this would push dedup into ap
 
 ## Migration
 
-This ADR is implementation-only — covered by issue . The migration shape:
+This ADR is implementation-only. The migration shape:
 
 1. Land ADR-0009's `ReplaceProvenance` + reindex-call-it implementation PRs first (sequencing matters: this ADR's UNIQUE constraint assumes Replace is the canonical path that Append defers to).
 2. Land's migration + `AppendProvenance` update.
@@ -157,7 +157,5 @@ Two PRs total in the implementation chain (one already in flight from ADR-0009; 
 ## References
 
 - [ADR-0009](0009-provenance-reconciliation.md) — vault-canonical provenance + reindex re-derives. This ADR builds on its Race / consistency section.
-- Issue — implementation of the UNIQUE + ON CONFLICT DO NOTHING shape for `provenance`.
-- the implementer's review on a prior PR — first surfaced the missing-UNIQUE catch.
-- the cold-reviewer's review on a prior PR — confirmed against `migrations/001_init.sql`.
-- the operator's 2026-05-02 12:43 call: long-run schema correctness > self-heals-on-next-reindex.
+- The missing-UNIQUE catch, confirmed against `migrations/001_init.sql`.
+- Decision: long-run schema correctness over self-heals-on-next-reindex.

@@ -3,7 +3,6 @@
 **Status:** Proposed (2026-05-06; amended 2026-06-01 — §Note identity for #390)
 **Date:** 2026-05-06
 **Depends on:** [ADR-0008](./0008-vault-as-source-of-truth.md), [ADR-0012](./0012-user-generated-content.md), [ADR-0014](./0014-plugin-attachment-contract.md)
-**Tracked in:** yaad-index/(the trigger; the body-rendering work that surfaced the gap)
 
 ## Context
 
@@ -88,7 +87,7 @@ Brass: Birmingham is an economic strategy game...
 
 ## My Notes
 
-I played this with Eli last weekend, the second round we both went heavy on cotton...
+I played this with a friend last weekend, the second round we both went heavy on cotton...
 ```
 
 The markers are present in the file but the reader doesn't see them. Editing in Obsidian works naturally — the operator types under the description, not aware of the marker's position; on re-ingest, their `## My Notes` survives because it's outside the marker region.
@@ -128,7 +127,7 @@ None required. Plugins emit body content as plain markdown via the existing Fetc
 
 ### Plugin author surface
 
-- **yaad-bgg a prior PR (the trigger)**: emits body content as plain markdown. No marker awareness needed. The daemon wraps on write. Becomes a small PR (just emit the title H1 + image embed + description prose).
+- **yaad-bgg (the trigger)**: emits body content as plain markdown. No marker awareness needed. The daemon wraps on write. Becomes a small PR (just emit the title H1 + image embed + description prose).
 - **yaad-wikipedia (existing plugin emitting body)**: gains preservation behavior automatically once the daemon merge lands. No plugin-side change required.
 
 ### Operator surface

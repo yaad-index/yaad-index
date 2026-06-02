@@ -182,7 +182,7 @@ Trigger sets today:
  nothing**: when the DB row is absent, note requests return
  404. The vault file gets materialized only when the thin DB
  row already exists (typically from an ingest-time
- materialization Per the prior design, phase B). The asymmetry vs
+ materialization, phase B). The asymmetry vs
  operator-fill exists because **for notes specifically**, an
  uninhibited create-from-nothing path would accumulate dangling
  entries on canonical labels that nobody meaningfully promoted.
@@ -341,8 +341,7 @@ Concrete v1 work this ADR triggers:
  Pre-v1; reindex handles migration.
 - Multi-edition disambig in canonical labels (Age of Steam 2002 vs
  2018). Already out of scope per ADR-0017; carried forward.
-- Salience / weighting of canonical labels (the cold-reviewer's from
- concerns review). Separate architectural ADR.
+- Salience / weighting of canonical labels. Separate architectural ADR.
 - The workflow concept itself (forthcoming as a separate ADR);
  this ADR provides the slug-ownership foundation that workflows
  rely on.
@@ -350,16 +349,15 @@ Concrete v1 work this ADR triggers:
 ## Action items if approved
 
 1. Implement the daemon clean-slug utility (single function, tested).
-2. Open issues for yaad-bgg + yaad-wikipedia rewrites; dispatch to
- the implementer with the new emission contract.
+2. Open issues for yaad-bgg + yaad-wikipedia rewrites with the new
+ emission contract.
 3. Update ADR-0017 status header to "Superseded by ADR-0021."
 4. Update ADR-0019 references to plugin-owned slug.
 5. Update ADR-0020 (search-with-gap-predicates) to reflect that
  canonical-typed gaps produce edge labels via daemon, not via
  plugin call.
-6. Re-spec canonical_type fill (the source issue) with the new
+6. Re-spec canonical_type fill with the new
  contract: agent fills `{name, kind}`, daemon slugifies, no
- plugin call. **a prior PR was already closed** (its earlier
+ plugin call. The earlier
  implementation assumed plugin-canonicalize-at-fill-time and is
- now stale); the re-spec produces a fresh PR after is
- updated.
+ now stale; the re-spec produces a fresh implementation.

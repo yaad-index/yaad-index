@@ -74,7 +74,7 @@ A `308 permanent redirect` was considered. `410 gone` was chosen because:
 
 - Clients written against the operator-fill body shape (per-field-op map) can replay the body verbatim against `/v1/fill` — the request shape doesn't change, only the URL does. A redirect adds a round-trip without semantic benefit.
 - `410` carries a clearer "this is gone, migrate" signal than `308` for downstream agents reading status codes deterministically.
-- The fleet's only two operator-fill callers are the MCP `set_operator_fill` tool and a small set of test fixtures; both will be updated in ADR-0029's Cut 3.
+- The only two operator-fill callers are the MCP `set_operator_fill` tool and a small set of test fixtures; both will be updated in ADR-0029's Cut 3.
 
 ### 6. What stays unchanged
 
@@ -105,7 +105,7 @@ The workflow-engine `set_property` action is a separate surface (workflow-intern
 
 ### Negative
 
-- Existing clients of `/v1/operator-fill` get a `410 gone` immediately on the cut. The MCP layer's `set_operator_fill` tool keeps working via the alias in §7, so the operator-visible surface stays connected. External direct-HTTP callers (none known in the fleet) must update URL.
+- Existing clients of `/v1/operator-fill` get a `410 gone` immediately on the cut. The MCP layer's `set_operator_fill` tool keeps working via the alias in §7, so the operator-visible surface stays connected. External direct-HTTP callers (none known) must update URL.
 - The trigger-mode gate now lives in the unified endpoint's handler rather than being implicit in the URL. The handler MUST read the caller's claim correctly — a misclassified trigger-mode could allow an agent-trigger write to land against an operator-strategy gap (the failure mode the old split structurally prevented). Tests pin the gate's behavior on both directions.
 - The `force=true` parameter adds a small risk surface: a caller passing `force=true` unconditionally clobbers existing values without seeing the `409 already_filled` warning. Mitigated by defaulting `force=false` and naming the parameter explicitly.
 

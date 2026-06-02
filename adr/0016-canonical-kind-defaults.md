@@ -3,7 +3,6 @@
 **Status:** Proposed (2026-05-06)
 **Date:** 2026-05-06
 **Depends on:** [ADR-0008](./0008-vault-as-source-of-truth.md), [ADR-0013](./0013-canonical-kind-owns-gap-contract.md)
-**Tracked in:**
 **Amends:** ADR-0013 §1 (canonical_kinds config shape)
 
 ## Context
@@ -27,7 +26,7 @@ canonical_kinds:
  instruction: "..."
 ```
 
-Three problems surface in practice (the operator catalogued 2026-05-06):
+Three problems surface in practice:
 
 1. **Boilerplate**: every kind repeats `name` / `tags` / `summary` (which are required for DB-backed search anyway). The operator types the same three gap descriptions per kind, with the same instruction prose.
 2. **Plugin redundancy**: plugins already declare their canonical kinds in their Capabilities document (per ADR-0013). The operator then has to RE-enable them in config — duplicated declaration that adds no information.
@@ -212,7 +211,7 @@ Plugin authors and operators who want a field searchable as more than substring 
 
 ### A. Keep the current explicit-everything shape
 
-Rejected. Demonstrated ergonomic problem: operator types the same name/tags/summary block per kind, and plugin-declared kinds have to be re-enabled in config. The work surface this creates was real friction during the bgg demo today.
+Rejected. Demonstrated ergonomic problem: operator types the same name/tags/summary block per kind, and plugin-declared kinds have to be re-enabled in config. The work surface this creates is real friction in practice.
 
 ### B. Code-only defaults with no operator override
 

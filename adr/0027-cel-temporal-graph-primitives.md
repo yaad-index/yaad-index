@@ -7,13 +7,13 @@
 
 The workflow CEL surface today is narrow: `entity.*` + `edge.*` + `Bindings.*` for input, and `graph.get(id)` as the only graph-traversal primitive. ADR-0024 established this surface; ADR-0025 added day entities + canonical edge vocab but explicitly deferred the temporal and walking primitives needed to express daily-digest / deadline / ingested-on workflows.
 
-The deferred items, called out in ADR-0025 § "Workflow integration" and PR-228's docs:
+The deferred items, called out in ADR-0025 § "Workflow integration":
 
 1. **No `today()` helper.** Workflows can't target "the current day" without operator-side date interpolation. The CEL evaluator has no concept of "now."
 2. **No date arithmetic.** `day:X + 7` / `day:X - day:Y` are not expressible — needed for "N days from now," "approaching deadline," weekly digests.
 3. **No in-edge / out-edge walker.** `graph.get(id)` returns the entity by id, but can't answer "what entities point at this day with edge type Y?" Daily-digest's core query shape is impossible.
 
-PR-228's worked examples for daily-digest + ingested_on were rewritten to a curl/shell-side shape precisely because the CEL surface couldn't express them. This ADR closes that gap.
+ADR-0025's worked examples for daily-digest + ingested_on were written to a curl/shell-side shape precisely because the CEL surface couldn't express them. This ADR closes that gap.
 
 ## Decision
 
@@ -223,7 +223,7 @@ actions:
         name: 'today()'
 ```
 
-Fires on every new entity. `add_canonical_edge`'s `target.name` field accepts the CEL expression `today()` which evaluates to `day:YYYY-MM-DD`; the action runner's kind-prefix strip (§1 above) removes the leading `day:` before slugifying so `target.id` resolves to the operator-expected `day:2026-11-11` shape. The runner also ensures the target day entity exists (per PR-226's ensure-target work in ADR-0025 cut 2).
+Fires on every new entity. `add_canonical_edge`'s `target.name` field accepts the CEL expression `today()` which evaluates to `day:YYYY-MM-DD`; the action runner's kind-prefix strip (§1 above) removes the leading `day:` before slugifying so `target.id` resolves to the operator-expected `day:2026-11-11` shape. The runner also ensures the target day entity exists (per the ensure-target work in ADR-0025 cut 2).
 
 ### Approaching-deadline workflow (`vault/workflows/approaching-deadline.md`)
 
@@ -272,4 +272,4 @@ This ADR ships in 4 cuts (mirroring ADR-0025's cadence):
 ## References
 
 - ADR-0024 — Workflows and tasks (the CEL evaluator surface this ADR extends).
-- ADR-0025 — Date entities (the `clock.DayLocation()` resolution chain; the deferred workflow examples this ADR unblocks; PR-228's docs that defer to this ADR).
+- ADR-0025 — Date entities (the `clock.DayLocation()` resolution chain; the deferred workflow examples this ADR unblocks).

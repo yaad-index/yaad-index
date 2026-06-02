@@ -20,7 +20,7 @@ Today's gap mechanism (per ADR-0008 / ADR-0013 / ADR-0016):
 4. Repeat on next ingest if gaps reappear.
 
 The mechanism assumes every gap is fillable from `clean_content`.
-Some are not. The 2026-05-08 concerns meeting surfaced the missing
+Some are not. There is a missing
 shape: **fields the operator must fill from their own knowledge**,
 because no external source carries the truth.
 
@@ -38,7 +38,7 @@ Examples per the operator-database reframe:
  cleanly if someone else taught the round).
 
 The naive approach — introduce a separate `user_fill_fields`
-parallel to gaps (initial draft of this ADR, closed a prior PR) — was
+parallel to gaps (the initial draft of this ADR) — was
 rejected. Reason: it doubles the schema surface for what is
 essentially the same shape (a missing field that needs to be
 filled), and forces operators to learn two parallel-but-distinct
@@ -282,7 +282,7 @@ metadata (`gap_state`) is exposed:
  agent attempt entirely — no hallucination risk. Agent-only
  fields (wikipedia_summary) skip the operator surface — no
  noise.
-- **Closes the cold-reviewer's ("would you miss it = no").** Operator-fill
+- **Closes the "would you miss it = no" gap.** Operator-fill
  on rating/owned/want/played/knows_how_to_play is the missing layer that
  makes yaad-index a personal database.
 
@@ -327,8 +327,8 @@ Filed as small reviewable PRs (per `feedback_dispatch_small_steps`):
 8. **BGG plugin update** — declare `fill_strategy: operator` on
  the five boardgame fields.
 
-Search-with-predicate-on-gaps and search-UX are separate tracks
-per the concerns-meeting build sequence; they land after this ADR
+Search-with-predicate-on-gaps and search-UX are separate tracks;
+they land after this ADR
 is approved and the operator-fill loop is live.
 
 ## Out of scope

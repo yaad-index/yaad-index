@@ -1,6 +1,6 @@
 # ADR-0012: User-generated content as a first-class entity source
 
-**Status:** Accepted (2026-05-03; amended 2026-05-05 for section-level edit per yaad-index)
+**Status:** Accepted (2026-05-03; amended 2026-05-05 for section-level edit)
 
 ## Context
 
@@ -29,9 +29,9 @@ A first-class in-process entity source pattern fits cleaner — no subprocess, n
  - `kind: user-content`
  - `tags: [...]` — non-empty list, agent + user choose
  - Provenance with `source: user` (one entry per write; mirrors the plugin-path provenance shape from ADR-0009)
-- **No `notations:` field** — UGC has no upstream URL forms to cache (Per the prior design,'s lookup-first cache; not applicable here).
-- **No expiry by default.** TTL semantics from a prior PR do not apply unless the user opts in for a specific entity.
-- **`body`** holds the markdown body as the agent / user composed it. Named `body` (deliberately *not* `raw_content`, the plugin-emit path's name) to avoid a vault-writer collision: per ADR-0002, plugin `raw_content` is upstream-only and never persisted to the vault, while UGC body IS the persisted body. Sharing the name on the same `vault.Writer` would silently fold two contradictory contracts into one persistence path. (External advisor audit, 2026-05-03; inconsistency.) The plugin-side rename is out of scope — that contract is settled at the API boundary as `clean_content` already.
+- **No `notations:` field** — UGC has no upstream URL forms to cache (the lookup-first cache does not apply here).
+- **No expiry by default.** TTL semantics do not apply unless the user opts in for a specific entity.
+- **`body`** holds the markdown body as the agent / user composed it. Named `body` (deliberately *not* `raw_content`, the plugin-emit path's name) to avoid a vault-writer collision: per ADR-0002, plugin `raw_content` is upstream-only and never persisted to the vault, while UGC body IS the persisted body. Sharing the name on the same `vault.Writer` would silently fold two contradictory contracts into one persistence path. The plugin-side rename is out of scope — that contract is settled at the API boundary as `clean_content` already.
 
 ### Creation flow
 
@@ -44,7 +44,7 @@ The agent is the body-producer for this entity source: it composes the body, fil
 
 ### Update semantics (v1) — section-level edit
 
-UGC v1 supports **section-level edit and pagination** as the editable granularity (per yaad-index). Whole-body PUT was rejected as the v1 shape: a 5000-word UGC with a one-paragraph fix means resending all 5000 words on every edit, and concurrency edit-storms corrupt every time. Paragraph-level was rejected too: stable per-paragraph IDs require content-hash anchoring, which is more complex than v1 needs. Section-level is the natural balance — markdown headings change less often than paragraph order, are markdown-native, and address what operators actually reference ("the notes section about X").
+UGC v1 supports **section-level edit and pagination** as the editable granularity. Whole-body PUT was rejected as the v1 shape: a 5000-word UGC with a one-paragraph fix means resending all 5000 words on every edit, and concurrency edit-storms corrupt every time. Paragraph-level was rejected too: stable per-paragraph IDs require content-hash anchoring, which is more complex than v1 needs. Section-level is the natural balance — markdown headings change less often than paragraph order, are markdown-native, and address what operators actually reference ("the notes section about X").
 
 **Containment model.** Every markdown ATX heading (`#`..`######`) is one addressable section in a flat list. A section's body extends from the line after its heading until the next heading of same-or-shallower depth, meaning DEEPER nested headings (and their content) are TEXTUALLY INCLUDED in the parent's body. Editing `# Top` rewrites the whole sub-tree below it; editing the leaf `### Foo` rewrites just its leaf content. The granularity choice IS the section choice — no "recursive" flag, no surgical-vs-destructive split. Pre-heading body is the implicit "section 0"; a body with no headings collapses to one section.
 
@@ -65,7 +65,7 @@ DELETE /v1/user-content/{id} — delete entity
 
 **Concurrency.** PUT requires `If-Match: <etag>` to prevent lost-update on simultaneous section edits; the etag scheme (per-section body hash vs. whole-entity content-hash) is settled by the write-endpoint implementation PR. 412 on mismatch.
 
-**Version history.** Auto-commit produces a per-edit git commit (per yaad-index /), and that IS the version history for v1. No separate revisions table.
+**Version history.** Auto-commit produces a per-edit git commit, and that IS the version history for v1. No separate revisions table.
 
 **Out of scope for v1:**
 - Paragraph or block-level edit (separate ADR if pursued).
@@ -106,7 +106,7 @@ This is the same operator-gating story plugin entities already follow ; UGC inhe
 The edge `to:` field admits three shapes; the agent picks per case based on what makes sense for the content:
 
 1. **Reference an existing entity** by id — `to: person:susanna-clarke` when the agent recognizes the canonical entity exists.
-2. **Auto-create a stub** — agent emits a canonical stub on the same write path (Per the prior design,'s vault-canonical model), edge points at it.
+2. **Auto-create a stub** — agent emits a canonical stub on the same write path (the vault-canonical model), edge points at it.
 3. **Free-text label** — `to: "<text>"` when the relationship is a description rather than a pointer to a queryable entity.
 
 Operator config gating applies regardless of which shape — DB rows only for in-config edge types.
@@ -117,7 +117,7 @@ The user-facing edge types — `idea`, `design`, `memory`, etc. — are simply e
 
 ### Notes
 
-UGC entities support notes per ADR-0010 / — same body-section single-column-table format, append-only.
+UGC entities support notes per ADR-0010 — same body-section single-column-table format, append-only.
 
 ### Storage
 
@@ -152,5 +152,5 @@ UGC entities support notes per ADR-0010 / — same body-section single-column-ta
 ## Open follow-ups
 
 - Slug derivation rules for UGC titles (ASCII-fold, dedupe-suffix on collision). Punt to the implementation PR.
-- Reindex behavior on hand-edit of UGC body / frontmatter — preserve user edits or re-render. Same question as notes Per the prior design,'s open list.
-- Search inclusion of UGC `body` — defer to's evolution. UGC will participate in `search_local` once that surface gets text-body indexing.
+- Reindex behavior on hand-edit of UGC body / frontmatter — preserve user edits or re-render. Same open question as for notes.
+- Search inclusion of UGC `body` — deferred. UGC will participate in `search_local` once that surface gets text-body indexing.

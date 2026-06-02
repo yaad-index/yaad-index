@@ -3,7 +3,6 @@
 **Status:** Proposed (2026-05-04)
 **Date:** 2026-05-04
 **Depends on:** [ADR-0001](./0001-fresh-rewrite-ai-first-remote-api.md), [ADR-0002](./0002-api-surface.md), [ADR-0005](./0005-plugin-lifecycle.md), [ADR-0008](./0008-vault-as-source-of-truth.md)
-**Tracked in:**
 
 ## Context
 
@@ -285,7 +284,7 @@ The new-kind case (operator adds a new canonical-kind, expects existing source e
 1. **ADR-0013** (this document) — captures the design.
 2. **Smallest first PR** — `fill_instruction` config string + `instruction` field on needs_fill response. Per-kind override deferred.
 3. **Follow-up PR** — full CV registry; plugins emit edge-keyed source data; index extracts edges + auto-creates thin canonicals; gap-call lifecycle; DB flag; `GET /v1/needs-fill`; `GET /v1/structure`.
-4. **** — vault-carries-canonical-emissions semantics. Lands on top of (3); without (3)'s CV registry, AI doesn't know what to extract.
+4. **Final PR** — vault-carries-canonical-emissions semantics. Lands on top of (3); without (3)'s CV registry, AI doesn't know what to extract.
 
 ## Tests
 
@@ -328,4 +327,4 @@ The new-kind case (operator adds a new canonical-kind, expects existing source e
 - **Caching agents.** An agent that fetched the operator's registry from `/v1/structure` or `/v1/kinds` at session start passes `?exclude=canonical_vocabulary` on every needs-fill page. An agent that fetched a body via `/v1/entities/<id>` passes `?exclude=clean_content` on subsequent revisits.
 - **MCP `needs_fill` tool** at `/mcp` adds the matching `exclude` parameter so MCP-client callers get the same opt-out surface.
 
-Status remains PROPOSED pending operator hard-gate review of this revision.
+Status remains PROPOSED pending review of this revision.

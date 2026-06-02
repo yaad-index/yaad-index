@@ -264,7 +264,7 @@ Both kill paths log the plugin name + the request that was in flight. No silent 
 
 - **HTTP plugins (long-running services).** Rejected (see Invocation): operational weight not worth uniformity at v1 scale.
 - **In-process Go plugins.** Rejected: forces all plugins to be Go, can't be replaced without server rebuild, plugin crashes take the server down.
-- **Manifest files** (e.g., `~/.yaad/plugins/bgg.toml`). Rejected: parallel source of truth that drifts. `--init` is more honest.
+- **Manifest files** (e.g., a per-plugin manifest file). Rejected: parallel source of truth that drifts. `--init` is more honest.
 - **MCP-style stdio with a long-running subprocess.** A plausible later promotion target, not a v1 starting point. Adds plugin lifecycle (ready/idle/exit) that the simpler one-shot model doesn't need.
 - **Server-owned AI extractor** (server runs OpenAI/Claude calls itself). Rejected: yaad-index becomes responsible for model choice, key management, prompt versioning, cost accounting — all of which the calling agent already handles for itself. The agent-as-AI model keeps yaad-index as a pure index/cache layer.
 - **Plugin-owned AI** (each plugin runs its own AI calls). Rejected: every plugin reimplements AI client integration; key management leaks across N processes.

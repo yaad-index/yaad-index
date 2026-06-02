@@ -95,7 +95,7 @@ Operator declares the repo set in the structured `config:` block per ADR-0006's 
 ```yaml
 plugins:
   - name: github
-    path: /home/operator/.local/bin/yaad-github
+    path: /usr/local/bin/yaad-github
     config:
       repos:
         - acme-org/project-a
@@ -238,12 +238,12 @@ The plugin reads its API base URL from the structured `config:` block's `base_ur
 ```yaml
 plugins:
   - name: github-personal
-    path: /home/operator/.local/bin/yaad-github
+    path: /usr/local/bin/yaad-github
     config:
       base_url: https://api.github.com
       repos: [acme-org/project-a, someuser/dotfiles]
   - name: github-work
-    path: /home/operator/.local/bin/yaad-github
+    path: /usr/local/bin/yaad-github
     config:
       base_url: https://ghes.example.com/api/v3
       repos: [team/service-a, team/service-b]

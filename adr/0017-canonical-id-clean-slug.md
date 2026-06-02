@@ -149,9 +149,9 @@ plugins reference notations when re-fetching their own source artifact.
 
 Concrete plugin work landed alongside this ADR:
 
-- **/ a prior PR** — strip parens-disambig from
+- Strip parens-disambig from
  canonical entity ID in wikipedia's emission path.
-- **/ a prior PR** — drop year-suffix from canonical entity
+- Drop year-suffix from canonical entity
  ID in bgg's emission path.
 
 Future plugins MUST follow the same shape: slug for the canonical

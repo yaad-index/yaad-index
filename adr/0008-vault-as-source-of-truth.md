@@ -123,9 +123,9 @@ canonical_edge_types:
 
 plugins:
  - name: wikipedia
- path: /home/operator/.local/bin/yaad-wikipedia
+ path: /usr/local/bin/yaad-wikipedia
  - name: bgg
- path: /home/operator/code/yaad-bgg/yaad-bgg
+ path: /opt/yaad-bgg/yaad-bgg
 ```
 
 **Resolution at ingest:**
@@ -213,7 +213,7 @@ The markdown frontmatter for an entity carries:
 | `summary` | string | agent-filled gap; empty until fill |
 | `tags` | list of strings | plugin-emitted + agent-filled |
 | `edges` | list of `{type, to, metadata?}` | plugin-emitted + agent-filled (also expressible as body wikilinks) |
-| `notes` | list of `{date, text, author?, operator?}` | append-only; mirrored to body `## Notes` section. Per yaad-index a prior PR the body heading row reads `<date> — <author> @ <operator>` when both are set; legacy `<date> — <author>` rows still parse and round-trip with empty `operator` |
+| `notes` | list of `{date, text, author?, operator?}` | append-only; mirrored to body `## Notes` section. The body heading row reads `<date> — <author> @ <operator>` when both are set; legacy `<date> — <author>` rows still parse and round-trip with empty `operator` |
 | `gaps` | list of strings | currently-unfilled gap field names; consumed by the fill endpoint's validation |
 
 The body of the markdown file holds the `clean_content` (verbatim from the plugin) followed by `## Edges` and `## Notes` sections that mirror the frontmatter for human authoring. Reindex parses both representations; on write, the canonical source is the frontmatter, and the body sections are regenerated.
@@ -272,7 +272,7 @@ There is no production yaad-index. The existing DB schema can be tossed; the exi
 
 ## Action items if approved
 
-Sequenced PRs from the implementer after ADR merges. Each is a separate dispatch under the one-task-per-worker rule.
+Sequenced implementation PRs after ADR merges.
 
 1. **Vault writer + reader.** Markdown serialization (entity → markdown), parser (markdown → entity), frontmatter schema. New `internal/vault/` package. Tests over round-trip fidelity.
 2. **Reindex command.** `yaad-index reindex` walks the vault, parses every file, regenerates DB rows. Incremental + full modes. Config key `vault.path`.

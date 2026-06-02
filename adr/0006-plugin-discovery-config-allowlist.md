@@ -9,7 +9,7 @@
 
 ADR-0005 commits to plugins as separate executables invoked subprocess-per-request. For *discovery* — the question of which executables the server is willing to spawn — it picks **git-style PATH scan**: the server walks `$PATH` for binaries named `yaad-*` and treats every match as a registered plugin.
 
-A pre-implementation review (the operator, on the in-tree-Go-plugin attempt that drifted away from ADR-0005's subprocess decision) raised the security cost of that choice:
+The security cost of that choice:
 
 - **Anything on PATH that matches `yaad-*` runs.** A drive-by `yaad-attacker` binary anywhere on the user's PATH (a malicious `~/.local/bin/yaad-foo` bundled with an unrelated tool, a typo-squatted package, an `npm install` side-effect of a dev tool) becomes part of the trust boundary the moment yaad-index starts.
 - **The trust boundary is implicit and shifts under the operator.** Adding a new entry to `$PATH` for unrelated reasons silently expands what yaad-index will execute. The decision of "which plugins is yaad-index allowed to invoke" becomes coupled to the user's general shell environment.
@@ -30,9 +30,9 @@ A new YAML file, default location `~/.config/yaad-index/config.yaml` (overridabl
 ```yaml
 plugins:
  - name: wikipedia
- path: /home/operator/.local/bin/yaad-wikipedia
+ path: /usr/local/bin/yaad-wikipedia
  - name: bgg
- path: /home/operator/code/yaad-bgg/yaad-bgg
+ path: /opt/yaad-bgg/yaad-bgg
  - name: web
  path: /opt/yaad/yaad-web
 ```
