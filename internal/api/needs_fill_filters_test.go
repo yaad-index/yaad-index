@@ -1,0 +1,154 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"sort"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/yaad-index/yaad-index/internal/config"
+	"github.com/yaad-index/yaad-index/internal/store"
+	"github.com/yaad-index/yaad-index/internal/vault"
+)
+
+// nfFilterSeed is one (id, kind, source) tuple for the #385 filter
+// fixture. source is the vault `source[0]` slash-form; the plugin
+// namespace (the bit before `/`) is what the source filter matches.
+type nfFilterSeed struct {
+	id, kind, source string
+}
+
+// nfFilterFixture seeds heterogeneous gap-callable entities across
+// multiple kinds + source plugins, so the #385 kind/source filters can
+// be exercised. Both `boardgame` and `person` carry a `summary` gap in
+// the registry so every seed surfaces absent a filter.
+func nfFilterFixture(t *testing.T, seeds []nfFilterSeed) http.Handler {
+	t.Helper()
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	r, err := vault.NewReader(root)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	for _, s := range seeds {
+		require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+			ID:       s.id,
+			Kind:     s.kind,
+			Data:     map[string]any{"id": s.id},
+			GapState: map[string]store.GapStateEntry{"summary": {}},
+			Provenance: []store.ProvenanceEntry{
+				{Source: "seed:fixture", FetchedAt: &now, OK: true},
+			},
+		}))
+		require.NoError(t, w.Write(&vault.Entity{
+			ID:           s.id,
+			Kind:         s.kind,
+			Source:       []string{s.source},
+			Data:         map[string]any{"id": s.id},
+			Gaps:         []string{"summary"},
+			CleanContent: "stub for " + s.id,
+		}))
+	}
+
+	reg := map[string]config.CanonicalKindConfig{
+		"boardgame": {Gaps: config.GapsFromMap(map[string]string{"summary": "Game summary."})},
+		"person":    {Gaps: config.GapsFromMap(map[string]string{"summary": "Person summary."})},
+	}
+	return NewHandlerWithRegistry(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		st, testRegistryWithSeed(),
+		WithVaultIO(w, r),
+		WithCanonicalKindRegistry(reg),
+	)
+}
+
+func nfGet(t *testing.T, h http.Handler, target string) needsFillResponse {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	var got needsFillResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	return got
+}
+
+func nfEntityIDs(resp needsFillResponse) []string {
+	ids := make([]string, 0, len(resp.Entities))
+	for _, e := range resp.Entities {
+		ids = append(ids, e.ID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+var nfFilterSeeds = []nfFilterSeed{
+	{"boardgame:a", "boardgame", "bgg/default"},
+	{"boardgame:b", "boardgame", "wikipedia/default"},
+	{"person:x", "person", "bgg/default"},
+	{"person:y", "person", "wikipedia/default"},
+}
+
+// TestNeedsFill_NoFilters_Unchanged pins the no-params behavior: every
+// gap-callable entity surfaces, total counts them all.
+func TestNeedsFill_NoFilters_Unchanged(t *testing.T) {
+	t.Parallel()
+	h := nfFilterFixture(t, nfFilterSeeds)
+	got := nfGet(t, h, "/v1/needs-fill")
+	assert.Equal(t, []string{"boardgame:a", "boardgame:b", "person:x", "person:y"}, nfEntityIDs(got))
+	assert.Equal(t, 4, got.Total)
+}
+
+// TestNeedsFill_KindFilter pins the store-level kind filter: only the
+// requested kind surfaces, and total reflects it (exact, DB-side).
+func TestNeedsFill_KindFilter(t *testing.T) {
+	t.Parallel()
+	h := nfFilterFixture(t, nfFilterSeeds)
+	got := nfGet(t, h, "/v1/needs-fill?kind=boardgame")
+	assert.Equal(t, []string{"boardgame:a", "boardgame:b"}, nfEntityIDs(got))
+	assert.Equal(t, 2, got.Total, "total reflects the kind filter")
+}
+
+// TestNeedsFill_SourceFilter pins the vault-side source filter on the
+// plugin namespace (PluginName — bit before `/` in source[0]). total is
+// NOT reduced by source (the documented #385 nuance): it stays the
+// kind-unfiltered DB count.
+func TestNeedsFill_SourceFilter(t *testing.T) {
+	t.Parallel()
+	h := nfFilterFixture(t, nfFilterSeeds)
+	got := nfGet(t, h, "/v1/needs-fill?source=bgg")
+	assert.Equal(t, []string{"boardgame:a", "person:x"}, nfEntityIDs(got))
+	assert.Equal(t, 4, got.Total, "source filter is vault-side; total stays the kind-unfiltered anchor")
+}
+
+// TestNeedsFill_KindAndSource_AND pins that the two filters compose with
+// AND: only entities matching both surface.
+func TestNeedsFill_KindAndSource_AND(t *testing.T) {
+	t.Parallel()
+	h := nfFilterFixture(t, nfFilterSeeds)
+	got := nfGet(t, h, "/v1/needs-fill?kind=person&source=wikipedia")
+	assert.Equal(t, []string{"person:y"}, nfEntityIDs(got))
+	assert.Equal(t, 2, got.Total, "total reflects kind=person; source does not reduce it")
+}
+
+// TestNeedsFill_SourceFilter_NoMatch pins that an unmatched source
+// yields zero entities (but total still reflects the kind anchor).
+func TestNeedsFill_SourceFilter_NoMatch(t *testing.T) {
+	t.Parallel()
+	h := nfFilterFixture(t, nfFilterSeeds)
+	got := nfGet(t, h, "/v1/needs-fill?source=gmail")
+	assert.Empty(t, got.Entities)
+	assert.Equal(t, 4, got.Total)
+}

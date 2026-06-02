@@ -340,7 +340,7 @@ func (s *sqliteStore) ClearGapCallDone(ctx context.Context, entityID string) err
 // when non-empty, restricts to ids strictly greater (cursor
 // resume); empty afterID returns the first page. `limit` caps the
 // row count; callers clamp / default at the handler boundary.
-func (s *sqliteStore) ListGapCallableCandidates(ctx context.Context, afterID string, limit int) ([]Entity, error) {
+func (s *sqliteStore) ListGapCallableCandidates(ctx context.Context, afterID string, limit int, kind string) ([]Entity, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
@@ -349,7 +349,11 @@ func (s *sqliteStore) ListGapCallableCandidates(ctx context.Context, afterID str
 		FROM entities
 		WHERE gap_call_done_at IS NULL
 	`
-	args := make([]any, 0, 2)
+	args := make([]any, 0, 3)
+	if kind != "" {
+		query += " AND kind = ?"
+		args = append(args, kind)
+	}
 	if afterID != "" {
 		query += " AND id > ?"
 		args = append(args, afterID)
@@ -412,8 +416,8 @@ func (s *sqliteStore) ListGapCallableCandidates(ctx context.Context, afterID str
 // NOT applied (would require materializing every candidate);
 // remaining over-count is bounded by pure-pointer canonical rows
 // + entities whose gaps were entirely auth-hidden.
-func (s *sqliteStore) CountGapCallableCandidates(ctx context.Context) (int, error) {
-	const query = `
+func (s *sqliteStore) CountGapCallableCandidates(ctx context.Context, kind string) (int, error) {
+	query := `
 		SELECT COUNT(*) FROM entities
 		WHERE gap_call_done_at IS NULL
 		  AND gap_state IS NOT NULL
@@ -424,8 +428,13 @@ func (s *sqliteStore) CountGapCallableCandidates(ctx context.Context) (int, erro
 		      AND COALESCE(json_extract(value, '$.deferred'), 0) = 0
 		  )
 	`
+	args := make([]any, 0, 1)
+	if kind != "" {
+		query += " AND kind = ?"
+		args = append(args, kind)
+	}
 	var n int
-	if err := s.db.QueryRowContext(ctx, query).Scan(&n); err != nil {
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count gap-callable candidates: %w", err)
 	}
 	return n, nil

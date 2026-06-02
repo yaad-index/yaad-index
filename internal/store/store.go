@@ -425,7 +425,13 @@ type Store interface {
 	// canonical source for that and the handler vault-reads each
 	// candidate. Provenance is NOT loaded (the caller drops it
 	// before serializing).
-	ListGapCallableCandidates(ctx context.Context, afterID string, limit int) ([]Entity, error)
+	//
+	// kind, when non-empty, filters candidates to that entity kind
+	// (the indexed `entities.kind` column) per #385. The source
+	// filter is NOT applied here — source lives in the vault
+	// frontmatter, not a DB column, so the handler filters it on the
+	// vault entity it already reads.
+	ListGapCallableCandidates(ctx context.Context, afterID string, limit int, kind string) ([]Entity, error)
 	// CountGapCallableCandidates returns the count of entities the
 	// `/v1/needs-fill` listing would surface — the queue-depth
 	// surface for the response's `total` field per #338 with the
@@ -450,8 +456,13 @@ type Store interface {
 	// vault file; auth-filtered entries with all gaps gated by the
 	// caller's role would still inflate by the gap_state-filled-but-
 	// auth-hidden count. Both surfaced as docstring caveats on the
-	// `total` field.
-	CountGapCallableCandidates(ctx context.Context) (int, error)
+	// `total` field. kind, when non-empty, scopes the count to that
+	// entity kind per #385 so `total` matches the kind-filtered
+	// listing. The source filter is vault-side and intentionally NOT
+	// reflected in this count (an exact source count would require
+	// vault-reading every candidate); under a source filter `total`
+	// is the kind-filtered anchor.
+	CountGapCallableCandidates(ctx context.Context, kind string) (int, error)
 	GetEdgesFor(ctx context.Context, entityID string, types []string) ([]Edge, error)
 	// GetEdgesTo is the inbound mirror of GetEdgesFor — edges whose
 	// to_id matches the supplied id. Per yaad-index; the new
