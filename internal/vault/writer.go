@@ -195,14 +195,17 @@ func (w *Writer) writeAtomic(e *Entity) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// #415 location preservation: when the flat `<kind>/<slug>.md`
-	// doesn't exist but a same-slug file lives one level deep in a
-	// subfolder (an operator-organized user-content file), write back
-	// to that subfolder so an edit doesn't orphan the file to the flat
-	// path. New entities and normal flat files fall through to the flat
-	// dir (the flat file exists, or no subfolder match).
-	if subDir, ok := w.existingSubfolderDir(dir, slug); ok {
-		dir = subDir
+	// #415 location preservation — user-content only: when the flat
+	// `user-content/<slug>.md` doesn't exist but a same-slug file lives
+	// one level deep in a subfolder, write back to that subfolder so an
+	// edit doesn't orphan the file to the flat path. New entities and
+	// normal flat files fall through to the flat dir (the flat file
+	// exists, or no subfolder match). Scoped to user-content so other
+	// kinds never glob nested markdown.
+	if e.Kind == kindUserContent {
+		if subDir, ok := w.existingSubfolderDir(dir, slug); ok {
+			dir = subDir
+		}
 	}
 	return w.writeAtomicAt(e, dir, slug)
 }
@@ -460,13 +463,14 @@ func (w *Writer) moveBetweenArchive(ctx context.Context, kind, id, message, auth
 
 	activeRel := filepath.Join(KindDir(kind), slug+".md")
 	archiveRel := filepath.Join(ArchiveDir, KindDir(kind), slug+".md")
-	// #415: when archiving, the active file may live one level deep in a
-	// subfolder (operator-organized user-content). Resolve the real
-	// source so the move finds it; the archive destination stays flat
+	// #415: when archiving a user-content file, the active file may live
+	// one level deep in a subfolder. Resolve the real source so the move
+	// finds it; the archive destination stays flat
 	// (`_archive/<kind>/<slug>.md`). A restore therefore returns the file
 	// to the flat active path — the subfolder organization is not
-	// preserved across an archive round-trip in v1.
-	if archiving {
+	// preserved across an archive round-trip in v1. Scoped to
+	// user-content so other kinds never glob nested markdown.
+	if archiving && kind == kindUserContent {
 		if _, statErr := os.Stat(filepath.Join(w.root, activeRel)); os.IsNotExist(statErr) {
 			if matches, _ := filepath.Glob(filepath.Join(w.root, KindDir(kind), "*", slug+".md")); len(matches) == 1 {
 				if rel, relErr := filepath.Rel(w.root, matches[0]); relErr == nil {

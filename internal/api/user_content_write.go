@@ -241,12 +241,18 @@ func handleUserContentCreate(
 			return
 		}
 
-		// #415: also reject if a vault file with this slug exists in ANY
-		// user-content subfolder. The id is flat + globally unique within
-		// the kind, so a same-slug file under a different subfolder would
-		// collide on the id. ReadByID's subfolder glob fallback resolves
-		// every on-disk layout, so a found file is a collision even when
-		// no DB row exists yet (a hand-authored file before reindex).
+		// #415: also reject if a vault file with this slug already exists
+		// on disk, even with no DB row yet (a hand-authored file before
+		// reindex). The id is flat + globally unique within the kind, so a
+		// same-slug file anywhere — flat, ct, archive, or a subfolder —
+		// would collide on the id.
+		//
+		// Two probes: ReadByID covers the flat / ct / archive paths, and
+		// UserContentSlugInSubfolder covers ANY subfolder match. The
+		// subfolder check can't ride on ReadByID because ReadByID treats
+		// two-or-more same-slug subfolder files as "no unique match" and
+		// returns not-found — which would let create write a third flat
+		// file and break the promised uniqueness.
 		if _, rerr := vaultReader.ReadByID(userContentKind, id); rerr == nil {
 			writeError(w, http.StatusConflict, "conflict",
 				fmt.Sprintf("a user-content file with slug %q already exists in the vault; pick a different title", slug))
@@ -255,6 +261,16 @@ func handleUserContentCreate(
 			logger.ErrorContext(r.Context(), "vault probe from user-content create", "err", rerr, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",
 				"failed to probe the vault for an existing file")
+			return
+		}
+		if inSub, serr := vaultReader.UserContentSlugInSubfolder(slug); serr != nil {
+			logger.ErrorContext(r.Context(), "vault subfolder probe from user-content create", "err", serr, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to probe the vault for an existing file")
+			return
+		} else if inSub {
+			writeError(w, http.StatusConflict, "conflict",
+				fmt.Sprintf("a user-content file with slug %q already exists in the vault; pick a different title", slug))
 			return
 		}
 

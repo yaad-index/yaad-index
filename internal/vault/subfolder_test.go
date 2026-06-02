@@ -76,6 +76,63 @@ func TestSubfolder_FlatUnaffected(t *testing.T) {
 	assert.Equal(t, "user-content:flat", got.ID)
 }
 
+// TestSubfolder_MultipleMatches_CollisionProbe pins the multi-subfolder
+// collision case (#415): when two same-slug files exist in different
+// subfolders (e.g. hand-authored
+// before reindex), ReadByID returns not-found (no unique match) but the
+// create-collision probe UserContentSlugInSubfolder still reports the
+// collision — so create can't write a third flat file and break the
+// flat id's uniqueness.
+func TestSubfolder_MultipleMatches_CollisionProbe(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	w, _ := vault.NewWriter(root)
+	r, _ := vault.NewReader(root)
+	ctx := context.Background()
+
+	require.NoError(t, w.WriteWithCommitInSubfolder(ctx, ucEntity("user-content:dup", "Dup"), "notes", "", ""))
+	require.NoError(t, w.WriteWithCommitInSubfolder(ctx, ucEntity("user-content:dup", "Dup"), "drafts", "", ""))
+	require.FileExists(t, filepath.Join(root, "user-content", "notes", "dup.md"))
+	require.FileExists(t, filepath.Join(root, "user-content", "drafts", "dup.md"))
+
+	// ReadByID can't resolve a unique file → not-found.
+	_, err := r.ReadByID("user-content", "user-content:dup")
+	require.Error(t, err)
+	assert.True(t, vault.IsNotExist(err), "two matches → ReadByID is not-found")
+
+	// The collision probe still flags it.
+	exists, err := r.UserContentSlugInSubfolder("dup")
+	require.NoError(t, err)
+	assert.True(t, exists, "collision probe sees the slug regardless of match count")
+}
+
+// TestSubfolder_ScopedToUserContent pins the kind-scoping of #415: the
+// subfolder fallback is user-content only. A non-UGC kind with a
+// same-slug file nested one level deep must NOT be resolved by ReadByID
+// — generic entity reads stay on the flat / ct / archive paths.
+func TestSubfolder_ScopedToUserContent(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	w, _ := vault.NewWriter(root)
+	r, _ := vault.NewReader(root)
+	ctx := context.Background()
+
+	bg := &vault.Entity{
+		ID:     "boardgame:catan",
+		Kind:   "boardgame",
+		Source: []string{"bgg/default"},
+		Data:   map[string]any{"id": "boardgame:catan", "title": "Catan"},
+		Tags:   []string{"x"},
+	}
+	require.NoError(t, w.WriteWithCommitInSubfolder(ctx, bg, "shelf", "", ""))
+	require.FileExists(t, filepath.Join(root, "boardgame", "shelf", "catan.md"))
+
+	_, err := r.ReadByID("boardgame", "boardgame:catan")
+	require.Error(t, err)
+	assert.True(t, vault.IsNotExist(err),
+		"non-UGC kinds do not glob nested markdown — the subfolder fallback is user-content only")
+}
+
 // TestSubfolder_ArchiveFindsSubfolderSource pins that archiving resolves
 // a subfoldered source file (else delete, which routes through
 // archive→destroy, can't find it). The archive destination is flat.

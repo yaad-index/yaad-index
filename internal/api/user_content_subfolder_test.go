@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -78,6 +79,33 @@ func TestUGC_Create_Subfolder_InvalidRejected(t *testing.T) {
 		}, nil)
 		assert.Equal(t, http.StatusBadRequest, rec.Code, "subfolder %q must be rejected; body=%s", bad, rec.Body.String())
 	}
+}
+
+// TestUGC_Create_DuplicateSubfolderFiles_Collision pins the
+// multi-subfolder collision case (#415): when two same-slug files
+// already exist in different subfolders
+// (hand-authored before reindex), ReadByID can't pick a unique match —
+// the create must still 409 on the any-match subfolder probe rather than
+// writing a third flat file and breaking the flat id's uniqueness.
+func TestUGC_Create_DuplicateSubfolderFiles_Collision(t *testing.T) {
+	t.Parallel()
+	h, _, root, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "alice-agent", "alice")
+
+	for _, sub := range []string{"notes", "drafts"} {
+		dir := filepath.Join(root, "user-content", sub)
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "dup-note.md"),
+			[]byte("---\nid: user-content:dup-note\n---\n"), 0o644))
+	}
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content", tok, map[string]any{
+		"title": "Dup Note", "tags": []string{"x"},
+	}, nil)
+	assert.Equal(t, http.StatusConflict, rec.Code,
+		"create must 409 even when ReadByID can't pick a unique match; body=%s", rec.Body.String())
+	assert.NoFileExists(t, filepath.Join(root, "user-content", "dup-note.md"),
+		"create must not write a third flat file")
 }
 
 // TestUGC_Create_NoSubfolder_Flat pins the regression: omitting the
