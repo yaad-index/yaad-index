@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.16.0...yaad-index-v0.17.0) (2026-06-01)
+
+
+### Features
+
+* **api,canonical,workflow:** auto-alias entity to source-of-slug name ([#405](https://github.com/yaad-index/yaad-index/issues/405)) ([#406](https://github.com/yaad-index/yaad-index/issues/406)) ([2be3972](https://github.com/yaad-index/yaad-index/commit/2be3972ebe12479706d297f5b8de7b79b01bf00a))
+
 ## [0.16.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.15.0...yaad-index-v0.16.0) (2026-06-01)
 
 
