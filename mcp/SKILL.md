@@ -421,6 +421,8 @@ List entities of a given kind — the kind-driven discovery surface above. The `
 
 Full-text search across the **local** yaad-index — entities yaad-index has already ingested. `query` is required; `kind` filters to a specific kind; `limit` defaults to 20. Returns the same `{results, total, limit, offset}` shape as `list_entities` — each result is `{id, kind, snippet, score}`, call `get_entity(id)` to load full state.
 
+**Match semantics (#391).** The query is split into whitespace-separated terms; a result must contain **every** term (AND), matched as a case-insensitive substring across the entity's id, data, or any alias. Terms may land in different fields. Because terms match independently, a multi-word query spans punctuation in the stored text — `Brass Birmingham` finds `boardgame:brass-birmingham` titled `Brass: Birmingham`. There is no phrase/ordering match and no relevance ranking yet (`score` is a placeholder); a single-word query is a plain substring match. To narrow, add more terms (AND); there is no OR — issue separate searches for alternatives.
+
 **Local vs upstream.** `search_local` searches what's already in yaad-index — it's the "find an entity by keyword across what we know" tool. It does NOT reach Wikipedia / external sources. To FETCH new content from upstream, use `ingest(url)` (which runs the plugin against the upstream API). For the discovery-shaped step BEFORE `ingest` — "show me candidates from upstream sources matching this string so I can pick which to ingest" — use `search_upstream` (below).
 
 ### `search_upstream(query, plugins?, limit?, per_plugin_timeout_seconds?)`

@@ -1187,14 +1187,32 @@ func assertEntityExists(ctx context.Context, tx *sql.Tx, id, side string) error 
 // cheap to add later, but the wire shape today is the same one
 // the stub produced (Snippet field present, content placeholder).
 func (s *sqliteStore) Search(ctx context.Context, query, kind string, limit, offset int, archived ArchivedFilter, journalOnly bool) ([]Hit, int, error) {
-	pattern := "%" + query + "%"
-
-	// Match on id, data, OR any of the entity's aliases per #3.
-	// The EXISTS subquery keeps the row count clean — a LEFT JOIN
-	// would duplicate rows when an entity carries multiple aliases
-	// that each match the pattern.
-	whereParts := []string{"(id LIKE ? OR data LIKE ? OR EXISTS (SELECT 1 FROM entity_aliases ea WHERE ea.entity_id = entities.id AND ea.alias LIKE ?))"}
-	whereArgs := []any{pattern, pattern, pattern}
+	// Tokenize-and-AND per #391. Split the query into whitespace-
+	// separated terms and require EACH term to match somewhere in
+	// id / data / aliases. The prior shape was a single contiguous
+	// LIKE %query%, which could not span punctuation in the stored
+	// text: "Brass Birmingham" missed the BGG title "Brass:
+	// Birmingham" (colon) and the brass-birmingham slug (hyphen),
+	// while a punctuation-free title like "Moon Colony Bloodbath"
+	// matched. Per-term matching restores name search across
+	// punctuation. A single-term query is unchanged; multi-term
+	// queries are AND-of-terms (broader recall — the standard
+	// search expectation). Phrase/ordering search and relevance
+	// ranking are deferred to the FTS5 follow-up (#409). % / _ stay
+	// unescaped (wildcard semantics) — same v1 caveat as before.
+	//
+	// Each term contributes one id/data/alias OR-group; the groups
+	// join with the other filters under AND below. The EXISTS
+	// subquery (not a LEFT JOIN) keeps the row count clean when an
+	// entity carries multiple matching aliases.
+	var whereParts []string
+	var whereArgs []any
+	for _, term := range strings.Fields(query) {
+		pattern := "%" + term + "%"
+		whereParts = append(whereParts,
+			"(id LIKE ? OR data LIKE ? OR EXISTS (SELECT 1 FROM entity_aliases ea WHERE ea.entity_id = entities.id AND ea.alias LIKE ?))")
+		whereArgs = append(whereArgs, pattern, pattern, pattern)
+	}
 	if kind != "" {
 		whereParts = append(whereParts, "kind = ?")
 		whereArgs = append(whereArgs, kind)
@@ -1220,6 +1238,13 @@ func (s *sqliteStore) Search(ctx context.Context, query, kind string, limit, off
 	if journalOnly {
 		whereParts = append(whereParts,
 			"(json_extract(data, '$.is_journal') = 1 OR json_extract(data, '$.is_journal') = 'true')")
+	}
+	// A kind-only / archived-only call (empty or all-whitespace
+	// query) contributes no term clauses; keep the WHERE well-formed.
+	// The API rejects the truly-unfiltered query==""&&kind=="" case
+	// upstream, so this only fires for legitimate kind/journal lists.
+	if len(whereParts) == 0 {
+		whereParts = append(whereParts, "1=1")
 	}
 	where := strings.Join(whereParts, " AND ")
 
