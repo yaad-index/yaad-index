@@ -10,13 +10,13 @@ Accepted (2026-05-02).
 
 What we have today:
 
-- **Vault frontmatter** — every entity's `*.md` file accumulates the full provenance list under the `provenance:` key (a prior PR). Plugin fetches, agent fills, manual edits all append entries. The vault list is the canonical record.
-- **DB `provenance` table** — entity-keyed audit rows. a prior PR left a dual-write contract: ingest writes the vault first, then `AppendProvenance` mirrors to the DB. Concurrency-safe via `AppendProvenance`'s tx wrapper.
-- **Reindex** — a prior PR added the vault walker, but `Reindexer.upsertEntity` deliberately does NOT touch DB provenance during re-derivation. Its only DB write is `store.UpsertEntity`. Note in `internal/reindex/reindex.go` explicitly defers this work to a future PR.
+- **Vault frontmatter** — every entity's `*.md` file accumulates the full provenance list under the `provenance:` key. Plugin fetches, agent fills, manual edits all append entries. The vault list is the canonical record.
+- **DB `provenance` table** — entity-keyed audit rows. A dual-write contract is in place: ingest writes the vault first, then `AppendProvenance` mirrors to the DB. Concurrency-safe via `AppendProvenance`'s tx wrapper.
+- **Reindex** — the vault walker is in place, but `Reindexer.upsertEntity` deliberately does NOT touch DB provenance during re-derivation. Its only DB write is `store.UpsertEntity`. Note in `internal/reindex/reindex.go` explicitly defers this work to a future PR.
 
 The result: the DB's `provenance` rows are a **half-derived** state. They mirror what the API has written, but they're not regenerable from the vault. A `WipeDerivedState` followed by reindex leaves the table empty until the next ingest / fill writes new rows. The vault still holds the full record — data isn't lost — but the DB-side mirror diverges until ingest / fill fires.
 
-This was a known gap ([docs/index-flow.md §2 / §3](../docs/index-flow.md)) and is the motivation for issue .
+This was a known gap ([docs/index-flow.md §2 / §3](../docs/index-flow.md)) and is the motivation for this ADR.
 
 ## Decision
 
@@ -121,9 +121,9 @@ Rejected for now. The current single-table-with-source-column shape is simple an
 
 This ADR is implementation-only — no schema change needed. The migration shape:
 
-1. Add `store.ReplaceProvenance` (a prior PR, store-only, no behavior change for callers).
-2. Update `Reindexer.upsertEntity` to call `ReplaceProvenance` (a prior PR, reindex-only behavior change).
-3. Update `docs/index-flow.md` §2 (re-derived list) and §3 (Wipe `provenance` row) to reflect the new state (a prior PR or follow-up).
+1. Add `store.ReplaceProvenance` (store-only, no behavior change for callers).
+2. Update `Reindexer.upsertEntity` to call `ReplaceProvenance` (reindex-only behavior change).
+3. Update `docs/index-flow.md` §2 (re-derived list) and §3 (Wipe `provenance` row) to reflect the new state.
 
 Existing dual-write paths in ingest / fill stay unchanged.
 
@@ -131,6 +131,3 @@ Existing dual-write paths in ingest / fill stay unchanged.
 
 - [ADR-0008](0008-vault-as-source-of-truth.md) — vault-as-source-of-truth (foundation)
 - [docs/index-flow.md](../docs/index-flow.md) §2 (re-derive scope) + §3 (wipe set rationale)
-- Issue — backlog spec this ADR formalizes
-- a prior PR — reindex landed; note block deferred provenance handling
-- a prior PR — vault-first ingest writes; vault list is the live record

@@ -126,6 +126,6 @@ Rationale: the `archive_when` predicate is advisory housekeeping — its failure
 
 Tracking #376. Implementation lands in three PRs:
 
-1. **Cut 1 (this ADR, hard-gate)** — contract.
-2. **Cut 2 — parser + predicate evaluator (standard gate)** — `internal/workflow/parser` schema struct for `ArchiveWhen` + new evaluator under `internal/workflow/decision` with testify table tests per primitive + `any_of` / `all_of` composition.
-3. **Cut 3 — engine hook + end-to-end test (standard gate; `closes #376`)** — post-action evaluation hook in `internal/workflow/engine`; on true, invokes the same code path as the existing `/v1/entities/{id}/archive` handler; end-to-end test where a workflow with `archive_when: all_gaps_resolved` archives its source row after the last gap fills.
+1. **Cut 1 (this ADR)** — contract.
+2. **Cut 2 — parser + predicate evaluator** — `internal/workflow/parser` schema struct for `ArchiveWhen` + new evaluator under `internal/workflow/decision` with testify table tests per primitive + `any_of` / `all_of` composition.
+3. **Cut 3 — engine hook + end-to-end test (`closes #376`)** — post-action evaluation hook in `internal/workflow/engine`; on true, invokes the same code path as the existing `/v1/entities/{id}/archive` handler; end-to-end test where a workflow with `archive_when: all_gaps_resolved` archives its source row after the last gap fills.

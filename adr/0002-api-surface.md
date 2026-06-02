@@ -1,6 +1,6 @@
 # ADR-0002 — API surface
 
-**Status:** Accepted (2026-04-27). Amended by ADR-0008 in three places (snippet semantics, fill-token mechanism, new note endpoint). See ADR-0008's "Supersedes" line for details. The obsolete `fill_token` + equal-set fill semantics in this ADR's body have been struck through in-place with cross-links to ADR-0008 (Per the prior design, Option A: visible deprecation, audit trail preserved via git history + strike-through markers).
+**Status:** Accepted (2026-04-27). Amended by ADR-0008 in three places (snippet semantics, fill-token mechanism, new note endpoint). See ADR-0008's "Supersedes" line for details. The obsolete `fill_token` + equal-set fill semantics in this ADR's body have been struck through in-place with cross-links to ADR-0008 (visible deprecation: the audit trail is preserved via git history plus the in-place strike-through markers).
 **Date:** 2026-04-27
 **Depends on:** [ADR-0001](./0001-fresh-rewrite-ai-first-remote-api.md)
 
@@ -23,7 +23,7 @@ The graph is built from two kinds of records:
 - **Entities** (nodes) — concrete things the index knows about: a boardgame, a person, a book. Each has a `kind` (boardgame, person, …) and `data` (kind-specific fields). One entity = one identity. `person:tolkien` exists once whether he authored ten books or designed nothing — being a person is what he *is*, not what he does.
 - **Edges** (typed relationships) — directed, typed connections between entities: `(boardgame:brass) -[designed_by]-> (person:martin-wallace)`, `(book:lotr) -[authored_by]-> (person:tolkien)`. The role lives on the edge, not on the entity. A person who plays multiple roles (Tolkien authoring books, Lacerda designing games) gets multiple edges, not multiple entity rows.
 
-This decision (per the operator's review on a prior PR) settles the question "is `person/author` a sub-kind, or is `authored_by` an edge type?" in favor of edges. The latter scales: query patterns like "all books authored by Tolkien" or "all games designed by Lacerda's collaborators" become natural traversals; the entity model stays clean.
+This decision settles the question "is `person/author` a sub-kind, or is `authored_by` an edge type?" in favor of edges. The latter scales: query patterns like "all books authored by Tolkien" or "all games designed by Lacerda's collaborators" become natural traversals; the entity model stays clean.
 
 ### `GET /v1/health`
 
@@ -44,7 +44,7 @@ Fetch a single entity by canonical ID. For multi-hop context stitching across li
 
 **Request:**
 - Path: `id` — canonical entity ID (slug-like, see ADR-0007 of v0 for shape)
-- Query (optional): `with_edges` — controls inline edge expansion. Four equivalent shapes (per yaad-index):
+- Query (optional): `with_edges` — controls inline edge expansion. Four equivalent shapes:
  - `with_edges=designed_by,authored_by` — comma-separated type filter; only the named types are expanded.
  - `with_edges=*` (canonical) or `with_edges=all` — sentinel "expand all edge types"; either spelling works, `*` is the canonical form.
  - `with_edges` (key present, no value) or `with_edges=` (key present, explicit empty) — presence-based "expand all edge types"; equivalent to the sentinel.
@@ -85,7 +85,7 @@ Fetch a single entity by canonical ID. For multi-hop context stitching across li
 
 Submit a source for ingestion. The collector decides whether the source is structured (parsed deterministically) or unstructured (queued for AI extraction).
 
-**Primary mode: long-poll.** The server holds the request open up to a configurable timeout (default `60s`, max `300s`) waiting for extraction to complete. If extraction finishes inside the window the server returns the full entity inline. If not, it returns a 202 so the client can fall back. This shape is chosen because it makes the simple-agent case a single call ("ingest URL, get entity") and only forces async-handling code when extraction genuinely takes longer than the agent is willing to wait. Per the operator (review on a prior PR): the question of "request → return-call-again, or block-and-return" was decided in favor of block-and-return as the agent-friendly default.
+**Primary mode: long-poll.** The server holds the request open up to a configurable timeout (default `60s`, max `300s`) waiting for extraction to complete. If extraction finishes inside the window the server returns the full entity inline. If not, it returns a 202 so the client can fall back. This shape is chosen because it makes the simple-agent case a single call ("ingest URL, get entity") and only forces async-handling code when extraction genuinely takes longer than the agent is willing to wait. The question of "request → return-call-again, or block-and-return" was decided in favor of block-and-return as the agent-friendly default.
 
 **Request body:**
 ```json
@@ -200,7 +200,7 @@ Client decision tree from the 202 response:
 
 ### `GET /v1/entities/{id}/context`
 
-Stitch context: return an entity plus all entities reachable within N edge-hops, in one round-trip. Added per yaad-index the source issue to support cross-source context-assembly use cases (a PR-review agent fetching the PR + linked Jira ticket + linked Confluence doc + canonical process stub in one shot) without round-tripping per hop. See also [`GET /v1/entities/{id}`](#get-v1entitiesid) — that endpoint returns inline edge refs but not the linked entities themselves; this endpoint is the multi-hop variant.
+Stitch context: return an entity plus all entities reachable within N edge-hops, in one round-trip. Added to support cross-source context-assembly use cases (a PR-review agent fetching the PR + linked Jira ticket + linked Confluence doc + canonical process stub in one shot) without round-tripping per hop. See also [`GET /v1/entities/{id}`](#get-v1entitiesid) — that endpoint returns inline edge refs but not the linked entities themselves; this endpoint is the multi-hop variant.
 
 **Request:**
 - Path: `id` — canonical entity ID; the BFS root.
@@ -276,7 +276,7 @@ Fetch multiple entities in one call. Saves agents from N sequential `GET /v1/ent
 
 **In-flight entities are *not* missing.** If a client requests an ID for which an ingest is currently extracting (placeholder entity with a pending provenance state but no completed `data` yet), the entity is returned in `entities` with whatever placeholder fields the storage layer has — `data` may be `null` or sparse, the provenance array makes the in-flight state machine-readable. `missing` is reserved exclusively for IDs the server has never seen.
 
-Rationale for inclusion in v1 (was deferred): per the operator's review, the "50 calls is cheap on LAN" argument is sketchy for typical agent workloads where pulling 5–20 related entities at once is the common case. Adding `batch` to v1 is small (one handler, no new schema) and removes an obvious agent-side foot-gun where a chained tool call balloons into N round-trips.
+Rationale for inclusion in v1 (was deferred): the "50 calls is cheap on LAN" argument is sketchy for typical agent workloads where pulling 5–20 related entities at once is the common case. Adding `batch` to v1 is small (one handler, no new schema) and removes an obvious agent-side foot-gun where a chained tool call balloons into N round-trips.
 
 ### `POST /v1/entities/{id}/fill`
 
@@ -514,8 +514,8 @@ Canonical-vocabulary drift surface (per [ADR-0013](./0013-canonical-kind-owns-ga
 ```
 
 **Field semantics:**
-- `config_hash` — deterministic SHA over the canonical-vocabulary subset of the config (canonical_kinds + canonical_edge_types). Bumps on any change to the canonical config; stable across calls otherwise. Operator tooling polls + diffs to detect drift between snapshots. Distinct from `/v1/structure`'s `version` (which covers the full structural signature including plugins). Edge-types sorted before hashing — same contract as `/v1/structure` per yaad-index a prior PR.
-- `drift.kinds_emitted_not_enabled[]` — per-(plugin, kind) counter rows. The `would_materialize_count` field is the cumulative count of canonical entity stubs the plugin emitted that the orchestrator's config-filter dropped at ingest time. Persisted in DB so it survives daemon restart; sourced from the `dropped_canonical_kinds` table (yaad-index a prior PR).
+- `config_hash` — deterministic SHA over the canonical-vocabulary subset of the config (canonical_kinds + canonical_edge_types). Bumps on any change to the canonical config; stable across calls otherwise. Operator tooling polls + diffs to detect drift between snapshots. Distinct from `/v1/structure`'s `version` (which covers the full structural signature including plugins). Edge-types sorted before hashing — same contract as `/v1/structure`.
+- `drift.kinds_emitted_not_enabled[]` — per-(plugin, kind) counter rows. The `would_materialize_count` field is the cumulative count of canonical entity stubs the plugin emitted that the orchestrator's config-filter dropped at ingest time. Persisted in DB so it survives daemon restart; sourced from the `dropped_canonical_kinds` table.
 - `drift.edge_types_emitted_not_enabled[]` — same axis for canonical edge types.
 - `drift.kinds_enabled_not_emitted` / `drift.edge_types_enabled_not_emitted` — stubbed empty arrays for v1 per ADR-0013 §3. "Operator enabled X but no plugin emits it" is a different signal that lands in a follow-up.
 - `last_reindex_at` — `MAX(last_indexed_at)` across the `reindex_files` table; null when no reindex has ever run.
@@ -694,7 +694,7 @@ The split is enforced at routing time in `internal/api/api.go`. The default-prot
 
 **Path precedence chain (locked):** CLI flag > env var > config file > built-in default — the same chain used for `keys_dir` and `default_ttl` . For `auth.required` the built-in default is `true`; for `keys_dir` it is `/etc/yaad-index/keys/`; for `default_ttl` it is `2160h` (90 days).
 
-Note-author validation (the JWT's `sub` must match `POST /v1/entities/{id}/notes` body's `author`) lands in a prior PR. The full auth series (a prior a prior PR keypair + sign/verify + CLIs, a prior a prior PR middleware, a prior a prior PR note validation, a prior a prior PR /v1/jwks) closes out the auth surface area for v1.
+Note-author validation (the JWT's `sub` must match `POST /v1/entities/{id}/notes` body's `author`) lands in the auth series. The full auth series (keypair + sign/verify + CLIs, middleware, note validation, /v1/jwks) closes out the auth surface area for v1.
 
 ### Rate limiting
 

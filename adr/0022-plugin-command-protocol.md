@@ -227,11 +227,11 @@ The CLI surface (§5's `yaad-index command` / `yaad-index fetch`) is unaffected 
 
 The implementation lands across separate issues (this ADR is the foundation; not the implementation):
 
-- **** — daemon-side `commands` field plumbing in capability cache + invocation parser for `<plugin>: !<command>`.
-- **** — in-memory job system covering all invocations.
-- **** — routing-time validation.
-- **** — CLI subcommands `command` + `fetch`.
-- **** — CLI auth (operator-claim-only).
-- **** — yaad-gmail declares `commands: ["fetch"]` + adds the handler.
+- Daemon-side `commands` field plumbing in capability cache + invocation parser for `<plugin>: !<command>`.
+- In-memory job system covering all invocations.
+- Routing-time validation.
+- CLI subcommands `command` + `fetch`.
+- CLI auth (operator-claim-only).
+- yaad-gmail declares `commands: ["fetch"]` + adds the handler.
 
 This ADR is the contract; the implementation issues cite it.

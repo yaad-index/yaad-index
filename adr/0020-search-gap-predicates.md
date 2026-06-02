@@ -19,7 +19,7 @@ Today's `GET /v1/search` (per ADR-0002) supports two filter axes:
 - `q` — free-text FTS query.
 - `kind` — entity-kind exact match.
 
-Neither addresses the meeting's example. `data.rating > 5` is a
+Neither addresses the motivating example. `data.rating > 5` is a
 predicate over a gap field, not over text or kind. The current
 endpoint can return all boardgames matching a text query, but it
 cannot answer "boardgames I rated > 5" because there is no
@@ -143,9 +143,8 @@ walks edges through people back to games) is out of scope per
 the bottom of this ADR.
 
 Multiple `where` predicates AND together. OR is **not in v1** —
-disjunctions surfaced rarely in the meeting's design discussion;
-adding them complicates the parser and the SQL builder; deferring
-keeps this ADR small. A future ADR can add `OR` if usage demands
+disjunctions are rarely needed in practice, adding them complicates
+the parser and the SQL builder, and deferring keeps this ADR small. A future ADR can add `OR` if usage demands
 it.
 
 ### Execution
@@ -194,8 +193,8 @@ If `gap_state` is supplied without any `where` predicate, it
 filters entities that have *any* gap in the named state.
 
 **`gap_state` + canonical_type gap.** The ADR-0019 fill state
-machine still applies to canonical_type gaps (per ADR-0021 +
-the source issue), even though their VALUES live as edges rather than
+machine still applies to canonical_type gaps (per ADR-0021),
+even though their VALUES live as edges rather than
 as `data.<field>` entries. The `gap_state` filter therefore works
 correctly when combined with `edge.<gap-name>` predicates:
 
@@ -246,7 +245,7 @@ kind/q count.
 
 ### Positive
 
-- The meeting's load-bearing query ("rated > 5 boardgames")
+- The load-bearing query ("rated > 5 boardgames")
  becomes a single API call.
 - Workflow patterns can express their decision rules in this
  predicate language without inventing a parallel query DSL.
@@ -308,13 +307,13 @@ kind/q count.
 - Sort-by-field. (Future ADR.)
 - Aggregations (`COUNT`, `AVG`). (Out of v1 entirely.)
 - Search UX surface (operator-natural query interface for
- ad-hoc broad queries). The 2026-05-09 workflow meeting made
- the situated-query case primary (workflows do bounded queries
+ ad-hoc broad queries). The situated-query case is primary
+ (workflows do bounded queries
  on events), so a dedicated user-facing search UX may not be
  needed in v1 — the agent calls /v1/search directly when the
  user asks. Defer the UX-surface ADR until usage shows whether
  it's needed.
-- Salience / weighting (the cold-reviewer's from concerns.md). Separate
+- Salience / weighting. Separate
  architectural ADR.
 - Predicates over canonical-edge traversal (e.g., "boardgames
  designed by people I rated > 7" requires walking edges

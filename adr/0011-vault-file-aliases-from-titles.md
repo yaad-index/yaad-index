@@ -16,7 +16,7 @@ It's bad for **vault navigation**. Obsidian (and most markdown-aware editors) re
 
 The author has to know the slug to make a wikilink work — a bad user experience for both human authors and the AI agents we want using the vault as a graph.
 
-Surfaced concretely during the yaad-mcp end-to-end test (2026-05-02) when the operator noticed Obsidian wasn't resolving cross-entity references in the test vault.
+Surfaced during end-to-end testing when Obsidian wasn't resolving cross-entity references.
 
 ## Decision
 
@@ -179,5 +179,4 @@ The DB `entity_aliases` rows MUST match the alias list the vault writer puts on 
 - [ADR-0008](./0008-vault-as-source-of-truth.md) — vault as source of truth; yaad-index re-derives frontmatter from entity state on every write.
 - [ADR-0009](./0009-provenance-reconciliation.md) — re-derive pattern (DELETE + INSERT in one transaction); `ReplaceAliases` mirrors this shape.
 - [ADR-0010](./0010-row-level-idempotency-for-derived-tables.md) — table-as-cache discipline `entity_aliases` inherits.
-- yaad-mcp test session 2026-05-02 — surfaced the wikilink-resolution gap during the operator's manual end-to-end test.
 - Obsidian aliases documentation: aliases are a recognized property in Obsidian's link-resolution algorithm. https://help.obsidian.md/Linking+notes+and+files/Aliases

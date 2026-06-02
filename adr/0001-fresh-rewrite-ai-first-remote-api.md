@@ -39,7 +39,7 @@ Every agent gets full access. Authentication and authorization are explicitly **
 
 **Why not skip authz?** Because adding authz later to a remote-first API is mechanical: a middleware layer, a token check, a per-route policy. Adding authz to a file-based system is structural — you'd have to introduce the API as the new chokepoint, migrate every agent off file access, and rebuild trust assumptions. The remote-first commitment is what makes "no authz now" cheap to undo.
 
-Until authz lands, the API is on a trusted network and protected by network topology + agent-membership, not by per-call policy. Same trust model the agent bus already operates under.
+Until authz lands, the API is on a trusted network and protected by network topology + agent-membership, not by per-call policy.
 
 ## Consequences
 

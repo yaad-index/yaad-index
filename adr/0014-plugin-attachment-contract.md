@@ -3,7 +3,6 @@
 **Status:** Proposed (2026-05-06)
 **Date:** 2026-05-06
 **Depends on:** [ADR-0005](./0005-plugin-lifecycle.md), [ADR-0006](./0006-plugin-discovery-config-allowlist.md), [ADR-0008](./0008-vault-as-source-of-truth.md), [ADR-0012](./0012-user-generated-content.md)
-**Tracked in:**
 
 ## Context
 
@@ -26,7 +25,7 @@ Each fits a different plugin shape:
 - **tmp+URI** is the natural fit when the plugin already needs to authenticate / handle upstream-specific quirks (BGG, GitHub, Wikipedia).
 - **URL pass-through** is simplest when the upstream URL is canonical and stable, and the plugin doesn't add value over the daemon's HTTP client.
 
-A canonical-single-method contract would be simpler to maintain but rules out plugin contexts the others handle naturally. Operator polling the discussion (see): all three should be supported within one wire shape, with the plugin choosing per-attachment.
+A canonical-single-method contract would be simpler to maintain but rules out plugin contexts the others handle naturally. Decision: all three should be supported within one wire shape, with the plugin choosing per-attachment.
 
 ## Decision
 
@@ -134,7 +133,7 @@ On re-ingest:
 - If the plugin emits an attachment with a `(role, uri)` that matches an existing on-disk file (same role, same uri stamped in the entity provenance), the daemon SKIPS the fetch and leaves the existing file in place.
 - If the plugin emits a different `uri` for the same `role`, the daemon performs the fetch and OVERWRITES the existing file.
 - If the plugin emits no attachments on a re-ingest (or the array is missing entirely), existing on-disk attachments are PRESERVED. Same shape as UGC preservation per ADR-0012: a plugin's silence does not delete operator-visible artifacts.
-- Operator-driven force-refetch (Per the prior design,'s `cache refetch`) refetches all attachments unconditionally.
+- Operator-driven force-refetch (`cache refetch`) refetches all attachments unconditionally.
 
 The provenance entry on the entity records the URI(s) used at last fetch under a `fetch_attachments` field on the provenance row. Wire shape: an array of `{role, uri}` objects (mirrors the FetchResult shape minus `extension`, which is preserved on disk via the filename). Example:
 
@@ -184,7 +183,7 @@ A new top-level config key:
 plugin_staging_dir: /tmp/yaad-index-staging # default: /tmp
 ```
 
-Plugins receive this path via the `YAAD_PLUGIN_STAGING_DIR` environment variable (per the same plumbing as `YAAD_TIMEZONE` from ADR-0014's predecessor, yaad-index PR-D). Plugins SHOULD stage their tmp files under this dir.
+Plugins receive this path via the `YAAD_PLUGIN_STAGING_DIR` environment variable (per the same plumbing as `YAAD_TIMEZONE`). Plugins SHOULD stage their tmp files under this dir.
 
 The default `/tmp` is fine for single-operator deployments; operators wanting isolation (per-tenant staging, restricted permissions) override.
 

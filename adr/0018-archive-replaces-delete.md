@@ -136,7 +136,7 @@ the active layout one level down). Ranges:
 
 Edges referencing archived entities are retained in the database.
 Graph traversal (the `?with_edges=` flag, the upcoming
-`GET /v1/edges` Per the prior design,) returns archived endpoints with the
+`GET /v1/edges`) returns archived endpoints with the
 `archived: true` flag visible. Default consumers can choose to
 follow or skip; the archive state is information, not invisibility.
 

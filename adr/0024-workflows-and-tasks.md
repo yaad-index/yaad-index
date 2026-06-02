@@ -235,7 +235,7 @@ Out of v1 (deferred — listed below): edge-creation as a workflow action, silen
 
 **Why the smaller set:** the earlier draft listed four output types (create task / mutate entity / add edge / silent log). The v1-reconciled set drops `add edge` and `silent log` as separate primitives — `add edge` becomes a follow-up via `plugin_dispatch` (the plugin emits the edge during ingest) or a manual operator add; `silent log` collapses into `add_note` (record what the workflow saw, no task surface). `plugin_dispatch` is genuinely new — the earlier draft had no explicit way for a workflow to ask the index to go fetch something. `archive_entity` + `restore_entity` are also v1 — added in the 2026-05-21 amendment to back the workflow-driven lifecycle pattern (plugin emits truth, workflow owns archive state).
 
-**Concurrent writes.** Two workflows — or any two writers (workflow output, UGC mutation, note addition, edge addition, plugin emit, operator manual write) — may touch the same on-disk artifact at the same time. v1 protects via a daemon-internal **per-artifact write-lock manager** (`internal/writelocks` per yaad-index #23) with a **block-on-conflict** policy: an Acquire on an artifact already held by another writer returns a typed conflict error immediately, surfacing as a 409 envelope naming the active holder. No queuing, no merging, no last-writer-wins; the rejected caller retries.
+**Concurrent writes.** Two workflows — or any two writers (workflow output, UGC mutation, note addition, edge addition, plugin emit, operator manual write) — may touch the same on-disk artifact at the same time. v1 protects via a daemon-internal **per-artifact write-lock manager** (`internal/writelocks`) with a **block-on-conflict** policy: an Acquire on an artifact already held by another writer returns a typed conflict error immediately, surfacing as a 409 envelope naming the active holder. No queuing, no merging, no last-writer-wins; the rejected caller retries.
 
 Two write classes deliberately skip the lock as additive-append shapes that don't conflict at the storage layer:
 
@@ -444,11 +444,11 @@ The original PROPOSED draft (2026-05-12) was richer than necessary for a first v
 - **Dedup: two layers explicit.** Per-pattern at workflow level (key + policy `update`/`skip`/`replace`) prevents N tasks for the same situation; action-level inside `task_append` (skip-if-line-exists) prevents N duplicate lines inside the same task. Stack, don't conflict.
 - **Workflow location: vault-default + daemon-reserved.** Operator-authored vault workflows are the only thing today; daemon-side is reserved as a forward-compatible path for future system-shipped workflows.
 
-Status remains PROPOSED pending operator hard-gate review of this revision.
+Status remains PROPOSED pending review of this revision.
 
-### 2026-05-16 — pre-review fold-in
+### 2026-05-16 — specification-gap fold-in
 
-Pre-reviewer flagged 9 specification gaps before the hard-gate read. All accepted or deferred:
+Review flagged 9 specification gaps. All accepted or deferred:
 
 - `graph.find({predicate})` predicate shape was undefined — **dropped from v1**, ship `graph.get(id)` only. Re-introduce post-v1 with a settled predicate spec.
 - **Collection-shaped predicates also deferred.** ID-list → entity-list auto-resolution semantics aren't settled in v1; workflows that want multi-related-entity predicates use multiple named `context` entries instead. Re-introduce alongside `graph.find`.
@@ -465,7 +465,7 @@ Adds the workflow-engine shapes the github plugin's closed-item lifecycle (per A
 - **New `archive_entity` + `restore_entity` actions.** Mirror pair wrapping ADR-0018's archive lifecycle. Both take a CEL-templated `target:` (usually `{{ entity.id }}`) and an optional `reason:` provenance string. Idempotent at the engine layer — re-firing on the same archive state is a no-op. Do NOT fire `entity.updated` themselves (archive flag is metadata, not `data.*`), so cannot self-trigger.
 - **Worked example** added for the GitHub archive-on-close / restore-on-open mirror pair as two workflow files. Demonstrates the `entity_updated` trigger + `field_changed: data.state` + `canonical_kind: [github-pr, github-issue]` match + `dedup.policy: skip` (idempotent actions need no per-fire task surface).
 
-Status remains PROPOSED pending operator hard-gate review of this revision.
+Status remains PROPOSED pending review of this revision.
 
 ### 2026-05-25 — gmail address fields + daemon-managed canonical vocabulary expansion (#272)
 
@@ -476,7 +476,7 @@ Extends the daemon-managed canonical-kind / edge-type set (the precedent set by 
 - **Lazy materialization on POST /v1/edges** generalized to thin-label kinds: the day-target ensure landed in #268 was specific to `day:YYYY-MM-DD`. The same path now lazy-ensures any thin-label daemon-managed target (`day:` / `email:` / `email-address:` / `label:`) via `canonical.EnsureLabelRow` so manual edge creation against those targets holds the FK without the caller pre-creating the entity. `task:` is deliberately excluded — task rows index `<vault>/tasks/*.md` files per §Task and only materialize on first-create (no automatic backfill); a manual edge to an unknown `task:<slug>` correctly returns 422 missing_entity rather than landing a phantom store row with no backing vault file.
 - **Structured `data` fields**: the gmail plugin now surfaces `from` (string), `to` (`[]string`, possibly empty), `cc` (`[]string`, possibly empty), and `bcc` (`[]string`, omitted when empty since BCC is sent-folder-only) on the source entity's `data` map. Workflow CEL predicates can read `entity.data.from == "noreply@example.com"` directly without regexing `clean_content`.
 
-Status remains PROPOSED pending operator hard-gate review of this revision.
+Status remains PROPOSED pending review of this revision.
 
 ### 2026-05-25 — task entity promotion (#268)
 
@@ -491,7 +491,7 @@ Aligns the implementation with the §Task spec text. Pre-#268 tasks lived as mar
 
 Day-side (#268 day fold): the day-anchored materialization paths already in the codebase (ingest `EmitDayRefs`, fill `EmitDayRefs`, workflow `set_property` `EmitDayRefs`, `add_canonical_edge` `EnsureLabelRow`, reindex `EmitDayRefs`, canonical_type ops `ensureCanonicalLabelRow`) cover their respective edge-write sites. The one gap closed in this revision: `POST /v1/edges` with a `day:YYYY-MM-DD` target now lazy-ensures the day entity row before `CreateEdge` so manual edge-creation matches the lazy-on-write pattern. The `isRegisteredEdgeKind` validator also folds in `DaemonEdgeTypes()` so operators can `POST /v1/edges` with `references_day` / `triggered_by` / etc. without registering a plugin that advertises them.
 
-Status remains PROPOSED pending operator hard-gate review of this revision.
+Status remains PROPOSED pending review of this revision.
 
 ### 2026-05-25 — `trigger.*` CEL surface (#264)
 
@@ -508,12 +508,12 @@ Adds the per-firing trigger context to the CEL expression environment so workflo
 - **Manual triggers.** `workflow.trigger(input)` synthesizes a manual-shape trigger context: `trigger.event == "manual"`, `trigger.source` resolves to the target entity (self-cause). Workflows that need to branch on event-driven vs manual firings condition on `trigger.event`.
 - **Reserved name.** `trigger` joins `entity` and `edge` as a reserved CEL variable — declaring a context binding named `trigger` is rejected at workflow-load time.
 
-Status remains PROPOSED pending operator hard-gate review of this revision.
+Status remains PROPOSED pending review of this revision.
 
-### 2026-05-16 — third-round pre-review fold-in + add_gap
+### 2026-05-16 — add_gap amendment
 
 - `edge.target` → `edge.to` in graph.get prose + worked CEL example (consistency with the edge shape spec).
-- Pre-existing workflow-chaining out-of-v1 line cleaned of meeting-reference framing (operator hard-gate requirement before PROPOSED → ACCEPTED).
+- Pre-existing workflow-chaining out-of-v1 line cleaned of meeting-reference framing (required before PROPOSED → ACCEPTED).
 - **`add_gap` action primitive added** (operator-requested). Bridges decision-needing-human-input cases into the workflow framework without an LLM step. Constraints: permanent per ADR-0008, scoped to a single unified `addable_gaps` declaration covering BOTH trigger-time injection and action-stage adds. The intended add_gap-loop (workflow asks → human fills → workflow decides on the answer) is design, not a self-loop; the source-tag self-loop detection doesn't cover it (fills are sourced from operator/agent, not the workflow), and the engine-backstop re-evaluation counter is the right protection layer.
 - Decision rule between `task_append`/`add_note`/`add_gap` extended to cover all three primitives.
 - `plugin_dispatch` async/sync semantics were contradictory — clarified as **synchronous bounded-await** (default timeout 30s; err-task on timeout/error).
