@@ -230,11 +230,14 @@ func handleEntityOperatorFill(
 		// force-overwrite from query param. Trigger-mode replaces the
 		// caller-identity gate (was: this URL is operator-fill,
 		// therefore caller is operator) with a request-property gate.
-		// operator-trigger: claim subject == operator (caller acting
-		// on operator's behalf). agent-trigger: any other authenticated
-		// claim.
+		// operator-trigger: an operator-only token (subject == operator)
+		// OR a pair-claim token the operator delegated via the agent
+		// skill UI (#361 — claim.OperatorDelegated). agent-trigger: any
+		// other authenticated claim. The delegation flag is honored only
+		// for non-anonymous claims (subject present), so an anonymous /
+		// auth-disabled request can't self-promote to operator-trigger.
 		triggerMode := "agent"
-		if claim.Subject != "" && claim.Subject == claim.Operator {
+		if claim.Subject != "" && (claim.Subject == claim.Operator || claim.OperatorDelegated) {
 			triggerMode = "operator"
 		}
 		force := r.URL.Query().Get("force") == "true"

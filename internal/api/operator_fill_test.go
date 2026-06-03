@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -86,12 +87,30 @@ func seedBoardgameForFill(t *testing.T, st store.Store, root, id string) {
 }
 
 // mintOperatorToken issues a JWT where Subject == Operator (the
-// operator-only pattern per ADR-0019 §Endpoint surface). The
-// handler accepts these; agent-on-behalf tokens (Subject !=
-// Operator) reject with 403.
+// operator-only pattern per ADR-0019 §Endpoint surface). Classifies
+// as operator-trigger on the unified /v1/fill endpoint.
 func mintOperatorToken(t *testing.T, signer auth.Signer, operator string) string {
 	t.Helper()
 	return mintToken(t, signer, operator, operator)
+}
+
+// mintDelegatedToken issues a pair-claim JWT (Subject != Operator) with
+// OperatorDelegated set — the agent-on-behalf-of-operator shape the
+// agent skill UI produces after the operator confirms (#361). It
+// classifies as operator-trigger on /v1/fill without Subject ==
+// Operator.
+func mintDelegatedToken(t *testing.T, signer auth.Signer, agent, operator string) string {
+	t.Helper()
+	now := time.Now().UTC()
+	tok, err := signer.Sign(auth.Claim{
+		Subject: agent,
+		Operator: operator,
+		IssuedAt: now,
+		ExpiresAt: now.Add(time.Hour),
+		OperatorDelegated: true,
+	})
+	require.NoError(t, err)
+	return tok
 }
 
 // TestOperatorFill_HappyPath_SetScalar covers the scalar-set
@@ -301,26 +320,44 @@ func TestOperatorFill_AgentOnlyField(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "agent_only_field")
 }
 
-// TestOperatorFill_AgentOnBehalfOfOperatorAccepted (per yaad-index
-//): a JWT where Subject is an agent + Operator names a real
-// human now passes the operator-authority gate. Legacy this
-// rejected with 403 agent_not_allowed; the gate widened to accept
-// the agent-conduit pattern since the operator authority is
-// structurally present on the pair-claim. The audit trail stamps
-// the agent (commit author) and the operator (frontmatter operator
-// field) separately.
+// TestOperatorFill_AgentOnBehalfOfOperatorAccepted (#361): a pair-claim
+// JWT (Subject is an agent, Operator names a real human) that carries
+// OperatorDelegated — the shape the agent skill UI produces once the
+// operator confirms — classifies as operator-trigger and fills an
+// operator-strategy gap (`rating`). ADR-0029's trigger-mode gate had
+// regressed this to a 400 operator_only_field; #361 restores it via the
+// explicit delegation flag (not a bare pair-claim — see the negative
+// test below). The audit trail stamps the agent (commit author) and the
+// operator (frontmatter operator field) separately.
 func TestOperatorFill_AgentOnBehalfOfOperatorAccepted(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: agent-on-behalf-of-operator trigger-mode regression; recovery tracked in #361")
 	h, st, root, signer := newOperatorFillFixture(t)
 	const id = "boardgame:agent-on-behalf"
 	seedBoardgameForFill(t, st, root, id)
-	agentTok := mintToken(t, signer, "the implementer", "alice") // subject != operator, operator populated
+	delegatedTok := mintDelegatedToken(t, signer, "the implementer", "alice") // subject != operator, delegated
 
-	rec := ugcReq(t, h, http.MethodPost, "/v1/entities/"+id+"/fill", agentTok,
+	rec := ugcReq(t, h, http.MethodPost, "/v1/entities/"+id+"/fill", delegatedTok,
 		map[string]any{"rating": 9}, nil)
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 	assert.Contains(t, rec.Body.String(), `"rating":9`)
+}
+
+// TestOperatorFill_AgentOnBehalfNotDelegated_Rejected pins the #361
+// boundary: a bare pair-claim token (Subject != Operator, no delegation)
+// stays agent-trigger and is rejected on an operator-strategy gap. Only
+// the explicit OperatorDelegated flag promotes a pair-claim to
+// operator-trigger — a plain agent token can't self-elevate.
+func TestOperatorFill_AgentOnBehalfNotDelegated_Rejected(t *testing.T) {
+	t.Parallel()
+	h, st, root, signer := newOperatorFillFixture(t)
+	const id = "boardgame:agent-not-delegated"
+	seedBoardgameForFill(t, st, root, id)
+	bareTok := mintToken(t, signer, "the implementer", "alice") // subject != operator, NOT delegated
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/entities/"+id+"/fill", bareTok,
+		map[string]any{"rating": 9}, nil)
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "operator_only_field")
 }
 
 // Per #317 the operator-authority gate has been dropped. The

@@ -66,9 +66,11 @@ func registerSetOperatorFill(s *server.MCPServer, b *bridge) {
 			"Alias for `fill_field` per ADR-0029. POSTs to "+
 				"`/v1/entities/{id}/fill` with per-field operations. "+
 				"The caller's JWT determines the trigger-mode: "+
-				"Subject == Operator → operator-trigger (fills "+
-				"operator-strategy gaps + ad-hoc writes); anything "+
-				"else → agent-trigger (fills agent-strategy gaps). "+
+				"Subject == Operator OR an `operator_delegated` "+
+				"claim (an agent-on-behalf-of-operator token, per "+
+				"#361) → operator-trigger (fills operator-strategy "+
+				"gaps + ad-hoc writes); a bare agent token → "+
+				"agent-trigger (fills agent-strategy gaps). "+
 				"Per-field value shapes: scalar (number / boolean / "+
 				"string / list) sets the field; explicit `null` "+
 				"clears it; `{defer: true}` marks the field deferred "+
@@ -104,7 +106,8 @@ func registerFillField(s *server.MCPServer, b *bridge) {
 				"overwrite (requires `force=true` query param); "+
 				"ad-hoc property write (operator-trigger only). The "+
 				"trigger-mode follows the caller's JWT — Subject == "+
-				"Operator → operator-trigger. Per-field value "+
+				"Operator or an `operator_delegated` claim (#361) → "+
+				"operator-trigger. Per-field value "+
 				"shapes: scalar sets the field; explicit `null` "+
 				"clears it; `{defer: true}` marks the field "+
 				"deferred; `{defer: false}` un-defers.",

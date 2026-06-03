@@ -229,7 +229,7 @@ fill_field("boardgame:caverna", {
 
 Maps to `POST /v1/entities/{id}/fill` — the unified endpoint per [ADR-0029](../adr/0029-unified-fill-surface.md). Same flow as `fill` with three case-routing branches per submitted field:
 
-- **Open gap** — the strategy gate fires on the request's *trigger-mode* (derived from the caller's JWT claim `Subject == Operator`) crossed against the gap's `fill_strategy`. Operator-trigger requests fill operator-strategy gaps; agent-trigger requests fill agent-strategy gaps. Either-strategy gaps are open to both.
+- **Open gap** — the strategy gate fires on the request's *trigger-mode* crossed against the gap's `fill_strategy`. The trigger-mode is **operator** when the caller's JWT has `Subject == Operator` **or** carries the `operator_delegated` claim (an agent token the operator confirmed via the agent skill UI — minted with `issue-token --on-behalf-of-operator`, per #361); otherwise it is **agent**. Operator-trigger requests fill operator-strategy gaps; agent-trigger requests fill agent-strategy gaps. Either-strategy gaps are open to both.
 - **Overwrite** — a field with an existing value (gap previously closed) rejects with `409 already_filled` unless `?force=true` is set.
 - **Ad-hoc** — a brand-new field (no spec, no value, no current gap) accepts the write only under operator-trigger; agent-trigger ad-hoc writes reject with `400 unknown_field`.
 

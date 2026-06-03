@@ -67,6 +67,7 @@ type IssueTokenCmd struct {
 	Operator string `name:"operator" required:"" help:"the human (resource owner). Stamped on the token's operator claim."`
 	Agent string `name:"agent" help:"the agent identity (the actor calling the API). Stamped on the token's sub claim. Required unless --operator-only is set."`
 	OperatorOnly bool `name:"operator-only" help:"issue an operator-only token (Subject == Operator). Required for CLI dispatch (yaad-index / ADR-0022 §6 — command-shape inputs reject pair-claim tokens). Sets --agent equal to --operator automatically; mutually exclusive with --agent."`
+	OnBehalfOfOperator bool `name:"on-behalf-of-operator" help:"mark this pair-claim token as carrying delegated operator authority (the operator confirmed via the agent skill UI). Classifies as operator-trigger on the unified /v1/fill endpoint (#361 / ADR-0029 §3) without making Subject == Operator. Requires --agent; mutually exclusive with --operator-only."`
 	TTL string `name:"ttl" env:"YAAD_INDEX_DEFAULT_TTL" help:"token lifetime (Go time.ParseDuration: 24h, 30m, 2160h). Defaults via auth.default_ttl config, then 90d."`
 	KeysDir string `name:"keys-dir" env:"YAAD_INDEX_KEYS_DIR" help:"directory holding private.pem (default /etc/yaad-index/keys/)."`
 	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file (read for auth.* defaults if CLI / env not set)."`
@@ -79,6 +80,9 @@ func (c *IssueTokenCmd) Run() error {
 	if c.OperatorOnly {
 		if c.Agent != "" && c.Agent != c.Operator {
 			return errors.New("issue-token: --operator-only is mutually exclusive with --agent (operator-only tokens have Subject == Operator by definition)")
+		}
+		if c.OnBehalfOfOperator {
+			return errors.New("issue-token: --on-behalf-of-operator is mutually exclusive with --operator-only (an operator-only token already carries operator authority; delegation is for agent-tier pair-claims)")
 		}
 		c.Agent = c.Operator
 	}
@@ -104,6 +108,7 @@ func (c *IssueTokenCmd) Run() error {
 		Operator: c.Operator,
 		IssuedAt: now,
 		ExpiresAt: now.Add(ttl),
+		OperatorDelegated: c.OnBehalfOfOperator,
 	}
 	token, err := signer.Sign(claim)
 	if err != nil {
@@ -115,8 +120,8 @@ func (c *IssueTokenCmd) Run() error {
 	// safe to display alongside.
 	_, _ = fmt.Fprintln(os.Stdout, token)
 	_, _ = fmt.Fprintf(os.Stderr,
-		"issued token for operator=%s agent=%s ttl=%s exp=%s\n",
-		c.Operator, c.Agent, ttl, claim.ExpiresAt.Format(time.RFC3339))
+		"issued token for operator=%s agent=%s on_behalf_of_operator=%t ttl=%s exp=%s\n",
+		c.Operator, c.Agent, c.OnBehalfOfOperator, ttl, claim.ExpiresAt.Format(time.RFC3339))
 	return nil
 }
 
