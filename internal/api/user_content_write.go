@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -75,7 +76,21 @@ type userContentCreateRequest struct {
 	Body string `json:"body"`
 	Tags []string `json:"tags"`
 	Data map[string]json.RawMessage `json:"data,omitempty"`
+	// Subfolder (#415) is an optional operator-chosen organization
+	// folder. When set, the vault file lands at
+	// `user-content/<subfolder>/<slug>.md` instead of the flat
+	// `user-content/<slug>.md`. The entity id stays flat
+	// (`user-content:<slug>`) — the subfolder is on-disk organization
+	// only, transparent to every id-taking surface. A single path
+	// segment of `[a-z0-9-]`; nested folders are out of v1 scope.
+	Subfolder string `json:"subfolder,omitempty"`
 }
+
+// userContentSubfolderPattern is the #415 subfolder shape: a single
+// path segment of lowercase alphanumerics joined by single hyphens —
+// the same slug shape SlugFromTitle produces. It forbids `/`, `.`, and
+// `..`, so a subfolder can never escape the `user-content/` directory.
+var userContentSubfolderPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // userContentSectionReplaceRequest is the PUT
 // /v1/user-content/{id}/sections/{sec} body. `body` is taken
@@ -162,6 +177,15 @@ func handleUserContentCreate(
 				"tags is required and must be a non-empty list (per ADR-0012)")
 			return
 		}
+		// #415: optional organization subfolder. A single path segment
+		// of lowercase alphanumerics + hyphens — the pattern forbids
+		// `/`, `.`, and `..`, so the file can't escape the kind dir.
+		subfolder := strings.TrimSpace(req.Subfolder)
+		if subfolder != "" && !userContentSubfolderPattern.MatchString(subfolder) {
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				"subfolder must be a single path segment of lowercase alphanumerics and hyphens (e.g. notes, drafts, projects)")
+			return
+		}
 		slug, err := vault.SlugFromTitle(title)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_argument",
@@ -214,6 +238,39 @@ func handleUserContentCreate(
 			logger.ErrorContext(r.Context(), "store.GetEntity probe from user-content create", "err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",
 				"failed to probe for existing entity")
+			return
+		}
+
+		// #415: also reject if a vault file with this slug already exists
+		// on disk, even with no DB row yet (a hand-authored file before
+		// reindex). The id is flat + globally unique within the kind, so a
+		// same-slug file anywhere — flat, ct, archive, or a subfolder —
+		// would collide on the id.
+		//
+		// Two probes: ReadByID covers the flat / ct / archive paths, and
+		// UserContentSlugInSubfolder covers ANY subfolder match. The
+		// subfolder check can't ride on ReadByID because ReadByID treats
+		// two-or-more same-slug subfolder files as "no unique match" and
+		// returns not-found — which would let create write a third flat
+		// file and break the promised uniqueness.
+		if _, rerr := vaultReader.ReadByID(userContentKind, id); rerr == nil {
+			writeError(w, http.StatusConflict, "conflict",
+				fmt.Sprintf("a user-content file with slug %q already exists in the vault; pick a different title", slug))
+			return
+		} else if !vault.IsNotExist(rerr) {
+			logger.ErrorContext(r.Context(), "vault probe from user-content create", "err", rerr, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to probe the vault for an existing file")
+			return
+		}
+		if inSub, serr := vaultReader.UserContentSlugInSubfolder(slug); serr != nil {
+			logger.ErrorContext(r.Context(), "vault subfolder probe from user-content create", "err", serr, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to probe the vault for an existing file")
+			return
+		} else if inSub {
+			writeError(w, http.StatusConflict, "conflict",
+				fmt.Sprintf("a user-content file with slug %q already exists in the vault; pick a different title", slug))
 			return
 		}
 
@@ -293,9 +350,19 @@ func handleUserContentCreate(
 
 		commitMsg := userContentCreateCommitMessage(id, author)
 		commitAuthor := agentAuthorRef(author)
-		if err := vaultWriter.WriteWithCommit(r.Context(), ve, commitMsg, commitAuthor); err != nil {
-			logger.ErrorContext(r.Context(), "vault.Writer.WriteWithCommit from user-content create",
-				"err", err, "id", id)
+		// #415: write under the chosen subfolder when set, else the flat
+		// path. Subsequent edits preserve the location (the writer writes
+		// back to wherever the file already lives), so the edit/delete
+		// handlers stay subfolder-unaware.
+		var writeErr error
+		if subfolder != "" {
+			writeErr = vaultWriter.WriteWithCommitInSubfolder(r.Context(), ve, subfolder, commitMsg, commitAuthor)
+		} else {
+			writeErr = vaultWriter.WriteWithCommit(r.Context(), ve, commitMsg, commitAuthor)
+		}
+		if writeErr != nil {
+			logger.ErrorContext(r.Context(), "vault.Writer write from user-content create",
+				"err", writeErr, "id", id, "subfolder", subfolder)
 			writeError(w, http.StatusInternalServerError, "internal_error",
 				"failed to write vault file")
 			return

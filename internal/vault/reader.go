@@ -63,6 +63,13 @@ func NewReader(vaultRoot string) (*Reader, error) {
 //
 // Returns os.ErrNotExist via the wrapped error when none of the
 // three paths exists.
+// kindUserContent is the only kind that uses the #415 subfolder layout.
+// The subfolder fallback + writer/archive location-preservation are
+// scoped to it so generic entity reads for other kinds (boardgame,
+// gmail, …) keep resolving exactly the flat / ct / archive paths and
+// never glob one-level-nested markdown.
+const kindUserContent = "user-content"
+
 func (r *Reader) ReadByID(kind, id string) (*Entity, error) {
 	path, err := r.pathFor(kind, id)
 	if err != nil {
@@ -84,6 +91,22 @@ func (r *Reader) ReadByID(kind, id string) (*Entity, error) {
 	} else if !IsNotExist(err) {
 		return nil, err
 	}
+	// #415 subfolder layout — user-content only — at
+	// `<root>/user-content/<subfolder>/<slug>.md`. The id stays flat, so
+	// the subfolder is discovered by globbing the slug one level deep. A
+	// unique match resolves; create-time collision-checking keeps the
+	// slug unique within the kind, so the glob never returns >1 for a
+	// real entity. Scoped to user-content so other kinds never widen to
+	// nested markdown.
+	if kind == kindUserContent {
+		if subPath, ok := r.subfolderPathFor(kind, id); ok {
+			if e, err := r.ReadFile(subPath); err == nil {
+				return e, nil
+			} else if !IsNotExist(err) {
+				return nil, err
+			}
+		}
+	}
 	// Archive layout per ADR-0018 — same slug, same kind, but
 	// rooted under `_archive/`.
 	archivePath, err := r.archivePathFor(kind, id)
@@ -91,6 +114,37 @@ func (r *Reader) ReadByID(kind, id string) (*Entity, error) {
 		return nil, err
 	}
 	return r.ReadFile(archivePath)
+}
+
+// subfolderPathFor resolves the on-disk path of a user-content file
+// organized one level deep under `<root>/<kind>/<subfolder>/<slug>.md`
+// (#415). Returns ("", false) when there is no unique single-level
+// match — the id stays flat, so the slug is the only handle.
+func (r *Reader) subfolderPathFor(kind, id string) (string, bool) {
+	slug, err := slugFromID(id)
+	if err != nil {
+		return "", false
+	}
+	matches, err := filepath.Glob(filepath.Join(r.root, KindDir(kind), "*", slug+".md"))
+	if err != nil || len(matches) != 1 {
+		return "", false
+	}
+	return matches[0], true
+}
+
+// UserContentSlugInSubfolder reports whether ANY user-content file with
+// the given slug exists one level deep in a subfolder
+// (`<root>/user-content/*/<slug>.md`), regardless of how many. The
+// create-collision probe uses this instead of ReadByID because ReadByID
+// treats two-or-more same-slug subfolder files as "no unique match" and
+// returns not-found — which would let create write a third flat file and
+// break the flat id's global uniqueness within the kind (#415).
+func (r *Reader) UserContentSlugInSubfolder(slug string) (bool, error) {
+	matches, err := filepath.Glob(filepath.Join(r.root, KindDir(kindUserContent), "*", slug+".md"))
+	if err != nil {
+		return false, err
+	}
+	return len(matches) > 0, nil
 }
 
 // ReadFile loads the entity at the given file path. Path is taken as-is
