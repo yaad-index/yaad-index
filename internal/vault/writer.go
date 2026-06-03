@@ -190,6 +190,58 @@ func (w *Writer) WriteCanonicalLabelWithCommit(ctx context.Context, e *Entity, m
 	return nil
 }
 
+// WriteRawWithCommit writes verbatim bytes to `<root>/<relPath>`
+// atomically (temp + rename in the destination dir), then best-effort
+// commits — the same atomic + commit semantics as WriteWithCommit, but
+// bypassing the Entity Marshal round-trip. For callers (#343: the notes
+// endpoint's task path) that own a body whose section structure the
+// Entity model would not preserve. relPath must be vault-root-relative;
+// the parent dir is created if missing. An empty message skips the
+// commit (consistent with the other Write* methods).
+func (w *Writer) WriteRawWithCommit(ctx context.Context, relPath string, body []byte, message, author string) error {
+	if strings.TrimSpace(relPath) == "" {
+		return fmt.Errorf("%w: relPath", ErrMissingRequiredField)
+	}
+	dst := filepath.Join(w.root, relPath)
+	dir := filepath.Dir(dst)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create dir: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, ".raw.md.tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	if _, err := tmp.Write(body); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, dst); err != nil {
+		cleanup()
+		return fmt.Errorf("rename to destination: %w", err)
+	}
+	if w.committer == nil || message == "" {
+		return nil
+	}
+	if err := w.committer.OnWrite(ctx, relPath, message, author); err != nil {
+		w.logger.Warn("auto-commit OnWrite failed",
+			"rel_path", relPath,
+			"err", err)
+	}
+	return nil
+}
+
 func (w *Writer) writeAtomic(e *Entity) (string, error) {
 	dir, slug, err := w.pathFor(e)
 	if err != nil {

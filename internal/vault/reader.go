@@ -164,6 +164,31 @@ func (r *Reader) ReadFile(path string) (*Entity, error) {
 	return e, nil
 }
 
+// ReadRawByID returns the verbatim on-disk bytes of the flat
+// `<root>/<kind>/<slug>.md` file plus its vault-root-relative path,
+// without the Entity Marshal/Unmarshal round-trip. Used by callers
+// (#343: the notes endpoint's task path) that own a body whose internal
+// section structure the Entity model would not preserve — e.g. a task's
+// 5-section schema, whose `## Notes` / `## Edges` headers Unmarshal would
+// mis-parse into the legacy note/edge model. The returned relPath is
+// what WriteRawWithCommit expects. Returns a wrapped os.ErrNotExist when
+// the file is absent (detectable via IsNotExist).
+func (r *Reader) ReadRawByID(kind, id string) (body []byte, relPath string, err error) {
+	path, err := r.pathFor(kind, id)
+	if err != nil {
+		return nil, "", err
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("read %q: %w", path, err)
+	}
+	rel, relErr := filepath.Rel(r.root, path)
+	if relErr != nil {
+		rel = path
+	}
+	return b, rel, nil
+}
+
 func (r *Reader) pathFor(kind, id string) (string, error) {
 	if kind == "" {
 		return "", fmt.Errorf("%w: kind", ErrMissingRequiredField)

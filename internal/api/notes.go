@@ -14,6 +14,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/config"
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
+	"github.com/yaad-index/yaad-index/internal/workflow/actions"
 )
 
 // commentsRequest is the POST /v1/entities/{id}/notes body. The
@@ -232,6 +233,71 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 			return
 		}
 
+		// #343: task-kind targets route the note into the task body's
+		// 5-section `notes` section via the AddNote bounded primitive,
+		// operating on the RAW body. The standard Entity round-trip
+		// (ReadByID -> append ve.Notes -> WriteWithCommit) would mis-parse
+		// the task's `## Notes` / `## Edges` section headers into the
+		// legacy note/edge model and re-render them, destroying the
+		// 5-section schema — so tasks bypass the Entity model entirely.
+		// Non-task kinds fall through to the legacy `## Notes` table below.
+		if got.Kind == canonical.TaskKind {
+			rawBody, relPath, rerr := vaultReader.ReadRawByID(got.Kind, id)
+			if rerr != nil {
+				if vault.IsNotExist(rerr) {
+					writeError(w, http.StatusNotFound, "not_found",
+						fmt.Sprintf("no vault file for task %s", id))
+					return
+				}
+				logger.ErrorContext(r.Context(), "vault.Reader.ReadRawByID from notes (task)", "err", rerr, "id", id)
+				writeError(w, http.StatusInternalServerError, "internal_error",
+					"failed to read task file")
+				return
+			}
+			now := clock.Now().Truncate(time.Second)
+			newBody, aerr := actions.AddNote(string(rawBody), taskNoteLine(now, author, text))
+			if aerr != nil {
+				logger.ErrorContext(r.Context(), "actions.AddNote from notes (task)", "err", aerr, "id", id)
+				writeError(w, http.StatusInternalServerError, "internal_error",
+					"failed to add note to task body")
+				return
+			}
+			if werr := vaultWriter.WriteRawWithCommit(r.Context(), relPath, []byte(newBody),
+				noteCommitMessage(id, author), agentAuthorRef(author)); werr != nil {
+				logger.ErrorContext(r.Context(), "vault.Writer.WriteRawWithCommit from notes (task)", "err", werr, "id", id)
+				writeError(w, http.StatusInternalServerError, "internal_error",
+					"failed to write task file")
+				return
+			}
+			fresh, ferr := st.GetEntity(r.Context(), id)
+			if ferr != nil {
+				logger.ErrorContext(r.Context(), "store.GetEntity post-task-note reread", "err", ferr, "id", id)
+				writeError(w, http.StatusInternalServerError, "internal_error",
+					"failed to reload entity")
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			if err := json.NewEncoder(w).Encode(commentsResponse{
+				OK: true,
+				// Task notes live as a single line in the 5-section body,
+				// not as a structured note row — so the response omits the
+				// per-note ID (no ADR-0015 note identity in this model).
+				Note: noteEntry{
+					Date: now.Format(time.RFC3339),
+					Text: text,
+					Author: author,
+					Operator: operator,
+					Field: field,
+					Kind: kind,
+				},
+				Entity: toAPIEntity(fresh),
+			}); err != nil {
+				logger.ErrorContext(r.Context(), "encode /v1/entities/{id}/notes response (task)", "err", err)
+			}
+			return
+		}
+
 		ve, err := vaultReader.ReadByID(got.Kind, id)
 		if err != nil {
 			if !vault.IsNotExist(err) {
@@ -358,5 +424,25 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 			logger.ErrorContext(r.Context(), "encode /v1/entities/{id}/notes response", "err", err)
 		}
 	}
+}
+
+// taskNoteLine renders a single notes-section line for a task note
+// (#343), mirroring err_task's formatFailureLine shape so the 5-section
+// notes world stays consistent: `- <RFC3339> (<author>): <text>`. The
+// author parenthetical is dropped when empty (anonymous dev-mode), and
+// internal newlines collapse to spaces to keep the entry single-line per
+// the notes section's dedup contract.
+func taskNoteLine(when time.Time, author, text string) string {
+	var b strings.Builder
+	b.WriteString("- ")
+	b.WriteString(when.UTC().Format(time.RFC3339))
+	if author != "" {
+		b.WriteString(" (")
+		b.WriteString(author)
+		b.WriteString(")")
+	}
+	b.WriteString(": ")
+	b.WriteString(strings.ReplaceAll(strings.ReplaceAll(text, "\n", " "), "\r", " "))
+	return b.String()
 }
 
