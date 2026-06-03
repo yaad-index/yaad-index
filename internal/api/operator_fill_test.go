@@ -706,11 +706,13 @@ func TestOperatorFill_NonCanonicalKind_WithGapState_Accepted(t *testing.T) {
 		map[string]any{"summary": "operator-set summary text"}, nil)
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 
-	// Vault round-trip: summary lands in data + gap_state stamps
+	// Vault round-trip: summary lands at frontmatter top-level (#359 —
+	// a reserved field, not a data: entry) + gap_state stamps
 	// source=operator + filled_at.
 	got, err := r.ReadByID("gmail", id)
 	require.NoError(t, err)
-	assert.Equal(t, "operator-set summary text", got.Data["summary"])
+	assert.Equal(t, "operator-set summary text", got.Summary)
+	assert.NotContains(t, got.Data, "summary", "summary is top-level frontmatter, not data:")
 	require.Contains(t, got.GapState, "summary")
 	assert.Equal(t, "operator", got.GapState["summary"].Source)
 	require.NotNil(t, got.GapState["summary"].FilledAt)
