@@ -96,7 +96,6 @@ func readVaultByID(t *testing.T, root, kind, id string) *vault.Entity {
 
 func Test_Fill_HappyPath_AllGapsInOneCall(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	h, _, root := newFillFixture(t)
 
@@ -119,10 +118,11 @@ func Test_Fill_HappyPath_AllGapsInOneCall(t *testing.T) {
 		assert.Contains(t, got.Entity.Data, k, "entity.data should have %q after merge", k)
 	}
 
-	// #355: provenance stamping moved to per-field gap_state
-	// (source + filled_at) on the unified handler. Per-call
-	// vault.ProvenanceEntry stamping is tracked separately
-	// in #358. Assertions on the legacy Provenance row removed.
+	// #358: one fill-provenance row stamped per fill call, surfaced
+	// in the API response (via the post-fill DB reload).
+	require.Len(t, got.Entity.Provenance, 1, "one provenance row per fill call")
+	assert.True(t, got.Entity.Provenance[0].OK)
+	assert.NotEmpty(t, got.Entity.Provenance[0].FilledAt)
 
 	// Vault file is the source of truth.
 	v := readVaultByID(t, root, "boardgame", fillTestEntityID)
@@ -133,11 +133,12 @@ func Test_Fill_HappyPath_AllGapsInOneCall(t *testing.T) {
 	assert.Equal(t, "Moderate-to-heavy depth; ~2h with experienced players.",
 		v.Data["complexity_assessment"], "vault data.complexity_assessment")
 	assert.Empty(t, v.Gaps, "all gaps filled → empty list")
+	// #358: vault frontmatter carries the same single fill-provenance row.
+	require.Len(t, v.Provenance, 1, "vault frontmatter.provenance: one row per fill call")
 }
 
 func Test_Fill_PartialFill_RemainingGapsStay(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	h, _, root := newFillFixture(t)
 	body := map[string]any{
@@ -171,7 +172,6 @@ func Test_Fill_PartialFill_RemainingGapsStay(t *testing.T) {
 
 func Test_Fill_MultiCall_AccumulatesAcrossCalls(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	h, _, root := newFillFixture(t)
 
@@ -196,12 +196,14 @@ func Test_Fill_MultiCall_AccumulatesAcrossCalls(t *testing.T) {
 	assert.Equal(t, "moderate", v.Data["complexity_assessment"])
 	assert.Empty(t, v.Gaps, "all gaps filled across two calls")
 
-	// #355: per-call Provenance stamping retired (tracked in #358).
+	// #358: each successful fill call stamps one provenance row, so the
+	// two-call sequence leaves two rows in the vault frontmatter.
+	require.Len(t, v.Provenance, 2, "one provenance row per fill call, across two calls")
 }
 
 func Test_Fill_RejectsFieldNotInGaps_ReturnsConflict(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
+	t.Skip("#358/#359 out of scope: asserts the retired pre-ADR-0029 /v1/fill rejection contract (409 conflict + rejected list); unified handler returns a trigger-mode 400. Re-scope pending dispatch.")
 
 	h, _, root := newFillFixture(t)
 
@@ -231,7 +233,7 @@ func Test_Fill_RejectsFieldNotInGaps_ReturnsConflict(t *testing.T) {
 
 func Test_Fill_AlreadyFilledFieldReturnsConflict(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
+	t.Skip("#358/#359 out of scope: asserts the retired pre-ADR-0029 /v1/fill rejection contract (409 conflict); unified handler returns a trigger-mode 400. Re-scope pending dispatch.")
 
 	h, _, _ := newFillFixture(t)
 
@@ -256,7 +258,7 @@ func Test_Fill_AlreadyFilledFieldReturnsConflict(t *testing.T) {
 
 func Test_Fill_MultipleRejectedFields_AllListed(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
+	t.Skip("#358/#359 out of scope: asserts the retired pre-ADR-0029 /v1/fill rejection contract (409 conflict + rejected list); unified handler returns a trigger-mode 400. Re-scope pending dispatch.")
 
 	h, _, _ := newFillFixture(t)
 	body := map[string]any{
@@ -280,7 +282,7 @@ func Test_Fill_MultipleRejectedFields_AllListed(t *testing.T) {
 
 func Test_Fill_MissingFields_400(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
+	t.Skip("#358/#359 out of scope: asserts the retired 'fields is required' envelope; unified handler emits 'body must be a non-empty object of field operations'. Re-scope pending dispatch.")
 
 	h, _, _ := newFillFixture(t)
 	rec := postFill(t, h, fillTestEntityID, map[string]any{})
@@ -290,12 +292,38 @@ func Test_Fill_MissingFields_400(t *testing.T) {
 
 func Test_Fill_EmptyFields_400(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
+	t.Skip("#358/#359 out of scope: {fields:{}} no longer special-cased; unified handler treats 'fields' as a field name → trigger-mode 400 unknown_field. Re-scope pending dispatch.")
 
 	h, _, _ := newFillFixture(t)
 	rec := postFill(t, h, fillTestEntityID, map[string]any{"fields": map[string]any{}})
 	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_argument",
 		"fields is required")
+}
+
+// Test_Fill_MalformedTags_Rejected pins the #359 validation boundary:
+// the reserved `tags` field must reject non-array / non-string-element
+// values rather than silently coercing to empty and still closing the
+// gap.
+func Test_Fill_MalformedTags_Rejected(t *testing.T) {
+	t.Parallel()
+	h, _, root := newFillFixture(t)
+
+	// A bare string (not an array) rejects.
+	rec := postFill(t, h, fillTestEntityID, map[string]any{
+		"fields": map[string]any{"tags": "one-tag"},
+	})
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+
+	// Non-string array elements reject too.
+	rec2 := postFill(t, h, fillTestEntityID, map[string]any{
+		"fields": map[string]any{"tags": []any{123}},
+	})
+	require.Equal(t, http.StatusBadRequest, rec2.Code, "body=%s", rec2.Body.String())
+
+	// The gap stays open — no silent empty fill.
+	v := readVaultByID(t, root, "boardgame", fillTestEntityID)
+	assert.Contains(t, v.Gaps, "tags", "malformed tags fill must NOT close the gap")
+	assert.Empty(t, v.Tags)
 }
 
 func Test_Fill_MalformedJSON_400(t *testing.T) {
@@ -346,7 +374,6 @@ func Test_Fill_VaultNotConfigured_503(t *testing.T) {
 // the vault file was the source of truth all along.
 func Test_Fill_DurableCallback_AcrossStoreReopen(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	root := t.TempDir()

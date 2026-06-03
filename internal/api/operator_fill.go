@@ -21,6 +21,12 @@ import (
 	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
+// stubFillProvenanceSource is the fill-provenance Source for a fill
+// with no caller claim (auth-disabled dev-mode path) — matches the
+// `agent:stub` convention used elsewhere (#358). An authenticated fill
+// stamps the real claim subject (e.g. `agent:bob`) instead.
+const stubFillProvenanceSource = "agent:stub"
+
 // operatorFillResponse is the 200 envelope on a successful
 // operator-fill. Mirrors fillResponse shape so callers can branch
 // uniformly on `ok` across the two fill paths.
@@ -287,7 +293,8 @@ func handleEntityOperatorFill(
 		// ve.Gaps (a prior PR cold-reviewer carry-over: clearing a previously-set
 		// field shouldn't permanently remove it from the open-gap
 		// list — the operator should be able to re-fill it).
-		applied := applyOperatorFillOps(ve, ops, clock.Now(), effectiveGaps)
+		fillNow := clock.Now()
+		applied := applyOperatorFillOps(ve, ops, fillNow, effectiveGaps)
 
 		commitMsg := operatorFillCommitMessage(ve.ID, applied, claim.Subject)
 		if allowUnresolved {
@@ -297,6 +304,25 @@ func handleEntityOperatorFill(
 			commitMsg += " (allow_unresolved)"
 		}
 		commitAuthor := agentAuthorRef(claim.Subject)
+		// #358: stamp one fill-provenance entry per call that performs
+		// an actual fill (≥1 set op). A FilledAt provenance row on a
+		// pure clear/defer call would misrepresent the audit trail, so
+		// gate on a set op. Source is the calling agent (claim subject);
+		// the dev-mode no-claim path falls back to the documented
+		// agent:stub placeholder. Mirrored to the DB after UpsertEntity
+		// (below) so the reloaded response + GET surface it.
+		var fillEntry *vault.ProvenanceEntry
+		for _, op := range ops {
+			if op.Kind == opSet {
+				src := commitAuthor
+				if src == "" {
+					src = stubFillProvenanceSource
+				}
+				fillEntry = &vault.ProvenanceEntry{Source: src, FilledAt: &fillNow, OK: true}
+				ve.Provenance = append(ve.Provenance, *fillEntry)
+				break
+			}
+		}
 		// ADR-0021 amendment ( phase D): canonical-label
 		// auto-materialize lands the vault file at
 		// `<vault_root>/ct/<kind>/<slug>.md` rather than the
@@ -333,6 +359,24 @@ func handleEntityOperatorFill(
 			writeError(w, http.StatusInternalServerError, "internal_error",
 				"failed to mirror operator-fill to DB")
 			return
+		}
+
+		// #358: mirror the fill-provenance row to the DB so the reloaded
+		// entity (toAPIEntity(fresh) below) and GET /v1/entities/{id}
+		// surface it. AppendProvenance runs after UpsertEntity so the
+		// row is guaranteed present.
+		if fillEntry != nil {
+			if err := st.AppendProvenance(r.Context(), ve.ID, []store.ProvenanceEntry{{
+				Source: fillEntry.Source,
+				FilledAt: fillEntry.FilledAt,
+				OK: fillEntry.OK,
+			}}); err != nil {
+				logger.ErrorContext(r.Context(), "store.AppendProvenance from operator-fill",
+					"err", err, "id", id)
+				writeError(w, http.StatusInternalServerError, "internal_error",
+					"failed to mirror fill provenance to DB")
+				return
+			}
 		}
 
 		// Canonical_type edge create/replace per yaad-index.
@@ -667,6 +711,33 @@ func parseAndValidateScalar(field string, raw json.RawMessage, spec config.GapSp
 			message: fmt.Sprintf("field %q: expected %s, got %T %v", field, expect, got, got),
 		}
 	}
+	// #359: `summary` and `tags` are reserved frontmatter fields with
+	// implicit canonical types (string / []string) regardless of whether
+	// a GapSpec declares them. Validate strictly here so a malformed
+	// value (`tags: "x"`, `tags: [123]`, `summary: 123`) rejects with 400
+	// instead of silently coercing to an empty value that still closes
+	// the gap.
+	switch field {
+	case "summary":
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, mismatch("string", string(raw))
+		}
+		if spec.MaxLength > 0 && len(s) > spec.MaxLength {
+			return nil, &opError{
+				status: http.StatusBadRequest,
+				code: "max_length_exceeded",
+				message: fmt.Sprintf("field %q: length %d > max_length %d", field, len(s), spec.MaxLength),
+			}
+		}
+		return s, nil
+	case "tags":
+		var arr []string
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			return nil, mismatch("array of strings", string(raw))
+		}
+		return arr, nil
+	}
 	switch spec.Type {
 	case "int":
 		// Reject strings up front: json.Number's UnmarshalJSON
@@ -783,10 +854,22 @@ func applyOperatorFillOps(ve *vault.Entity, ops []operatorFillOp, now time.Time,
 			// recording on the target canonical entity per
 			// yaad-index #119. Scalar ops keep their natural
 			// Go shape.
-			if ids := canonicalLabelEntryIDs(op.Value); ids != nil {
-				ve.Data[op.Field] = ids
-			} else {
-				ve.Data[op.Field] = op.Value
+			// #359: `summary` and `tags` are reserved vault frontmatter
+			// fields that live at the top level of the entity, not in
+			// `data:`. Route them to the struct fields so the markdown
+			// renders them as native frontmatter; vaultEntityDataForDB
+			// projects them back into the API entity.data shape on read.
+			switch op.Field {
+			case "summary":
+				ve.Summary, _ = op.Value.(string)
+			case "tags":
+				ve.Tags = tagsValueToStrings(op.Value)
+			default:
+				if ids := canonicalLabelEntryIDs(op.Value); ids != nil {
+					ve.Data[op.Field] = ids
+				} else {
+					ve.Data[op.Field] = op.Value
+				}
 			}
 			ve.GapState[op.Field] = vault.GapStateEntry{
 				Source: "operator",
@@ -798,7 +881,16 @@ func applyOperatorFillOps(ve *vault.Entity, ops []operatorFillOp, now time.Time,
 				delete(gapPresent, op.Field)
 			}
 		case opClear:
-			delete(ve.Data, op.Field)
+			// #359: clearing a reserved top-level field zeroes the
+			// struct field, not a `data:` entry.
+			switch op.Field {
+			case "summary":
+				ve.Summary = ""
+			case "tags":
+				ve.Tags = nil
+			default:
+				delete(ve.Data, op.Field)
+			}
 			delete(ve.GapState, op.Field)
 			// Re-insert into ve.Gaps if the field is a known gap in
 			// the resolved kind config and isn't already present.
@@ -854,6 +946,27 @@ func removeStringFromSlice(in []string, s string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+// tagsValueToStrings coerces a fill value for the reserved `tags` field
+// (#359) into the []string shape vault frontmatter expects. JSON arrays
+// decode to []any on the no-spec default path, so unwrap element-wise; a
+// bare []string passes through; anything else yields nil.
+func tagsValueToStrings(v any) []string {
+	switch t := v.(type) {
+	case []string:
+		return t
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // vaultGapStateToStore converts the vault-side gap_state map to
