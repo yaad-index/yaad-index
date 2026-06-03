@@ -30,18 +30,6 @@ type fillResponse struct {
 	Gaps   []string `json:"gaps"`
 }
 
-// fillConflictResponse is the legacy 409 envelope for fields rejected
-// as already-filled. Retained for tests that decode the old shape;
-// the unified handler emits ADR-0029's already_filled (overwrite) /
-// unknown_field (ad-hoc) / agent_only_field (strategy) shapes via
-// writeError instead.
-type fillConflictResponse struct {
-	OK       bool     `json:"ok"`
-	Error    string   `json:"error"`
-	Message  string   `json:"message"`
-	Rejected []string `json:"rejected"`
-}
-
 // vaultEntityDataForDB projects a vault entity into the data map the
 // store sees. Top-level vault fields that the DB tracks (summary,
 // tags, notes) are folded into data so that GET /v1/entities/{id}

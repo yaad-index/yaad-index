@@ -201,103 +201,20 @@ func Test_Fill_MultiCall_AccumulatesAcrossCalls(t *testing.T) {
 	require.Len(t, v.Provenance, 2, "one provenance row per fill call, across two calls")
 }
 
-func Test_Fill_RejectsFieldNotInGaps_ReturnsConflict(t *testing.T) {
-	t.Parallel()
-	t.Skip("#358/#359 out of scope: asserts the retired pre-ADR-0029 /v1/fill rejection contract (409 conflict + rejected list); unified handler returns a trigger-mode 400. Re-scope pending dispatch.")
-
-	h, _, root := newFillFixture(t)
-
-	body := map[string]any{
-		"fields": map[string]any{
-			"summary": "valid",
-			"nonsense": "this gap was never declared",
-		},
-	}
-	rec := postFill(t, h, fillTestEntityID, body)
-	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
-
-	var got fillConflictResponse
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
-	assert.False(t, got.OK)
-	assert.Equal(t, "conflict", got.Error)
-	assert.Equal(t, []string{"nonsense"}, got.Rejected,
-		"rejected list names the offending field")
-
-	// Per-call atomic: the valid summary is NOT persisted because
-	// one rejection fails the whole call.
-	v := readVaultByID(t, root, "boardgame", fillTestEntityID)
-	assert.Empty(t, v.Summary, "valid field NOT persisted on partial-rejection")
-	assert.ElementsMatch(t, fillTestGaps, v.Gaps, "gaps unchanged after rejected fill")
-	assert.Empty(t, v.Provenance, "no provenance row on rejected fill")
-}
-
-func Test_Fill_AlreadyFilledFieldReturnsConflict(t *testing.T) {
-	t.Parallel()
-	t.Skip("#358/#359 out of scope: asserts the retired pre-ADR-0029 /v1/fill rejection contract (409 conflict); unified handler returns a trigger-mode 400. Re-scope pending dispatch.")
-
-	h, _, _ := newFillFixture(t)
-
-	// First call fills summary cleanly.
-	require.Equal(t, http.StatusOK,
-		postFill(t, h, fillTestEntityID, map[string]any{
-			"fields": map[string]any{"summary": "first"},
-		}).Code)
-
-	// Second call tries to overwrite summary — no longer in the gap
-	// set after the first call, so it surfaces as 409 with summary
-	// in `rejected`.
-	rec := postFill(t, h, fillTestEntityID, map[string]any{
-		"fields": map[string]any{"summary": "second"},
-	})
-	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
-
-	var got fillConflictResponse
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
-	assert.Equal(t, []string{"summary"}, got.Rejected)
-}
-
-func Test_Fill_MultipleRejectedFields_AllListed(t *testing.T) {
-	t.Parallel()
-	t.Skip("#358/#359 out of scope: asserts the retired pre-ADR-0029 /v1/fill rejection contract (409 conflict + rejected list); unified handler returns a trigger-mode 400. Re-scope pending dispatch.")
-
-	h, _, _ := newFillFixture(t)
-	body := map[string]any{
-		"fields": map[string]any{
-			"alpha": "not a gap",
-			"beta": "also not a gap",
-			"gamma": "also not a gap",
-			"summary": "this one IS a gap but the call still fails per atomic semantic",
-		},
-	}
-	rec := postFill(t, h, fillTestEntityID, body)
-	require.Equal(t, http.StatusConflict, rec.Code)
-
-	var got fillConflictResponse
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
-	assert.ElementsMatch(t, []string{"alpha", "beta", "gamma"}, got.Rejected,
-		"all rejected fields surface; sorted output is order-stable")
-	// summary (the one valid field) is NOT in rejected.
-	assert.NotContains(t, got.Rejected, "summary")
-}
-
+// Test_Fill_MissingFields_400 is the sole coverage for the unified
+// handler's empty-body branch: an empty object rejects with 400 before
+// any field parsing. The other legacy /v1/fill rejection-shape tests
+// (409 conflict + rejected[] list / "fields is required") were removed
+// in #421 as duplicates of operator_fill_test.go's unified-handler set;
+// this one had no equivalent there, so it was rewritten to the unified
+// message rather than deleted.
 func Test_Fill_MissingFields_400(t *testing.T) {
 	t.Parallel()
-	t.Skip("#358/#359 out of scope: asserts the retired 'fields is required' envelope; unified handler emits 'body must be a non-empty object of field operations'. Re-scope pending dispatch.")
 
 	h, _, _ := newFillFixture(t)
 	rec := postFill(t, h, fillTestEntityID, map[string]any{})
 	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_argument",
-		"fields is required")
-}
-
-func Test_Fill_EmptyFields_400(t *testing.T) {
-	t.Parallel()
-	t.Skip("#358/#359 out of scope: {fields:{}} no longer special-cased; unified handler treats 'fields' as a field name → trigger-mode 400 unknown_field. Re-scope pending dispatch.")
-
-	h, _, _ := newFillFixture(t)
-	rec := postFill(t, h, fillTestEntityID, map[string]any{"fields": map[string]any{}})
-	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_argument",
-		"fields is required")
+		"body must be a non-empty object of field operations")
 }
 
 // Test_Fill_MalformedTags_Rejected pins the #359 validation boundary:
