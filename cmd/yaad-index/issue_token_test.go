@@ -1,10 +1,15 @@
 package main
 
 import (
+	"io"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/yaad-index/yaad-index/internal/auth"
 )
 
 // TestIssueTokenCmd_OperatorOnlyAcceptsBareOperator pins yaad-index
@@ -77,4 +82,58 @@ func TestIssueTokenCmd_OperatorOnlyAllowsAgentEqualOperator(t *testing.T) {
 	conflict := c.OperatorOnly && c.Agent != "" && c.Agent != c.Operator
 	assert.False(t, conflict,
 		"--operator-only with --agent == operator is permitted (redundant but not wrong)")
+}
+
+// TestIssueTokenCmd_OnBehalfOfOperator_SetsDelegatedClaim is the
+// end-to-end #361 mint -> verify path: `issue-token --agent bob
+// --operator alice --on-behalf-of-operator` produces a pair-claim token
+// whose verified claim carries OperatorDelegated == true. Not parallel —
+// it swaps os.Stdout to capture the token the CLI prints.
+func TestIssueTokenCmd_OnBehalfOfOperator_SetsDelegatedClaim(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, auth.GenerateKeypair(dir, false))
+
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+	runErr := (&IssueTokenCmd{
+		Operator: "alice",
+		Agent: "bob",
+		OnBehalfOfOperator: true,
+		KeysDir: dir,
+		TTL: "1h",
+	}).Run()
+	_ = w.Close()
+	os.Stdout = orig
+	require.NoError(t, runErr)
+
+	out, err := io.ReadAll(r)
+	require.NoError(t, err)
+	token := strings.TrimSpace(string(out))
+	require.NotEmpty(t, token)
+
+	verifier, err := auth.LoadVerifier(dir)
+	require.NoError(t, err)
+	claim, err := verifier.Verify(token)
+	require.NoError(t, err)
+	assert.Equal(t, "bob", claim.Subject)
+	assert.Equal(t, "alice", claim.Operator)
+	assert.True(t, claim.OperatorDelegated,
+		"--on-behalf-of-operator stamps OperatorDelegated on the issued token")
+}
+
+// TestIssueTokenCmd_OnBehalfOfOperator_ConflictsWithOperatorOnly pins
+// the mutual exclusion: an operator-only token already carries operator
+// authority, so combining it with the agent-tier delegation flag is
+// rejected before any signing.
+func TestIssueTokenCmd_OnBehalfOfOperator_ConflictsWithOperatorOnly(t *testing.T) {
+	t.Parallel()
+	err := (&IssueTokenCmd{
+		Operator: "alice",
+		OperatorOnly: true,
+		OnBehalfOfOperator: true,
+	}).Run()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "on-behalf-of-operator")
 }

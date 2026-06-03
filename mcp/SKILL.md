@@ -360,7 +360,7 @@ Same error envelopes as `edit_user_content_section`, plus:
 
 ### `set_operator_fill(id, fields)`
 
-Operator-fill endpoint. POSTs to `/v1/entities/{id}/operator-fill` with per-field operations. **Operator-only** — the JWT MUST have `Subject == Operator`; agent-on-behalf tokens reject with 403 `agent_not_allowed`.
+Operator-side fill. Routes per-field operations to the unified endpoint `POST /v1/entities/{id}/fill` (per ADR-0029 — the old `/v1/entities/{id}/operator-fill` URL is `410 gone`; this tool stays as an alias of `fill_field`). **Requires operator-trigger** — the JWT must either have `Subject == Operator` or carry the `operator_delegated` claim (an agent-on-behalf token the operator confirmed via the agent skill UI, minted with `issue-token --on-behalf-of-operator` per #361). A bare agent token (no delegation, `Subject != Operator`) is agent-trigger and rejects operator-strategy fields with `400 operator_only_field`.
 
 Per-field value shapes:
 - **scalar** (number / boolean / string / ...) → set the field, stamp `gap_state.source=operator + filled_at`.

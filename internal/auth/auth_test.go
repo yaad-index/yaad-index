@@ -122,6 +122,39 @@ func TestSignVerify_RoundTrip(t *testing.T) {
 	assert.Equal(t, defaultKeyID, out.KeyID, "default kid stamped when caller leaves it empty")
 }
 
+func TestSignVerify_OperatorDelegated(t *testing.T) {
+	t.Parallel()
+	d := newKeysDir(t)
+	signer, err := LoadSigner(d)
+	require.NoError(t, err)
+	verifier, err := LoadVerifier(d)
+	require.NoError(t, err)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// A delegated pair-claim round-trips with the bit set (#361).
+	delegated, err := signer.Sign(Claim{
+		Subject: "bob", Operator: "alice",
+		IssuedAt: now, ExpiresAt: now.Add(time.Hour),
+		OperatorDelegated: true,
+	})
+	require.NoError(t, err)
+	out, err := verifier.Verify(delegated)
+	require.NoError(t, err)
+	assert.True(t, out.OperatorDelegated, "delegated bit survives sign -> verify")
+
+	// A bare token omits the claim entirely (Sign only emits it when
+	// true), so it verifies back to false — exactly how a pre-#361
+	// issued token, which never carried the claim, parses.
+	bare, err := signer.Sign(Claim{
+		Subject: "bob", Operator: "alice",
+		IssuedAt: now, ExpiresAt: now.Add(time.Hour),
+	})
+	require.NoError(t, err)
+	out2, err := verifier.Verify(bare)
+	require.NoError(t, err)
+	assert.False(t, out2.OperatorDelegated, "omitted operator_delegated claim defaults to false")
+}
+
 func TestSign_RejectsEmptyFields(t *testing.T) {
 	t.Parallel()
 	signer, err := LoadSigner(newKeysDir(t))

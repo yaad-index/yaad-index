@@ -70,6 +70,16 @@ type Claim struct {
 	IssuedAt time.Time // `iat`
 	ExpiresAt time.Time // `exp`
 	KeyID string // `kid` — for rotation
+
+	// OperatorDelegated marks a pair-claim token (Subject != Operator)
+	// as carrying delegated operator authority — the operator confirmed
+	// the action via the agent skill UI, so the agent acts on the
+	// operator's behalf. The unified-fill trigger-mode classifier treats
+	// such a token as operator-trigger (per #361, ADR-0029 §3). Carried
+	// on the `operator_delegated` JWT claim; OMITTED when false, so
+	// already-issued tokens (which lack the claim) parse back as false
+	// and classify exactly as before — additive + back-compatible.
+	OperatorDelegated bool // `operator_delegated`
 }
 
 // IsOperatorOnly reports whether this claim represents an operator
@@ -142,13 +152,20 @@ func (s *rs256Signer) Sign(c Claim) (string, error) {
 	if c.KeyID == "" {
 		c.KeyID = defaultKeyID
 	}
-	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+	mc := jwt.MapClaims{
 		"sub": c.Subject,
 		"operator": c.Operator,
 		"iat": c.IssuedAt.Unix(),
 		"exp": c.ExpiresAt.Unix(),
 		"iss": tokenIssuer,
-	})
+	}
+	// Emit operator_delegated only when set, so bare agent / operator
+	// tokens stay byte-identical to pre-#361 tokens on the wire (a
+	// missing claim reads back as false in claimFromMap).
+	if c.OperatorDelegated {
+		mc["operator_delegated"] = true
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, mc)
 	tok.Header["kid"] = c.KeyID
 	signed, err := tok.SignedString(s.priv)
 	if err != nil {
@@ -210,12 +227,17 @@ func claimFromMap(mc jwt.MapClaims, header map[string]any) (*Claim, error) {
 	if kid == "" {
 		kid = defaultKeyID
 	}
+	// operator_delegated is optional: tokens issued before #361 (and all
+	// bare agent / operator-only tokens) omit it, so a missing or
+	// non-true value reads back as false — classifying exactly as before.
+	delegated, _ := mc["operator_delegated"].(bool)
 	return &Claim{
 		Subject: sub,
 		Operator: op,
 		IssuedAt: iat,
 		ExpiresAt: exp,
 		KeyID: kid,
+		OperatorDelegated: delegated,
 	}, nil
 }
 
