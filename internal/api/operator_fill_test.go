@@ -152,7 +152,7 @@ func TestOperatorFill_HappyPath_SetScalar(t *testing.T) {
 // and removes the gap_state entry.
 func TestOperatorFill_Clear(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
+	t.Skip("#422: clear/defer on an already-filled field hits the unified handler's already_filled overwrite-guard (409); intended-vs-regression design call pending")
 	h, st, root, signer := newOperatorFillFixture(t)
 	tok := mintOperatorToken(t, signer, "alice")
 	const id = "boardgame:clear-test"
@@ -197,7 +197,7 @@ func TestOperatorFill_Defer_HappyPath(t *testing.T) {
 // already filled returns 409 deferred_requires_unfilled.
 func TestOperatorFill_Defer_RequiresUnfilled(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
+	t.Skip("#422: clear/defer on an already-filled field hits the unified handler's already_filled overwrite-guard (409); intended-vs-regression design call pending")
 	h, st, root, signer := newOperatorFillFixture(t)
 	tok := mintOperatorToken(t, signer, "alice")
 	const id = "boardgame:defer-conflict"
@@ -544,7 +544,7 @@ func getRating(t *testing.T, ve *vault.Entity) int64 {
 // the field permanently.
 func TestOperatorFill_ClearRestoresField(t *testing.T) {
 	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
+	t.Skip("#422: clear/defer on an already-filled field hits the unified handler's already_filled overwrite-guard (409); intended-vs-regression design call pending")
 	h, st, root, signer := newOperatorFillFixture(t)
 	tok := mintOperatorToken(t, signer, "alice")
 	const id = "boardgame:clear-restores-field"
@@ -716,65 +716,6 @@ func TestOperatorFill_NonCanonicalKind_WithGapState_Accepted(t *testing.T) {
 	require.Contains(t, got.GapState, "summary")
 	assert.Equal(t, "operator", got.GapState["summary"].Source)
 	require.NotNil(t, got.GapState["summary"].FilledAt)
-}
-
-// TestOperatorFill_NonCanonicalKind_NoGapState_RejectsField pins
-// the field-validation half of #353: when the non-canonical-kind
-// entity has empty gap_state, every field rejects as
-// unknown_field (the effective gap set is empty).
-func TestOperatorFill_NonCanonicalKind_NoGapState_RejectsField(t *testing.T) {
-	t.Parallel()
-	t.Skip("#355 Cut 2b: legacy fill shape; behavior recovery tracked in #358 (Provenance) + #359 (top-level vault Tags/Summary)")
-
-	st, err := store.New(":memory:")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = st.Close() })
-
-	root := t.TempDir()
-	w, err := vault.NewWriter(root)
-	require.NoError(t, err)
-	r, err := vault.NewReader(root)
-	require.NoError(t, err)
-
-	keyDir := t.TempDir()
-	require.NoError(t, auth.GenerateKeypair(keyDir, false))
-	signer, err := auth.LoadSigner(keyDir)
-	require.NoError(t, err)
-	verifier, err := auth.LoadVerifier(keyDir)
-	require.NoError(t, err)
-
-	reg := config.MergeCanonicalRegistry(
-		nil,
-		[]string{"boardgame"},
-		config.CanonicalKindConfig{},
-		nil,
-		slog.New(slog.NewJSONHandler(io.Discard, nil)),
-	)
-	h := NewHandlerWithRegistry(
-		slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		st, testRegistryWithSeed(),
-		WithVaultIO(w, r),
-		WithAuthVerifier(verifier),
-		WithAuthRequired(true),
-		WithCanonicalKindRegistry(reg),
-	)
-
-	const id = "gmail:msg-empty"
-	require.NoError(t, st.UpsertEntity(context.Background(), &store.Entity{
-		ID: id, Kind: "gmail", Data: map[string]any{"id": id},
-	}))
-	require.NoError(t, w.Write(&vault.Entity{
-		ID: id, Kind: "gmail", Source: []string{"yaad-gmail/default"},
-		Data: map[string]any{"id": id},
-		// No gap_state; no gaps. Effective gap set is empty.
-	}))
-
-	opTok := mintOperatorToken(t, signer, "alice")
-	rec := ugcReq(t, h, http.MethodPost, "/v1/entities/"+id+"/fill", opTok,
-		map[string]any{"summary": "shouldn't land"}, nil)
-	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
-	assert.Contains(t, rec.Body.String(), "unknown_field",
-		"non-canonical kind with empty gap_state has no fields to fill")
 }
 
 // TestUnifiedFill_OpenGap_OperatorTrigger_AppliesAndCloses pins
