@@ -711,6 +711,33 @@ func parseAndValidateScalar(field string, raw json.RawMessage, spec config.GapSp
 			message: fmt.Sprintf("field %q: expected %s, got %T %v", field, expect, got, got),
 		}
 	}
+	// #359: `summary` and `tags` are reserved frontmatter fields with
+	// implicit canonical types (string / []string) regardless of whether
+	// a GapSpec declares them. Validate strictly here so a malformed
+	// value (`tags: "x"`, `tags: [123]`, `summary: 123`) rejects with 400
+	// instead of silently coercing to an empty value that still closes
+	// the gap.
+	switch field {
+	case "summary":
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, mismatch("string", string(raw))
+		}
+		if spec.MaxLength > 0 && len(s) > spec.MaxLength {
+			return nil, &opError{
+				status: http.StatusBadRequest,
+				code: "max_length_exceeded",
+				message: fmt.Sprintf("field %q: length %d > max_length %d", field, len(s), spec.MaxLength),
+			}
+		}
+		return s, nil
+	case "tags":
+		var arr []string
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			return nil, mismatch("array of strings", string(raw))
+		}
+		return arr, nil
+	}
 	switch spec.Type {
 	case "int":
 		// Reject strings up front: json.Number's UnmarshalJSON

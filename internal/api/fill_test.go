@@ -300,6 +300,32 @@ func Test_Fill_EmptyFields_400(t *testing.T) {
 		"fields is required")
 }
 
+// Test_Fill_MalformedTags_Rejected pins the #359 validation boundary:
+// the reserved `tags` field must reject non-array / non-string-element
+// values rather than silently coercing to empty and still closing the
+// gap.
+func Test_Fill_MalformedTags_Rejected(t *testing.T) {
+	t.Parallel()
+	h, _, root := newFillFixture(t)
+
+	// A bare string (not an array) rejects.
+	rec := postFill(t, h, fillTestEntityID, map[string]any{
+		"fields": map[string]any{"tags": "one-tag"},
+	})
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+
+	// Non-string array elements reject too.
+	rec2 := postFill(t, h, fillTestEntityID, map[string]any{
+		"fields": map[string]any{"tags": []any{123}},
+	})
+	require.Equal(t, http.StatusBadRequest, rec2.Code, "body=%s", rec2.Body.String())
+
+	// The gap stays open — no silent empty fill.
+	v := readVaultByID(t, root, "boardgame", fillTestEntityID)
+	assert.Contains(t, v.Gaps, "tags", "malformed tags fill must NOT close the gap")
+	assert.Empty(t, v.Tags)
+}
+
 func Test_Fill_MalformedJSON_400(t *testing.T) {
 	t.Parallel()
 
