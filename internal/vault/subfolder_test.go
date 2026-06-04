@@ -133,6 +133,50 @@ func TestSubfolder_ScopedToUserContent(t *testing.T) {
 		"non-UGC kinds do not glob nested markdown — the subfolder fallback is user-content only")
 }
 
+// TestMoveToSubfolder_RelocatesFileAcrossLocations pins #425 Cut 1: a
+// move relocates the vault file flat<->subfolder<->subfolder via rename,
+// is an idempotent no-op when already at the target, and reports
+// os.ErrNotExist for a missing entity.
+func TestMoveToSubfolder_RelocatesFileAcrossLocations(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, w.WriteWithCommit(ctx, ucEntity("user-content:mv", "Move Me"), "", ""))
+	flat := filepath.Join(root, "user-content", "mv.md")
+	notes := filepath.Join(root, "user-content", "notes", "mv.md")
+	drafts := filepath.Join(root, "user-content", "drafts", "mv.md")
+	require.FileExists(t, flat)
+
+	moved, err := w.MoveToSubfolder(ctx, "user-content", "user-content:mv", "notes", "", "")
+	require.NoError(t, err)
+	assert.True(t, moved)
+	assert.NoFileExists(t, flat)
+	require.FileExists(t, notes)
+
+	moved, err = w.MoveToSubfolder(ctx, "user-content", "user-content:mv", "notes", "", "")
+	require.NoError(t, err)
+	assert.False(t, moved, "same subfolder is an idempotent no-op")
+
+	moved, err = w.MoveToSubfolder(ctx, "user-content", "user-content:mv", "drafts", "", "")
+	require.NoError(t, err)
+	assert.True(t, moved)
+	assert.NoFileExists(t, notes)
+	require.FileExists(t, drafts)
+
+	moved, err = w.MoveToSubfolder(ctx, "user-content", "user-content:mv", "", "", "")
+	require.NoError(t, err)
+	assert.True(t, moved)
+	require.FileExists(t, flat)
+	assert.NoFileExists(t, drafts)
+
+	_, err = w.MoveToSubfolder(ctx, "user-content", "user-content:ghost", "notes", "", "")
+	require.Error(t, err)
+	assert.True(t, vault.IsNotExist(err))
+}
+
 // TestSubfolder_ArchiveFindsSubfolderSource pins that archiving resolves
 // a subfoldered source file (else delete, which routes through
 // archive→destroy, can't find it). The archive destination is flat.

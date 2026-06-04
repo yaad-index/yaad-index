@@ -394,6 +394,86 @@ func (w *Writer) pathFor(e *Entity) (dir, slug string, err error) {
 // vault file (test fixtures, admin-cleanup paths). The handler
 // layer's DELETE /v1/entities/{id} now gates on archived-state
 // and routes to DestroyArchivedWithCommit instead.
+// MoveToSubfolder relocates an existing entity's vault file to the
+// given subfolder (empty = flat) via an atomic os.Rename, then
+// best-effort commits — same move+commit shape as the archive moves.
+// The id / kind / file content are unchanged; only the on-disk path
+// moves (#425 Cut 1 — the subfolder is path-only per #415, so the
+// entity row, provenance, and edges, all keyed by the flat id, are
+// untouched by construction). The current file is located flat first,
+// then via a single-level subfolder glob. Returns moved=false when the
+// file is already at the target path (the idempotent same-subfolder
+// no-op). The attachment sidecar subtree, if present, moves alongside.
+func (w *Writer) MoveToSubfolder(ctx context.Context, kind, id, newSubfolder, message, author string) (moved bool, err error) {
+	if kind == "" {
+		return false, fmt.Errorf("%w: kind", ErrMissingRequiredField)
+	}
+	slug, err := slugFromID(id)
+	if err != nil {
+		return false, err
+	}
+	flatDir := filepath.Join(w.root, KindDir(kind))
+
+	// Resolve the current on-disk file: flat path, else a unique
+	// single-level subfolder match (mirrors the #415 read fallback).
+	srcFull := filepath.Join(flatDir, slug+".md")
+	if _, statErr := os.Stat(srcFull); statErr != nil {
+		if !os.IsNotExist(statErr) {
+			return false, fmt.Errorf("stat source: %w", statErr)
+		}
+		matches, _ := filepath.Glob(filepath.Join(flatDir, "*", slug+".md"))
+		if len(matches) != 1 {
+			return false, fmt.Errorf("vault file for %s: %w", id, os.ErrNotExist)
+		}
+		srcFull = matches[0]
+	}
+
+	dstDir := flatDir
+	if newSubfolder != "" {
+		dstDir = filepath.Join(flatDir, newSubfolder)
+	}
+	dstFull := filepath.Join(dstDir, slug+".md")
+	if srcFull == dstFull {
+		// Already at the target path — idempotent no-op, no commit.
+		return false, nil
+	}
+
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return false, fmt.Errorf("create destination dir: %w", err)
+	}
+	if err := os.Rename(srcFull, dstFull); err != nil {
+		return false, fmt.Errorf("move %s -> %s: %w", srcFull, dstFull, err)
+	}
+
+	// Attachment sidecar subtree (`<dir>/<slug>/`) rides alongside the
+	// .md, same direction. Absence is a no-op.
+	srcSub := strings.TrimSuffix(srcFull, ".md")
+	dstSub := strings.TrimSuffix(dstFull, ".md")
+	if _, statErr := os.Stat(srcSub); statErr == nil {
+		if renErr := os.Rename(srcSub, dstSub); renErr != nil {
+			w.logger.Warn("attachment subdir cascade move failed on subfolder move (manifest entries may be orphaned)",
+				"src", srcSub, "dst", dstSub, "err", renErr)
+		}
+	} else if !os.IsNotExist(statErr) {
+		w.logger.Warn("stat attachment subdir during subfolder move", "src", srcSub, "err", statErr)
+	}
+
+	if w.committer == nil || message == "" {
+		return true, nil
+	}
+	dstRel, relErr := filepath.Rel(w.root, dstFull)
+	if relErr != nil {
+		dstRel = dstFull
+	}
+	// Commit the destination path; the committer's `git add -A` covers
+	// the source's removal automatically (same as moveBetweenArchive).
+	if err := w.committer.OnWrite(ctx, dstRel, message, author); err != nil {
+		w.logger.Warn("auto-commit OnWrite failed",
+			"rel_path", dstRel, "op", "move", "err", err)
+	}
+	return true, nil
+}
+
 func (w *Writer) DeleteWithCommit(ctx context.Context, kind, id, message, author string) error {
 	if kind == "" {
 		return fmt.Errorf("%w: kind", ErrMissingRequiredField)

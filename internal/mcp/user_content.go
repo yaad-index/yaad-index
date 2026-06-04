@@ -128,6 +128,48 @@ func registerDeleteUserContent(s *server.MCPServer, b *bridge) {
 	})
 }
 
+func registerMoveUserContent(s *server.MCPServer, b *bridge) {
+	tool := mcp.NewTool("move_user_content",
+		mcp.WithDescription(
+			"Relocate a UGC entity's vault file to a different on-disk "+
+				"subfolder in place — no archive -> delete -> recreate "+
+				"dance. Provenance, edges, and the entity id are all "+
+				"preserved (the id is flat per #415; the subfolder is "+
+				"path-only organization). An empty / omitted subfolder "+
+				"moves it to the flat user-content/<slug>.md path. Same "+
+				"subfolder is an idempotent no-op. A bad subfolder (not a "+
+				"single segment of lowercase alphanumerics + hyphens) "+
+				"rejects with 400.",
+		),
+		mcp.WithString("id",
+			mcp.Required(),
+			mcp.Description("UGC entity id to move."),
+		),
+		mcp.WithString("subfolder",
+			mcp.Description(
+				"Destination subfolder (single path segment of lowercase "+
+					"alphanumerics and hyphens, e.g. notes, drafts, "+
+					"projects). Empty -> flat user-content/<slug>.md.",
+			),
+		),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id := req.GetString("id", "")
+		if id == "" {
+			return mcp.NewToolResultError("`id` is required"), nil
+		}
+		args := map[string]any{}
+		if sf := req.GetString("subfolder", ""); sf != "" {
+			args["subfolder"] = sf
+		}
+		bodyBytes, err := json.Marshal(args)
+		if err != nil {
+			return mcp.NewToolResultError("encode args: " + err.Error()), nil
+		}
+		return b.callToolWithEtagLift(ctx, "POST", "/v1/user-content/"+url.PathEscape(id)+"/move", bytes.NewReader(bodyBytes), nil)
+	})
+}
+
 func registerListUserContentSections(s *server.MCPServer, b *bridge) {
 	tool := mcp.NewTool("list_user_content_sections",
 		mcp.WithDescription(
