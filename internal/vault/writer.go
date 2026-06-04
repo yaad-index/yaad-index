@@ -445,17 +445,30 @@ func (w *Writer) MoveToSubfolder(ctx context.Context, kind, id, newSubfolder, me
 		return false, fmt.Errorf("move %s -> %s: %w", srcFull, dstFull, err)
 	}
 
-	// Attachment sidecar subtree (`<dir>/<slug>/`) rides alongside the
-	// .md, same direction. Absence is a no-op.
+	// Attachment sidecar subtree (`<dir>/<slug>/`) MUST ride along with
+	// the .md: manifest attachment paths resolve relative to the .md's
+	// location, so a moved .md with a stranded sidecar breaks every
+	// attachment read. Unlike the archive move (where the entity leaves
+	// active queries anyway), an in-place move keeps the entity live, so
+	// the sidecar move is part of the move contract — on failure, roll
+	// the .md back to its origin and fail the whole operation (#425
+	// review). Sidecar absence is a no-op.
 	srcSub := strings.TrimSuffix(srcFull, ".md")
 	dstSub := strings.TrimSuffix(dstFull, ".md")
 	if _, statErr := os.Stat(srcSub); statErr == nil {
 		if renErr := os.Rename(srcSub, dstSub); renErr != nil {
-			w.logger.Warn("attachment subdir cascade move failed on subfolder move (manifest entries may be orphaned)",
-				"src", srcSub, "dst", dstSub, "err", renErr)
+			if rb := os.Rename(dstFull, srcFull); rb != nil {
+				w.logger.Error("sidecar move failed AND .md rollback failed — vault left inconsistent; reindex required",
+					"md_at", dstFull, "md_should_be", srcFull, "sidecar_err", renErr, "rollback_err", rb)
+			}
+			return false, fmt.Errorf("move attachment sidecar %s -> %s: %w", srcSub, dstSub, renErr)
 		}
 	} else if !os.IsNotExist(statErr) {
-		w.logger.Warn("stat attachment subdir during subfolder move", "src", srcSub, "err", statErr)
+		if rb := os.Rename(dstFull, srcFull); rb != nil {
+			w.logger.Error("sidecar stat failed AND .md rollback failed — vault left inconsistent; reindex required",
+				"md_at", dstFull, "md_should_be", srcFull, "stat_err", statErr, "rollback_err", rb)
+		}
+		return false, fmt.Errorf("stat attachment sidecar %s: %w", srcSub, statErr)
 	}
 
 	if w.committer == nil || message == "" {

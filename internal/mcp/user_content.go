@@ -134,12 +134,12 @@ func registerMoveUserContent(s *server.MCPServer, b *bridge) {
 			"Relocate a UGC entity's vault file to a different on-disk "+
 				"subfolder in place — no archive -> delete -> recreate "+
 				"dance. Provenance, edges, and the entity id are all "+
-				"preserved (the id is flat per #415; the subfolder is "+
-				"path-only organization). An empty / omitted subfolder "+
-				"moves it to the flat user-content/<slug>.md path. Same "+
-				"subfolder is an idempotent no-op. A bad subfolder (not a "+
-				"single segment of lowercase alphanumerics + hyphens) "+
-				"rejects with 400.",
+				"preserved: the id is stable and the subfolder is purely "+
+				"on-disk organization, not part of the identity. An empty "+
+				"/ omitted subfolder moves it to the flat "+
+				"user-content/<slug>.md path. Same subfolder is an "+
+				"idempotent no-op. A bad subfolder (not a single segment "+
+				"of lowercase alphanumerics + hyphens) rejects with 400.",
 		),
 		mcp.WithString("id",
 			mcp.Required(),

@@ -2,6 +2,7 @@ package vault_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -175,6 +176,36 @@ func TestMoveToSubfolder_RelocatesFileAcrossLocations(t *testing.T) {
 	_, err = w.MoveToSubfolder(ctx, "user-content", "user-content:ghost", "notes", "", "")
 	require.Error(t, err)
 	assert.True(t, vault.IsNotExist(err))
+}
+
+// TestMoveToSubfolder_MovesAttachmentSidecar pins the #425 review fix:
+// the attachment sidecar (`<dir>/<slug>/`) rides along with the .md as
+// part of the move contract, so manifest attachment paths (which resolve
+// relative to the .md) stay valid after a move — no .md-moved-but-
+// sidecar-orphaned silent break.
+func TestMoveToSubfolder_MovesAttachmentSidecar(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, w.WriteWithCommit(ctx, ucEntity("user-content:att", "Att"), "", ""))
+	// A sidecar dir with one attachment alongside the flat .md.
+	sidecar := filepath.Join(root, "user-content", "att")
+	require.NoError(t, os.MkdirAll(sidecar, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sidecar, "photo.png"), []byte("img"), 0o644))
+
+	moved, err := w.MoveToSubfolder(ctx, "user-content", "user-content:att", "notes", "", "")
+	require.NoError(t, err)
+	assert.True(t, moved)
+
+	// Both .md and the sidecar (with its file) are at the new location;
+	// neither remains at the old.
+	require.FileExists(t, filepath.Join(root, "user-content", "notes", "att.md"))
+	require.FileExists(t, filepath.Join(root, "user-content", "notes", "att", "photo.png"))
+	assert.NoFileExists(t, filepath.Join(root, "user-content", "att.md"))
+	assert.NoDirExists(t, sidecar)
 }
 
 // TestSubfolder_ArchiveFindsSubfolderSource pins that archiving resolves
