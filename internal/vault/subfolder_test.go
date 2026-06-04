@@ -208,6 +208,89 @@ func TestMoveToSubfolder_MovesAttachmentSidecar(t *testing.T) {
 	assert.NoDirExists(t, sidecar)
 }
 
+// TestRenameUserContentSlug_RelocatesFileFlatAndSubfolder pins #425
+// Cut 2: a rename changes the filename (slug) to the new entity's id,
+// staying in the file's current location (flat stays flat; a subfoldered
+// file stays in its subfolder), and the new file carries the new id in
+// its frontmatter.
+func TestRenameUserContentSlug_RelocatesFileFlatAndSubfolder(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	r, err := vault.NewReader(root)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	// Flat: user-content:flat-old -> user-content:flat-new.
+	require.NoError(t, w.WriteWithCommit(ctx, ucEntity("user-content:flat-old", "Flat Old"), "", ""))
+	require.NoError(t, w.RenameUserContentSlug(ctx, "user-content", "user-content:flat-old",
+		ucEntity("user-content:flat-new", "Flat New"), "", ""))
+	require.FileExists(t, filepath.Join(root, "user-content", "flat-new.md"))
+	assert.NoFileExists(t, filepath.Join(root, "user-content", "flat-old.md"))
+	got, err := r.ReadByID("user-content", "user-content:flat-new")
+	require.NoError(t, err)
+	assert.Equal(t, "user-content:flat-new", got.ID)
+
+	// Subfoldered: the renamed file stays in its subfolder.
+	require.NoError(t, w.WriteWithCommitInSubfolder(ctx, ucEntity("user-content:sub-old", "Sub Old"), "notes", "", ""))
+	require.NoError(t, w.RenameUserContentSlug(ctx, "user-content", "user-content:sub-old",
+		ucEntity("user-content:sub-new", "Sub New"), "", ""))
+	require.FileExists(t, filepath.Join(root, "user-content", "notes", "sub-new.md"))
+	assert.NoFileExists(t, filepath.Join(root, "user-content", "notes", "sub-old.md"))
+	assert.NoFileExists(t, filepath.Join(root, "user-content", "sub-new.md"), "rename does not orphan to the flat path")
+}
+
+// TestRenameUserContentSlug_MovesAttachmentSidecar pins that the
+// attachment sidecar rides along to the new slug, so manifest paths
+// (which resolve relative to the .md) stay valid after a rename.
+func TestRenameUserContentSlug_MovesAttachmentSidecar(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, w.WriteWithCommit(ctx, ucEntity("user-content:att-old", "Att"), "", ""))
+	sidecar := filepath.Join(root, "user-content", "att-old")
+	require.NoError(t, os.MkdirAll(sidecar, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sidecar, "photo.png"), []byte("img"), 0o644))
+
+	require.NoError(t, w.RenameUserContentSlug(ctx, "user-content", "user-content:att-old",
+		ucEntity("user-content:att-new", "Att"), "", ""))
+
+	require.FileExists(t, filepath.Join(root, "user-content", "att-new.md"))
+	require.FileExists(t, filepath.Join(root, "user-content", "att-new", "photo.png"))
+	assert.NoFileExists(t, filepath.Join(root, "user-content", "att-old.md"))
+	assert.NoDirExists(t, sidecar)
+}
+
+// TestRenameUserContentSlug_MissingAndCollision pins the error paths: a
+// missing source is os.ErrNotExist; an existing destination is a hard
+// error (the API-layer 409 probe should have caught it) and leaves both
+// files untouched.
+func TestRenameUserContentSlug_MissingAndCollision(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	err = w.RenameUserContentSlug(ctx, "user-content", "user-content:ghost",
+		ucEntity("user-content:ghost-new", "Ghost"), "", "")
+	require.Error(t, err)
+	assert.True(t, vault.IsNotExist(err), "missing source -> os.ErrNotExist")
+
+	require.NoError(t, w.WriteWithCommit(ctx, ucEntity("user-content:keep", "Keep"), "", ""))
+	require.NoError(t, w.WriteWithCommit(ctx, ucEntity("user-content:taken", "Taken"), "", ""))
+	err = w.RenameUserContentSlug(ctx, "user-content", "user-content:keep",
+		ucEntity("user-content:taken", "Keep"), "", "")
+	require.Error(t, err)
+	assert.False(t, vault.IsNotExist(err), "destination-exists is not a not-found error")
+	require.FileExists(t, filepath.Join(root, "user-content", "keep.md"), "source untouched on collision")
+	require.FileExists(t, filepath.Join(root, "user-content", "taken.md"), "destination untouched on collision")
+}
+
 // TestSubfolder_ArchiveFindsSubfolderSource pins that archiving resolves
 // a subfoldered source file (else delete, which routes through
 // archive→destroy, can't find it). The archive destination is flat.

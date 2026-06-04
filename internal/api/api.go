@@ -183,6 +183,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("DELETE /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSectionDelete(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks, cfg.canonicalKindReg))))
 	mux.Handle("PUT /v1/user-content/{id}/frontmatter", protect(http.HandlerFunc(handleUserContentFrontmatterEdit(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.userContentFrontmatterEdges, cfg.eventBus, cfg.writeLocks))))
 	mux.Handle("POST /v1/user-content/{id}/move", protect(http.HandlerFunc(handleUserContentMove(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
+	mux.Handle("POST /v1/user-content/{id}/rename", protect(http.HandlerFunc(handleUserContentRename(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
 	mux.Handle("DELETE /v1/user-content/{id}", protect(http.HandlerFunc(handleUserContentDelete(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
 	// Archive lifecycle for user-content per ADR-0018 step 2. Same
 	// shared handler as the entity routes — kind-aware via the row

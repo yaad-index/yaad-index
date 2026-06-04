@@ -487,6 +487,114 @@ func (w *Writer) MoveToSubfolder(ctx context.Context, kind, id, newSubfolder, me
 	return true, nil
 }
 
+// RenameUserContentSlug is the rename counterpart to MoveToSubfolder:
+// MoveToSubfolder keeps the slug and changes the subfolder; this keeps
+// the on-disk location and changes the slug (filename). It writes
+// newEntity — which must already carry the new id + title in its
+// frontmatter — to `<dir>/<new-slug>.md` in the same location as the old
+// file (flat or a single-level subfolder, resolved like the #415 read
+// fallback), moves the attachment sidecar `<dir>/<old-slug>/` ->
+// `<dir>/<new-slug>/`, removes the old `.md`, then best-effort commits.
+//
+// Ordering is write-new -> move-sidecar -> remove-old so a crash never
+// destroys the source before the destination lands. On a sidecar failure
+// the freshly-written new `.md` is rolled back; on an old-file-removal
+// failure the sidecar is restored and the new `.md` rolled back, leaving
+// the vault at its pre-rename state (same sidecar-is-part-of-the-contract
+// rule as MoveToSubfolder). Returns os.ErrNotExist when the source file
+// is absent; an existing destination is a hard error (the caller's 409
+// collision probe should have caught it).
+func (w *Writer) RenameUserContentSlug(ctx context.Context, kind, oldID string, newEntity *Entity, message, author string) error {
+	if kind == "" {
+		return fmt.Errorf("%w: kind", ErrMissingRequiredField)
+	}
+	if newEntity == nil {
+		return fmt.Errorf("%w: entity", ErrMissingRequiredField)
+	}
+	oldSlug, err := slugFromID(oldID)
+	if err != nil {
+		return err
+	}
+	newSlug, err := slugFromID(newEntity.ID)
+	if err != nil {
+		return err
+	}
+	flatDir := filepath.Join(w.root, KindDir(kind))
+
+	// Resolve the current on-disk file: flat path, else a unique
+	// single-level subfolder match (mirrors MoveToSubfolder + the #415
+	// read fallback), so a renamed file stays in its subfolder.
+	oldFull := filepath.Join(flatDir, oldSlug+".md")
+	if _, statErr := os.Stat(oldFull); statErr != nil {
+		if !os.IsNotExist(statErr) {
+			return fmt.Errorf("stat source: %w", statErr)
+		}
+		matches, _ := filepath.Glob(filepath.Join(flatDir, "*", oldSlug+".md"))
+		if len(matches) != 1 {
+			return fmt.Errorf("vault file for %s: %w", oldID, os.ErrNotExist)
+		}
+		oldFull = matches[0]
+	}
+	dir := filepath.Dir(oldFull)
+	newFull := filepath.Join(dir, newSlug+".md")
+	if oldFull == newFull {
+		// Same slug — the caller should have no-op'd; nothing to rename.
+		return nil
+	}
+	if _, statErr := os.Stat(newFull); statErr == nil {
+		return fmt.Errorf("rename destination %s already exists", newFull)
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("stat destination: %w", statErr)
+	}
+
+	// Write the new file (new id/title frontmatter) into the same dir.
+	newRel, err := w.writeAtomicAt(newEntity, dir, newSlug)
+	if err != nil {
+		return err
+	}
+
+	// Move the attachment sidecar subtree alongside, if present. On
+	// failure roll the just-written new .md back (the old file is still
+	// in place) and fail the whole operation.
+	oldSub := filepath.Join(dir, oldSlug)
+	newSub := filepath.Join(dir, newSlug)
+	sidecarMoved := false
+	if _, statErr := os.Stat(oldSub); statErr == nil {
+		if renErr := os.Rename(oldSub, newSub); renErr != nil {
+			_ = os.Remove(newFull)
+			return fmt.Errorf("move attachment sidecar %s -> %s: %w", oldSub, newSub, renErr)
+		}
+		sidecarMoved = true
+	} else if !os.IsNotExist(statErr) {
+		_ = os.Remove(newFull)
+		return fmt.Errorf("stat attachment sidecar %s: %w", oldSub, statErr)
+	}
+
+	// Remove the old .md last. On failure roll everything back to the
+	// pre-rename state.
+	if err := os.Remove(oldFull); err != nil {
+		if sidecarMoved {
+			if rb := os.Rename(newSub, oldSub); rb != nil {
+				w.logger.Error("rename rollback: sidecar restore failed — vault left inconsistent; reindex required",
+					"sidecar_at", newSub, "sidecar_should_be", oldSub, "err", rb)
+			}
+		}
+		_ = os.Remove(newFull)
+		return fmt.Errorf("remove old vault file %s: %w", oldFull, err)
+	}
+
+	if w.committer == nil || message == "" {
+		return nil
+	}
+	// Commit the destination path; the committer's `git add -A` covers
+	// the source's removal + the sidecar move automatically.
+	if err := w.committer.OnWrite(ctx, newRel, message, author); err != nil {
+		w.logger.Warn("auto-commit OnWrite failed",
+			"rel_path", newRel, "op", "rename", "err", err)
+	}
+	return nil
+}
+
 func (w *Writer) DeleteWithCommit(ctx context.Context, kind, id, message, author string) error {
 	if kind == "" {
 		return fmt.Errorf("%w: kind", ErrMissingRequiredField)

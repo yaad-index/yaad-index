@@ -572,6 +572,20 @@ type Store interface {
 	UpsertReindexFile(ctx context.Context, f ReindexFile) error
 	DeleteReindexFile(ctx context.Context, path string) (bool, error)
 	DeleteEntityCascade(ctx context.Context, id string) error
+	// RenameEntity re-keys an entity from oldID to newID in a single
+	// transaction: it inserts the new entities row (carrying over
+	// kind / created_at / gap state / archived state from the old row,
+	// with newData as the new payload), re-points every table that
+	// references the old id — edges (from_id + to_id), provenance
+	// (entity + edge-endpoint rows), entity_notations, and
+	// entity_aliases — guarantees the bare old slug resolves to
+	// newID via an alias row, then deletes the old entities row. The
+	// derived view stays whole (inbound/outbound edges + provenance
+	// survive, re-pointed); the old `<kind>:<old-slug>` reference still
+	// resolves through the alias resolver. There is no in-place id
+	// rename in SQLite (no ON UPDATE CASCADE on the FKs), so this is the
+	// supported path for changing an entity's id.
+	RenameEntity(ctx context.Context, oldID, newID string, newData map[string]any) error
 	WipeDerivedState(ctx context.Context) error
 
 	// Notation lookup (per the source issue a prior PR). entity_notations is
@@ -642,6 +656,13 @@ var ErrNotFound = errors.New("not found")
 // §15.5.21 unprocessable content — request well-formed, can't be
 // processed because of a referential-integrity gap).
 var ErrMissingEntity = errors.New("missing entity")
+
+// ErrAliasConflict is returned by RenameEntity when the renamed entity's
+// bare old slug is already a live alias owned by a DIFFERENT same-kind
+// entity. Completing the rename would delete the old row and leave the
+// old `<kind>:<old-slug>` reference falling through the kind-scoped
+// resolver to that foreign entity. Handlers translate it into a 409.
+var ErrAliasConflict = errors.New("alias conflict")
 
 // ErrEdgeStale is returned by UpdateEdgeTarget when current state
 // doesn't permit the requested rewrite per #304 Cut B. Two failure

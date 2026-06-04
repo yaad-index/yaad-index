@@ -132,6 +132,7 @@ func registerAll(s *server.MCPServer, b *bridge) {
 	registerGetUserContent(s, b)
 	registerDeleteUserContent(s, b)
 	registerMoveUserContent(s, b)
+	registerRenameUserContent(s, b)
 	registerListUserContentSections(s, b)
 	registerGetUserContentSection(s, b)
 	registerEditUserContentSection(s, b)
