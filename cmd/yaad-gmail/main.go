@@ -468,6 +468,18 @@ func buildSourceLine(env gmail.IngestEnvelope, fetchedAt string) sourceLine {
 	if len(env.Bcc) > 0 {
 		data["bcc"] = stringsCopy(env.Bcc)
 	}
+	// #323: forwarded-message identity. Additive — `from` still carries
+	// the forwarder; these surface the original sender + un-prefixed
+	// subject so workflow predicates can opt in
+	// (`entity.data.forwarded_from.endsWith("acme.com")`). Both omitted
+	// for non-forwards; `forwarded_from` omitted when the embedded sender
+	// isn't recoverable from a detected forward.
+	if env.ForwardedFrom != "" {
+		data["forwarded_from"] = env.ForwardedFrom
+	}
+	if env.ForwardedSubject != "" {
+		data["forwarded_subject"] = env.ForwardedSubject
+	}
 
 	return sourceLine{
 		OK: true,
