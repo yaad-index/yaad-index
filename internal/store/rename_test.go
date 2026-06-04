@@ -84,6 +84,34 @@ func TestRenameEntity_GuaranteesOldSlugAliasWithoutPriorAlias(t *testing.T) {
 	assert.Equal(t, "x:new", resolved)
 }
 
+// TestRenameEntity_DoesNotStealForeignBareSlugAlias pins the #425 Cut 2
+// review fix: when the renamed entity's bare old slug is already an alias
+// owned by a DIFFERENT entity, the rename must not hijack it — the other
+// entity's resolver path stays intact, and the new id does not acquire
+// that alias.
+func TestRenameEntity_DoesNotStealForeignBareSlugAlias(t *testing.T) {
+	t.Parallel()
+	s := newMemoryStore(t)
+	ctx := context.Background()
+
+	// x:old has NO self-alias for "old"; a different entity x:other owns
+	// the bare alias "old".
+	require.NoError(t, s.SaveEntity(ctx, &Entity{ID: "x:old", Kind: "x", Data: map[string]any{"id": "x:old"}}))
+	require.NoError(t, s.SaveEntity(ctx, &Entity{ID: "x:other", Kind: "x", Data: map[string]any{"id": "x:other"}}))
+	require.NoError(t, s.ReplaceAliases(ctx, "x:other", []Alias{{Alias: "old", EntityID: "x:other", Kind: AliasKindBare}}))
+
+	require.NoError(t, s.RenameEntity(ctx, "x:old", "x:new", map[string]any{"id": "x:new"}))
+
+	// The foreign alias is untouched — still resolves to x:other, NOT x:new.
+	resolved, err := s.ResolveAlias(ctx, "old", "x")
+	require.NoError(t, err)
+	assert.Equal(t, "x:other", resolved, "rename must not steal another entity's alias")
+
+	// The rename itself still succeeded.
+	_, err = s.GetEntity(ctx, "x:new")
+	require.NoError(t, err)
+}
+
 func TestRenameEntity_MissingReturnsNotFound(t *testing.T) {
 	t.Parallel()
 	s := newMemoryStore(t)

@@ -28,8 +28,10 @@ import (
 //   - entity_notations  — entity_id re-pointed (ON DELETE CASCADE would
 //     otherwise drop them with the old row).
 //   - entity_aliases    — existing aliases re-homed to newID, plus the
-//     bare old slug is guaranteed to alias to newID so the old
-//     `<kind>:<old-slug>` reference still resolves via the alias resolver.
+//     bare old slug is aliased to newID so the old `<kind>:<old-slug>`
+//     reference still resolves via the alias resolver — UNLESS that bare
+//     slug already belongs to another entity, whose alias is left
+//     untouched (no resolver-path hijack).
 //
 // reindex_files is intentionally NOT touched: it is per-file bookkeeping
 // that self-heals on the next reindex walk (the on-disk path changes with
@@ -118,31 +120,39 @@ func (s *sqliteStore) RenameEntity(ctx context.Context, oldID, newID string, new
 		return fmt.Errorf("re-point notations %s -> %s: %w", oldID, newID, err)
 	}
 
-	// 5. Re-home the old entity's aliases onto the new id (an existing
-	// self-alias for the old slug becomes the old -> new back-reference
-	// for free).
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE entity_aliases SET entity_id = ? WHERE entity_id = ?`, newID, oldID,
-	); err != nil {
-		return fmt.Errorf("re-home aliases %s -> %s: %w", oldID, newID, err)
-	}
-
-	// 6. Guarantee the bare old slug resolves to newID even when the old
-	// entity had no self-alias (an operator could have cleared its alias
-	// list). resolveEntityID strips the `<kind>:` prefix and looks the
-	// bare slug up kind-scoped, so a bare alias row is what makes the old
-	// `<kind>:<old-slug>` reference keep resolving.
+	// 5. Guarantee the bare old slug is owned by oldID — but WITHOUT
+	// stealing it from a third entity. resolveEntityID strips the
+	// `<kind>:` prefix and looks the bare slug up kind-scoped, so this
+	// bare alias row is what keeps the old `<kind>:<old-slug>` reference
+	// resolving after the rename (even when the old entity had no
+	// self-alias — an operator could have cleared its alias list). The
+	// `DO UPDATE ... WHERE existing == oldID` clause is load-bearing: if
+	// the bare slug already belongs to some OTHER entity, this no-ops and
+	// leaves that entity's alias intact rather than hijacking its resolver
+	// path. The re-home below then carries this (oldID-owned) alias to the
+	// new id.
 	if bareOld := bareSlugOf(oldID); bareOld != "" {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO entity_aliases (alias, entity_id, alias_kind)
 			VALUES (?, ?, ?)
 			ON CONFLICT(alias) DO UPDATE SET
 				entity_id = excluded.entity_id,
-				alias_kind = excluded.alias_kind`,
-			bareOld, newID, AliasKindBare,
+				alias_kind = excluded.alias_kind
+			WHERE entity_aliases.entity_id = excluded.entity_id`,
+			bareOld, oldID, AliasKindBare,
 		); err != nil {
-			return fmt.Errorf("insert old-slug alias %q -> %s: %w", bareOld, newID, err)
+			return fmt.Errorf("ensure old-slug alias %q for %s: %w", bareOld, oldID, err)
 		}
+	}
+
+	// 6. Re-home the old entity's aliases onto the new id. The bare-slug
+	// alias ensured above rides along, becoming the old -> new
+	// back-reference; a third entity's identically-named alias (left
+	// untouched above) stays put.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE entity_aliases SET entity_id = ? WHERE entity_id = ?`, newID, oldID,
+	); err != nil {
+		return fmt.Errorf("re-home aliases %s -> %s: %w", oldID, newID, err)
 	}
 
 	// 7. Drop the old row — nothing references it anymore.
