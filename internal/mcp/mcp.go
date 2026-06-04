@@ -91,6 +91,9 @@ func registerAll(s *server.MCPServer, b *bridge) {
 	registerArchiveEntity(s, b)
 	registerRestoreEntity(s, b)
 	registerDeleteEntity(s, b)
+	// #383 batch variants of the high-cardinality single-target tools.
+	registerArchiveEntities(s, b)
+	registerDeleteEntities(s, b)
 
 	// Search.
 	registerSearchLocal(s, b)
@@ -152,6 +155,7 @@ func registerAll(s *server.MCPServer, b *bridge) {
 	registerTaskList(s, b)
 	registerTaskLoad(s, b)
 	registerTaskResolve(s, b)
+	registerTaskResolveBatch(s, b) // #383
 }
 
 // extractAuthHeader is invoked on every incoming MCP HTTP

@@ -16,7 +16,7 @@ The daemon exposes its full MCP tool surface as a Streamable-HTTP MCP server at 
 
 ## What yaad-mcp is
 
-An MCP surface over yaad-index — a knowledge index that turns URLs into structured entities, plus the workflow engine that reacts to graph changes. The current tool surface, grouped by responsibility: entity reads + lifecycle (`get_entity`, `get_entities_batch`, `get_entity_with_context`, `list_entities`, `archive_entity`, `restore_entity`, `delete_entity`); search (`search_local`, `search_upstream`); ingest (`ingest`); fill / canonical-kind gap workflow (`fill`, `fill_field`, `set_operator_fill`, `defer_gap`, `needs_fill`, `cv_status`, `canonical_registry_effective`, `canonical_registry_available`, `create_canonical_entity`); edges (`edges`, `update_edge_target`); notes (`add_note`, `edit_note`, `delete_note`); system metadata (`structure`, `kinds`, `plugins`, `reindex`); user-content (UGC) read trio (`get_user_content`, `list_user_content_sections`, `get_user_content_section`) and write octad (`create_user_content`, `move_user_content`, `rename_user_content`, `edit_user_content_section`, `add_user_content_section`, `rename_user_content_section`, `delete_user_content_section`, `delete_user_content`); workflows (`workflow_list`, `workflow_discover`, `workflow_get`, `workflow_define`, `workflow_delete`, `workflow_trigger`); tasks (`task_list`, `task_load`, `task_resolve`) (per ADR-0024 §"Agent surface").
+An MCP surface over yaad-index — a knowledge index that turns URLs into structured entities, plus the workflow engine that reacts to graph changes. The current tool surface, grouped by responsibility: entity reads + lifecycle (`get_entity`, `get_entities_batch`, `get_entity_with_context`, `list_entities`, `archive_entity`, `restore_entity`, `delete_entity`, `archive_entities`, `delete_entities`); search (`search_local`, `search_upstream`); ingest (`ingest`); fill / canonical-kind gap workflow (`fill`, `fill_field`, `set_operator_fill`, `defer_gap`, `needs_fill`, `cv_status`, `canonical_registry_effective`, `canonical_registry_available`, `create_canonical_entity`); edges (`edges`, `update_edge_target`); notes (`add_note`, `edit_note`, `delete_note`); system metadata (`structure`, `kinds`, `plugins`, `reindex`); user-content (UGC) read trio (`get_user_content`, `list_user_content_sections`, `get_user_content_section`) and write octad (`create_user_content`, `move_user_content`, `rename_user_content`, `edit_user_content_section`, `add_user_content_section`, `rename_user_content_section`, `delete_user_content_section`, `delete_user_content`); workflows (`workflow_list`, `workflow_discover`, `workflow_get`, `workflow_define`, `workflow_delete`, `workflow_trigger`); tasks (`task_list`, `task_load`, `task_resolve`, `task_resolve_batch`) (per ADR-0024 §"Agent surface").
 
 ## Mental model — the graph yaad-index builds
 
@@ -437,6 +437,12 @@ On an active entity the daemon returns the structured `{ok: false, error: "must 
 
 Other non-2xx (401, 404 already-gone, 503 vault not configured) still throw YaadIndexError. Unlike `delete_user_content`, there's no 403 operator_mismatch path on the destroy itself: the surface is agent-callable-by-anyone (the WARN audit log + commit is the post-hoc accountability surface).
 
+### `archive_entities(entity_ids)` / `delete_entities(entity_ids)`
+
+Batch variants of `archive_entity` / `delete_entity` (#383) — apply the op across a list of ids in **one** call instead of one MCP round-trip per id (the difference between seconds and ~20 minutes when archiving a large plugin fan-out). Each id runs through the same single-target endpoint server-side, so semantics are identical: archive is reversible via `restore_entity`; delete still requires each id be archived first (un-archived ids report a per-id failure, they don't abort the batch).
+
+Returns an aggregate `{ok, total, succeeded, failed, results}` where `results` is a per-id `{id, ok, status, error?}` list. `ok` is true only when **every** id succeeded; a partial run reports `ok: false` with the per-id breakdown so failures stay legible. An empty / missing `entity_ids` list is a tool error; a non-string / empty entry *within* the list is counted as a failed result (never silently dropped, so `total` always matches the input you sent — important when the op is destructive).
+
 ### `list_entities(kind)`
 
 List entities of a given kind — the kind-driven discovery surface above. The `kind` parameter is required: yaad-index's `/v1/search` endpoint mandates either a kind filter or a query string, and the MCP surface only exposes kind-only listing. Returns `{results, total, limit, offset}` where each result is `{id, kind, snippet, score}` — call `get_entity(id)` on any id to load full state.
@@ -488,6 +494,10 @@ Load one workflow-produced task by id. Returns `{ok, task: {id, workflow, subjec
 ### `task_resolve(id)`
 
 Mark a workflow-produced task done. Stamps `resolved_at: <now>` on the task's frontmatter; auto-archives (moves to `tasks/_archive/<id>.md`) when the originating workflow has `auto_archive_on_done: true` (the default). Err-tasks always auto-archive regardless of the workflow opt-out per ADR-0024 §"Runtime errors". Returns `{ok, id, errored, auto_archived, resolved_at}` from `POST /v1/tasks/{id}/resolve`. Idempotent: re-resolving an active task preserves the original timestamp; re-resolving an already-archived task is a no-op success.
+
+### `task_resolve_batch(task_ids)`
+
+Batch variant of `task_resolve` (#383) — resolve many tasks in one call (e.g. a cascade of auto-generated mention-tasks after a multi-PR run). Plain resolves only, same auto-archive semantics as the single tool. Returns the same aggregate `{ok, total, succeeded, failed, results}` shape as `archive_entities`, with a per-id `{id, ok, status, error?}` breakdown; a failure on one id doesn't stop the rest. Resolution-tasks that need an `option` chosen aren't batchable — the choice is per-task, so use the single `task_resolve` for those.
 
 ## Bundled plugins (abbreviated reference)
 
