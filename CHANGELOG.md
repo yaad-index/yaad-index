@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.18.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.17.0...yaad-index-v0.18.0) (2026-06-04)
+
+
+### Features
+
+* **api,store,vault,mcp:** rename user-content ([#425](https://github.com/yaad-index/yaad-index/issues/425) Cut 2) ([791aedd](https://github.com/yaad-index/yaad-index/commit/791aedd1011e423d8ae40814484dd58951bcc0e0))
+* **api,store:** filter needs_fill by source and kind — yaad-index half ([#385](https://github.com/yaad-index/yaad-index/issues/385)) ([#411](https://github.com/yaad-index/yaad-index/issues/411)) ([78d26fe](https://github.com/yaad-index/yaad-index/commit/78d26fe8f501d17d4ad0b9eb53ec956f510fbf7a))
+* **api,vault,mcp:** in-place move for user-content ([#425](https://github.com/yaad-index/yaad-index/issues/425) Cut 1) ([83b3e16](https://github.com/yaad-index/yaad-index/commit/83b3e163f65fc5dd7b1914263813e940e06f9e9d))
+* **api,vault,mcp:** optional subfolder for user-content create ([#415](https://github.com/yaad-index/yaad-index/issues/415)) ([e7632a4](https://github.com/yaad-index/yaad-index/commit/e7632a4996be53fe1921514c8d140de249b93a21))
+* **api,vault:** route task-kind notes through the 5-section AddNote primitive ([#343](https://github.com/yaad-index/yaad-index/issues/343)) ([eb22ffe](https://github.com/yaad-index/yaad-index/commit/eb22ffe43b013a8cfe55df19d3ae4d26bfa70a17))
+* **auth,api:** agent-on-behalf-of-operator fill via OperatorDelegated claim ([#361](https://github.com/yaad-index/yaad-index/issues/361)) ([#419](https://github.com/yaad-index/yaad-index/issues/419)) ([c63c2ad](https://github.com/yaad-index/yaad-index/commit/c63c2ad10a6b1faa5363a99679ee733fda64fd5d))
+* **gmail:** surface forwarded original sender + subject ([#323](https://github.com/yaad-index/yaad-index/issues/323)) ([eaa24b0](https://github.com/yaad-index/yaad-index/commit/eaa24b0aeda6bca87552acb211a3b16d948a0748))
+* **mcp:** batch archive/delete/task-resolve tools ([#383](https://github.com/yaad-index/yaad-index/issues/383)) ([2e18f83](https://github.com/yaad-index/yaad-index/commit/2e18f831b099d6579bc005bf06a61fa44bed03bb))
+
+
+### Bug Fixes
+
+* **api:** restore fill provenance stamp + top-level summary/tags routing ([#358](https://github.com/yaad-index/yaad-index/issues/358), [#359](https://github.com/yaad-index/yaad-index/issues/359)) ([1611194](https://github.com/yaad-index/yaad-index/commit/1611194e54ad937f46794efcef487a9926f791eb))
+* **store:** tokenize-and-AND search so multi-word queries span punctuation ([#391](https://github.com/yaad-index/yaad-index/issues/391)) ([#410](https://github.com/yaad-index/yaad-index/issues/410)) ([eacf847](https://github.com/yaad-index/yaad-index/commit/eacf847ccb5759cb4644fe45e6872af0d1c3e4f4))
+
 ## [0.17.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.16.0...yaad-index-v0.17.0) (2026-06-01)
 
 
