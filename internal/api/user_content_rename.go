@@ -157,6 +157,25 @@ func handleUserContentRename(logger *slog.Logger, st store.Store, vaultReader *v
 			return
 		}
 
+		// Reject when the CURRENT bare slug is already an alias owned by a
+		// different same-kind entity: this rename deletes the old row, after
+		// which the old `user-content:<old-slug>` reference would fall
+		// through the kind-scoped resolver to that foreign entity instead of
+		// 404ing. Refuse before the vault move so nothing changes on disk;
+		// the store enforces the same invariant (ErrAliasConflict) as a
+		// backstop.
+		oldSlug := strings.TrimPrefix(id, userContentIDPrefix)
+		if owner, err := st.ResolveAlias(r.Context(), oldSlug, userContentKind); err != nil {
+			logger.ErrorContext(r.Context(), "store.ResolveAlias (old-slug ownership) from user-content rename", "err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error",
+				"failed to check current-slug alias ownership")
+			return
+		} else if owner != "" && owner != id {
+			writeError(w, http.StatusConflict, "conflict",
+				fmt.Sprintf("the current slug %q is an alias for %s; renaming would orphan the old reference — resolve that alias first", oldSlug, owner))
+			return
+		}
+
 		// Build the renamed entity: same body / tags / provenance, new id
 		// + title. The body is unchanged, so the content-derived etag is
 		// stable across the rename (an in-flight section-edit If-Match

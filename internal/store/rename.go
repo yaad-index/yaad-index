@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,6 +60,31 @@ func (s *sqliteStore) RenameEntity(ctx context.Context, oldID, newID string, new
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	// 0. Reject when the bare old slug is already a live alias owned by a
+	// DIFFERENT same-kind entity. After this rename deletes the old row,
+	// the old `<kind>:<old-slug>` reference would fall through the
+	// kind-scoped resolver to that foreign entity instead of newID —
+	// silent mis-resolution. We refuse rather than complete (and rather
+	// than steal the alias). The API surfaces this as 409 before reaching
+	// here; this is the defensive backstop for direct callers + the
+	// check-to-tx race. Cross-kind ownership is harmless (the resolver is
+	// kind-scoped), so the kind match is part of the condition.
+	if bareOld := bareSlugOf(oldID); bareOld != "" {
+		var owner string
+		qerr := tx.QueryRowContext(ctx, `
+			SELECT ea.entity_id FROM entity_aliases ea
+			JOIN entities e ON e.id = ea.entity_id
+			WHERE ea.alias = ?
+			  AND e.kind = (SELECT kind FROM entities WHERE id = ?)
+			  AND ea.entity_id <> ?
+			LIMIT 1`, bareOld, oldID, oldID).Scan(&owner)
+		if qerr == nil && owner != "" {
+			return fmt.Errorf("%w: bare slug %q owned by %s", ErrAliasConflict, bareOld, owner)
+		} else if qerr != nil && !errors.Is(qerr, sql.ErrNoRows) {
+			return fmt.Errorf("check bare-slug ownership for %s: %w", oldID, qerr)
+		}
+	}
 
 	// 1. Insert the new row, carrying over the columns a rename must
 	// preserve. created_at survives (a rename is not a re-creation);

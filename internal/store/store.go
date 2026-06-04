@@ -657,6 +657,13 @@ var ErrNotFound = errors.New("not found")
 // processed because of a referential-integrity gap).
 var ErrMissingEntity = errors.New("missing entity")
 
+// ErrAliasConflict is returned by RenameEntity when the renamed entity's
+// bare old slug is already a live alias owned by a DIFFERENT same-kind
+// entity. Completing the rename would delete the old row and leave the
+// old `<kind>:<old-slug>` reference falling through the kind-scoped
+// resolver to that foreign entity. Handlers translate it into a 409.
+var ErrAliasConflict = errors.New("alias conflict")
+
 // ErrEdgeStale is returned by UpdateEdgeTarget when current state
 // doesn't permit the requested rewrite per #304 Cut B. Two failure
 // modes both map to this sentinel + the same 409 wire shape:

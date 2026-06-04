@@ -72,6 +72,32 @@ func TestUGC_Rename_PreservesInboundEdge(t *testing.T) {
 	assert.Equal(t, newID, resolved)
 }
 
+// TestUGC_Rename_ForeignOldSlugAlias_409 pins the #425 Cut 2 review fix:
+// when the entity's current bare slug is already an alias owned by a
+// different entity, the rename is refused (409) before anything moves on
+// disk — completing it would orphan the old reference to the foreign
+// entity.
+func TestUGC_Rename_ForeignOldSlugAlias_409(t *testing.T) {
+	t.Parallel()
+	h, st, root, signer := newAuthedUGCFixture(t)
+	tok := mintToken(t, signer, "alice-agent", "alice")
+	idA, slugA := createUGCForMove(t, h, tok, "Target Note")
+	idB, _ := createUGCForMove(t, h, tok, "Other Note")
+	ctx := context.Background()
+
+	// Re-point A's bare slug to B (steals A's self-alias), so A's current
+	// slug is now a foreign-owned alias.
+	require.NoError(t, st.ReplaceAliases(ctx, idB, []store.Alias{{Alias: slugA, EntityID: idB, Kind: store.AliasKindBare}}))
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/"+idA+"/rename", tok,
+		map[string]any{"new_title": "Target Renamed"}, nil)
+	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
+
+	// Nothing moved on disk.
+	require.FileExists(t, filepath.Join(root, "user-content", slugA+".md"))
+	assert.NoFileExists(t, filepath.Join(root, "user-content", "target-renamed.md"))
+}
+
 // TestUGC_Rename_NoOp_SameSlug pins that a new title slugifying to the
 // current slug is a 200 no-op (file + id unchanged).
 func TestUGC_Rename_NoOp_SameSlug(t *testing.T) {
