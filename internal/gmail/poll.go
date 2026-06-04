@@ -46,6 +46,14 @@ type IngestEnvelope struct {
 	To   []string
 	Cc   []string
 	Bcc  []string
+	// ForwardedFrom / ForwardedSubject carry the original sender +
+	// un-prefixed subject for Gmail-forwarded messages (#323), surfaced
+	// into entity.data as additive `forwarded_from` / `forwarded_subject`
+	// fields. Empty for non-forwards (and ForwardedFrom empty when the
+	// embedded `From:` isn't recoverable). The envelope `From:`
+	// (data.from) still carries the forwarder — both identities preserved.
+	ForwardedFrom string
+	ForwardedSubject string
 	// Body is the raw RFC-822 body bytes for vault clean_content.
 	Body []byte
 	// Edges is the cross-canonical edge list (is_about + from/to/
@@ -196,6 +204,8 @@ func (p *Poller) Tick(ctx context.Context) (ingested int, errs []error) {
 				To:          pm.To,
 				Cc:          pm.Cc,
 				Bcc:         pm.Bcc,
+				ForwardedFrom: pm.ForwardedFrom,
+				ForwardedSubject: pm.ForwardedSubject,
 				Body:        pm.Body,
 				Edges:       AssembleEdges(pm, p.IngestedLabel, p.SkipLabel),
 				HTMLBody:    htmlBody,

@@ -43,6 +43,16 @@ type ParsedMessage struct {
 	// IsSentFolder marks whether the message came from the sent
 	// folder; the assembler only emits BCC edges when this is true.
 	IsSentFolder bool
+	// ForwardedFrom / ForwardedSubject carry the original sender's
+	// address + un-prefixed subject when this message is a Gmail forward
+	// (#323). Both empty for non-forwards. ForwardedFrom is empty when the
+	// forward is detected (by Subject prefix) but the embedded `From:`
+	// header isn't recoverable from the body. Surfaced into entity.data as
+	// the additive `forwarded_from` / `forwarded_subject` fields so
+	// workflow predicates can match the original sender even though the
+	// envelope `From:` (entity.data.from) carries the forwarder.
+	ForwardedFrom string
+	ForwardedSubject string
 }
 
 // ErrMissingMessageID signals an RFC-822 message with no
@@ -113,6 +123,10 @@ func ParseMessage(raw []byte, labels []string, isSent bool) (*ParsedMessage, err
 		_, _ = bodyBuf.ReadFrom(msg.Body)
 	}
 	out.Body = bodyBuf.Bytes()
+
+	// #323: detect Gmail-forward shape and surface the original sender +
+	// un-prefixed subject. Runs after Subject + Body are populated.
+	out.ForwardedFrom, out.ForwardedSubject = parseForwarded(out.Subject, out.Body)
 
 	return out, nil
 }

@@ -411,6 +411,40 @@ func TestBuildSourceLine_AddressFields_PopulatedFromEnvelope(t *testing.T) {
 	}
 }
 
+// #323: buildSourceLine surfaces forwarded_from / forwarded_subject into
+// the structured.data map for Gmail-forwarded messages — additive, so
+// data.from still carries the forwarder. Both omitted for non-forwards.
+func TestBuildSourceLine_ForwardedFields(t *testing.T) {
+	t.Parallel()
+
+	fwd := gmail.IngestEnvelope{
+		SourceID:         "gmail:fwd-x",
+		Subject:          "Fwd: Your receipt",
+		From:             "forwarder@gmail.com",
+		ForwardedFrom:    "noreply@acme.com",
+		ForwardedSubject: "Your receipt",
+	}
+	d := buildSourceLine(fwd, "2099-05-25T12:00:00Z").Structured.Data
+	if d["from"] != "forwarder@gmail.com" {
+		t.Errorf("data.from: got %v, want forwarder@gmail.com (forwarder preserved)", d["from"])
+	}
+	if d["forwarded_from"] != "noreply@acme.com" {
+		t.Errorf("data.forwarded_from: got %v, want noreply@acme.com", d["forwarded_from"])
+	}
+	if d["forwarded_subject"] != "Your receipt" {
+		t.Errorf("data.forwarded_subject: got %v, want Your receipt", d["forwarded_subject"])
+	}
+
+	plain := gmail.IngestEnvelope{SourceID: "gmail:plain-x", Subject: "Your receipt", From: "noreply@acme.com"}
+	pd := buildSourceLine(plain, "2099-05-25T12:00:00Z").Structured.Data
+	if _, has := pd["forwarded_from"]; has {
+		t.Errorf("data.forwarded_from: must be omitted for non-forwards")
+	}
+	if _, has := pd["forwarded_subject"]; has {
+		t.Errorf("data.forwarded_subject: must be omitted for non-forwards")
+	}
+}
+
 // TestBuildSourceLine_AddressFields_ShapeStableForAbsentHeaders
 // pins the absent-header degradation: missing From omits the
 // field; missing To / Cc still emit `[]` for shape stability
