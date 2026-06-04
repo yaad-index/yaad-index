@@ -28,15 +28,29 @@ type batchItemResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// runBatch applies a single-target operation across ids and projects the
-// per-id outcomes into one MCP result. method is the HTTP verb; pathFor
-// builds the daemon path for each id. A per-id bridge/HTTP error is
-// recorded on that item and the batch continues. The aggregate `ok` is
-// true only when every item succeeded.
-func (b *bridge) runBatch(ctx context.Context, method string, ids []string, pathFor func(string) string) *mcp.CallToolResult {
-	results := make([]batchItemResult, 0, len(ids))
+// runBatch applies a single-target operation across the raw input
+// targets and projects the per-target outcomes into one MCP result.
+// method is the HTTP verb; pathFor builds the daemon path for each id.
+//
+// EVERY input entry produces a result row — an entry that isn't a
+// non-empty string is recorded as a failed result (NOT silently dropped),
+// so `total` always equals the caller's input length and per-id
+// accounting can't lie about how many targets were acted on (a
+// load-bearing property for destructive batches). A per-id bridge/HTTP
+// error is likewise recorded and the batch continues. The aggregate `ok`
+// is true only when every entry succeeded.
+func (b *bridge) runBatch(ctx context.Context, method string, targets []any, pathFor func(string) string) *mcp.CallToolResult {
+	results := make([]batchItemResult, 0, len(targets))
 	succeeded := 0
-	for _, id := range ids {
+	for _, t := range targets {
+		id, ok := t.(string)
+		if !ok || id == "" {
+			results = append(results, batchItemResult{
+				ID:    fmt.Sprintf("%v", t),
+				Error: "invalid id: must be a non-empty string",
+			})
+			continue
+		}
 		item := batchItemResult{ID: id}
 		res, err := b.callWithHeaders(ctx, method, pathFor(id), nil, nil)
 		switch {
@@ -53,10 +67,10 @@ func (b *bridge) runBatch(ctx context.Context, method string, ids []string, path
 		results = append(results, item)
 	}
 	payload, err := json.Marshal(map[string]any{
-		"ok":        succeeded == len(ids),
-		"total":     len(ids),
+		"ok":        succeeded == len(targets),
+		"total":     len(targets),
 		"succeeded": succeeded,
-		"failed":    len(ids) - succeeded,
+		"failed":    len(targets) - succeeded,
 		"results":   results,
 	})
 	if err != nil {
@@ -65,21 +79,13 @@ func (b *bridge) runBatch(ctx context.Context, method string, ids []string, path
 	return mcp.NewToolResultText(string(payload))
 }
 
-// batchIDs coerces a required MCP array argument into a non-empty
-// []string, dropping non-string / empty entries. Returns nil when the
-// argument is absent, the wrong type, or yields no usable ids.
-func batchIDs(req mcp.CallToolRequest, key string) []string {
+// batchTargets returns the raw entries of a required MCP array argument
+// (each validated per-entry inside runBatch so invalid entries surface as
+// failed results rather than vanishing). Returns (nil, false) when the
+// argument is absent or not an array.
+func batchTargets(req mcp.CallToolRequest, key string) ([]any, bool) {
 	raw, ok := req.GetArguments()[key].([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(raw))
-	for _, v := range raw {
-		if s, ok := v.(string); ok && s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
+	return raw, ok
 }
 
 func registerArchiveEntities(s *server.MCPServer, b *bridge) {
@@ -105,11 +111,11 @@ func registerArchiveEntities(s *server.MCPServer, b *bridge) {
 
 func archiveEntitiesHandler(b *bridge) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		ids := batchIDs(req, "entity_ids")
-		if len(ids) == 0 {
+		targets, ok := batchTargets(req, "entity_ids")
+		if !ok || len(targets) == 0 {
 			return mcp.NewToolResultError("`entity_ids` is required and must be a non-empty list of strings"), nil
 		}
-		return b.runBatch(ctx, "POST", ids, func(id string) string {
+		return b.runBatch(ctx, "POST", targets, func(id string) string {
 			return "/v1/entities/" + url.PathEscape(id) + "/archive"
 		}), nil
 	}
@@ -136,11 +142,11 @@ func registerDeleteEntities(s *server.MCPServer, b *bridge) {
 
 func deleteEntitiesHandler(b *bridge) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		ids := batchIDs(req, "entity_ids")
-		if len(ids) == 0 {
+		targets, ok := batchTargets(req, "entity_ids")
+		if !ok || len(targets) == 0 {
 			return mcp.NewToolResultError("`entity_ids` is required and must be a non-empty list of strings"), nil
 		}
-		return b.runBatch(ctx, "DELETE", ids, func(id string) string {
+		return b.runBatch(ctx, "DELETE", targets, func(id string) string {
 			return "/v1/entities/" + url.PathEscape(id)
 		}), nil
 	}
@@ -169,11 +175,11 @@ func registerTaskResolveBatch(s *server.MCPServer, b *bridge) {
 
 func taskResolveBatchHandler(b *bridge) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		ids := batchIDs(req, "task_ids")
-		if len(ids) == 0 {
+		targets, ok := batchTargets(req, "task_ids")
+		if !ok || len(targets) == 0 {
 			return mcp.NewToolResultError("`task_ids` is required and must be a non-empty list of strings"), nil
 		}
-		return b.runBatch(ctx, "POST", ids, func(id string) string {
+		return b.runBatch(ctx, "POST", targets, func(id string) string {
 			return "/v1/tasks/" + url.PathEscape(id) + "/resolve"
 		}), nil
 	}

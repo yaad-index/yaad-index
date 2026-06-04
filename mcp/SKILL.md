@@ -441,7 +441,7 @@ Other non-2xx (401, 404 already-gone, 503 vault not configured) still throw Yaad
 
 Batch variants of `archive_entity` / `delete_entity` (#383) — apply the op across a list of ids in **one** call instead of one MCP round-trip per id (the difference between seconds and ~20 minutes when archiving a large plugin fan-out). Each id runs through the same single-target endpoint server-side, so semantics are identical: archive is reversible via `restore_entity`; delete still requires each id be archived first (un-archived ids report a per-id failure, they don't abort the batch).
 
-Returns an aggregate `{ok, total, succeeded, failed, results}` where `results` is a per-id `{id, ok, status, error?}` list. `ok` is true only when **every** id succeeded; a partial run reports `ok: false` with the per-id breakdown so failures stay legible. An empty / missing `entity_ids` list is a tool error.
+Returns an aggregate `{ok, total, succeeded, failed, results}` where `results` is a per-id `{id, ok, status, error?}` list. `ok` is true only when **every** id succeeded; a partial run reports `ok: false` with the per-id breakdown so failures stay legible. An empty / missing `entity_ids` list is a tool error; a non-string / empty entry *within* the list is counted as a failed result (never silently dropped, so `total` always matches the input you sent — important when the op is destructive).
 
 ### `list_entities(kind)`
 

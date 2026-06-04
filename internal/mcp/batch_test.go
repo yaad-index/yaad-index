@@ -148,11 +148,29 @@ func TestBatchHandlers_EmptyIDsRejected(t *testing.T) {
 	assert.Empty(t, h.calls, "bridge must not be invoked on validation failure")
 }
 
-func TestBatchIDs_CoercesAndFilters(t *testing.T) {
+// TestArchiveEntities_InvalidEntriesCountedAsFailed pins the #383 review
+// fix: a non-string / empty entry is NOT silently dropped — it surfaces
+// as a failed result so `total` covers the caller's full input (critical
+// for destructive batches), and only valid ids reach the bridge.
+func TestArchiveEntities_InvalidEntriesCountedAsFailed(t *testing.T) {
 	t.Parallel()
-	got := batchIDs(batchReq(map[string]any{
-		"ids": []any{"a", "", "b", 42, nil, "c"},
-	}), "ids")
-	assert.Equal(t, []string{"a", "b", "c"}, got, "drops empties + non-strings")
-	assert.Nil(t, batchIDs(mcp.CallToolRequest{}, "ids"), "absent arg → nil")
+	h := &batchFakeHandler{}
+	b := newBridge(h)
+	res, err := archiveEntitiesHandler(b)(context.Background(), batchReq(map[string]any{
+		"entity_ids": []any{"x:a", "", 42},
+	}))
+	require.NoError(t, err)
+	got := decodeBatchResult(t, res)
+
+	assert.False(t, got.OK)
+	assert.Equal(t, 3, got.Total, "total covers the original input incl invalid entries")
+	assert.Equal(t, 1, got.Succeeded)
+	assert.Equal(t, 2, got.Failed)
+	require.Len(t, got.Results, 3)
+	assert.True(t, got.Results[0].OK, "valid id processed")
+	assert.False(t, got.Results[1].OK)
+	assert.Contains(t, got.Results[1].Error, "invalid id")
+	assert.False(t, got.Results[2].OK)
+	assert.Contains(t, got.Results[2].Error, "invalid id")
+	assert.Equal(t, []string{"POST /v1/entities/x:a/archive"}, h.calls, "only the valid id reaches the bridge")
 }
