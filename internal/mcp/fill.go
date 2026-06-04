@@ -212,8 +212,22 @@ func registerNeedsFill(s *server.MCPServer, b *bridge) {
 		mcp.WithString("exclude",
 			mcp.Description("Comma-separated field names to strip from the response. Supported: `canonical_vocabulary`, `clean_content`. Default empty (include everything)."),
 		),
+		mcp.WithString("source",
+			mcp.Description("Filter the queue to gaps from a single source / plugin namespace (e.g. `gmail`, `wikipedia`) — useful when one source spikes and floods the queue (#385). Omit for all sources."),
+		),
+		mcp.WithString("kind",
+			mcp.Description("Filter the queue to gaps on a single entity kind (e.g. `person`, `boardgame`) (#385). Composes (AND) with `source`. Omit for all kinds."),
+		),
 	)
-	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.AddTool(tool, needsFillHandler(b))
+}
+
+// needsFillHandler is the needs_fill tool handler (extracted so the
+// query-param threading is unit-testable). It maps the optional
+// limit / cursor / exclude / source / kind args onto the
+// GET /v1/needs-fill query string.
+func needsFillHandler(b *bridge) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		q := url.Values{}
 		if limit := req.GetFloat("limit", 0); limit > 0 {
 			q.Set("limit", fmt.Sprintf("%d", int(limit)))
@@ -224,12 +238,18 @@ func registerNeedsFill(s *server.MCPServer, b *bridge) {
 		if exclude := req.GetString("exclude", ""); exclude != "" {
 			q.Set("exclude", exclude)
 		}
+		if source := req.GetString("source", ""); source != "" {
+			q.Set("source", source)
+		}
+		if kind := req.GetString("kind", ""); kind != "" {
+			q.Set("kind", kind)
+		}
 		path := "/v1/needs-fill"
 		if encoded := q.Encode(); encoded != "" {
 			path += "?" + encoded
 		}
 		return b.callTool(ctx, "GET", path, nil)
-	})
+	}
 }
 
 func registerCVStatus(s *server.MCPServer, b *bridge) {
