@@ -78,6 +78,29 @@ func TestUGC_Move_BadSubfolder_400(t *testing.T) {
 	require.FileExists(t, filepath.Join(root, "user-content", slug+".md"))
 }
 
+// TestUGC_Move_CrossOperator_403 pins the #425 review auth fix: a caller
+// whose operator does not match the entity's operator cannot move it
+// (closes the #377 cross-operator bypass class for this endpoint), and
+// the file stays put.
+func TestUGC_Move_CrossOperator_403(t *testing.T) {
+	t.Parallel()
+	h, _, root, signer := newAuthedUGCFixture(t)
+	alice := mintToken(t, signer, "alice-agent", "alice")
+	bob := mintToken(t, signer, "bob-agent", "bob")
+
+	id, slug := createUGCForMove(t, h, alice, "Alice Note") // operator=alice
+	flat := filepath.Join(root, "user-content", slug+".md")
+
+	rec := ugcReq(t, h, http.MethodPost, "/v1/user-content/"+id+"/move", bob,
+		map[string]any{"subfolder": "notes"}, nil)
+	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "operator_mismatch")
+
+	// The file is untouched — no cross-operator move.
+	require.FileExists(t, flat)
+	assert.NoFileExists(t, filepath.Join(root, "user-content", "notes", slug+".md"))
+}
+
 // TestUGC_Move_UnknownEntity_404 pins that a move on a non-existent UGC
 // id is a 404.
 func TestUGC_Move_UnknownEntity_404(t *testing.T) {

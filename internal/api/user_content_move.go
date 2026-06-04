@@ -98,6 +98,30 @@ func handleUserContentMove(logger *slog.Logger, st store.Store, vaultReader *vau
 			author = claim.Subject
 		}
 
+		// Load the entity under the lock and apply the UGC edit-permission
+		// gate BEFORE mutating — the same operator-match check every other
+		// UGC mutation (section / frontmatter / delete / archive) enforces,
+		// so move can't relocate another operator's file (closes the #377
+		// cross-operator bypass class for this new endpoint). A move leaves
+		// the body unchanged, so this pre-move read also serves the
+		// response.
+		ve, err := vaultReader.ReadByID(userContentKind, id)
+		if err != nil {
+			if vault.IsNotExist(err) {
+				writeError(w, http.StatusNotFound, "not_found",
+					fmt.Sprintf("no vault file for user-content entity %s", id))
+				return
+			}
+			logger.ErrorContext(r.Context(), "vault.Reader.ReadByID (pre-move auth) from user-content move", "err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "internal_error", "failed to read vault file")
+			return
+		}
+		if !canEditUserContent(claim, ve) {
+			writeError(w, http.StatusForbidden, "operator_mismatch",
+				"caller's operator does not match this user-content entity's operator")
+			return
+		}
+
 		commitMsg := userContentMoveCommitMessage(id, subfolder, author)
 		if _, err := vaultWriter.MoveToSubfolder(r.Context(), userContentKind, id, subfolder, commitMsg, agentAuthorRef(author)); err != nil {
 			if vault.IsNotExist(err) {
@@ -107,15 +131,6 @@ func handleUserContentMove(logger *slog.Logger, st store.Store, vaultReader *vau
 			}
 			logger.ErrorContext(r.Context(), "vault.Writer.MoveToSubfolder from user-content move", "err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error", "failed to move vault file")
-			return
-		}
-
-		// Re-read so the response reflects the post-move on-disk file
-		// (resolved at its new path via the #415 read fallback).
-		ve, err := vaultReader.ReadByID(userContentKind, id)
-		if err != nil {
-			logger.ErrorContext(r.Context(), "vault.Reader.ReadByID post-move reread", "err", err, "id", id)
-			writeError(w, http.StatusInternalServerError, "internal_error", "failed to reload moved entity")
 			return
 		}
 
