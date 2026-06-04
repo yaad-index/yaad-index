@@ -170,6 +170,49 @@ func registerMoveUserContent(s *server.MCPServer, b *bridge) {
 	})
 }
 
+func registerRenameUserContent(s *server.MCPServer, b *bridge) {
+	tool := mcp.NewTool("rename_user_content",
+		mcp.WithDescription(
+			"Rename a UGC entity by retitling it: the new slug — and thus "+
+				"the new id user-content:<new-slug> — is derived from "+
+				"new_title server-side. Unlike move (which keeps the id and "+
+				"relocates the file), rename changes the identity. Inbound "+
+				"and outbound edges, provenance, and the file body are "+
+				"preserved, re-keyed to the new id; the old id is kept as an "+
+				"alias so existing references still resolve. A new title that "+
+				"slugifies to the current slug is an idempotent no-op. A new "+
+				"slug that collides with an existing entity, file, or alias "+
+				"rejects with 409 — pick a different title.",
+		),
+		mcp.WithString("id",
+			mcp.Required(),
+			mcp.Description("UGC entity id to rename."),
+		),
+		mcp.WithString("new_title",
+			mcp.Required(),
+			mcp.Description(
+				"The new human title. The new slug + id are derived from "+
+					"it the same way create derives them from title.",
+			),
+		),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id := req.GetString("id", "")
+		if id == "" {
+			return mcp.NewToolResultError("`id` is required"), nil
+		}
+		newTitle := req.GetString("new_title", "")
+		if newTitle == "" {
+			return mcp.NewToolResultError("`new_title` is required"), nil
+		}
+		bodyBytes, err := json.Marshal(map[string]any{"new_title": newTitle})
+		if err != nil {
+			return mcp.NewToolResultError("encode args: " + err.Error()), nil
+		}
+		return b.callToolWithEtagLift(ctx, "POST", "/v1/user-content/"+url.PathEscape(id)+"/rename", bytes.NewReader(bodyBytes), nil)
+	})
+}
+
 func registerListUserContentSections(s *server.MCPServer, b *bridge) {
 	tool := mcp.NewTool("list_user_content_sections",
 		mcp.WithDescription(
