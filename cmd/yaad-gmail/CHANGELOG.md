@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/yaad-index/yaad-index/compare/yaad-gmail-v0.4.0...yaad-gmail-v0.5.0) (2026-06-04)
+
+
+### Features
+
+* **gmail:** surface forwarded original sender + subject ([#323](https://github.com/yaad-index/yaad-index/issues/323)) ([eaa24b0](https://github.com/yaad-index/yaad-index/commit/eaa24b0aeda6bca87552acb211a3b16d948a0748))
+
 ## [0.4.0](https://github.com/yaad-index/yaad-index/compare/yaad-gmail-v0.3.0...yaad-gmail-v0.4.0) (2026-05-29)
 
 
