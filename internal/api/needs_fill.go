@@ -21,6 +21,7 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
@@ -138,6 +139,49 @@ type needsFillResponse struct {
 	// copy per response rather than one per entry. Omitted when
 	// the operator's request strips it via `?exclude=canonical_vocabulary`.
 	CanonicalVocabulary map[string]config.LegacyCanonicalKindConfig `json:"canonical_vocabulary,omitempty"`
+}
+
+// countNeedsFillCandidatesBySource counts gap-callable candidates whose
+// vault entity belongs to the given plugin source — the source companion
+// to CountGapCallableCandidates(kind) (#439). source isn't a DB column (it
+// lives in the vault frontmatter source[0]), so this paginates the
+// gap-callable set from the start and reads each candidate's PluginName.
+// Bounded by the same per-request needsFillMaxCandidateScan cap as the
+// page loop; `capped` reports whether the cap truncated the walk (total is
+// then a lower bound). Vault-less / unreadable candidates belong to no
+// source and are skipped. Parallel to the base count, it does not apply
+// the vault Gaps / audience filters — it adds only the source dimension.
+func countNeedsFillCandidatesBySource(ctx context.Context, st store.Store, vaultReader *vault.Reader, kindFilter, sourceFilter string) (count int, capped bool, err error) {
+	scanned := 0
+	var after string
+	for scanned < needsFillMaxCandidateScan {
+		batch := needsFillCandidateBatch
+		if rem := needsFillMaxCandidateScan - scanned; rem < batch {
+			batch = rem
+		}
+		candidates, lerr := st.ListGapCallableCandidates(ctx, after, batch, kindFilter)
+		if lerr != nil {
+			return 0, false, lerr
+		}
+		if len(candidates) == 0 {
+			return count, false, nil
+		}
+		for i := range candidates {
+			after = candidates[i].ID
+			scanned++
+			ve, rerr := vaultReader.ReadByID(candidates[i].Kind, candidates[i].ID)
+			if rerr != nil {
+				continue
+			}
+			if ve.PluginName() == sourceFilter {
+				count++
+			}
+		}
+		if len(candidates) < batch {
+			return count, false, nil
+		}
+	}
+	return count, true, nil
 }
 
 func handleNeedsFill(
@@ -334,11 +378,34 @@ func handleNeedsFill(
 		// position. Logs at WARN on failure and surfaces total=0
 		// rather than failing the whole response — the entries
 		// payload is the load-bearing surface.
-		total, err := st.CountGapCallableCandidates(r.Context(), kindFilter)
-		if err != nil {
+		// total: the cheap kind-only COUNT(*) when there's no source
+		// filter. With ?source= set, source lives in the vault (not a DB
+		// column), so an honest total requires scanning the gap-callable
+		// set and reading each vault entity's PluginName — a bounded extra
+		// pass so total reflects the source-filtered list instead of
+		// overcounting it (#439).
+		var total int
+		if sourceFilter != "" {
+			c, capped, cerr := countNeedsFillCandidatesBySource(r.Context(), st, vaultReader, kindFilter, sourceFilter)
+			switch {
+			case cerr != nil:
+				logger.WarnContext(r.Context(), "source-filtered needs-fill count failed; surfacing total=0",
+					"err", cerr, "source", sourceFilter)
+				total = 0
+			default:
+				total = c
+				if capped {
+					logger.WarnContext(r.Context(),
+						"source-filtered needs-fill count hit the scan cap; total is a lower bound",
+						"cap", needsFillMaxCandidateScan, "source", sourceFilter)
+				}
+			}
+		} else if t, err := st.CountGapCallableCandidates(r.Context(), kindFilter); err != nil {
 			logger.WarnContext(r.Context(), "store.CountGapCallableCandidates failed; surfacing total=0",
 				"err", err)
 			total = 0
+		} else {
+			total = t
 		}
 
 		resp := needsFillResponse{

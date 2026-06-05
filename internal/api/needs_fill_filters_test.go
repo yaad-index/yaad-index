@@ -122,33 +122,35 @@ func TestNeedsFill_KindFilter(t *testing.T) {
 }
 
 // TestNeedsFill_SourceFilter pins the vault-side source filter on the
-// plugin namespace (PluginName — bit before `/` in source[0]). total is
-// NOT reduced by source (the documented #385 nuance): it stays the
-// kind-unfiltered DB count.
+// plugin namespace (PluginName — bit before `/` in source[0]) AND that
+// total now reflects it (#439): the source-aware count scans the
+// gap-callable set and counts vault source matches, so total drops to the
+// filtered count instead of overcounting at the kind-unfiltered anchor.
 func TestNeedsFill_SourceFilter(t *testing.T) {
 	t.Parallel()
 	h := nfFilterFixture(t, nfFilterSeeds)
 	got := nfGet(t, h, "/v1/needs-fill?source=bgg")
 	assert.Equal(t, []string{"boardgame:a", "person:x"}, nfEntityIDs(got))
-	assert.Equal(t, 4, got.Total, "source filter is vault-side; total stays the kind-unfiltered anchor")
+	assert.Equal(t, 2, got.Total, "total reflects the source filter (#439): 2 bgg entities, not the kind-anchor 4")
 }
 
 // TestNeedsFill_KindAndSource_AND pins that the two filters compose with
-// AND: only entities matching both surface.
+// AND for both the entity list and total (#439): only person+wikipedia
+// surfaces, and total counts exactly that intersection.
 func TestNeedsFill_KindAndSource_AND(t *testing.T) {
 	t.Parallel()
 	h := nfFilterFixture(t, nfFilterSeeds)
 	got := nfGet(t, h, "/v1/needs-fill?kind=person&source=wikipedia")
 	assert.Equal(t, []string{"person:y"}, nfEntityIDs(got))
-	assert.Equal(t, 2, got.Total, "total reflects kind=person; source does not reduce it")
+	assert.Equal(t, 1, got.Total, "total reflects kind=person AND source=wikipedia (#439): just person:y")
 }
 
-// TestNeedsFill_SourceFilter_NoMatch pins that an unmatched source
-// yields zero entities (but total still reflects the kind anchor).
+// TestNeedsFill_SourceFilter_NoMatch pins that an unmatched source yields
+// zero entities AND total 0 (#439) — not the kind anchor.
 func TestNeedsFill_SourceFilter_NoMatch(t *testing.T) {
 	t.Parallel()
 	h := nfFilterFixture(t, nfFilterSeeds)
 	got := nfGet(t, h, "/v1/needs-fill?source=gmail")
 	assert.Empty(t, got.Entities)
-	assert.Equal(t, 4, got.Total)
+	assert.Equal(t, 0, got.Total, "unmatched source → total 0 (#439)")
 }
