@@ -441,7 +441,18 @@ func handleListEdges(logger *slog.Logger, st store.Store) http.HandlerFunc {
 		types := parseEdgeTypesFilter(r.URL.Query().Get("edge_types"))
 		limit := parseEdgesLimit(r.URL.Query().Get("limit"))
 
+		// Per-direction cap: each side is independently truncated to
+		// `limit`, so direction=both can return up to 2× limit (one page
+		// per side) and a node with many outbound edges never starves the
+		// inbound side. Capping the concatenated slice instead would slice
+		// `[out…, in…][:limit]` and silently drop every inbound edge once
+		// the outbound side alone reached `limit`.
+		//
+		// #338: `total` stays the pre-cap matched count across both
+		// directions, so the caller can tell when either side was
+		// truncated (total > len(edges)).
 		edges := make([]store.Edge, 0)
+		total := 0
 		if direction == "out" || direction == "both" {
 			out, err := st.GetEdgesFor(r.Context(), entityID, types)
 			if err != nil {
@@ -450,6 +461,10 @@ func handleListEdges(logger *slog.Logger, st store.Store) http.HandlerFunc {
 				writeError(w, http.StatusInternalServerError, "internal_error",
 					"failed to read outbound edges")
 				return
+			}
+			total += len(out)
+			if len(out) > limit {
+				out = out[:limit]
 			}
 			edges = append(edges, out...)
 		}
@@ -462,16 +477,11 @@ func handleListEdges(logger *slog.Logger, st store.Store) http.HandlerFunc {
 					"failed to read inbound edges")
 				return
 			}
+			total += len(in)
+			if len(in) > limit {
+				in = in[:limit]
+			}
 			edges = append(edges, in...)
-		}
-
-		// #338: capture pre-cap count so the response's `total`
-		// field tells the caller how many edges the (entity,
-		// direction, types) tuple matched before the limit
-		// truncation.
-		total := len(edges)
-		if len(edges) > limit {
-			edges = edges[:limit]
 		}
 
 		resp := edgeListResponse{
