@@ -366,7 +366,7 @@ func TestUserContent_Delete_ConflictOnActive(t *testing.T) {
 	rec = ugcReq(t, h, http.MethodDelete, "/v1/user-content/user-content:stillactive", tok, nil, nil)
 	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
 	body := rec.Body.String()
-	assert.Contains(t, body, "must archive before delete", "wire error code")
+	assert.Contains(t, body, "not_archived", "wire error code")
 	assert.Contains(t, body, "/archive first", "hint points at archive path")
 
 	// Untouched: still in DB, still active.
@@ -1042,7 +1042,7 @@ func TestUserContent_GenericDelete_403OnCrossOperator(t *testing.T) {
 // the order-of-checks fix from the second nava-catch on #377:
 // the operator gate must run BEFORE the ADR-0018 archive-first
 // gate so a cross-operator intruder learns 403 (operator_mismatch),
-// not 409 (must archive before delete). Otherwise the lifecycle hint
+// not 409 (not_archived). Otherwise the lifecycle hint
 // leaks existence + active state of someone else's UGC entity. The
 // UGC-specific delete path puts authorization first for the same
 // reason — see user_content_write.go:1356.
@@ -1065,6 +1065,6 @@ func TestUserContent_GenericDelete_ActiveRow_403BeforeArchiveCheck(t *testing.T)
 		"/v1/entities/user-content:cross-op-active-probe", intruderTok, nil, nil)
 	require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
 	assert.Contains(t, rec.Body.String(), "operator_mismatch")
-	assert.NotContains(t, rec.Body.String(), "must archive before delete",
+	assert.NotContains(t, rec.Body.String(), "not_archived",
 		"lifecycle hint must not leak to a cross-operator caller")
 }
