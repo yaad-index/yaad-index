@@ -70,7 +70,7 @@ func (d *Dispatcher) handleHTTP(ctx context.Context, a Attachment, dest string) 
 	if err != nil {
 		return fmt.Errorf("create dest %q: %w", dest, err)
 	}
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	if err := copyCapped(out, resp.Body, d.maxAttachmentBytes); err != nil {
 		_ = out.Close()
 		_ = os.Remove(dest)
 		return fmt.Errorf("write response body to %q: %w", dest, err)
@@ -81,6 +81,23 @@ func (d *Dispatcher) handleHTTP(ctx context.Context, a Attachment, dest string) 
 	}
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("close dest %q: %w", dest, err)
+	}
+	return nil
+}
+
+// copyCapped streams src to dst, refusing once src exceeds max bytes.
+// io.CopyN writes at most max+1 bytes: an io.EOF return means the source
+// fit within the cap; any other nil error means max+1 bytes were
+// available, i.e. the source is over the cap. Callers remove the partial
+// dest on the returned error — the same fail-soft path as any other copy
+// failure (ADR-0014 §5). Shared by the file:// and https:// handlers.
+func copyCapped(dst io.Writer, src io.Reader, max int64) error {
+	n, err := io.CopyN(dst, src, max+1)
+	if err != nil && err != io.EOF {
+		return err
+	}
+	if n > max {
+		return fmt.Errorf("%w: limit %d bytes", ErrAttachmentTooLarge, max)
 	}
 	return nil
 }

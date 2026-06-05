@@ -97,7 +97,27 @@ type Dispatcher struct {
 	stagingDir string
 
 	logger *slog.Logger
+
+	// maxAttachmentBytes caps a single attachment's on-disk size as
+	// defense-in-depth against an unbounded write — a plugin (or a URL
+	// it points at) streaming far more than expected into the vault.
+	// An over-cap attachment fails with ErrAttachmentTooLarge and is
+	// logged + skipped per the §5 fail-soft rule. Defaults to
+	// defaultMaxAttachmentBytes; override via WithMaxAttachmentBytes.
+	maxAttachmentBytes int64
 }
+
+// defaultMaxAttachmentBytes bounds a single attachment at 100 MiB —
+// generous for the thumbnails / PDFs / audio / screenshots ADR-0014
+// describes, while keeping a runaway fetch or oversized staged file
+// from filling the vault disk. A defensive default, not yet
+// operator-configurable.
+const defaultMaxAttachmentBytes int64 = 100 * 1024 * 1024
+
+// ErrAttachmentTooLarge is returned when an attachment's source exceeds
+// the dispatcher's max on-disk size. The dispatcher logs + skips the
+// attachment per ADR-0014 §5 (the rest of the entity still lands).
+var ErrAttachmentTooLarge = errors.New("attachment exceeds max size")
 
 // Option configures a Dispatcher at construction.
 type Option func(*Dispatcher)
@@ -113,6 +133,17 @@ func WithLogger(l *slog.Logger) Option {
 	return func(d *Dispatcher) {
 		if l != nil {
 			d.logger = l
+		}
+	}
+}
+
+// WithMaxAttachmentBytes overrides the per-attachment on-disk size cap
+// (default 100 MiB). Non-positive values are ignored. Used by tests and
+// reserved for a future operator-config wiring.
+func WithMaxAttachmentBytes(n int64) Option {
+	return func(d *Dispatcher) {
+		if n > 0 {
+			d.maxAttachmentBytes = n
 		}
 	}
 }
@@ -138,6 +169,7 @@ func New(stagingDir string, opts ...Option) (*Dispatcher, error) {
 		httpClient: &http.Client{Timeout: 60 * time.Second},
 		stagingDir: resolved,
 		logger: slog.Default(),
+		maxAttachmentBytes: defaultMaxAttachmentBytes,
 	}
 	for _, o := range opts {
 		o(d)

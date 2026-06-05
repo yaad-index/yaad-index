@@ -3,7 +3,6 @@ package attachments
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -56,6 +55,15 @@ func (d *Dispatcher) handleFile(a Attachment, dest string) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("staged source %q is not a regular file", resolved)
 	}
+	// Size cap, checked before the hardlink path too: a same-filesystem
+	// hardlink would otherwise land an oversized staged file in the vault
+	// without ever hitting copyFile's streaming cap. copyFile keeps its
+	// own copyCapped as TOCTOU defense in case the file grows after this
+	// stat.
+	if info.Size() > d.maxAttachmentBytes {
+		return fmt.Errorf("%w: staged source %q is %d bytes (limit %d)",
+			ErrAttachmentTooLarge, resolved, info.Size(), d.maxAttachmentBytes)
+	}
 
 	// Ensure the destination's parent (kind dir) exists. The vault
 	// writer creates the kind dir during the .md write, but
@@ -93,7 +101,7 @@ func (d *Dispatcher) handleFile(a Attachment, dest string) error {
 	// Copy fallback. Open source + dest in the safe order: source
 	// for read, dest with O_TRUNC|O_CREATE so an existing file is
 	// overwritten in place.
-	if err := copyFile(resolved, dest); err != nil {
+	if err := copyFile(resolved, dest, d.maxAttachmentBytes); err != nil {
 		return err
 	}
 	// Delete staged source on copy success.
@@ -140,7 +148,7 @@ func parseFileURI(uri string) (string, error) {
 // copyFile is the cross-device copy fallback for the `file://`
 // handler. Open source, create dest with O_TRUNC, io.Copy, fsync.
 // Permissions on dest are 0644 (vault files are operator-readable).
-func copyFile(src, dst string) error {
+func copyFile(src, dst string, max int64) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("open staged source %q: %w", src, err)
@@ -151,7 +159,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("create dest %q: %w", dst, err)
 	}
-	if _, err := io.Copy(out, in); err != nil {
+	if err := copyCapped(out, in, max); err != nil {
 		_ = out.Close()
 		_ = os.Remove(dst)
 		return fmt.Errorf("copy %q → %q: %w", src, dst, err)
