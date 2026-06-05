@@ -922,13 +922,13 @@ func (e *Engine) runWorkflowAgainstEvent(qe queuedEvent, reg *registeredWorkflow
 	case eventbus.EntityEdgeAddedEvent:
 		return e.evaluateEdgeEvent(qe.ctx, reg, ev)
 	case eventbus.EntityCreatedEvent:
-		trig := e.buildTriggerContext(qe.ctx, "entity_created", ev.At, ev.CausedByEntityID, ev.ID, "")
+		trig := e.buildTriggerContext(qe.ctx, "entity_created", ev.At, ev.CausedByEntityID, ev.ID, "", nil, nil)
 		return e.evaluateAndRecord(qe.ctx, reg, ev.ID, nil, trig, ev.Chain)
 	case eventbus.FillCompletedEvent:
-		trig := e.buildTriggerContext(qe.ctx, "fill_completed", ev.At, ev.EntityID, ev.EntityID, ev.Gap)
+		trig := e.buildTriggerContext(qe.ctx, "fill_completed", ev.At, ev.EntityID, ev.EntityID, ev.Gap, nil, nil)
 		return e.evaluateAndRecord(qe.ctx, reg, ev.EntityID, nil, trig, ev.Chain)
 	case eventbus.EntityUpdatedEvent:
-		trig := e.buildTriggerContext(qe.ctx, "entity_updated", ev.At, ev.CausedByEntityID, ev.EntityID, ev.Field)
+		trig := e.buildTriggerContext(qe.ctx, "entity_updated", ev.At, ev.CausedByEntityID, ev.EntityID, ev.Field, ev.Old, ev.New)
 		return e.evaluateAndRecord(qe.ctx, reg, ev.EntityID, nil, trig, ev.Chain)
 	default:
 		return false
@@ -945,7 +945,7 @@ func (e *Engine) runWorkflowAgainstEvent(qe queuedEvent, reg *registeredWorkflow
 // land as an empty `trigger.source` map — predicates that
 // reference fields see has() == false, mirroring the engine's
 // entity-resolve missing-ref handling.
-func (e *Engine) buildTriggerContext(ctx context.Context, eventType string, at time.Time, causedByID, fallbackEntityID, cause string) map[string]any {
+func (e *Engine) buildTriggerContext(ctx context.Context, eventType string, at time.Time, causedByID, fallbackEntityID, cause string, oldValue, newValue any) map[string]any {
 	sourceID := causedByID
 	if sourceID == "" {
 		sourceID = fallbackEntityID
@@ -956,7 +956,7 @@ func (e *Engine) buildTriggerContext(ctx context.Context, eventType string, at t
 			source = ent
 		}
 	}
-	return triggerContextWith(source, eventType, at, cause)
+	return triggerContextWith(source, eventType, at, cause, oldValue, newValue)
 }
 
 // triggerContextWith shapes the `trigger.*` CEL map when the
@@ -964,16 +964,32 @@ func (e *Engine) buildTriggerContext(ctx context.Context, eventType string, at t
 // manual paths, evaluateEdgeEvent's fromEntity reuse). Avoids
 // the re-resolve buildTriggerContext does. Nil source is
 // normalized to an empty map for the has()-safety contract.
-func triggerContextWith(source map[string]any, eventType string, at time.Time, cause string) map[string]any {
+//
+// oldValue / newValue carry the entity_updated field transition
+// (ev.Old / ev.New) and are stamped under `trigger.old_value` /
+// `trigger.new_value` (#456). Callers for which the keys don't
+// apply (entity_created, fill_completed, manual, edge) pass nil
+// for both; a nil value is OMITTED from the map so
+// has(trigger.new_value) reports false on non-update events,
+// matching the file's has()-safety contract. The trigger var is
+// a dyn map, so adding these keys needs no schema change.
+func triggerContextWith(source map[string]any, eventType string, at time.Time, cause string, oldValue, newValue any) map[string]any {
 	if source == nil {
 		source = map[string]any{}
 	}
-	return map[string]any{
+	trig := map[string]any{
 		"source":    source,
 		"event":     eventType,
 		"timestamp": at,
 		"cause":     cause,
 	}
+	if oldValue != nil {
+		trig["old_value"] = oldValue
+	}
+	if newValue != nil {
+		trig["new_value"] = newValue
+	}
+	return trig
 }
 
 // evaluateEdgeEvent runs the per-edge activation prep
@@ -1567,10 +1583,29 @@ func compileActionTemplates(ev *decision.Evaluator, a parser.Action) (map[string
 			tpls["entity"] = tpl
 		}
 	case a.PluginDispatch != nil:
-		// Phase 4.C — plugin_dispatch.args templating not yet
-		// wired. Returning an empty map keeps the runner-side
-		// drift-warn quiet for this action (no templated
-		// fields → no rendered keys expected).
+		// plugin_dispatch.args are mustache-only / literal-default
+		// (#456): plugin args are literal-heavy (paths, modes, type
+		// discriminators), so a bare value passes through to the
+		// dispatcher verbatim and ONLY a value carrying a `{{ … }}`
+		// interpolation segment is compiled as a template (e.g.
+		// `args.id: "{{ entity.id }}"`). This deliberately differs from
+		// the CEL-by-default convention of the other templated fields so
+		// existing literal args stay back-compatible. Rendered output is
+		// keyed under `arg:<name>`, mirroring set_property's
+		// `field:<name>` namespacing. Non-string arg values (numbers,
+		// bools, nested structures) are not templatable and pass through
+		// untouched at runner time.
+		for name, raw := range a.PluginDispatch.Args {
+			s, ok := raw.(string)
+			if !ok || s == "" || !strings.Contains(s, "{{") {
+				continue
+			}
+			tpl, err := template.Compile(s, ev)
+			if err != nil {
+				return nil, fmt.Errorf("plugin_dispatch.args[%q]: %w", name, err)
+			}
+			tpls["arg:"+name] = tpl
+		}
 	case a.SetProperty != nil:
 		if a.SetProperty.Entity != "" {
 			tpl, err := template.Compile(a.SetProperty.Entity, ev)
@@ -1865,7 +1900,7 @@ func (e *Engine) Dispatch(ctx context.Context, name, input string) (Decision, er
 	// per #264: synthesize a manual-shape trigger so workflows
 	// referencing `trigger.*` see a non-empty map (source
 	// resolves to the target entity for self-cause).
-	manualTrigger := e.buildTriggerContext(ctx, "manual", time.Now().UTC(), target, target, "")
+	manualTrigger := e.buildTriggerContext(ctx, "manual", time.Now().UTC(), target, target, "", nil, nil)
 	e.evaluateAndRecord(ctx, reg, target, nil, manualTrigger, nil)
 	return e.findRecentDecision(name, target), nil
 }
@@ -1924,7 +1959,7 @@ func (e *Engine) runEvaluation(ctx context.Context, reg *registeredWorkflow, ent
 	// `trigger.event == "manual"`. Workflows that branch on
 	// `trigger.event` distinguish event-driven from manual
 	// firings via this shape.
-	trigger := triggerContextWith(entity, "manual", dec.At, "")
+	trigger := triggerContextWith(entity, "manual", dec.At, "", nil, nil)
 
 	act := decision.Activation{
 		Entity:   entity,

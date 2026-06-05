@@ -89,6 +89,64 @@ func TestPluginDispatch_HappyPath(t *testing.T) {
 	assert.Equal(t, map[string]any{"id": "123"}, d.snapshot()[0].args)
 }
 
+// TestPluginDispatch_RenderedArgsReachDispatcher pins #456: a
+// string-valued arg that the engine pre-rendered (keyed
+// `arg:<name>` in RenderedTemplates) reaches the dispatcher as
+// the resolved value, not the raw `{{ ... }}` source. Non-string
+// args pass through verbatim.
+func TestPluginDispatch_RenderedArgsReachDispatcher(t *testing.T) {
+	t.Parallel()
+	d := &fakePluginDispatcher{}
+	r := New(Options{PluginDispatcher: d})
+	wf := wfWithActions("refetch-wf",
+		parser.Action{PluginDispatch: &parser.PluginDispatchAction{
+			Plugin:  "yaad-fetch",
+			Command: "refetch",
+			Args: map[string]any{
+				"id":    "{{ entity.id }}",
+				"count": int64(3),
+			},
+		}},
+	)
+	wf.AllowedPlugins = []string{"yaad-fetch"}
+	act := Activation{
+		RenderedTemplates: map[int]map[string]string{
+			0: {"arg:id": "widget:alpha-prime"},
+		},
+	}
+	results := r.Run(context.Background(), wf, Decision{Workflow: "refetch-wf"}, act)
+	require.Len(t, results, 1)
+	assert.NoError(t, results[0].Err)
+	require.Len(t, d.snapshot(), 1)
+	assert.Equal(t, map[string]any{
+		"id":    "widget:alpha-prime",
+		"count": int64(3),
+	}, d.snapshot()[0].args, "rendered string arg resolved; non-string arg passed through")
+}
+
+// TestPluginDispatch_NilRenderedTemplates_RawArgsBackCompat pins
+// the back-compat path: with no RenderedTemplates (legacy / test
+// callers that bypass the engine renderer), string args fall back
+// to their raw value rather than dropping.
+func TestPluginDispatch_NilRenderedTemplates_RawArgsBackCompat(t *testing.T) {
+	t.Parallel()
+	d := &fakePluginDispatcher{}
+	r := New(Options{PluginDispatcher: d})
+	wf := wfWithActions("wf",
+		parser.Action{PluginDispatch: &parser.PluginDispatchAction{
+			Plugin:  "yaad-fetch",
+			Command: "refetch",
+			Args:    map[string]any{"id": "literal-value"},
+		}},
+	)
+	wf.AllowedPlugins = []string{"yaad-fetch"}
+	results := r.Run(context.Background(), wf, Decision{Workflow: "wf"}, Activation{})
+	require.Len(t, results, 1)
+	assert.NoError(t, results[0].Err)
+	require.Len(t, d.snapshot(), 1)
+	assert.Equal(t, map[string]any{"id": "literal-value"}, d.snapshot()[0].args)
+}
+
 // TestPluginDispatch_AllowedPluginsEnforcement_RuntimeReject:
 // per ADR-0024 §"Workflow declares its plugin scope", the
 // runtime check rejects a plugin outside AllowedPlugins even

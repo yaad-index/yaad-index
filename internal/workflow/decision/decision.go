@@ -348,6 +348,19 @@ func (e *Evaluator) buildEnv(bindings []string) (*cel.Env, error) {
 				cel.UnaryBinding(e.graphGet),
 			),
 		),
+		// graph.try_get(id) — has()-safe sibling of graph.get(id)
+		// (#456). Same lookup, but a miss is SILENT: it records
+		// no MissingRef and returns an empty map so nested field
+		// access via has(graph.try_get(id).field) reports false
+		// instead of surfacing a task note (as graph.get would)
+		// or raising on null traversal.
+		cel.Function("graph.try_get",
+			cel.Overload("graph_try_get_string",
+				[]*cel.Type{cel.StringType},
+				cel.DynType,
+				cel.UnaryBinding(e.graphTryGet),
+			),
+		),
 		cel.Function("today",
 			cel.Overload("today",
 				[]*cel.Type{},
@@ -433,28 +446,71 @@ func (e *Evaluator) graphGet(arg ref.Val) ref.Val {
 	if !ok {
 		return types.NewErr("graph.get: argument must be string, got %T", arg.Value())
 	}
-	tracker := e.currentTracker
-	if tracker == nil {
-		// Defensive: a bare program.Eval invocation without
-		// an active tracker shouldn't happen via this
-		// package's API but might if a caller bypasses
-		// eval(). Returning null + recording nothing is the
-		// safest shape.
-		return types.NullValue
+	got, found, errVal := e.graphLookup(id)
+	if errVal != nil {
+		return errVal
 	}
-	if e.lookup == nil {
-		tracker.record(id)
-		return types.NullValue
-	}
-	got, err := e.lookup.Get(e.currentCtx, id)
-	if err != nil {
-		if errors.Is(err, ErrEntityNotFound) {
+	if !found {
+		// Record the miss so the engine surfaces it as a task
+		// note, and return null — callers guard with
+		// `graph.get(id) != null`.
+		if tracker := e.currentTracker; tracker != nil {
 			tracker.record(id)
-			return types.NullValue
 		}
-		return types.NewErr("graph.get(%q): %v", id, err)
+		return types.NullValue
 	}
 	return types.DefaultTypeAdapter.NativeToValue(got)
+}
+
+// graphTryGet is the env-time binding for graph.try_get(id)
+// (#456). It shares graphLookup's resolve logic with graph.get
+// but a miss is SILENT: no MissingRef is recorded, and the
+// return is an EMPTY map (not null) so has(graph.try_get(id).x)
+// reports false rather than raising on null traversal. A HIT
+// returns the same entity map shape as graph.get so existing
+// field access works unchanged.
+func (e *Evaluator) graphTryGet(arg ref.Val) ref.Val {
+	id, ok := arg.Value().(string)
+	if !ok {
+		return types.NewErr("graph.try_get: argument must be string, got %T", arg.Value())
+	}
+	got, found, errVal := e.graphLookup(id)
+	if errVal != nil {
+		return errVal
+	}
+	if !found {
+		return types.DefaultTypeAdapter.NativeToValue(map[string]any{})
+	}
+	return types.DefaultTypeAdapter.NativeToValue(got)
+}
+
+// graphLookup resolves id against the configured GraphLookup,
+// shared by graphGet (records-on-miss) and graphTryGet
+// (silent-on-miss). It returns the entity map + found=true on a
+// hit; found=false (with a nil errVal) on a not-found or
+// no-lookup-configured miss; or a non-nil errVal carrying a
+// types.Err for a fatal lookup failure or missing tracker
+// context. Reads the per-eval ctx from the evaluator's
+// evalMu-guarded fields populated by eval() before Eval.
+func (e *Evaluator) graphLookup(id string) (got map[string]any, found bool, errVal ref.Val) {
+	if e.currentTracker == nil {
+		// Defensive: a bare program.Eval invocation without an
+		// active tracker shouldn't happen via this package's
+		// API but might if a caller bypasses eval(). Treat as a
+		// silent miss (no record, no error).
+		return nil, false, nil
+	}
+	if e.lookup == nil {
+		return nil, false, nil
+	}
+	res, err := e.lookup.Get(e.currentCtx, id)
+	if err != nil {
+		if errors.Is(err, ErrEntityNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, types.NewErr("graph.get(%q): %v", id, err)
+	}
+	return res, true, nil
 }
 
 // Compile returns a compiled program for expr that can be
