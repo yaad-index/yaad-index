@@ -1,6 +1,6 @@
 # ADR-0024: Workflows and Tasks
 
-**Status:** PROPOSED
+**Status:** ACCEPTED (2026-06-05)
 **Date:** 2026-05-12
 **Revised:** 2026-05-16 (v1 design slice reconciled — see Revisions log at end)
 

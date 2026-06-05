@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed 2026-05-24. Pre-release; no migration. Schema is the new shape from v0.11 onward.
+Accepted 2026-06-05 (proposed 2026-05-24). Pre-release; no migration. Schema is the new shape from v0.11 onward.
 
 ## Depends on
 

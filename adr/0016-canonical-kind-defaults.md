@@ -1,6 +1,6 @@
 # ADR-0016 — Canonical-kind defaults: built-in gaps + 4-layer override + plugin-driven activation
 
-**Status:** Proposed (2026-05-06)
+**Status:** Accepted (2026-06-05; proposed 2026-05-06)
 **Date:** 2026-05-06
 **Depends on:** [ADR-0008](./0008-vault-as-source-of-truth.md), [ADR-0013](./0013-canonical-kind-owns-gap-contract.md)
 **Amends:** ADR-0013 §1 (canonical_kinds config shape)

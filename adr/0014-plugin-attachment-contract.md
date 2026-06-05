@@ -1,6 +1,6 @@
 # ADR-0014 — Plugin attachment contract: binary-blob delivery from plugins to vault
 
-**Status:** Proposed (2026-05-06)
+**Status:** Accepted (2026-06-05; proposed 2026-05-06)
 **Date:** 2026-05-06
 **Depends on:** [ADR-0005](./0005-plugin-lifecycle.md), [ADR-0006](./0006-plugin-discovery-config-allowlist.md), [ADR-0008](./0008-vault-as-source-of-truth.md), [ADR-0012](./0012-user-generated-content.md)
 
