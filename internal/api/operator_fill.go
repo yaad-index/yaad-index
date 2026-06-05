@@ -247,9 +247,22 @@ func handleEntityOperatorFill(
 			triggerMode = "operator"
 		}
 		force := r.URL.Query().Get("force") == "true"
+		// Pass ve.Data augmented with the reserved frontmatter fill
+		// fields (`summary`, `tags`), not bare ve.Data, so the
+		// already-filled / overwrite detection sees them. They live on
+		// the struct (ve.Summary / ve.Tags) rather than in ve.Data
+		// (#359); without this, a re-fill of an already-filled reserved
+		// field misses the overwrite branch and falls through to ad-hoc —
+		// surfacing as a 400 unknown_field for some request-field
+		// orderings and a 409 already_filled for others (the non-reserved
+		// field wins), making the response status depend on map-iteration
+		// order. fillOverwriteData adds summary/tags only when set — and
+		// deliberately NOT the derived `notes_text` search projection,
+		// which is not an operator-fillable field and must keep
+		// classifying as unknown_field (#468).
 		ops, opErr := parseOperatorFillOps(
 			req, effectiveGaps, operatorAllKinds,
-			ve.Data, ve.Gaps, triggerMode, force,
+			fillOverwriteData(ve), ve.Gaps, triggerMode, force,
 		)
 		if opErr != nil {
 			writeError(w, opErr.status, opErr.code, opErr.message)
