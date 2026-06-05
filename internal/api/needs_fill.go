@@ -211,6 +211,16 @@ func handleNeedsFill(
 		kindFilter := strings.TrimSpace(r.URL.Query().Get("kind"))
 		sourceFilter := strings.TrimSpace(r.URL.Query().Get("source"))
 
+		// #459: optional ?fill_strategy= audience selector. Validated
+		// here — before the vaultReader==nil short-circuit — so a bad
+		// value is rejected with 400 regardless of vault presence.
+		fillStrategy, ok := parseNeedsFillStrategy(r.URL.Query().Get("fill_strategy"))
+		if !ok {
+			writeError(w, http.StatusBadRequest, "invalid_argument",
+				`fill_strategy: must be "agent" or "operator" (or omitted)`)
+			return
+		}
+
 		// Vault is the canonical source for `Gaps`-non-empty per
 		// ADR-0008; without a vault reader we can't filter
 		// candidates and have nothing meaningful to surface.
@@ -256,6 +266,20 @@ func handleNeedsFill(
 			!IsAnonymousClaim(claim) && claim.Subject != "" &&
 			claim.Subject == claim.Operator {
 			isOperator = true
+		}
+
+		// #459: an explicit ?fill_strategy= overrides the auth-derived
+		// audience so a caller can focus on either slice (an operator can
+		// review the agent queue, an agent can preview operator gaps). The
+		// override only steers which gaps surface in the listing — it is not
+		// an auth boundary (the audience filter is an ergonomic one per
+		// ADR-0019 step 6).
+		viewAsOperator := isOperator
+		switch fillStrategy {
+		case "operator":
+			viewAsOperator = true
+		case "agent":
+			viewAsOperator = false
 		}
 
 		// Scan-until-found-or-exhausted: a DB full of source-shape
@@ -330,7 +354,7 @@ func handleNeedsFill(
 					continue
 				}
 				entry, ok := buildNeedsFillEntry(
-					cand.ID, cand.Kind, ve, fillInstruction, canonicalKindReg, isOperator)
+					cand.ID, cand.Kind, ve, fillInstruction, canonicalKindReg, viewAsOperator)
 				if !ok {
 					// All gaps for this entity were filtered out
 					// (deferred or wrong fill_strategy for caller).
@@ -462,6 +486,25 @@ func parseNeedsFillExclude(raw string) map[string]bool {
 	return out
 }
 
+// parseNeedsFillStrategy validates the optional ?fill_strategy= filter.
+// "" (omitted) → ("", true) no override; "agent"/"operator" (trimmed,
+// case-insensitive) → (value, true); any other non-empty value →
+// ("", false) so the handler returns 400 invalid_argument. Only the
+// two audience selectors are accepted — "both"/other GapSpec strategy
+// values are not audience views. Per #459.
+func parseNeedsFillStrategy(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return "", true
+	case "agent":
+		return "agent", true
+	case "operator":
+		return "operator", true
+	default:
+		return "", false
+	}
+}
+
 // buildNeedsFillEntry shapes a single entity's gap-call payload.
 // Returns (entry, true) when at least one gap survives the
 // audience-aware filter (defer + fill_strategy + registry
@@ -470,12 +513,15 @@ func parseNeedsFillExclude(raw string) map[string]bool {
 // gap is deferred, wrong-audience, or not in the registry doesn't
 // surface as an empty-gaps row.
 //
-// ADR-0019 step 6 audience filtering:
+// ADR-0019 step 6 audience filtering. viewAsOperator is the
+// EFFECTIVE audience view — auth-derived by default, but the
+// handler overrides it from an explicit ?fill_strategy= selector
+// (#459) so a caller can focus on either slice regardless of auth:
 //
-// - isOperator=true (operator caller): skip fields whose
+// - viewAsOperator=true (operator view): skip fields whose
 // fill_strategy=="agent" (don't waste operator attention on
 // fields the agent should derive from clean_content).
-// - isOperator=false (agent caller): skip fields whose
+// - viewAsOperator=false (agent view): skip fields whose
 // fill_strategy=="operator" (don't have agent waste cycles
 // trying to fill operator-only fields like rating/owned).
 // - fill_strategy="" or "both": included for both audiences.
@@ -495,7 +541,7 @@ func buildNeedsFillEntry(
 	ve *vault.Entity,
 	fillInstruction string,
 	reg map[string]config.CanonicalKindConfig,
-	isOperator bool,
+	viewAsOperator bool,
 ) (needsFillEntry, bool) {
 	// kind-not-in-registry was a strict-mode early-return until
 	// #142 added workflow-injected GapStateEntry — a workflow can
@@ -541,10 +587,10 @@ func buildNeedsFillEntry(
 		}
 		// Audience filter: skip fields whose fill_strategy doesn't
 		// match this caller's audience.
-		if isOperator && spec.FillStrategy == "agent" {
+		if viewAsOperator && spec.FillStrategy == "agent" {
 			continue
 		}
-		if !isOperator && spec.FillStrategy == "operator" {
+		if !viewAsOperator && spec.FillStrategy == "operator" {
 			continue
 		}
 		gaps[g] = spec.Description
