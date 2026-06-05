@@ -516,6 +516,7 @@ func (p *Plugin) streamStdout(stdoutBytes []byte, onEnvelope plugins.EnvelopeFun
 
 	var (
 		anyValueSeen bool
+		anyOKEnvelope bool
 		valueIndex int
 	)
 
@@ -575,12 +576,26 @@ func (p *Plugin) streamStdout(stdoutBytes []byte, onEnvelope plugins.EnvelopeFun
 			continue
 		}
 		if !resp.OK {
-			// ok=false on the FIRST envelope is a hard failure
-			// (existing pre-ADR-0023 contract). Per-envelope
-			// ok=false on a later envelope is treated the same —
-			// the plugin emits a control packet for that case.
-			return fmt.Errorf("plugin reported ok=false")
+			if !anyOKEnvelope {
+				// First/only source result failed before any good
+				// envelope streamed — the fetch produced nothing
+				// usable. Preserve the pre-ADR-0023 hard-failure
+				// contract so a wholly-failed fetch surfaces as an
+				// error to the caller.
+				return fmt.Errorf("plugin reported ok=false")
+			}
+			// A later envelope reported ok=false after good envelopes
+			// already streamed. Per ADR-0006's N-envelope
+			// write-as-you-go contract, one failed item must not abort
+			// the plugin's remaining (good) envelopes — log it and keep
+			// draining the stream (#448).
+			p.logger.Warn("plugin emitted source envelope with ok=false past the first; skipped",
+				"plugin", p.name,
+				"value_index", valueIndex,
+			)
+			continue
 		}
+		anyOKEnvelope = true
 		if resp.Structured != nil {
 			if err := validateStructured(resp.Structured, p.capabilities); err != nil {
 				// Validation failure on the wire shape: same
