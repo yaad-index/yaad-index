@@ -1159,7 +1159,24 @@ func titleOf(entity map[string]any) string {
 // worker's per-event chain. False on cycle-suppress, condition
 // false, dedup-skip, or any action chain that didn't include
 // claim_entity.
+// workflowActive reports whether a registered workflow should fire. Only
+// `active` (the parser default for an unset status) runs; `paused` and
+// `draft` workflows stay registered — so workflow_list still surfaces them
+// with their status — but never evaluate or fire actions (#440). Docs
+// (parser/types.go) promised this gate; the engine had not enforced it.
+func workflowActive(wf *parser.Workflow) bool {
+	return wf.Status == "" || wf.Status == parser.StatusActive
+}
+
 func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow, entityID string, edge map[string]any, trigger map[string]any, chain []string) bool {
+	// #440: paused / draft workflows are inert — skip the whole pipeline
+	// (condition, actions, archive_when) so a disabled workflow can't
+	// mutate the vault on a matching event.
+	if !workflowActive(reg.workflow) {
+		e.logger.Debug("workflow not active; skipping event evaluation",
+			"workflow", reg.workflow.Name, "status", reg.workflow.Status)
+		return false
+	}
 	dec := Decision{
 		Workflow: reg.workflow.Name,
 		EntityID: entityID,
@@ -1874,6 +1891,13 @@ func (e *Engine) findRecentDecision(name, entityID string) Decision {
 // empty entity). Skips the resolve step on the assumption
 // the caller has already populated entity.
 func (e *Engine) runEvaluation(ctx context.Context, reg *registeredWorkflow, entityID string, entity, edge map[string]any) {
+	// #440: paused / draft workflows are inert on the manual-dispatch
+	// path too — a disabled workflow can't be fired by a manual trigger.
+	if !workflowActive(reg.workflow) {
+		e.logger.Debug("workflow not active; skipping dispatch evaluation",
+			"workflow", reg.workflow.Name, "status", reg.workflow.Status)
+		return
+	}
 	dec := Decision{
 		Workflow: reg.workflow.Name,
 		EntityID: entityID,
