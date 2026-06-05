@@ -1222,7 +1222,7 @@ func assertEntityExists(ctx context.Context, tx *sql.Tx, id, side string) error 
 // - Snippet is empty — extracting a substring around the match is
 // cheap to add later, but the wire shape today is the same one
 // the stub produced (Snippet field present, content placeholder).
-func (s *sqliteStore) Search(ctx context.Context, query, kind string, limit, offset int, archived ArchivedFilter, journalOnly bool) ([]Hit, int, error) {
+func (s *sqliteStore) Search(ctx context.Context, query, kind string, limit, offset int, archived ArchivedFilter, journalOnly bool, tags ...string) ([]Hit, int, error) {
 	// Tokenize-and-AND per #391. Split the query into whitespace-
 	// separated terms and require EACH term to match somewhere in
 	// id / data / aliases. The prior shape was a single contiguous
@@ -1274,6 +1274,21 @@ func (s *sqliteStore) Search(ctx context.Context, query, kind string, limit, off
 	if journalOnly {
 		whereParts = append(whereParts,
 			"(json_extract(data, '$.is_journal') = 1 OR json_extract(data, '$.is_journal') = 'true')")
+	}
+	// tags AND-filter per #453. Each tag contributes its own EXISTS
+	// over json_each(data.$.tags) → the predicates join under AND, so a
+	// multi-tag query is an intersection (every tag must be present).
+	// An entity with no `data.tags` key yields json_extract → NULL →
+	// json_each → zero rows → excluded, which is correct. Empty-string
+	// entries are skipped defensively. This applies to both the COUNT
+	// and the results query below — they share the single `where`.
+	for _, tag := range tags {
+		if tag == "" {
+			continue
+		}
+		whereParts = append(whereParts,
+			"EXISTS (SELECT 1 FROM json_each(json_extract(data, '$.tags')) WHERE value = ?)")
+		whereArgs = append(whereArgs, tag)
 	}
 	// A kind-only / archived-only call (empty or all-whitespace
 	// query) contributes no term clauses; keep the WHERE well-formed.
