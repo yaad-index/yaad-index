@@ -144,13 +144,16 @@ type needsFillResponse struct {
 // countNeedsFillCandidatesBySource counts gap-callable candidates whose
 // vault entity belongs to the given plugin source — the source companion
 // to CountGapCallableCandidates(kind) (#439). source isn't a DB column (it
-// lives in the vault frontmatter source[0]), so this paginates the
-// gap-callable set from the start and reads each candidate's PluginName.
-// Bounded by the same per-request needsFillMaxCandidateScan cap as the
-// page loop; `capped` reports whether the cap truncated the walk (total is
-// then a lower bound). Vault-less / unreadable candidates belong to no
-// source and are skipped. Parallel to the base count, it does not apply
-// the vault Gaps / audience filters — it adds only the source dimension.
+// lives in the vault frontmatter source[0]), so this enumerates the
+// gap-state-aware candidate set (ListGapCallableUnfilledCandidates — the
+// SAME predicate the base count uses, so all-filled/deferred rows don't
+// inflate the total) and reads each candidate's PluginName, counting the
+// source matches. It adds only the source dimension on top of the count's
+// predicate (it does not apply the audience filter, which the base count
+// also omits). Bounded by the same per-request needsFillMaxCandidateScan
+// cap as the page loop; `capped` reports whether the cap truncated the
+// walk (total is then a lower bound). Vault-less / unreadable candidates
+// belong to no source and are skipped.
 func countNeedsFillCandidatesBySource(ctx context.Context, st store.Store, vaultReader *vault.Reader, kindFilter, sourceFilter string) (count int, capped bool, err error) {
 	scanned := 0
 	var after string
@@ -159,7 +162,7 @@ func countNeedsFillCandidatesBySource(ctx context.Context, st store.Store, vault
 		if rem := needsFillMaxCandidateScan - scanned; rem < batch {
 			batch = rem
 		}
-		candidates, lerr := st.ListGapCallableCandidates(ctx, after, batch, kindFilter)
+		candidates, lerr := st.ListGapCallableUnfilledCandidates(ctx, after, batch, kindFilter)
 		if lerr != nil {
 			return 0, false, lerr
 		}

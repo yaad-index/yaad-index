@@ -24,6 +24,11 @@ import (
 // namespace (the bit before `/`) is what the source filter matches.
 type nfFilterSeed struct {
 	id, kind, source string
+	// filled marks the seed as already-filled: its gap_state carries a
+	// filled_at (so the gap-state-aware count excludes it) and its vault
+	// Gaps list is empty. Used to pin that a source-matching but
+	// non-gap-callable row doesn't inflate the source total (#439).
+	filled bool
 }
 
 // nfFilterFixture seeds heterogeneous gap-callable entities across
@@ -44,11 +49,17 @@ func nfFilterFixture(t *testing.T, seeds []nfFilterSeed) http.Handler {
 
 	now := time.Now().UTC()
 	for _, s := range seeds {
+		gapState := store.GapStateEntry{}
+		vaultGaps := []string{"summary"}
+		if s.filled {
+			gapState = store.GapStateEntry{FilledAt: &now}
+			vaultGaps = nil
+		}
 		require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
 			ID:       s.id,
 			Kind:     s.kind,
 			Data:     map[string]any{"id": s.id},
-			GapState: map[string]store.GapStateEntry{"summary": {}},
+			GapState: map[string]store.GapStateEntry{"summary": gapState},
 			Provenance: []store.ProvenanceEntry{
 				{Source: "seed:fixture", FetchedAt: &now, OK: true},
 			},
@@ -58,7 +69,7 @@ func nfFilterFixture(t *testing.T, seeds []nfFilterSeed) http.Handler {
 			Kind:         s.kind,
 			Source:       []string{s.source},
 			Data:         map[string]any{"id": s.id},
-			Gaps:         []string{"summary"},
+			Gaps:         vaultGaps,
 			CleanContent: "stub for " + s.id,
 		}))
 	}
@@ -95,10 +106,28 @@ func nfEntityIDs(resp needsFillResponse) []string {
 }
 
 var nfFilterSeeds = []nfFilterSeed{
-	{"boardgame:a", "boardgame", "bgg/default"},
-	{"boardgame:b", "boardgame", "wikipedia/default"},
-	{"person:x", "person", "bgg/default"},
-	{"person:y", "person", "wikipedia/default"},
+	{id: "boardgame:a", kind: "boardgame", source: "bgg/default"},
+	{id: "boardgame:b", kind: "boardgame", source: "wikipedia/default"},
+	{id: "person:x", kind: "person", source: "bgg/default"},
+	{id: "person:y", kind: "person", source: "wikipedia/default"},
+}
+
+// TestNeedsFill_SourceTotal_ExcludesFilled pins the #439 review fix: the
+// source total enumerates the gap-state-aware candidate set (matching
+// CountGapCallableCandidates), so a source-matching but already-filled row
+// is NOT counted — using the loose gap_call_done_at-only list would have
+// over-counted it.
+func TestNeedsFill_SourceTotal_ExcludesFilled(t *testing.T) {
+	t.Parallel()
+	seeds := append(append([]nfFilterSeed{}, nfFilterSeeds...),
+		nfFilterSeed{id: "boardgame:filled", kind: "boardgame", source: "bgg/default", filled: true})
+	h := nfFilterFixture(t, seeds)
+
+	got := nfGet(t, h, "/v1/needs-fill?source=bgg")
+	// Two unfilled bgg entities surface; the filled bgg row is gap-state
+	// non-callable, so it inflates neither the list nor the total.
+	assert.Equal(t, []string{"boardgame:a", "person:x"}, nfEntityIDs(got))
+	assert.Equal(t, 2, got.Total, "filled source-matching row excluded from total (#439)")
 }
 
 // TestNeedsFill_NoFilters_Unchanged pins the no-params behavior: every

@@ -341,6 +341,20 @@ func (s *sqliteStore) ClearGapCallDone(ctx context.Context, entityID string) err
 // resume); empty afterID returns the first page. `limit` caps the
 // row count; callers clamp / default at the handler boundary.
 func (s *sqliteStore) ListGapCallableCandidates(ctx context.Context, afterID string, limit int, kind string) ([]Entity, error) {
+	return s.listGapCallableCandidates(ctx, afterID, limit, kind, false)
+}
+
+// ListGapCallableUnfilledCandidates is the gap-state-aware companion to
+// ListGapCallableCandidates: it returns only candidates carrying at least
+// one unfilled, non-deferred gap — the SAME predicate
+// CountGapCallableCandidates counts. Use it where the enumerated set must
+// agree with that count so all-filled / deferred rows can't inflate it
+// (e.g. the source-filtered needs-fill total, #439).
+func (s *sqliteStore) ListGapCallableUnfilledCandidates(ctx context.Context, afterID string, limit int, kind string) ([]Entity, error) {
+	return s.listGapCallableCandidates(ctx, afterID, limit, kind, true)
+}
+
+func (s *sqliteStore) listGapCallableCandidates(ctx context.Context, afterID string, limit int, kind string, requireUnfilledGaps bool) ([]Entity, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
@@ -349,6 +363,19 @@ func (s *sqliteStore) ListGapCallableCandidates(ctx context.Context, afterID str
 		FROM entities
 		WHERE gap_call_done_at IS NULL
 	`
+	// Mirror CountGapCallableCandidates' gap-state predicate when the
+	// caller needs the list to agree with the count (#439): only rows with
+	// at least one unfilled, non-deferred gap.
+	if requireUnfilledGaps {
+		query += `
+		  AND gap_state IS NOT NULL
+		  AND length(gap_state) > 2
+		  AND EXISTS (
+		    SELECT 1 FROM json_each(gap_state)
+		    WHERE json_extract(value, '$.filled_at') IS NULL
+		      AND COALESCE(json_extract(value, '$.deferred'), 0) = 0
+		  )`
+	}
 	args := make([]any, 0, 3)
 	if kind != "" {
 		query += " AND kind = ?"
