@@ -239,16 +239,33 @@ func (cmd *xGMRawSearchCommand) Command() *imap.Command {
 }
 
 // buildSearchPredicate composes the X-GM-RAW search string from
-// the configured label slot pair.
+// the configured label slot pair. Each label value is quoted so a
+// label containing whitespace (e.g. `Job Search/Active`, a nested
+// label, or any space-bearing name) doesn't silently split into
+// separate search terms and shift the result set (#450).
 func buildSearchPredicate(ingestedLabel, skipLabel string) string {
 	parts := []string{}
 	if ingestedLabel != "" {
-		parts = append(parts, "-label:"+ingestedLabel)
+		parts = append(parts, "-label:"+quoteLabelValue(ingestedLabel))
 	}
 	if skipLabel != "" {
-		parts = append(parts, "-label:"+skipLabel)
+		parts = append(parts, "-label:"+quoteLabelValue(skipLabel))
 	}
 	return strings.Join(parts, " ")
+}
+
+// quoteLabelValue renders a label value safe for the Gmail X-GM-RAW
+// search syntax. A bare value whose tokens contain whitespace splits
+// into separate query terms (`-label:My Label` parses as `-label:My`
+// AND a bare `Label`), and an embedded quote breaks the phrase. Wrap
+// the value in double quotes and backslash-escape any embedded
+// backslash or quote so the Gmail parser reads it as one quoted label.
+// Quoting unconditionally (even single-token values) is accepted by
+// Gmail and keeps the predicate uniform. The whole predicate is then
+// IMAP-quoted again by go-imap on the wire; the two encodings compose.
+func quoteLabelValue(label string) string {
+	escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(label)
+	return `"` + escaped + `"`
 }
 
 // FetchMessages issues a UID FETCH for each UID requesting BODY[]
