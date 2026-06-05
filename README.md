@@ -138,7 +138,11 @@ configure the agent to send it as `Authorization: Bearer <token>`.
 
 **Tools:** every daemon HTTP route is exposed as an MCP tool —
 `ingest`, `get_entity`, `list_entities`, `fill`, `add_note`,
-the UGC + workflow + task families, and so on. Live inventory
+the UGC + workflow + task families, and so on. Each tool is a thin
+adapter that synthesizes the same `/v1/...` request in-process against
+the daemon mux, so REST and MCP share one auth + validation + error
+contract — see [ADR-0032](./adr/0032-mcp-bridge.md) for the bridge
+architecture. Live inventory
 via `tools/list`; for the per-tool reference and usage patterns
 see [`mcp/SKILL.md`](mcp/SKILL.md).
 
