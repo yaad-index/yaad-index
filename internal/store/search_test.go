@@ -233,6 +233,68 @@ func TestSearch_JournalOnlyFilter_KindAgnostic(t *testing.T) {
 	assert.Len(t, hits, 2, "is_journal filter ignores kind by default")
 }
 
+// TestSearch_TagsFilter pins the #453 contract: the variadic tags
+// AND-filter against the entity's `data.tags` JSON array. A single
+// tag returns every entity carrying it; multiple tags require ALL of
+// them (intersection); a tag no entity has returns empty; no tags
+// applies no filter. Tags live in the data column (mirrored from vault
+// frontmatter) and the SQL uses json_each over json_extract.
+func TestSearch_TagsFilter(t *testing.T) {
+	t.Parallel()
+	s := newMemoryStore(t)
+	ctx := context.Background()
+
+	seedSearchableEntity(t, s, "boardgame:test-game-2099", "boardgame", map[string]any{
+		"title": "Test Game 2099",
+		"tags":  []any{"alpha", "beta"},
+	})
+	seedSearchableEntity(t, s, "boardgame:test-game-2100", "boardgame", map[string]any{
+		"title": "Test Game 2100",
+		"tags":  []any{"alpha", "gamma"},
+	})
+	seedSearchableEntity(t, s, "boardgame:test-game-2101", "boardgame", map[string]any{
+		"title": "Test Game 2101",
+		"tags":  []any{"delta"},
+	})
+	// No tags key at all — must be excluded by any tag predicate.
+	seedSearchableEntity(t, s, "boardgame:test-game-2102", "boardgame", map[string]any{
+		"title": "Test Game 2102",
+	})
+
+	// No tags → no filter, all four returned.
+	all, total, err := s.Search(ctx, "", "boardgame", 50, 0, ArchivedExclude, false)
+	require.NoError(t, err)
+	assert.Equal(t, 4, total)
+	assert.Len(t, all, 4)
+
+	// Single tag → every entity carrying it.
+	alpha, total, err := s.Search(ctx, "", "boardgame", 50, 0, ArchivedExclude, false, "alpha")
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+	assert.ElementsMatch(t,
+		[]string{"boardgame:test-game-2099", "boardgame:test-game-2100"},
+		hitIDs(alpha))
+
+	// Multiple tags → intersection (only entities with BOTH).
+	both, total, err := s.Search(ctx, "", "boardgame", 50, 0, ArchivedExclude, false, "alpha", "beta")
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	require.Len(t, both, 1)
+	assert.Equal(t, "boardgame:test-game-2099", both[0].ID)
+
+	// A tag no entity carries → empty.
+	none, total, err := s.Search(ctx, "", "boardgame", 50, 0, ArchivedExclude, false, "omega")
+	require.NoError(t, err)
+	assert.Equal(t, 0, total)
+	assert.Empty(t, none)
+
+	// Empty-string entries are skipped defensively → behaves like no filter.
+	skipped, total, err := s.Search(ctx, "", "boardgame", 50, 0, ArchivedExclude, false, "")
+	require.NoError(t, err)
+	assert.Equal(t, 4, total)
+	assert.Len(t, skipped, 4)
+}
+
 // TestSearch_MatchesByAlias pins the #3 contract: a query that
 // substring-matches an entry in entity_aliases returns the owning
 // entity, even when neither id nor data carries the term.

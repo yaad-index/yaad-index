@@ -106,7 +106,14 @@ func handleSearch(logger *slog.Logger, st store.Store) http.HandlerFunc {
 		// to also pin `?kind=day` for the canonical use case.
 		journalOnly := isTruthy(q.Get("is_journal"))
 
-		hits, total, err := st.Search(r.Context(), query, kind, limit, offset, archivedFilter, journalOnly)
+		// tags filter per #453. Accept BOTH repeated params
+		// (`tags=foo&tags=bar`) AND comma-separated (`tags=foo,bar`):
+		// each repeated value is split on comma, trimmed, and empties
+		// dropped. The store AND-filters (intersection). Absent / all-
+		// empty → nil → no predicate (behavior unchanged).
+		tags := parseTags(q["tags"])
+
+		hits, total, err := st.Search(r.Context(), query, kind, limit, offset, archivedFilter, journalOnly, tags...)
 		if err != nil {
 			logger.ErrorContext(r.Context(), "store.Search", "err", err,
 				"q", query, "kind", kind, "limit", limit, "offset", offset)
@@ -141,6 +148,23 @@ func handleSearch(logger *slog.Logger, st store.Store) http.HandlerFunc {
 			logger.ErrorContext(r.Context(), "encode /v1/search response", "err", err)
 		}
 	}
+}
+
+// parseTags flattens the raw `tags` query values into a clean slice
+// per #453. Each raw value may itself be comma-separated, so every
+// value is split on comma; entries are TrimSpace'd and empties dropped.
+// Returns nil when nothing survives (no tag predicate at the store).
+func parseTags(raw []string) []string {
+	var out []string
+	for _, v := range raw {
+		for _, part := range strings.Split(v, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				out = append(out, part)
+			}
+		}
+	}
+	return out
 }
 
 // parseArchivedFilter resolves the operator-facing

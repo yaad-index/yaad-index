@@ -135,8 +135,19 @@ func registerListEntities(s *server.MCPServer, b *bridge) {
 				"only journal-shaped `day` entities (combine with "+
 				"`kind: day`)."),
 		),
+		mcp.WithArray("tags",
+			mcp.Description("Optional tag filter per #453. Restricts "+
+				"results to entities whose `data.tags` array contains "+
+				"every listed tag (AND / intersection). Empty / omitted "+
+				"applies no tag filter."),
+			mcp.Items(map[string]any{"type": "string"}),
+		),
 	)
-	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.AddTool(tool, listEntitiesHandler(b))
+}
+
+func listEntitiesHandler(b *bridge) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		kind := req.GetString("kind", "")
 		if kind == "" {
 			return mcp.NewToolResultError("`kind` is required"), nil
@@ -145,8 +156,17 @@ func registerListEntities(s *server.MCPServer, b *bridge) {
 		if req.GetBool("is_journal", false) {
 			path += "&is_journal=true"
 		}
+		// tags AND-filter per #453: one `&tags=<escaped>` per non-empty
+		// string entry. Non-string / empty entries are skipped.
+		if raw, ok := req.GetArguments()["tags"].([]any); ok {
+			for _, t := range raw {
+				if s, ok := t.(string); ok && s != "" {
+					path += "&tags=" + url.QueryEscape(s)
+				}
+			}
+		}
 		return b.callTool(ctx, "GET", path, nil)
-	})
+	}
 }
 
 func registerArchiveEntity(s *server.MCPServer, b *bridge) {

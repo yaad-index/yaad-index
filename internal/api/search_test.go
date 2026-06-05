@@ -213,6 +213,104 @@ func Test_Search_LimitAtMaxIsAllowed(t *testing.T) {
 	assert.Equal(t, searchMaxLimit, got.Limit, "limit echoed")
 }
 
+// seedTaggedEntity writes a boardgame entity whose `data.tags` carries
+// the given tags — the #453 tags filter reads json_extract(data,
+// '$.tags').
+func seedTaggedEntity(t *testing.T, st store.Store, id string, tags ...string) {
+	t.Helper()
+	anyTags := make([]any, len(tags))
+	for i, tg := range tags {
+		anyTags[i] = tg
+	}
+	require.NoError(t, st.SaveEntity(context.Background(), &store.Entity{
+		ID:   id,
+		Kind: "boardgame",
+		Data: map[string]any{"title": id, "tags": anyTags},
+	}), "seed %s", id)
+}
+
+// Test_Search_TagsFilter pins #453 at the HTTP boundary: a single
+// `tags=` returns matching entities; multiple repeated params AND-filter;
+// comma-separated values are equivalent to repeated params.
+func Test_Search_TagsFilter(t *testing.T) {
+	t.Parallel()
+
+	h, st := newAPIWithStore(t)
+	seedTaggedEntity(t, st, "boardgame:test-game-2099", "alpha", "beta")
+	seedTaggedEntity(t, st, "boardgame:test-game-2100", "alpha", "gamma")
+	seedTaggedEntity(t, st, "boardgame:test-game-2101", "delta")
+
+	// Single tag → both alpha-carrying entities.
+	req, rec := searchRequest("/v1/search?kind=boardgame&tags=alpha")
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	got := decodeSearch(t, rec)
+	assert.Equal(t, 2, got.Total)
+	assert.ElementsMatch(t,
+		[]string{"boardgame:test-game-2099", "boardgame:test-game-2100"},
+		searchResultIDs(got))
+
+	// Repeated params AND-filter → only the entity with BOTH.
+	req, rec = searchRequest("/v1/search?kind=boardgame&tags=alpha&tags=beta")
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	got = decodeSearch(t, rec)
+	require.Len(t, got.Results, 1)
+	assert.Equal(t, "boardgame:test-game-2099", got.Results[0].ID)
+
+	// Comma-separated is equivalent to the repeated-param AND.
+	req, rec = searchRequest("/v1/search?kind=boardgame&tags=alpha,beta")
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	got = decodeSearch(t, rec)
+	require.Len(t, got.Results, 1)
+	assert.Equal(t, "boardgame:test-game-2099", got.Results[0].ID)
+
+	// A tag no entity carries → empty.
+	req, rec = searchRequest("/v1/search?kind=boardgame&tags=omega")
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	got = decodeSearch(t, rec)
+	assert.Empty(t, got.Results)
+	assert.Equal(t, 0, got.Total)
+}
+
+// searchResultIDs lifts the result ids for ElementsMatch comparisons.
+func searchResultIDs(resp searchResponse) []string {
+	out := make([]string, len(resp.Results))
+	for i, r := range resp.Results {
+		out[i] = r.ID
+	}
+	return out
+}
+
+// Test_parseTags covers the comma + repeated-param flattening, trimming,
+// and empty-drop directly (the #453 handler-side parse).
+func Test_parseTags(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		raw  []string
+		want []string
+	}{
+		{name: "nil → nil", raw: nil, want: nil},
+		{name: "single", raw: []string{"alpha"}, want: []string{"alpha"}},
+		{name: "repeated", raw: []string{"alpha", "beta"}, want: []string{"alpha", "beta"}},
+		{name: "comma split", raw: []string{"alpha,beta"}, want: []string{"alpha", "beta"}},
+		{name: "trim whitespace", raw: []string{" alpha , beta "}, want: []string{"alpha", "beta"}},
+		{name: "drop empties", raw: []string{"", "alpha", ",", "beta,"}, want: []string{"alpha", "beta"}},
+		{name: "mixed repeated+comma", raw: []string{"alpha,beta", "gamma"}, want: []string{"alpha", "beta", "gamma"}},
+		{name: "all empty → nil", raw: []string{"", " , "}, want: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, parseTags(tc.raw))
+		})
+	}
+}
+
 // Test_parseBoundedInt covers the helper directly, including the
 // `max < 0` sentinel path that disables the upper bound. The HTTP-level
 // search tests exercise the limit/offset surface but never reach a value
