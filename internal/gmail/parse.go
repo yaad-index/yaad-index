@@ -53,6 +53,17 @@ type ParsedMessage struct {
 	// envelope `From:` (entity.data.from) carries the forwarder.
 	ForwardedFrom string
 	ForwardedSubject string
+	// InReplyTo holds the resolved immediate-parent Message-ID for
+	// thread walking (#458), with angle brackets stripped (same
+	// normalization as MessageID). Resolved from the `In-Reply-To`
+	// header, falling back to the LAST whitespace-separated token of
+	// the `References` header (RFC-5322 §3.6.4: References lists
+	// ancestors oldest-first, so the last token is the immediate
+	// parent). Empty when neither header yields a non-empty id. The
+	// edge assembler emits a single `in_reply_to` edge from this
+	// message's email entity to the parent's; no entity.data field is
+	// derived (the edge is the whole deliverable).
+	InReplyTo string
 }
 
 // ErrMissingMessageID signals an RFC-822 message with no
@@ -95,6 +106,26 @@ func ParseMessage(raw []byte, labels []string, isSent bool) (*ParsedMessage, err
 		return nil, ErrMissingMessageID
 	}
 	out.MessageID = mid
+
+	// #458: resolve the immediate-parent Message-ID for thread edges.
+	// Prefer the In-Reply-To header (angle-bracket-stripped, mirroring
+	// the MessageID extraction above); fall back to the LAST
+	// whitespace-separated token of References (RFC-5322 §3.6.4 lists
+	// ancestors oldest-first, so the last token is the immediate
+	// parent). Empty when neither yields a non-empty id.
+	irt := strings.TrimSpace(msg.Header.Get("In-Reply-To"))
+	irt = strings.TrimPrefix(irt, "<")
+	irt = strings.TrimSuffix(irt, ">")
+	if irt == "" {
+		refs := strings.Fields(msg.Header.Get("References"))
+		if len(refs) > 0 {
+			last := refs[len(refs)-1]
+			last = strings.TrimPrefix(last, "<")
+			last = strings.TrimSuffix(last, ">")
+			irt = last
+		}
+	}
+	out.InReplyTo = irt
 
 	if dateRaw := msg.Header.Get("Date"); dateRaw != "" {
 		if t, err := mail.ParseDate(dateRaw); err == nil {
