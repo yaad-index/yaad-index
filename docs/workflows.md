@@ -114,6 +114,12 @@ Missing match keys widen the trigger — `trigger: { type: edge_created, match: 
 
 ## 3. CEL environment
 
+> The complete, authoritative enumeration of the CEL surface — every variable
+> binding, every function, the per-trigger-type availability matrix, and the
+> templating rules — lives in [cel-surface.md](cel-surface.md). This section is
+> the workflow-authoring-focused walkthrough; reach for the reference when you
+> need the full vocabulary.
+
 The decision pipeline uses CEL ([cel-go](https://pkg.go.dev/github.com/google/cel-go)) per ADR-0024 §"Decision logic is agent-free in v1". The expression env is the same for `condition`, `subject`, `dedup.key`, `context[].via`, and per-action template fields.
 
 ### 3.1 Variables
