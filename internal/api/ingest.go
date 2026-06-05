@@ -77,7 +77,7 @@ type ingestNeedsFillResponse struct {
 	// descriptions guiding the AI's output (per ADR-0002 universal-
 	// state amendment).
 	//
-	// Per ADR-0008 (a prior PR): the entity ID itself is the durable
+	// Per ADR-0008: the entity ID itself is the durable
 	// callback handle for POST /v1/entities/{id}/fill — no separate
 	// fill_token + fill_token_expires_at fields are emitted, and
 	// agents can fill arbitrarily late or across multiple partial
@@ -97,7 +97,7 @@ type ingestNeedsFillResponse struct {
 	Instruction string `json:"instruction,omitempty"`
 
 	// CanonicalVocabulary is the operator's CV registry surfaced
-	// verbatim from `cfg.CanonicalKinds` (per ADR-0013 §2 a prior PR).
+	// verbatim from `cfg.CanonicalKinds` (per ADR-0013 §2).
 	// Each entry carries the kind's gap-set vocabulary + optional
 	// per-kind instruction; the agent reads this alongside the
 	// resolved Instruction when deciding whether to extract
@@ -135,7 +135,7 @@ type ingestDisambiguationOption struct {
 // cacheNotationsSource is the canonical `provenance.source` value
 // surfaced on a cache-hit response so the agent can distinguish
 // "served from the index cache" from "served from a fresh upstream
-// fetch." Per yaad-index the source issue a prior PR — these entries ride on
+// fetch." These entries ride on
 // the response only; the entity's persistent provenance stays
 // untouched (cache hits aren't fetches).
 const cacheNotationsSource = "cache:notations"
@@ -207,7 +207,7 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 			return
 		}
 
-		// Lookup-first per the source issue a prior PR: probe the index (the
+		// Lookup-first: probe the index (the
 		// cache) before invoking the plugin. The notation table maps
 		// every input form (URL, shorthand `<plugin>: <id>`, future
 		// shapes) to the canonical entity slug; a hit short-circuits
@@ -323,7 +323,7 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 
 		// `hint` is accepted-but-not-acted-on. The real plugin runtime
 		// (ADR-0005) will dispatch against `hint`. `force_refetch` is
-		// honored by the lookup-first guard above (the source issue a prior PR) —
+		// honored by the lookup-first guard above —
 		// when true, the cache lookup is skipped unconditionally and
 		// ingest always invokes the plugin.
 		_ = req.Hint
@@ -388,12 +388,12 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 }
 
 // notationCacheHit captures the data needed to respond from the
-// store without invoking a plugin (per the source issue a prior PR). State is
+// store without invoking a plugin. State is
 // inferred from openGaps: empty → complete, non-empty → needs_fill.
 //
 // vaultEntity (when non-nil) carries the single-hop body fields
-// the cache-hit response surfaces via mergeVaultEntity (per issue
-// a prior PR addendum) — clean_content, summary, tags, gaps,
+// the cache-hit response surfaces via mergeVaultEntity —
+// clean_content, summary, tags, gaps,
 // aliases, plugin, notations, notes. nil when WithVaultIO isn't
 // wired or the vault read errored; the response then falls back to
 // the DB-only shape.
@@ -404,9 +404,9 @@ type notationCacheHit struct {
 	matched store.Notation
 }
 
-// tryNotationCacheHit implements lookup-first dispatch (per issue
-// a prior PR) with TTL freshness gating reshaped under to read
-// the per-entity TTL from vault frontmatter (`cache_ttl_seconds:`)
+// tryNotationCacheHit implements lookup-first dispatch with
+// TTL freshness gating reshaped to read the per-entity TTL from
+// vault frontmatter (`cache_ttl_seconds:`)
 // rather than a global config knob. Returns a non-nil hit when:
 // - The notation table has a row for the request URL/shorthand.
 // - The store has the entity that notation points at.
@@ -492,8 +492,8 @@ func tryNotationCacheHit(
 
 	// Open gaps + per-entity TTL live in the vault frontmatter
 	// (ADR-0008). Read the vault first — both the TTL gate
-	// and the response enrichment (the source issue a prior PR addendum:
-	// clean_content, summary, tags, aliases, plugin, notations,
+	// and the response enrichment (clean_content, summary, tags,
+	// aliases, plugin, notations,
 	// notes) need it. DB-only mode (no vault wiring) skips the
 	// TTL gate entirely; cache hits forever, matching the legacy
 	// fallback contract.
@@ -576,8 +576,7 @@ func resolveInstruction(kind, global string, reg map[string]config.CanonicalKind
 // The wire entity carries the same single-hop body fields
 // (clean_content / summary / tags / gaps / aliases / plugin /
 // notations / notes) that GetEntity surfaces, via the
-// mergeVaultEntity overlay (per yaad-index the source issue a prior PR
-// addendum). Closes the gap a prior PR left where cache hits returned
+// mergeVaultEntity overlay. Closes the gap where cache hits returned
 // only the DB-mirrored slice.
 func respondFromCacheHit(w http.ResponseWriter, r *http.Request, logger *slog.Logger, hit *notationCacheHit, fillInstruction string, canonicalKindReg map[string]config.CanonicalKindConfig) {
 	wireEntity := toAPIEntity(hit.entity)
@@ -606,7 +605,7 @@ func respondFromCacheHit(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 	// query reads the full entity row including `gap_call_done_at`
 	// per migration 008's column. Any future change to the cache-hit
 	// lookup must keep populating this field; otherwise the
-	// suppression silently never fires (per the cold-reviewer's a prior PR review).
+	// suppression silently never fires.
 	if len(hit.openGaps) == 0 || hit.entity.GapCallDoneAt != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
