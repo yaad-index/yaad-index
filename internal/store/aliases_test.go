@@ -296,3 +296,39 @@ func TestAlias_ResolveAlias(t *testing.T) {
 	_, err = s.ResolveAlias(ctx, "", "boardgame")
 	require.Error(t, err)
 }
+
+// TestAlias_TypedAliasEntries pins the single-source-of-truth
+// derivation shared by reindex, ingest, and MirrorAliases (#445):
+// typed iff the `<prefix>: <label>` shape matches AND the prefix is
+// registered; empties skipped; duplicates collapsed (first wins).
+func TestAlias_TypedAliasEntries(t *testing.T) {
+	t.Parallel()
+	const id = "task:plan"
+	edgeTypes := []string{"references_day"}
+
+	got := TypedAliasEntries(id, []string{
+		"references_day: 2026-06-05", // typed — prefix registered
+		"author: Piranesi",           // typed-shape but prefix NOT registered → bare
+		"Plan The Week",              // no colon → bare
+		"",                           // empty → skipped
+		"references_day: 2026-06-05", // duplicate → collapsed
+	}, edgeTypes)
+
+	require.Len(t, got, 3, "empty skipped + duplicate collapsed")
+	for _, a := range got {
+		assert.Equal(t, id, a.EntityID, "EntityID stamped on every row")
+	}
+
+	assert.Equal(t, Alias{Alias: "references_day: 2026-06-05", EntityID: id, Kind: AliasKindTyped}, got[0])
+	assert.Equal(t, Alias{Alias: "author: Piranesi", EntityID: id, Kind: AliasKindBare}, got[1])
+	assert.Equal(t, Alias{Alias: "Plan The Week", EntityID: id, Kind: AliasKindBare}, got[2])
+}
+
+// TestAlias_TypedAliasEntries_EmptyInput pins that nil / zero-length
+// input returns nil (a ReplaceAliases clear), not an empty non-nil
+// slice.
+func TestAlias_TypedAliasEntries_EmptyInput(t *testing.T) {
+	t.Parallel()
+	assert.Nil(t, TypedAliasEntries("task:plan", nil, []string{"references_day"}))
+	assert.Nil(t, TypedAliasEntries("task:plan", []string{}, nil))
+}

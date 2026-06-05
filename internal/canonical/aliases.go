@@ -30,11 +30,13 @@ import (
 // An empty merged set (no title/name, or the candidate equals the
 // slug) writes an empty alias list, which ReplaceAliases treats as a
 // clear — correct for a fresh create (no prior aliases to wipe).
-func MirrorAliases(ctx context.Context, st store.Store, id, kind string, data map[string]any, pluginAliases, canonicalKinds []string) error {
+//
+// canonicalEdgeTypes is the operator's registered edge-type set used to
+// derive each alias's Kind (typed vs bare) via store.TypedAliasEntries,
+// matching the reindex + ingest paths. Without it every mirrored alias
+// would be written bare, miscategorizing typed aliases on the #405
+// creation surfaces until the next reindex pass (#445).
+func MirrorAliases(ctx context.Context, st store.Store, id, kind string, data map[string]any, pluginAliases, canonicalKinds, canonicalEdgeTypes []string) error {
 	merged := vault.MergedAliasesFor(id, kind, data, pluginAliases, canonicalKinds)
-	aliases := make([]store.Alias, 0, len(merged))
-	for _, a := range merged {
-		aliases = append(aliases, store.Alias{Alias: a})
-	}
-	return st.ReplaceAliases(ctx, id, aliases)
+	return st.ReplaceAliases(ctx, id, store.TypedAliasEntries(id, merged, canonicalEdgeTypes))
 }

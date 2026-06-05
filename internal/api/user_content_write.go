@@ -149,6 +149,7 @@ func handleUserContentCreate(
 	frontmatterEdges map[string]config.UserContentFrontmatterEdgeMapping,
 	writeLocks *writelocks.Manager,
 	bus eventbus.Bus,
+	canonicalEdgeTypes []string,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if vaultWriter == nil || vaultReader == nil {
@@ -387,7 +388,7 @@ func handleUserContentCreate(
 		// operatorAllKinds (built above) excludes user-content,
 		// keeping it on the title branch. After the upsert so the
 		// entity_aliases FK is satisfied.
-		if err := canonical.MirrorAliases(r.Context(), st, id, userContentKind, ve.Data, ve.Aliases, operatorAllKinds); err != nil {
+		if err := canonical.MirrorAliases(r.Context(), st, id, userContentKind, ve.Data, ve.Aliases, operatorAllKinds, canonicalEdgeTypes); err != nil {
 			logger.ErrorContext(r.Context(), "canonical.MirrorAliases from user-content create",
 				"err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",

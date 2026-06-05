@@ -54,7 +54,7 @@ type createCanonicalEntityRequest struct {
 var canonicalSlugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // handleCreateCanonicalEntity implements POST /v1/canonical-entities.
-func handleCreateCanonicalEntity(logger *slog.Logger, st store.Store, vaultWriter *vault.Writer, canonicalKindReg map[string]config.CanonicalKindConfig, writeLocks *writelocks.Manager, bus eventbus.Bus) http.HandlerFunc {
+func handleCreateCanonicalEntity(logger *slog.Logger, st store.Store, vaultWriter *vault.Writer, canonicalKindReg map[string]config.CanonicalKindConfig, writeLocks *writelocks.Manager, bus eventbus.Bus, canonicalEdgeTypes []string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if vaultWriter == nil {
 			writeError(w, http.StatusServiceUnavailable, "vault_required",
@@ -195,7 +195,7 @@ func handleCreateCanonicalEntity(logger *slog.Logger, st store.Store, vaultWrite
 		for k := range canonicalKindReg {
 			canonicalKinds = append(canonicalKinds, k)
 		}
-		if err := canonical.MirrorAliases(r.Context(), st, ve.ID, ve.Kind, ve.Data, ve.Aliases, canonicalKinds); err != nil {
+		if err := canonical.MirrorAliases(r.Context(), st, ve.ID, ve.Kind, ve.Data, ve.Aliases, canonicalKinds, canonicalEdgeTypes); err != nil {
 			logger.ErrorContext(r.Context(), "canonical.MirrorAliases from create-canonical-entity",
 				"err", err, "id", id)
 			writeError(w, http.StatusInternalServerError, "internal_error",

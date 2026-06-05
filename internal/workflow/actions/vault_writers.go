@@ -829,6 +829,11 @@ type VaultEdgeWriter struct {
 	kindReg     map[string]config.CanonicalKindConfig
 	bus         eventbus.Bus
 	logger      *slog.Logger
+	// canonicalEdgeTypes is the operator's registered edge-type
+	// set, threaded to MirrorAliases (via DataviewAppendDeps) so
+	// aliases mirrored on a fresh materialize derive typed-vs-bare
+	// the same way reindex/ingest do (#445).
+	canonicalEdgeTypes []string
 }
 
 // NewVaultEdgeWriter constructs an EdgeWriter from the daemon's
@@ -845,6 +850,7 @@ func NewVaultEdgeWriter(
 	kindReg map[string]config.CanonicalKindConfig,
 	bus eventbus.Bus,
 	logger *slog.Logger,
+	canonicalEdgeTypes []string,
 ) *VaultEdgeWriter {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -865,14 +871,15 @@ func NewVaultEdgeWriter(
 		edgeWriter = svc
 	}
 	return &VaultEdgeWriter{
-		store:       st,
-		edgeWriter:  edgeWriter,
-		vaultReader: vaultReader,
-		vaultWriter: vaultWriter,
-		writeLocks:  writeLocks,
-		kindReg:     kindReg,
-		bus:         bus,
-		logger:      logger,
+		store:              st,
+		edgeWriter:         edgeWriter,
+		vaultReader:        vaultReader,
+		vaultWriter:        vaultWriter,
+		writeLocks:         writeLocks,
+		kindReg:            kindReg,
+		bus:                bus,
+		logger:             logger,
+		canonicalEdgeTypes: canonicalEdgeTypes,
 	}
 }
 
@@ -960,13 +967,14 @@ func (w *VaultEdgeWriter) AddCanonicalEdge(
 	}
 
 	deps := canonical.DataviewAppendDeps{
-		Store:       w.store,
-		VaultReader: w.vaultReader,
-		VaultWriter: w.vaultWriter,
-		WriteLocks:  w.writeLocks,
-		KindReg:     w.kindReg,
-		Bus:         w.bus,
-		Logger:      w.logger,
+		Store:              w.store,
+		VaultReader:        w.vaultReader,
+		VaultWriter:        w.vaultWriter,
+		WriteLocks:         w.writeLocks,
+		KindReg:            w.kindReg,
+		Bus:                w.bus,
+		Logger:             w.logger,
+		CanonicalEdgeTypes: w.canonicalEdgeTypes,
 	}
 	// #405: targetName is the name targetID's slug derived from on
 	// the slugify path; AppendDataviewParagraph captures it as

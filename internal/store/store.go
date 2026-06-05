@@ -344,6 +344,51 @@ func TypedAliasPrefix(alias string) (prefix, label string, ok bool) {
 	return prefix, alias[idx+2:], true
 }
 
+// TypedAliasEntries builds entity_aliases rows from a flat alias-string
+// slice, deriving each row's Kind: AliasKindTyped when the alias matches
+// the `<prefix>: <label>` shape AND prefix is in the operator's
+// canonicalEdgeTypes registry, AliasKindBare otherwise. Empty alias
+// strings are skipped, duplicates de-duplicated (first occurrence wins),
+// and nil/empty input returns nil (a ReplaceAliases clear).
+//
+// This is the single source of truth for the alias-kind derivation
+// shared by reindex (vault frontmatter), ingest (plugin-emitted), and
+// the #405 creation surfaces (canonical.MirrorAliases) so all three
+// agree on alias typing (#445). EntityID is stamped on each row for
+// callers that consume it; ReplaceAliases scopes by its own id arg.
+func TypedAliasEntries(entityID string, aliases, canonicalEdgeTypes []string) []Alias {
+	if len(aliases) == 0 {
+		return nil
+	}
+	edgeSet := make(map[string]struct{}, len(canonicalEdgeTypes))
+	for _, t := range canonicalEdgeTypes {
+		edgeSet[t] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(aliases))
+	out := make([]Alias, 0, len(aliases))
+	for _, a := range aliases {
+		if a == "" {
+			continue
+		}
+		if _, dup := seen[a]; dup {
+			continue
+		}
+		seen[a] = struct{}{}
+		kind := AliasKindBare
+		if prefix, _, ok := TypedAliasPrefix(a); ok {
+			if _, registered := edgeSet[prefix]; registered {
+				kind = AliasKindTyped
+			}
+		}
+		out = append(out, Alias{
+			Alias:    a,
+			EntityID: entityID,
+			Kind:     kind,
+		})
+	}
+	return out
+}
+
 // Store is the persistence interface used by the API handlers.
 //
 // Implementations must be safe for concurrent use. Methods take a context
