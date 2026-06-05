@@ -136,7 +136,7 @@ func registerListEntities(s *server.MCPServer, b *bridge) {
 				"`kind: day`)."),
 		),
 		mcp.WithArray("tags",
-			mcp.Description("Optional tag filter per #453. Restricts "+
+			mcp.Description("Optional tag filter. Restricts "+
 				"results to entities whose `data.tags` array contains "+
 				"every listed tag (AND / intersection). Empty / omitted "+
 				"applies no tag filter."),
