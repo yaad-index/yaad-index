@@ -182,6 +182,45 @@ func TestAssembleEdges_EmptyControlLabels_DontFilterAnything(t *testing.T) {
 	}
 }
 
+// TestAssembleEdges_InReplyTo pins the #458 thread edge: a message with
+// InReplyTo set emits exactly one in_reply_to edge to the parent email
+// entity; an empty InReplyTo emits none.
+func TestAssembleEdges_InReplyTo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("InReplyTo set emits one in_reply_to email edge", func(t *testing.T) {
+		t.Parallel()
+		pm := &ParsedMessage{
+			MessageID: "reply-1@mail.example.com",
+			From:      "sender@example.com",
+			InReplyTo: "thread-root@example.com",
+		}
+		edges := AssembleEdges(pm, "", "")
+		var got []Edge
+		for _, e := range edges {
+			if e.Type == EdgeTypeInReplyTo {
+				got = append(got, e)
+			}
+		}
+		require.Len(t, got, 1, "exactly one in_reply_to edge")
+		assert.Equal(t, CanonicalKindEmail, got[0].Kind)
+		assert.Equal(t, EmailCanonicalSlug("thread-root@example.com"), got[0].Name)
+	})
+
+	t.Run("empty InReplyTo emits no in_reply_to edge", func(t *testing.T) {
+		t.Parallel()
+		pm := &ParsedMessage{
+			MessageID: "root-1@mail.example.com",
+			From:      "sender@example.com",
+		}
+		edges := AssembleEdges(pm, "", "")
+		for _, e := range edges {
+			assert.NotEqualf(t, EdgeTypeInReplyTo, e.Type,
+				"no in_reply_to edge when InReplyTo empty: %+v", e)
+		}
+	})
+}
+
 // TestAssembleEdges_NilMessage returns nil rather than panicking.
 func TestAssembleEdges_NilMessage(t *testing.T) {
 	t.Parallel()

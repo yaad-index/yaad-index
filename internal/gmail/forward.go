@@ -31,8 +31,12 @@ var gmailForwardBlock = regexp.MustCompile(`(?i)-{3,}\s*forwarded message\s*-{3,
 // HTML-only body) and the subject with its forward prefix stripped. When
 // no forward is detected it returns two empty strings.
 //
-// Only the most-recent (first) forward block is parsed; multi-hop
-// forwards are out of scope per #323.
+// For nested forwards (a forward-of-a-forward), the parser intentionally
+// surfaces only the OUTERMOST forwarded sender — the first (most-recent)
+// forward block's `From:`. The deeper (older) forward blocks are
+// intentionally not walked: their senders are not the most-recent hop,
+// and surfacing them would mis-attribute the forward. The bounded scan
+// in embeddedFromAddress enforces this first-block boundary (#458).
 func parseForwarded(subject string, body []byte) (forwardedFrom, forwardedSubject string) {
 	isForward := hasForwardSubjectPrefix(subject) || gmailForwardBlock.Match(body)
 	if !isForward {
@@ -67,10 +71,20 @@ func stripForwardPrefix(subject string) string {
 	return s
 }
 
-// embeddedFromAddress finds the first Gmail forward block in body and
+// embeddedFromAddress finds the FIRST Gmail forward block in body and
 // returns the address from its `From:` header line. Empty when there is
-// no forward block, no `From:` line in that block, or the address is
+// no forward block, no `From:` line in that first block, or the address is
 // unparseable.
+//
+// Nested-forward boundary: the scan is bounded to the first block's header
+// region and MUST stop there — it must never fall through into a deeper
+// (older) forward block's `From:`. The scan terminates on the first of:
+// the header-block's blank-line terminator, a non-header line (the
+// forwarded body), or a second gmailForwardBlock separator line. That last
+// guard covers the pathological case where the first block has no `From:`
+// and no blank line precedes the next separator: without it the scan could
+// otherwise leak the deeper block's sender. When the first block has no
+// parseable `From:`, this returns "" rather than the deeper sender.
 func embeddedFromAddress(body []byte) string {
 	loc := gmailForwardBlock.FindIndex(body)
 	if loc == nil {
@@ -82,7 +96,14 @@ func embeddedFromAddress(body []byte) string {
 	sc := bufio.NewScanner(bytes.NewReader(body[loc[1]:]))
 	started := false
 	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
+		raw := sc.Text()
+		// A second forward separator marks the start of a deeper (older)
+		// forward block. Stop here so the outermost block's absent From:
+		// can't leak the nested block's sender.
+		if gmailForwardBlock.MatchString(raw) {
+			break
+		}
+		line := strings.TrimSpace(raw)
 		if line == "" {
 			if started {
 				break // blank line terminates the header block

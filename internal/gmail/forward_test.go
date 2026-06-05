@@ -123,6 +123,75 @@ func TestParseMessage_ForwardedSurfacesOriginalSender(t *testing.T) {
 	assert.Equal(t, "Your receipt", pm.ForwardedSubject, "un-prefixed subject surfaced")
 }
 
+// TestEmbeddedFromAddress_NestedForward pins the #458 nested-forward
+// boundary: for a forward-of-a-forward the parser surfaces ONLY the
+// outermost (first-block) sender and never leaks a deeper block's sender —
+// including the pathological case where the first block has no From:.
+func TestEmbeddedFromAddress_NestedForward(t *testing.T) {
+	t.Parallel()
+
+	// 2-level nest: outer forward block (From: forwarder-a) wraps an inner
+	// forward block (From: person-a). The outermost sender must win.
+	twoLevel := "Passing this along.\n\n" +
+		"---------- Forwarded message ---------\n" +
+		"From: Forwarder A <forwarder-a@example.com>\n" +
+		"Date: Mon, 1 Jun 2026 09:00:00 +0000\n" +
+		"Subject: Fwd: notice\n" +
+		"To: Operator <operator@example.org>\n" +
+		"\n" +
+		"---------- Forwarded message ---------\n" +
+		"From: Person A <person-a@example.com>\n" +
+		"Date: Sun, 31 May 2026 08:00:00 +0000\n" +
+		"Subject: notice\n" +
+		"\n" +
+		"original body\n"
+
+	// 3-level nest: three stacked forward blocks; the first/outermost
+	// (forwarder-a) is still the answer.
+	threeLevel := "---------- Forwarded message ---------\n" +
+		"From: Forwarder A <forwarder-a@example.com>\n" +
+		"Subject: Fwd: Fwd: notice\n" +
+		"\n" +
+		"---------- Forwarded message ---------\n" +
+		"From: Forwarder B <forwarder-b@example.com>\n" +
+		"Subject: Fwd: notice\n" +
+		"\n" +
+		"---------- Forwarded message ---------\n" +
+		"From: Person A <person-a@example.com>\n" +
+		"Subject: notice\n" +
+		"\n" +
+		"original body\n"
+
+	// First block has NO From: and runs directly into the next separator
+	// (no blank line between). The deeper block's sender must NOT leak.
+	firstBlockNoFrom := "---------- Forwarded message ---------\n" +
+		"Date: Mon, 1 Jun 2026 09:00:00 +0000\n" +
+		"Subject: Fwd: notice\n" +
+		"---------- Forwarded message ---------\n" +
+		"From: Person A <person-a@example.com>\n" +
+		"Subject: notice\n" +
+		"\n" +
+		"original body\n"
+
+	t.Run("2-level nest surfaces the outermost sender", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, "forwarder-a@example.com",
+			embeddedFromAddress([]byte(twoLevel)))
+	})
+
+	t.Run("3-level nest surfaces the outermost sender", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, "forwarder-a@example.com",
+			embeddedFromAddress([]byte(threeLevel)))
+	})
+
+	t.Run("first block without From: does not leak the deeper sender", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, "", embeddedFromAddress([]byte(firstBlockNoFrom)),
+			"nested-forward boundary must stop at the second separator")
+	})
+}
+
 // TestParseMessage_NonForwardHasNoForwardedFields pins that an ordinary
 // message leaves the forwarded fields empty.
 func TestParseMessage_NonForwardHasNoForwardedFields(t *testing.T) {

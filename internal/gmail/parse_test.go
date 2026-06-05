@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // helper for raw RFC-822 fixtures. CRLF line endings — net/mail
@@ -143,4 +146,66 @@ func TestParseMessage_MalformedAddressHeaders_DoNotFail(t *testing.T) {
 	if len(pm.To) != 0 {
 		t.Errorf("To: malformed should yield empty, got %v", pm.To)
 	}
+}
+
+// TestParseMessage_InReplyTo pins the #458 immediate-parent resolution:
+// In-Reply-To wins (brackets stripped); References-only falls back to the
+// LAST reference; neither header → empty; In-Reply-To beats References
+// when both are present.
+func TestParseMessage_InReplyTo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("In-Reply-To populates InReplyTo, brackets stripped", func(t *testing.T) {
+		t.Parallel()
+		raw := msg(map[string]string{
+			"Message-ID":  "<reply-1@mail.example.com>",
+			"Subject":     "Re: hello",
+			"From":        "sender@example.com",
+			"In-Reply-To": "<thread-root@example.com>",
+		}, "")
+		pm, err := ParseMessage(raw, nil, false)
+		require.NoError(t, err)
+		assert.Equal(t, "thread-root@example.com", pm.InReplyTo)
+	})
+
+	t.Run("References-only falls back to the last reference", func(t *testing.T) {
+		t.Parallel()
+		raw := msg(map[string]string{
+			"Message-ID": "<reply-2@mail.example.com>",
+			"Subject":    "Re: hello",
+			"From":       "sender@example.com",
+			"References":  "<thread-root@example.com> <msg-1@mail.example.com> <msg-2@mail.example.com>",
+		}, "")
+		pm, err := ParseMessage(raw, nil, false)
+		require.NoError(t, err)
+		assert.Equal(t, "msg-2@mail.example.com", pm.InReplyTo,
+			"last References token is the immediate parent")
+	})
+
+	t.Run("neither header yields empty InReplyTo", func(t *testing.T) {
+		t.Parallel()
+		raw := msg(map[string]string{
+			"Message-ID": "<root-1@mail.example.com>",
+			"Subject":    "hello",
+			"From":       "sender@example.com",
+		}, "")
+		pm, err := ParseMessage(raw, nil, false)
+		require.NoError(t, err)
+		assert.Empty(t, pm.InReplyTo)
+	})
+
+	t.Run("In-Reply-To wins over References when both present", func(t *testing.T) {
+		t.Parallel()
+		raw := msg(map[string]string{
+			"Message-ID":  "<reply-3@mail.example.com>",
+			"Subject":     "Re: hello",
+			"From":        "sender@example.com",
+			"In-Reply-To": "<msg-2@mail.example.com>",
+			"References":   "<thread-root@example.com> <msg-1@mail.example.com>",
+		}, "")
+		pm, err := ParseMessage(raw, nil, false)
+		require.NoError(t, err)
+		assert.Equal(t, "msg-2@mail.example.com", pm.InReplyTo,
+			"In-Reply-To takes precedence over the References fallback")
+	})
 }

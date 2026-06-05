@@ -86,7 +86,8 @@ var KnownCanonicalKinds = []string{
 // the `email` canonical entity; `is_a` is the universal source-type
 // edge per ADR-0021; `from`/`to`/`cc`/`bcc` target email-address
 // canonical entities (bcc only on sent-folder messages); `tagged_as`
-// targets label canonical entities.
+// targets label canonical entities; `in_reply_to` is a cross-canonical
+// email→email edge to the immediate-parent message (#458).
 const (
 	EdgeTypeIsAbout = "is_about"
 	EdgeTypeIsA = "is_a"
@@ -95,6 +96,7 @@ const (
 	EdgeTypeCc = "cc"
 	EdgeTypeBcc = "bcc"
 	EdgeTypeTaggedAs = "tagged_as"
+	EdgeTypeInReplyTo = "in_reply_to"
 )
 
 // KnownCanonicalEdgeTypes is the alphabetically-sorted set of edge
@@ -104,6 +106,7 @@ var KnownCanonicalEdgeTypes = []string{
 	EdgeTypeBcc,
 	EdgeTypeCc,
 	EdgeTypeFrom,
+	EdgeTypeInReplyTo,
 	EdgeTypeIsA,
 	EdgeTypeIsAbout,
 	EdgeTypeTaggedAs,

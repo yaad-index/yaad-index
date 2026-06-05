@@ -7,7 +7,7 @@ import "strings"
 // expects per ADR-0021: `{type, name, kind}` where the daemon
 // derives the canonical-label endpoint as `<kind>:<slug.Slug(name)>`.
 //
-// yaad-gmail emits seven edge types per the spec:
+// yaad-gmail emits eight edge types per the spec:
 // - is_about → email
 // - is_a → source-type:gmail
 // - from → email-address
@@ -15,6 +15,7 @@ import "strings"
 // - cc → email-address (one per recipient)
 // - bcc → email-address (sent-folder only, one per recipient)
 // - tagged_as → label (one per surfaced Gmail label)
+// - in_reply_to → email (immediate-parent message, when resolvable)
 type Edge struct {
 	// Type is the edge type — one of the EdgeType* constants.
 	Type string
@@ -45,22 +46,35 @@ type Edge struct {
 // internal source-shape book-keeping — those land in the daemon
 // emission envelope at the wire layer. AssembleEdges' output is
 // the cross-canonical edge set ONLY (is_about + from/to/cc/bcc +
-// tagged_as).
+// tagged_as + in_reply_to).
 func AssembleEdges(pm *ParsedMessage, ingestedLabel, skipLabel string) []Edge {
 	if pm == nil {
 		return nil
 	}
 
 	// Capacity hint: 1 (is_about) + 1 (from) + len(to) + len(cc)
-	// + len(bcc) + len(labels). Over-allocates slightly in the
-	// excluded-label / no-from cases; harmless.
-	capHint := 2 + len(pm.To) + len(pm.Cc) + len(pm.Bcc) + len(pm.Labels)
+	// + len(bcc) + len(labels) + 1 (in_reply_to). Over-allocates
+	// slightly in the excluded-label / no-from / no-parent cases;
+	// harmless.
+	capHint := 3 + len(pm.To) + len(pm.Cc) + len(pm.Bcc) + len(pm.Labels)
 	out := make([]Edge, 0, capHint)
 
 	if pm.MessageID != "" {
 		out = append(out, Edge{
 			Type: EdgeTypeIsAbout,
 			Name: EmailCanonicalSlug(pm.MessageID),
+			Kind: CanonicalKindEmail,
+		})
+	}
+
+	// #458: single immediate-parent thread edge. ParsedMessage.InReplyTo
+	// already resolves the immediate parent (In-Reply-To, else last
+	// References token), so this is one email→email edge — not one per
+	// References ancestor.
+	if pm.InReplyTo != "" {
+		out = append(out, Edge{
+			Type: EdgeTypeInReplyTo,
+			Name: EmailCanonicalSlug(pm.InReplyTo),
 			Kind: CanonicalKindEmail,
 		})
 	}
