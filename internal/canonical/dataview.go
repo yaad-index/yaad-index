@@ -40,6 +40,11 @@ type DataviewAppendDeps struct {
 	KindReg     map[string]config.CanonicalKindConfig
 	Bus         eventbus.Bus
 	Logger      *slog.Logger
+	// CanonicalEdgeTypes is the operator's registered edge-type
+	// set used to derive each mirrored alias's Kind (typed vs
+	// bare) via store.TypedAliasEntries, matching reindex/ingest
+	// (#445). nil/empty mirrors every alias bare.
+	CanonicalEdgeTypes []string
 }
 
 // AppendDataviewParagraph appends one dataview-inline paragraph
@@ -169,7 +174,7 @@ func AppendDataviewParagraph(
 		for k := range deps.KindReg {
 			canonicalKinds = append(canonicalKinds, k)
 		}
-		if mirrorErr := MirrorAliases(ctx, deps.Store, ve.ID, ve.Kind, ve.Data, ve.Aliases, canonicalKinds); mirrorErr != nil {
+		if mirrorErr := MirrorAliases(ctx, deps.Store, ve.ID, ve.Kind, ve.Data, ve.Aliases, canonicalKinds, deps.CanonicalEdgeTypes); mirrorErr != nil {
 			return false, fmt.Errorf("mirror name alias: %w", mirrorErr)
 		}
 	}

@@ -547,36 +547,7 @@ func vaultNotationsToStore(entityID string, in []string) []store.Notation {
 // canonical_edge_types registry — typed iff prefix is a known edge
 // type, bare otherwise. Empty / duplicate aliases are skipped.
 func vaultAliasesToStore(entityID string, in []string, canonicalEdgeTypes []string) []store.Alias {
-	if len(in) == 0 {
-		return nil
-	}
-	edgeSet := make(map[string]struct{}, len(canonicalEdgeTypes))
-	for _, t := range canonicalEdgeTypes {
-		edgeSet[t] = struct{}{}
-	}
-	seen := make(map[string]struct{}, len(in))
-	out := make([]store.Alias, 0, len(in))
-	for _, a := range in {
-		if a == "" {
-			continue
-		}
-		if _, dup := seen[a]; dup {
-			continue
-		}
-		seen[a] = struct{}{}
-		kind := store.AliasKindBare
-		if prefix, _, ok := store.TypedAliasPrefix(a); ok {
-			if _, registered := edgeSet[prefix]; registered {
-				kind = store.AliasKindTyped
-			}
-		}
-		out = append(out, store.Alias{
-			Alias:    a,
-			EntityID: entityID,
-			Kind:     kind,
-		})
-	}
-	return out
+	return store.TypedAliasEntries(entityID, in, canonicalEdgeTypes)
 }
 
 // vaultProvenanceToStore converts the vault-frontmatter provenance

@@ -906,7 +906,7 @@ func (s *ServeCmd) Run() error {
 			PropertyWriter:       actions.NewVaultPropertyWriter(wfWriterBackend),
 			EdgeWriter: actions.NewVaultEdgeWriter(
 				st, edgeService, reader, writer, wfWriteLocks,
-				mergedRegistry, bus, logger,
+				mergedRegistry, bus, logger, cfg.CanonicalEdgeTypes,
 			),
 			ArchiveWriter:    wfArchiveWriter,
 			RestoreWriter:    actions.NewVaultRestoreWriter(wfWriterBackend),

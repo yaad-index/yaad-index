@@ -1729,34 +1729,5 @@ func (t *ingestTracker) wait(ctx context.Context, rec *ingestRecord, timeout tim
 // empty alias strings are skipped (defensive — the parser should
 // have rejected them, but skip rather than fail the ingest).
 func buildAliasEntries(entityID string, aliases []string, canonicalEdgeTypes []string) []store.Alias {
-	if len(aliases) == 0 {
-		return nil
-	}
-	edgeSet := make(map[string]struct{}, len(canonicalEdgeTypes))
-	for _, t := range canonicalEdgeTypes {
-		edgeSet[t] = struct{}{}
-	}
-	seen := make(map[string]struct{}, len(aliases))
-	out := make([]store.Alias, 0, len(aliases))
-	for _, a := range aliases {
-		if a == "" {
-			continue
-		}
-		if _, dup := seen[a]; dup {
-			continue
-		}
-		seen[a] = struct{}{}
-		kind := store.AliasKindBare
-		if prefix, _, ok := store.TypedAliasPrefix(a); ok {
-			if _, registered := edgeSet[prefix]; registered {
-				kind = store.AliasKindTyped
-			}
-		}
-		out = append(out, store.Alias{
-			Alias:    a,
-			EntityID: entityID,
-			Kind:     kind,
-		})
-	}
-	return out
+	return store.TypedAliasEntries(entityID, aliases, canonicalEdgeTypes)
 }

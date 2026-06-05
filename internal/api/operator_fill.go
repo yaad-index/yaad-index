@@ -77,6 +77,7 @@ func handleEntityOperatorFill(
 	canonicalKindReg map[string]config.CanonicalKindConfig,
 	writeLocks *writelocks.Manager,
 	bus eventbus.Bus,
+	canonicalEdgeTypes []string,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -412,13 +413,14 @@ func handleEntityOperatorFill(
 		// lands on the target canonical entity; auto-materialize
 		// covers a target that has only a thin DB row.
 		dataviewDeps := canonical.DataviewAppendDeps{
-			Store:       st,
-			VaultReader: vaultReader,
-			VaultWriter: vaultWriter,
-			WriteLocks:  writeLocks,
-			KindReg:     canonicalKindReg,
-			Bus:         bus,
-			Logger:      logger,
+			Store:              st,
+			VaultReader:        vaultReader,
+			VaultWriter:        vaultWriter,
+			WriteLocks:         writeLocks,
+			KindReg:            canonicalKindReg,
+			Bus:                bus,
+			Logger:             logger,
+			CanonicalEdgeTypes: canonicalEdgeTypes,
 		}
 		if err := appendDataviewParagraphs(r.Context(), dataviewDeps, ops, eventbus.SourceOperator, "", &pending); err != nil {
 			logger.ErrorContext(r.Context(), "operator-fill canonical_type dataview-append",

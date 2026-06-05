@@ -137,7 +137,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("POST /v1/entities/batch", protect(http.HandlerFunc(handleEntitiesBatch(logger, st))))
 	// #389: direct canonical-entity creation (no plugin / edge / UGC
 	// indirection). Edge-side-effect-free; any-authenticated.
-	mux.Handle("POST /v1/canonical-entities", protect(http.HandlerFunc(handleCreateCanonicalEntity(logger, st, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
+	mux.Handle("POST /v1/canonical-entities", protect(http.HandlerFunc(handleCreateCanonicalEntity(logger, st, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus, cfg.canonicalEdgeTypes))))
 	// /v1/entities/batch is a method-target path, not an entity id. The
 	// explicit GET handler below carves it out from the {id} matcher so a
 	// stray GET on this path returns the canonical 405 envelope rather than
@@ -164,7 +164,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	// handler — the rename to handleUnifiedFill is deferred to keep
 	// this PR's diff focused on the routing + parser changes.
 	// /v1/operator-fill returns 410 gone per ADR-0029 §5.
-	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
+	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus, cfg.canonicalEdgeTypes))))
 	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleOperatorFillGone)))
 	mux.Handle("POST /v1/entities/{id}/notes", protect(http.HandlerFunc(handleNotes(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks, cfg.canonicalKindReg))))
 	// #390 Cut 2: edit / delete a note by note_id (author-gated).
@@ -176,7 +176,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("GET /v1/user-content/{id}", protect(http.HandlerFunc(handleUserContentRead(logger, st, cfg.vaultReader))))
 	mux.Handle("GET /v1/user-content/{id}/sections", protect(http.HandlerFunc(handleUserContentSectionsList(logger, st, cfg.vaultReader, cfg.canonicalKindReg))))
 	mux.Handle("GET /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSection(logger, st, cfg.vaultReader, cfg.canonicalKindReg))))
-	mux.Handle("POST /v1/user-content", protect(http.HandlerFunc(handleUserContentCreate(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.userContentFrontmatterEdges, cfg.writeLocks, cfg.eventBus))))
+	mux.Handle("POST /v1/user-content", protect(http.HandlerFunc(handleUserContentCreate(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.userContentFrontmatterEdges, cfg.writeLocks, cfg.eventBus, cfg.canonicalEdgeTypes))))
 	mux.Handle("PUT /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSectionReplace(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks, cfg.canonicalKindReg))))
 	mux.Handle("POST /v1/user-content/{id}/sections", protect(http.HandlerFunc(handleUserContentSectionAdd(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks, cfg.canonicalKindReg))))
 	mux.Handle("PATCH /v1/user-content/{id}/sections/{sec}/heading", protect(http.HandlerFunc(handleUserContentSectionRenameHeading(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks, cfg.canonicalKindReg))))
