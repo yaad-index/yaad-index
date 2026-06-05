@@ -371,7 +371,7 @@ func handleUserContentCreate(
 		if err := st.UpsertEntity(r.Context(), &store.Entity{
 			ID: id,
 			Kind: userContentKind,
-			Data: ve.Data,
+			Data: vaultEntityDataForDB(ve),
 			CreatedAt: now,
 		}); err != nil {
 			logger.ErrorContext(r.Context(), "store.UpsertEntity from user-content create (vault already written)",
@@ -598,7 +598,7 @@ func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultR
 		if err := st.UpsertEntity(r.Context(), &store.Entity{
 			ID: id,
 			Kind: ve.Kind,
-			Data: ve.Data,
+			Data: vaultEntityDataForDB(ve),
 		}); err != nil {
 			logger.ErrorContext(r.Context(), "store.UpsertEntity from user-content section-replace",
 				"err", err, "id", id)
@@ -829,7 +829,7 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 		if err := st.UpsertEntity(r.Context(), &store.Entity{
 			ID:   id,
 			Kind: ve.Kind,
-			Data: ve.Data,
+			Data: vaultEntityDataForDB(ve),
 		}); err != nil {
 			logger.ErrorContext(r.Context(), "store.UpsertEntity from user-content section-add",
 				"err", err, "id", id)
@@ -1015,7 +1015,7 @@ func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, 
 		if err := st.UpsertEntity(r.Context(), &store.Entity{
 			ID:   id,
 			Kind: ve.Kind,
-			Data: ve.Data,
+			Data: vaultEntityDataForDB(ve),
 		}); err != nil {
 			logger.ErrorContext(r.Context(), "store.UpsertEntity from user-content section-rename",
 				"err", err, "id", id)
@@ -1168,7 +1168,7 @@ func handleUserContentSectionDelete(logger *slog.Logger, st store.Store, vaultRe
 		if err := st.UpsertEntity(r.Context(), &store.Entity{
 			ID:   id,
 			Kind: ve.Kind,
-			Data: ve.Data,
+			Data: vaultEntityDataForDB(ve),
 		}); err != nil {
 			logger.ErrorContext(r.Context(), "store.UpsertEntity from user-content section-delete",
 				"err", err, "id", id)
@@ -1371,7 +1371,7 @@ func handleUserContentFrontmatterEdit(
 		if err := st.UpsertEntity(r.Context(), &store.Entity{
 			ID: id,
 			Kind: userContentKind,
-			Data: ve.Data,
+			Data: vaultEntityDataForDB(ve),
 		}); err != nil {
 			logger.ErrorContext(r.Context(), "store.UpsertEntity from user-content frontmatter-edit",
 				"err", err, "id", id)
