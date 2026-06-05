@@ -94,6 +94,81 @@ func readVaultByID(t *testing.T, root, kind, id string) *vault.Entity {
 	return got
 }
 
+// Test_Fill_RefillReservedField_IsConflictNotAdHoc pins the fix for the
+// order-dependent re-fill status. The reserved frontmatter fields
+// `summary` and `tags` live on the entity struct (ve.Summary / ve.Tags),
+// not in ve.Data, so the fill handler's overwrite/already-filled
+// detection must consult the reserved-field-augmented data shape
+// (fillOverwriteData) rather than bare ve.Data. Re-filling a single already-filled reserved
+// field with no ?force= must surface as 409 already_filled — NOT the 400
+// unknown_field of the ad-hoc branch it used to hit. (With multiple
+// fields, the per-field error returned depended on map-iteration order,
+// so the multi-field re-fill status flaked between 400 and 409.)
+func Test_Fill_RefillReservedField_IsConflictNotAdHoc(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		field string
+		value any
+	}{
+		{"summary", "a different summary"},
+		{"tags", []string{"another-tag"}},
+	} {
+		tc := tc
+		t.Run(tc.field, func(t *testing.T) {
+			t.Parallel()
+			h, _, _ := newFillFixture(t)
+
+			// Fill all gaps so the reserved field is filled + closed.
+			require.Equal(t, http.StatusOK,
+				postFill(t, h, fillTestEntityID, validFillBody()).Code)
+
+			// Re-fill ONLY the one reserved field, no force. A single
+			// field has no map-order ambiguity, so this deterministically
+			// pins the overwrite-detection: must be 409, never 400.
+			redo := postFill(t, h, fillTestEntityID,
+				map[string]any{"fields": map[string]any{tc.field: tc.value}})
+			require.Equal(t, http.StatusConflict, redo.Code,
+				"re-fill of already-filled reserved %q must be 409 already_filled, body=%s",
+				tc.field, redo.Body.String())
+		})
+	}
+}
+
+// Test_Fill_DerivedNotesText_StaysUnknownField pins the #468 review: the
+// overwrite-detection projection (fillOverwriteData) must add ONLY the
+// reserved fill fields summary/tags, never the derived `notes_text`
+// search projection. An entity that has notes (so vaultEntityDataForDB
+// WOULD synthesize notes_text) must still reject a fill of `notes_text`
+// as unknown_field — it is a DB-search convenience, not an
+// operator-fillable field. Using the full DB projection here would have
+// let notes_text reach the overwrite branch (409 / ?force=) instead.
+func Test_Fill_DerivedNotesText_StaysUnknownField(t *testing.T) {
+	t.Parallel()
+	h, st, root := newAPIWithVault(t)
+	const id = "boardgame:notes-fixture"
+	seedEntity(t, st, id, "boardgame")
+	w, err := vault.NewWriter(root)
+	require.NoError(t, err)
+	require.NoError(t, w.Write(&vault.Entity{
+		ID:     id,
+		Kind:   "boardgame",
+		Source: []string{"test-fixture/default"},
+		Data:   map[string]any{"id": id},
+		Gaps:   []string{"summary"},
+		Notes:  []vault.Note{{Text: "a note, which derives a notes_text projection"}},
+	}))
+
+	// notes_text is neither an open gap nor a real data field; it exists
+	// only as a derived DB projection. Filling it must reject as
+	// unknown_field, NOT classify as an already-filled overwrite.
+	rec := postFill(t, h, id, map[string]any{
+		"fields": map[string]any{"notes_text": "should not be fillable"},
+	})
+	require.Equal(t, http.StatusBadRequest, rec.Code,
+		"derived notes_text must reject as unknown_field, body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "unknown_field")
+}
+
 func Test_Fill_HappyPath_AllGapsInOneCall(t *testing.T) {
 	t.Parallel()
 

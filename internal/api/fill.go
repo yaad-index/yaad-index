@@ -66,6 +66,32 @@ func vaultEntityDataForDB(e *vault.Entity) map[string]any {
 	return out
 }
 
+// fillOverwriteData returns the entity's data map augmented with ONLY
+// the reserved frontmatter fill fields (`summary`, `tags`) that live on
+// the struct (e.Summary / e.Tags) rather than in e.Data (#359). The
+// fill handler's overwrite / already-filled detection consults this so
+// a re-fill of an already-filled reserved field classifies as an
+// overwrite (409) rather than ad-hoc (400) (#468).
+//
+// Unlike vaultEntityDataForDB it deliberately does NOT fold in the
+// derived `notes_text` search projection: notes_text is a DB-search
+// convenience, not an operator-fillable field, so filling it must keep
+// classifying as unknown_field. Each reserved field is added only when
+// set, so an unfilled reserved field still classifies as before.
+func fillOverwriteData(e *vault.Entity) map[string]any {
+	out := make(map[string]any, len(e.Data)+2)
+	for k, v := range e.Data {
+		out[k] = v
+	}
+	if e.Summary != "" {
+		out["summary"] = e.Summary
+	}
+	if len(e.Tags) > 0 {
+		out["tags"] = e.Tags
+	}
+	return out
+}
+
 // fmt is referenced indirectly via callers; keep import alive for
 // future helpers without a stray underscore. _ ensures the package
 // builds even if no helper in this file uses it directly.
