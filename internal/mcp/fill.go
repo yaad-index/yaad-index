@@ -218,14 +218,17 @@ func registerNeedsFill(s *server.MCPServer, b *bridge) {
 		mcp.WithString("kind",
 			mcp.Description("Filter the queue to gaps on a single entity kind (e.g. `person`, `boardgame`) (#385). Composes (AND) with `source`. Omit for all kinds."),
 		),
+		mcp.WithString("fill_strategy",
+			mcp.Description("Filter the queue to one audience's gaps: `agent` (agent-fillable) or `operator` (operator-fillable). Overrides the auth-derived audience so an operator can review the agent queue (and vice versa). Omit for the caller's default slice (#459)."),
+		),
 	)
 	s.AddTool(tool, needsFillHandler(b))
 }
 
 // needsFillHandler is the needs_fill tool handler (extracted so the
 // query-param threading is unit-testable). It maps the optional
-// limit / cursor / exclude / source / kind args onto the
-// GET /v1/needs-fill query string.
+// limit / cursor / exclude / source / kind / fill_strategy args onto
+// the GET /v1/needs-fill query string.
 func needsFillHandler(b *bridge) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		q := url.Values{}
@@ -243,6 +246,9 @@ func needsFillHandler(b *bridge) server.ToolHandlerFunc {
 		}
 		if kind := req.GetString("kind", ""); kind != "" {
 			q.Set("kind", kind)
+		}
+		if fs := req.GetString("fill_strategy", ""); fs != "" {
+			q.Set("fill_strategy", fs)
 		}
 		path := "/v1/needs-fill"
 		if encoded := q.Encode(); encoded != "" {

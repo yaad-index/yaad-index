@@ -51,7 +51,8 @@ func TestNeedsFill_SourceAndKindFilters(t *testing.T) {
 }
 
 // TestNeedsFill_NoFiltersOmitsParams pins the preserved default: absent
-// source / kind don't appear in the query (full-list behavior).
+// source / kind / fill_strategy don't appear in the query (full-list
+// behavior).
 func TestNeedsFill_NoFiltersOmitsParams(t *testing.T) {
 	t.Parallel()
 	h := invokeNeedsFill(t, map[string]any{})
@@ -59,6 +60,19 @@ func TestNeedsFill_NoFiltersOmitsParams(t *testing.T) {
 	vals, _ := url.ParseQuery(h.query)
 	_, hasSource := vals["source"]
 	_, hasKind := vals["kind"]
+	_, hasFillStrategy := vals["fill_strategy"]
 	assert.False(t, hasSource, "source omitted when not supplied")
 	assert.False(t, hasKind, "kind omitted when not supplied")
+	assert.False(t, hasFillStrategy, "fill_strategy omitted when not supplied")
+}
+
+// TestNeedsFill_FillStrategyFilter pins #459: the fill_strategy arg
+// threads onto the GET /v1/needs-fill query.
+func TestNeedsFill_FillStrategyFilter(t *testing.T) {
+	t.Parallel()
+	h := invokeNeedsFill(t, map[string]any{"fill_strategy": "agent"})
+	assert.Equal(t, "/v1/needs-fill", h.path)
+	vals, err := url.ParseQuery(h.query)
+	require.NoError(t, err)
+	assert.Equal(t, "agent", vals.Get("fill_strategy"))
 }
