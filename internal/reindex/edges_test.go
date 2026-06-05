@@ -271,3 +271,147 @@ func TestReindex_AbsentEdgesBlockBackCompat(t *testing.T) {
 func touchPath(path string, when time.Time) error {
 	return os.Chtimes(path, when, when)
 }
+
+// TestReindex_CascadeRederivesSurvivorEdges pins the #447 fix: when a
+// vault file for a TARGET entity B disappears, the disappeared-file
+// cascade strips A→B (the FK forbids dangling inbound edges). A's own
+// file is unchanged, so the walk skips it — without the re-derive step
+// A→B would stay gone until `reindex --full`. After the fix the
+// incremental pass re-derives A's vault edges, restoring A→B and re-
+// materializing B as a thin canonical-label row (the --full steady
+// state).
+func TestReindex_CascadeRederivesSurvivorEdges(t *testing.T) {
+	t.Parallel()
+	r, st, w, vaultRoot := newGuardedTestEnv(t,
+		[]string{"boardgame"},
+		[]string{"is_about"},
+	)
+	ctx := context.Background()
+
+	// A (bgg:test-game-2099) declares an edge A→B (B = boardgame:...).
+	a := newEntity(t, "bgg:test-game-2099", "bgg")
+	a.Edges = []vault.Edge{{Type: "is_about", To: "boardgame:test-game-2099"}}
+	require.NoError(t, w.Write(a))
+
+	// B is its own full vault file so both exist as real rows first.
+	b := newEntity(t, "boardgame:test-game-2099", "boardgame")
+	require.NoError(t, w.Write(b))
+
+	first, err := r.Run(ctx, Incremental)
+	require.NoError(t, err)
+	assert.Empty(t, first.Errors)
+
+	edges, err := st.GetEdgesFor(ctx, "bgg:test-game-2099", nil)
+	require.NoError(t, err)
+	require.Len(t, edges, 1, "A→B present after first reindex")
+	assert.Equal(t, "boardgame:test-game-2099", edges[0].To)
+
+	bRow, err := st.GetEntity(ctx, "boardgame:test-game-2099")
+	require.NoError(t, err)
+	assert.NotEmpty(t, bRow.Data, "B has full Data from its own vault file")
+
+	// Delete B's vault FILE only; leave A untouched.
+	require.NoError(t, os.Remove(filepath.Join(vaultRoot, "boardgame", "test-game-2099.md")))
+
+	second, err := r.Run(ctx, Incremental)
+	require.NoError(t, err)
+	assert.Empty(t, second.Errors)
+	assert.Equal(t, 1, second.EntitiesDeleted, "B's file disappearance cascaded a delete")
+
+	// A→B re-derived despite A being skipped by the walk.
+	edges, err = st.GetEdgesFor(ctx, "bgg:test-game-2099", nil)
+	require.NoError(t, err)
+	require.Len(t, edges, 1, "A→B re-derived after B's file disappeared (#447)")
+	assert.Equal(t, "boardgame:test-game-2099", edges[0].To)
+
+	// B re-materialized as a thin row: exists, but Data is empty.
+	bRow, err = st.GetEntity(ctx, "boardgame:test-game-2099")
+	require.NoError(t, err, "B re-materialized as a thin canonical-label row")
+	assert.Empty(t, bRow.Data, "thin B carries no Data after re-materialize")
+}
+
+// TestReindex_CascadeRederiveStableAcrossReruns pins determinism: with
+// B's file still gone and A untouched, a 3rd incremental pass keeps
+// A→B present exactly once and B thin — no duplicate, no loss.
+func TestReindex_CascadeRederiveStableAcrossReruns(t *testing.T) {
+	t.Parallel()
+	r, st, w, vaultRoot := newGuardedTestEnv(t,
+		[]string{"boardgame"},
+		[]string{"is_about"},
+	)
+	ctx := context.Background()
+
+	a := newEntity(t, "bgg:test-game-2099", "bgg")
+	a.Edges = []vault.Edge{{Type: "is_about", To: "boardgame:test-game-2099"}}
+	require.NoError(t, w.Write(a))
+	b := newEntity(t, "boardgame:test-game-2099", "boardgame")
+	require.NoError(t, w.Write(b))
+
+	_, err := r.Run(ctx, Incremental)
+	require.NoError(t, err)
+
+	require.NoError(t, os.Remove(filepath.Join(vaultRoot, "boardgame", "test-game-2099.md")))
+
+	// Second pass: cascade + re-derive.
+	_, err = r.Run(ctx, Incremental)
+	require.NoError(t, err)
+
+	// Third pass: B's file still gone, A still untouched, B already
+	// thin (no full row to cascade) → no delete, edge stays stable.
+	third, err := r.Run(ctx, Incremental)
+	require.NoError(t, err)
+	assert.Empty(t, third.Errors)
+
+	edges, err := st.GetEdgesFor(ctx, "bgg:test-game-2099", nil)
+	require.NoError(t, err)
+	require.Len(t, edges, 1, "A→B still present exactly once on the 3rd run")
+	assert.Equal(t, "boardgame:test-game-2099", edges[0].To)
+
+	bRow, err := st.GetEntity(ctx, "boardgame:test-game-2099")
+	require.NoError(t, err, "B still exists as a thin row")
+	assert.Empty(t, bRow.Data)
+}
+
+// TestReindex_CascadeDoesNotResurrectDroppedEdge pins the "read
+// current vault, not a stale snapshot" half of the fix: if A drops its
+// A→B edge in the SAME incremental pass that B's file disappears, the
+// re-derive must NOT resurrect A→B — A no longer declares it.
+func TestReindex_CascadeDoesNotResurrectDroppedEdge(t *testing.T) {
+	t.Parallel()
+	r, st, w, vaultRoot := newGuardedTestEnv(t,
+		[]string{"boardgame"},
+		[]string{"is_about"},
+	)
+	ctx := context.Background()
+
+	a := newEntity(t, "bgg:test-game-2099", "bgg")
+	a.Edges = []vault.Edge{{Type: "is_about", To: "boardgame:test-game-2099"}}
+	require.NoError(t, w.Write(a))
+	b := newEntity(t, "boardgame:test-game-2099", "boardgame")
+	require.NoError(t, w.Write(b))
+
+	_, err := r.Run(ctx, Incremental)
+	require.NoError(t, err)
+
+	edges, err := st.GetEdgesFor(ctx, "bgg:test-game-2099", nil)
+	require.NoError(t, err)
+	require.Len(t, edges, 1, "A→B present after first reindex")
+
+	// Same pass: rewrite A to DROP the edge (bump mtime so it
+	// re-parses) AND delete B's file.
+	a.Edges = nil
+	require.NoError(t, w.Write(a))
+	bumped := time.Now().Add(2 * time.Second)
+	require.NoError(t, touchPath(filepath.Join(vaultRoot, "bgg", "test-game-2099.md"), bumped))
+	require.NoError(t, os.Remove(filepath.Join(vaultRoot, "boardgame", "test-game-2099.md")))
+
+	second, err := r.Run(ctx, Incremental)
+	require.NoError(t, err)
+	assert.Empty(t, second.Errors)
+
+	// A no longer declares A→B; the re-derive reads A's CURRENT vault
+	// and must not resurrect the stripped edge.
+	edges, err = st.GetEdgesFor(ctx, "bgg:test-game-2099", nil)
+	require.NoError(t, err)
+	assert.Empty(t, edges, "dropped A→B not resurrected (current vault, not stale snapshot)")
+}

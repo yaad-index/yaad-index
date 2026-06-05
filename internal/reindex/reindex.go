@@ -300,11 +300,59 @@ func (r *Reindexer) Run(ctx context.Context, mode Mode) (Summary, error) {
 	// Disappeared-file pass: anything that was in bookkeeping last
 	// time but didn't show up on disk this time gets a cascade delete.
 	// Full mode skips this — bookkeeping is empty after the wipe.
+	//
+	// #447: DeleteEntityCascade strips edges in BOTH directions (the FK
+	// edges.from_id/to_id → entities(id) forbids dangling inbound
+	// edges, so deleting B requires deleting every A→B too). When A is
+	// a SURVIVING entity whose vault file is unchanged, the walk above
+	// skipped A and never re-derived A→B → the edge would stay gone
+	// until a `reindex --full`. To keep the incremental end-state equal
+	// to the --full steady state, we re-derive the vault-declared edges
+	// of every survivor whose inbound edge to a disappearing entity was
+	// stripped. Re-deriving A both restores A→B and re-materializes B as
+	// a thin canonical-label row (B's full row is gone, but A still
+	// references it). Because we re-derive the FULL deduped set of
+	// affected survivors, the end state is independent of the
+	// map-iteration order of `prior` below.
 	if mode != Full {
+		// Set of entity IDs disappearing this pass (prior files whose
+		// path is no longer in `seen`). Computed first so step 2 below
+		// can exclude survivors that are themselves being deleted.
+		disappearing := make(map[string]struct{})
 		for path, f := range prior {
 			if _, ok := seen[path]; ok {
 				continue
 			}
+			disappearing[f.EntityID] = struct{}{}
+		}
+
+		// Survivors whose inbound edge to a disappearing entity is about
+		// to be stripped by the cascade. Captured from the CURRENT
+		// (post-walk) edge state so it reflects each survivor's current
+		// vault declarations: a survivor that changed this walk and
+		// dropped its A→B edge has no A→B row here, so we will NOT
+		// resurrect it.
+		strippedReferrers := make(map[string]struct{})
+
+		for path, f := range prior {
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			// Capture inbound referrers BEFORE the cascade deletes the
+			// edges. Exclude any referrer that is itself disappearing —
+			// no point re-deriving an entity we're about to delete.
+			inbound, gErr := r.store.GetEdgesTo(ctx, f.EntityID, nil)
+			if gErr != nil {
+				summary.Errors = append(summary.Errors, fmt.Sprintf("inbound edges %s (path %s): %v", f.EntityID, path, gErr))
+			} else {
+				for _, e := range inbound {
+					if _, gone := disappearing[e.From]; gone {
+						continue
+					}
+					strippedReferrers[e.From] = struct{}{}
+				}
+			}
+
 			if err := r.store.DeleteEntityCascade(ctx, f.EntityID); err != nil && !errors.Is(err, store.ErrNotFound) {
 				summary.Errors = append(summary.Errors, fmt.Sprintf("delete entity %s (path %s): %v", f.EntityID, path, err))
 				continue
@@ -314,6 +362,60 @@ func (r *Reindexer) Run(ctx context.Context, mode Mode) (Summary, error) {
 				continue
 			}
 			summary.EntitiesDeleted++
+		}
+
+		// Re-derive the stripped survivors' vault-declared edges. This
+		// restores the inbound edge(s) the cascade removed and re-
+		// materializes the now-thin target(s). We re-read each
+		// survivor's CURRENT vault file (not a stale snapshot) so a
+		// survivor that genuinely dropped the edge this walk stays
+		// dropped. Sort the ids so the apply order is deterministic for
+		// tests + debug-log grep — the end state is order-independent
+		// either way, but a stable order keeps reruns identical.
+		//
+		// id→path index from the `prior` bookkeeping: the affected
+		// survivors are unchanged present files, so they're in `prior`
+		// (a disappearing file's path was excluded from this index by
+		// the `seen` check). entity_id is unique per path so last-wins
+		// is irrelevant here.
+		idToPath := make(map[string]string, len(prior))
+		for path, f := range prior {
+			if _, ok := seen[path]; !ok {
+				continue
+			}
+			idToPath[f.EntityID] = path
+		}
+
+		referrers := make([]string, 0, len(strippedReferrers))
+		for id := range strippedReferrers {
+			referrers = append(referrers, id)
+		}
+		sort.Strings(referrers)
+
+		for _, referrerID := range referrers {
+			path, ok := idToPath[referrerID]
+			if !ok {
+				// Referrer isn't a surviving bookkeeping file — e.g. a
+				// brand-new file added this walk (already processed in
+				// the walk above, though its A→B edge may still have been
+				// stripped by a later cascade). Best-effort skip with a
+				// note rather than failing the whole reindex.
+				summary.Errors = append(summary.Errors, fmt.Sprintf("rederive survivor %s: not found in bookkeeping (skipped)", referrerID))
+				continue
+			}
+			body, readErr := os.ReadFile(path)
+			if readErr != nil {
+				summary.Errors = append(summary.Errors, fmt.Sprintf("rederive read %s: %v", path, readErr))
+				continue
+			}
+			entity, parseErr := vault.Unmarshal(body)
+			if parseErr != nil {
+				summary.Errors = append(summary.Errors, fmt.Sprintf("rederive parse %s: %v", path, parseErr))
+				continue
+			}
+			written, edgeErrs := r.applyVaultEdges(ctx, entity)
+			summary.EdgeRowsWritten += written
+			summary.Errors = append(summary.Errors, edgeErrs...)
 		}
 	}
 
