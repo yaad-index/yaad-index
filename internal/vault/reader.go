@@ -273,7 +273,7 @@ func (r *Reader) OpenAttachment(kind, id, name string) (io.ReadCloser, *Attachme
 		return nil, nil, nil, err
 	}
 
-	entity, archived, err := r.readByIDWithArchiveFlag(kind, id)
+	entity, mdPath, err := r.readByIDResolved(kind, id)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -293,16 +293,12 @@ func (r *Reader) OpenAttachment(kind, id, name string) (io.ReadCloser, *Attachme
 		return nil, nil, nil, err
 	}
 
-	slug, err := slugFromID(id)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	var entityDir string
-	if archived {
-		entityDir = filepath.Join(r.root, ArchiveDir, KindDir(kind), slug)
-	} else {
-		entityDir = filepath.Join(r.root, KindDir(kind), slug)
-	}
+	// The attachment subdir is the entity .md path with its `.md`
+	// extension stripped — true for every layout the resolver probes
+	// (flat `<kind>/<slug>`, `ct/<kind>/<slug>`, `<kind>/<subfolder>/<slug>`,
+	// `_archive/<kind>/<slug>`). Anchoring off the resolved path keeps
+	// attachments reachable regardless of which layout served the file.
+	entityDir := strings.TrimSuffix(mdPath, ".md")
 	resolved := filepath.Join(entityDir, filepath.Clean(manifest.Path))
 
 	// Belt-and-braces: after Clean+Join, confirm the resolved path is
@@ -325,29 +321,52 @@ func (r *Reader) OpenAttachment(kind, id, name string) (io.ReadCloser, *Attachme
 	return f, manifest, info, nil
 }
 
-// readByIDWithArchiveFlag mirrors ReadByID's active-then-archive
-// resolution but reports which layout served the file. The HTTP
-// attachment handler needs the layout to anchor the manifest's
-// relative Path correctly.
-func (r *Reader) readByIDWithArchiveFlag(kind, id string) (*Entity, bool, error) {
+// readByIDResolved mirrors ReadByID's full layout probe
+// (active → canonical-label `ct/` → #415 subfolder → archive) and
+// returns the resolved on-disk .md path alongside the entity. The HTTP
+// attachment handler needs the path — not merely an archived flag —
+// because each layout roots the entity's attachment subdir differently;
+// the subdir is always the .md path minus its extension. Keeping this in
+// lockstep with ReadByID lets OpenAttachment resolve attachments for
+// canonical-label entities and UGC-in-subfolder (#415), which the old
+// active-then-archive-only probe skipped (#443).
+func (r *Reader) readByIDResolved(kind, id string) (*Entity, string, error) {
 	activePath, err := r.pathFor(kind, id)
 	if err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
 	if e, err := r.ReadFile(activePath); err == nil {
-		return e, false, nil
+		return e, activePath, nil
 	} else if !IsNotExist(err) {
-		return nil, false, err
+		return nil, "", err
+	}
+	canonicalPath, err := r.canonicalLabelPathFor(kind, id)
+	if err != nil {
+		return nil, "", err
+	}
+	if e, err := r.ReadFile(canonicalPath); err == nil {
+		return e, canonicalPath, nil
+	} else if !IsNotExist(err) {
+		return nil, "", err
+	}
+	if kind == kindUserContent {
+		if subPath, ok := r.subfolderPathFor(kind, id); ok {
+			if e, err := r.ReadFile(subPath); err == nil {
+				return e, subPath, nil
+			} else if !IsNotExist(err) {
+				return nil, "", err
+			}
+		}
 	}
 	archivePath, err := r.archivePathFor(kind, id)
 	if err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
 	e, err := r.ReadFile(archivePath)
 	if err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
-	return e, true, nil
+	return e, archivePath, nil
 }
 
 // validateAttachmentName rejects names that could escape the
