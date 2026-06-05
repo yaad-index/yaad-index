@@ -122,6 +122,37 @@ func TestEvaluateArchiveWhen_PerPrimitive(t *testing.T) {
 	}
 }
 
+// TestEvaluateArchiveWhen_FieldEquals_NumericCrossType pins value-equal
+// numeric comparison for field_equals: entity data round-trips through
+// the store's JSON column as float64, while the workflow config parses
+// the same literal from YAML as int. A plain reflect.DeepEqual would
+// treat float64(5) and int(5) as unequal, so a numeric field_equals
+// would silently never match.
+func TestEvaluateArchiveWhen_FieldEquals_NumericCrossType(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		want  any // field_equals config value
+		got   any // entity data value
+		match bool
+	}{
+		{"config int vs data float64 (the bug)", 5, float64(5), true},
+		{"config float64 vs data int", float64(5), 5, true},
+		{"config int64 vs data float64", int64(5), float64(5), true},
+		{"numeric not equal", 5, float64(7), false},
+		{"fractional float equal", 2.5, float64(2.5), true},
+		{"number vs string not equal", 5, "5", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := &parser.ArchiveWhen{FieldEquals: map[string]any{"rating": tc.want}}
+			v := EntityView{Data: map[string]any{"rating": tc.got}}
+			assert.Equal(t, tc.match, EvaluateArchiveWhen(p, v))
+		})
+	}
+}
+
 // TestEvaluateArchiveWhen_SiblingPrimitivesAndImplicitly pins the
 // ADR-0030 §2 semantic: declaring multiple primitives at the same
 // level AND together (no explicit all_of wrapper required). Both
