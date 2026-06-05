@@ -29,7 +29,7 @@ A canonical-single-method contract would be simpler to maintain but rules out pl
 
 ## Decision
 
-**Plugins emit binary data via a top-level `attachments[]` field in FetchResult. Each attachment is a `{role, uri, extension}` triple with a URI that uses one of three schemes (`file://`, `https://`, `base64://`). The daemon dispatches on scheme and places the resolved binary at `<vault>/<kind>/<id>.<role>.<extension>` next to the entity's `.md` file.**
+**Plugins emit binary data via a top-level `attachments[]` field in FetchResult. Each attachment is a `{role, uri, extension}` triple with a URI that uses one of three schemes (`file://`, `https://`, `base64://`). The daemon dispatches on scheme and places the resolved binary under the entity's own attachment subdirectory at `<vault>/<kind>/<local-id>/attachments/<role>.<extension>` (nested aggregate-root layout per ADR-0018 — see §3).**
 
 ### 1. Wire shape
 
@@ -89,7 +89,7 @@ Constraints:
 
 - Daemon fetches with a default 60-second timeout, follows redirects (max 5), default User-Agent (`yaad-index/<version>`).
 - 4xx / 5xx response: attachment is logged + skipped; entity proceeds.
-- The daemon does NOT cache the URL beyond what's already in `<vault>/<kind>/<id>.<role>.<ext>`. Re-fetch happens only when the plugin re-emits a different URI (or operator forces).
+- The daemon does NOT cache the URL beyond what's already on disk in the entity's attachment subdirectory (`<vault>/<kind>/<local-id>/attachments/<role>.<ext>`, per §3). Re-fetch happens only when the plugin re-emits a different URI (or operator forces).
 - HTTPS is preferred; plain `http://` is allowed but logged as a warning per attachment.
 
 This scheme is appropriate when the URL is stable and authoritative. Plugins authenticating against private endpoints should NOT use this scheme: the daemon doesn't carry plugin credentials.
@@ -110,10 +110,20 @@ Constraints:
 
 ### 3. Vault placement
 
-Resolved binary lands at:
+> **Amended per [ADR-0018](./0018-archive-replaces-delete.md) (§Attachments and
+> ownership cascade).** The original flat sibling layout
+> (`<vault>/<kind>/<local-id>.<role>.<ext>`, next to the `.md`) was replaced
+> before release by the nested aggregate-root layout below. ADR-0018 made the
+> parent entity the unit of archive / restore / delete and moved every
+> attachment under the entity's own subdirectory so the whole subtree
+> moves-or-dies with its parent. `internal/attachments/validate.go`
+> (`destPath`) is the source of truth for the on-disk path; the flat layout
+> never shipped in a release.
+
+Resolved binary lands under the entity's own attachment subdirectory:
 
 ```
-<vault-root>/<kind>/<local-id>.<role>.<extension>
+<vault-root>/<kind>/<local-id>/attachments/<role>.<extension>
 ```
 
 `<local-id>` is the local part of the entity ID — everything AFTER the `<kind>:` namespace prefix. Local IDs MUST be alphanumeric + dash + underscore only (`^[a-z0-9_-]+$`); kinds whose canonical IDs contain other characters (dots, slashes, colons) are out of scope for the attachment contract until they normalize their local-ID shape.
@@ -121,10 +131,17 @@ Resolved binary lands at:
 For entity ID `boardgame:130680` (kind `boardgame`, local-id `130680`) with role `thumb`, extension `jpg`, vault root `/path/to/vault`:
 
 ```
-/path/to/vault/boardgame/130680.thumb.jpg
+/path/to/vault/boardgame/130680/attachments/thumb.jpg
 ```
 
-Sibling to the entity's `<vault>/<kind>/<local-id>.md`. The frontmatter of the .md file MAY reference the attachment (e.g., `image: 130680.thumb.jpg`) but the placement is canonical regardless of frontmatter; the daemon walks `<vault>/<kind>/<local-id>.*` to find all attachments, EXCLUDING `.md` (the entity file itself) and any future vault-native extensions reserved for the daemon's own use.
+Every attachment for one entity lives together under
+`<vault>/<kind>/<local-id>/attachments/` — a directory dedicated to that single
+entity, NOT a sibling of the entity's `<vault>/<kind>/<local-id>.md`. The daemon
+enumerates an entity's attachments by listing that `attachments/` directory (the
+`.md` is never inside it). The frontmatter MAY reference an attachment but the
+placement is canonical regardless of frontmatter. Because the subtree is wholly
+owned by the entity, ADR-0018's archive / restore / delete of the parent moves
+or removes the entire `<local-id>/` folder atomically.
 
 ### 4. Re-fetch and preservation semantics
 
@@ -171,7 +188,7 @@ For `file://` URIs, after the role + extension checks pass:
 2. Check the path is a strict descendant of the configured `plugin_staging_dir` (after symlink resolution).
 3. Reject paths that escape the staging dir, contain `..` components after resolution, or point at non-regular files.
 
-The destination path `<vault>/<kind>/<local-id>.<role>.<extension>` is also re-validated post-construction: it MUST be a strict descendant of `<vault>/<kind>` (defense-in-depth against a `local-id` somehow containing path separators despite the §3 constraint).
+The destination path `<vault>/<kind>/<local-id>/attachments/<role>.<extension>` is also re-validated post-construction: it MUST be a strict descendant of `<vault>/<kind>/<local-id>/attachments` (defense-in-depth against a `local-id` or `role` somehow containing path separators despite the §3 + §5a constraints). The check compares the resolved file's parent directory against the attachments subdir directly rather than `filepath.Clean`-ing the path, so a `..` component can't mask a traversal.
 
 These three checks together close the path-traversal surface. A code-review checklist for any future ADR or daemon change touching attachment paths SHOULD verify all three are exercised.
 
