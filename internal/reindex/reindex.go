@@ -498,6 +498,17 @@ func (r *Reindexer) upsertEntity(ctx context.Context, e *vault.Entity) error {
 	// override stays accurate for the lifetime the plugin emits
 	// the field — reindex is a recovery / rebuild path, not the
 	// authoritative emission point.
+	//
+	// EmitDayRefs is add-only, so a `day:` frontmatter field the operator
+	// removed would orphan its edge (no live source, never re-emitted).
+	// Prune the entity's existing day-targeting edges first so the
+	// reindex reconciles the day-reference set (delete-then-create)
+	// rather than appending to it (#446). Best-effort + WARN, mirroring
+	// EmitDayRefs' own fire-and-continue contract.
+	if err := pruneDayRefEdges(ctx, r.store, e.ID); err != nil && r.logger != nil {
+		r.logger.WarnContext(ctx, "day shape-scan: prune stale day-ref edges",
+			"source", e.ID, "err", err)
+	}
 	canonical.EmitDayRefs(ctx, r.store, r.edgeWriter, e.ID, e.Data, nil, r.logger)
 	// Notations cache (per yaad-index the source issue a prior PR). The vault is
 	// the canonical source for the entity_notations table — reindex
@@ -539,6 +550,35 @@ func vaultNotationsToStore(entityID string, in []string) []store.Notation {
 		}
 	}
 	return out
+}
+
+// pruneDayRefEdges removes the entity's existing edges that target a
+// `day:` entity, so reindex's EmitDayRefs re-emission reconciles the
+// day-reference set instead of appending to it (#446). The day-ref edge
+// types — references_day plus the semantic due_on / occurred_on /
+// is_about_day and any plugin date_fields override — point exclusively
+// to day entities, so a type that currently points to a day IS a
+// day-ref type; deleting by that type is target-precise. Distinct types
+// are deleted once each.
+func pruneDayRefEdges(ctx context.Context, st store.Store, entityID string) error {
+	edges, err := st.GetEdgesFor(ctx, entityID, nil)
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]struct{})
+	for _, edge := range edges {
+		if _, ok := canonical.ParseDayID(edge.To); !ok {
+			continue
+		}
+		if _, done := seen[edge.Type]; done {
+			continue
+		}
+		seen[edge.Type] = struct{}{}
+		if _, err := st.DeleteEdgesByTypeFrom(ctx, entityID, edge.Type); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // vaultAliasesToStore converts the vault-frontmatter aliases list

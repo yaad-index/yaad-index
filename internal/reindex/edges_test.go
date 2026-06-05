@@ -265,6 +265,64 @@ func TestReindex_AbsentEdgesBlockBackCompat(t *testing.T) {
 	require.Len(t, out, 1, "absent edges block does NOT wipe prior DB state")
 }
 
+// TestReindex_PrunesStaleDayRefEdge pins #446: removing a `day:`
+// frontmatter field and reindexing drops the orphaned day-ref edge.
+// EmitDayRefs is add-only, so without the prune the references_day edge
+// to the removed day would persist with no live source.
+func TestReindex_PrunesStaleDayRefEdge(t *testing.T) {
+	t.Parallel()
+	r, st, w, vaultRoot := newTestEnv(t)
+
+	src := newEntity(t, "bgg:event-2026", "bgg")
+	src.Data["meeting"] = "day:2026-06-05"
+	require.NoError(t, w.Write(src))
+
+	_, err := r.Run(context.Background(), Incremental)
+	require.NoError(t, err)
+
+	// The day-ref edge exists after the first pass.
+	out, err := st.GetEdgesFor(context.Background(), "bgg:event-2026", []string{"references_day"})
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, "day:2026-06-05", out[0].To)
+
+	// Operator removes the day field; bump mtime so reindex re-parses.
+	delete(src.Data, "meeting")
+	require.NoError(t, w.Write(src))
+	require.NoError(t, touchPath(filepath.Join(vaultRoot, "bgg", "event-2026.md"), time.Now().Add(2*time.Second)))
+
+	_, err = r.Run(context.Background(), Incremental)
+	require.NoError(t, err)
+
+	out, err = st.GetEdgesFor(context.Background(), "bgg:event-2026", []string{"references_day"})
+	require.NoError(t, err)
+	assert.Empty(t, out, "removed day: field → day-ref edge pruned on reindex")
+}
+
+// TestReindex_DayRefEdgeIdempotentAcrossReruns pins that the prune does
+// not regress the steady state: an entity that keeps its `day:` field
+// has exactly one day-ref edge after repeated reindex passes — the
+// prune deletes then EmitDayRefs re-creates, never zero or duplicate.
+func TestReindex_DayRefEdgeIdempotentAcrossReruns(t *testing.T) {
+	t.Parallel()
+	r, st, w, vaultRoot := newTestEnv(t)
+
+	src := newEntity(t, "bgg:standup", "bgg")
+	src.Data["occurs"] = "day:2026-06-05"
+	require.NoError(t, w.Write(src))
+
+	_, err := r.Run(context.Background(), Incremental)
+	require.NoError(t, err)
+	require.NoError(t, touchPath(filepath.Join(vaultRoot, "bgg", "standup.md"), time.Now().Add(2*time.Second)))
+	_, err = r.Run(context.Background(), Incremental)
+	require.NoError(t, err)
+
+	out, err := st.GetEdgesFor(context.Background(), "bgg:standup", []string{"references_day"})
+	require.NoError(t, err)
+	require.Len(t, out, 1, "day-ref edge stays at exactly one across reindex reruns")
+	assert.Equal(t, "day:2026-06-05", out[0].To)
+}
+
 // touchPath sets the mtime of a vault file so an incremental walk
 // re-parses it. Mirrors the inline helper used by the existing
 // TestReindex_ForwardEdgeReferenceLandsOnSecondPass test.
