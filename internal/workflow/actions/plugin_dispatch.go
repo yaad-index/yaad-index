@@ -60,7 +60,7 @@ type PluginDispatcher interface {
 // alongside the parser-side static check), applies the
 // action's timeout, and invokes the configured
 // PluginDispatcher.
-func (d *dispatcher) runPluginDispatch(ctx context.Context, idx int, wf *parser.Workflow, a *parser.PluginDispatchAction, _ Decision, _ Activation) ActionResult {
+func (d *dispatcher) runPluginDispatch(ctx context.Context, idx int, wf *parser.Workflow, a *parser.PluginDispatchAction, _ Decision, act Activation) ActionResult {
 	if d.pluginDispatcher == nil {
 		return ActionResult{
 			ActionIdx: idx,
@@ -110,7 +110,7 @@ func (d *dispatcher) runPluginDispatch(ctx context.Context, idx int, wf *parser.
 	dispatchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if err := d.pluginDispatcher.Dispatch(dispatchCtx, plugin, cmd, a.Args); err != nil {
+	if err := d.pluginDispatcher.Dispatch(dispatchCtx, plugin, cmd, d.renderArgs(act, idx, a.Args)); err != nil {
 		return ActionResult{
 			ActionIdx: idx,
 			Type:      "plugin_dispatch",
@@ -118,4 +118,30 @@ func (d *dispatcher) runPluginDispatch(ctx context.Context, idx int, wf *parser.
 		}
 	}
 	return ActionResult{ActionIdx: idx, Type: "plugin_dispatch"}
+}
+
+// renderArgs resolves each string-valued args entry to the
+// engine-rendered template value (keyed `arg:<name>` in
+// act.RenderedTemplates, mirroring set_property's `field:<name>`
+// scheme), so an arg like `{{ entity.id }}` reaches the
+// dispatcher as the resolved id (#456). Non-string arg values
+// are not templatable and pass through verbatim. Args with no
+// template expressions render to themselves, preserving
+// back-compat. A nil RenderedTemplates map (legacy / test path
+// that bypasses the engine renderer) falls every string arg
+// back to its raw value via d.rendered.
+func (d *dispatcher) renderArgs(act Activation, idx int, args map[string]any) map[string]any {
+	if len(args) == 0 {
+		return args
+	}
+	out := make(map[string]any, len(args))
+	for name, raw := range args {
+		s, ok := raw.(string)
+		if !ok || s == "" {
+			out[name] = raw
+			continue
+		}
+		out[name] = d.rendered(act, idx, "arg:"+name, s)
+	}
+	return out
 }

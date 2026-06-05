@@ -236,6 +236,77 @@ func TestEvaluator_GraphGet_FatalLookupError(t *testing.T) {
 		"underlying lookup error wrapped: %v", ev2)
 }
 
+// TestEvaluator_GraphTryGet_HitMatchesGet pins that
+// graph.try_get(id) returns the same entity-map shape as
+// graph.get on a hit, so nested field access resolves
+// identically and records no MissingRef (#456).
+func TestEvaluator_GraphTryGet_HitMatchesGet(t *testing.T) {
+	t.Parallel()
+	graph := newFakeGraph(map[string]map[string]any{
+		"widget:alpha-prime": {"data": map[string]any{"x": int64(9)}},
+	})
+	ev, err := NewEvaluator(Options{Lookup: graph})
+	require.NoError(t, err)
+
+	prog, err := ev.Compile(`graph.try_get(entity.ref).data.x > 7`, "bool")
+	require.NoError(t, err)
+	got, res, err := prog.EvalBool(context.Background(), Activation{
+		Entity: map[string]any{"ref": "widget:alpha-prime"},
+	})
+	require.NoError(t, err)
+	assert.True(t, got, "graph.try_get hit resolves nested field like graph.get")
+	assert.Empty(t, res.MissingRefs, "hit records no MissingRef")
+}
+
+// TestEvaluator_GraphTryGet_MissIsSilentAndHasSafe pins the
+// has()-safe contract (#456): a miss on graph.try_get records
+// NO MissingRef (unlike graph.get) and returns an empty map so
+// has(graph.try_get(missing).field) evaluates to false without
+// raising on null traversal.
+func TestEvaluator_GraphTryGet_MissIsSilentAndHasSafe(t *testing.T) {
+	t.Parallel()
+	graph := newFakeGraph(map[string]map[string]any{})
+	ev, err := NewEvaluator(Options{Lookup: graph})
+	require.NoError(t, err)
+
+	prog, err := ev.Compile(`has(graph.try_get(entity.ref).data)`, "bool")
+	require.NoError(t, err)
+	got, res, err := prog.EvalBool(context.Background(), Activation{
+		Entity: map[string]any{"ref": "widget:not-present"},
+	})
+	require.NoError(t, err)
+	assert.False(t, got, "has() on a try_get miss is false, not an error")
+	assert.Empty(t, res.MissingRefs, "try_get miss records NO MissingRef")
+}
+
+// TestEvaluator_GraphTryGet_MissVsGetMiss contrasts the two
+// surfaces side by side on the same missing id: graph.get
+// records a MissingRef (surfaces a task note) while
+// graph.try_get stays silent (#456).
+func TestEvaluator_GraphTryGet_MissVsGetMiss(t *testing.T) {
+	t.Parallel()
+	graph := newFakeGraph(map[string]map[string]any{})
+	ev, err := NewEvaluator(Options{Lookup: graph})
+	require.NoError(t, err)
+
+	getProg, err := ev.Compile(`graph.get(entity.ref) == null`, "bool")
+	require.NoError(t, err)
+	_, getRes, err := getProg.EvalBool(context.Background(), Activation{
+		Entity: map[string]any{"ref": "widget:absent"},
+	})
+	require.NoError(t, err)
+	require.Len(t, getRes.MissingRefs, 1, "graph.get miss records a MissingRef")
+	assert.Equal(t, "widget:absent", getRes.MissingRefs[0].ID)
+
+	tryProg, err := ev.Compile(`has(graph.try_get(entity.ref).rating)`, "bool")
+	require.NoError(t, err)
+	_, tryRes, err := tryProg.EvalBool(context.Background(), Activation{
+		Entity: map[string]any{"ref": "widget:absent"},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, tryRes.MissingRefs, "graph.try_get miss records no MissingRef")
+}
+
 // TestEvaluator_NilGraphLookup_AlwaysMissingRef: when the
 // evaluator is constructed without a GraphLookup (e.g. dev
 // mode), every graph.get(id) records a MissingRef + returns

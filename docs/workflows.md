@@ -435,7 +435,7 @@ Workflow authors don't need to opt in — the routing is transparent. `target.na
     plugin: yaad-bgg
     command: fetch
     args:
-      slug: 'entity.bgg_slug'
+      slug: '{{ entity.slug }}'
     timeout_seconds: 30
 ```
 
@@ -443,7 +443,7 @@ Fire a plugin command from inside a workflow ("look-something-up-then-decide"). 
 
 - `plugin` (required) — must appear in the workflow's `allowed_plugins` list.
 - `command` (required) — bare command name (no `!` sigil; the sigil lives on the operator-side invocation surface).
-- `args` — optional map; plugin-specific.
+- `args` — optional map; plugin-specific. **Values are literal by default** — unlike the other templated fields (which are bare CEL), an arg value is passed verbatim unless it carries a `{{ … }}` interpolation segment, in which case the segment is rendered against the activation (e.g. `slug: '{{ entity.slug }}'`). Plugin args are usually literal (paths, modes, type discriminators), so this keeps the common case quote-free.
 - `timeout_seconds` — non-negative integer; 0 → daemon default.
 
 On timeout / plugin error: the workflow's err-task pattern fires (one err task per workflow, error appended); the workflow continues firing on future events but the current evaluation aborts.
