@@ -138,6 +138,10 @@ type capabilitiesDoc struct {
 	// same plugin.
 	ResolvesCanonicalKinds []string `json:"resolves_canonical_kinds,omitempty"`
 	CanonicalEdgeTypesEmitted []string `json:"canonical_edge_types_emitted,omitempty"`
+	// SupportsSearch declares opt-in to /v1/search/upstream per
+	// #457. yaad-bgg delegates to BGG's xmlapi2 name-search
+	// endpoint via bgg.Plugin.Search.
+	SupportsSearch bool `json:"supports_search,omitempty"`
 	CacheTTLSeconds int `json:"cache_ttl_seconds,omitempty"`
 	CanonicalKindsExtras map[string]canonicalKindExtras `json:"canonical_kinds_extras,omitempty"`
 	// SourceNamespace declares the per-plugin vault path prefix
@@ -245,6 +249,10 @@ func runInit(stdout io.Writer) error {
 			"artist_by",
 			"published_by",
 		},
+		// SupportsSearch declares opt-in to /v1/search/upstream per
+		// #457. yaad-bgg delegates to BGG's xmlapi2 name-search via
+		// bgg.Plugin.Search.
+		SupportsSearch: true,
 		CacheTTLSeconds: bgg.DefaultCacheTTLSeconds,
 		SourceNamespace: bgg.SourceNamespace,
 
@@ -311,6 +319,20 @@ func runInit(stdout io.Writer) error {
 type fetchRequest struct {
 	Operation string `json:"operation"`
 	URL string `json:"url"`
+	// Query + Limit carry the search-operation parameters per
+	// #457. Ignored on operation=ingest.
+	Query string `json:"query,omitempty"`
+	Limit int `json:"limit,omitempty"`
+}
+
+// searchResponseDoc is the stdout JSON shape for operation=search
+// per #457. Mirrors yaad-wikipedia's searchResponseDoc (and
+// yaad-index's subprocess.searchResponse) — a single object, no
+// NDJSON wrap.
+type searchResponseDoc struct {
+	OK bool `json:"ok"`
+	Candidates []bgg.SearchResultCandidate `json:"candidates,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
 }
 
 // fetchResponse mirrors the wire shape yaad-index's
@@ -398,10 +420,20 @@ func runFetch(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) er
 	if err := json.Unmarshal(body, &req); err != nil {
 		return fmt.Errorf("parse request: %w", err)
 	}
-	if req.Operation != "ingest" {
-		return fmt.Errorf("unsupported operation %q (only \"ingest\" is implemented)", req.Operation)
+	// Operation dispatch mirrors yaad-wikipedia per #457. `ingest`
+	// falls through to the existing fetch path below; `search` runs
+	// BGG's free-text name search after the plugin is constructed
+	// (it needs the bggo client). The default message keeps the
+	// `unsupported operation` substring an existing test asserts.
+	switch req.Operation {
+	case "ingest":
+		// fall through to the existing ingest path below
+	case "search":
+		// handled after plugin construction below
+	default:
+		return fmt.Errorf("unsupported operation %q (supported: \"ingest\", \"search\")", req.Operation)
 	}
-	if req.URL == "" {
+	if req.Operation == "ingest" && req.URL == "" {
 		return errors.New("request missing `url`")
 	}
 
@@ -438,6 +470,13 @@ func runFetch(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) er
 	plugin, err := bgg.New(apiKey, pluginOpts...)
 	if err != nil {
 		return err
+	}
+
+	// #457: search operation runs BGG's free-text name search and
+	// returns the full candidate list (no auto-resolve / disambiguation
+	// collapse — that's the ingest path's job).
+	if req.Operation == "search" {
+		return runSearch(ctx, plugin, req, stdout)
 	}
 
 	outcome, err := plugin.Fetch(ctx, req.URL)
@@ -540,6 +579,39 @@ func runFetch(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) er
 	resp.RawContent = renderBody(bg, slug.Slug(bg.Name), thumbExt)
 
 	return writeFetchResponse(stdout, resp)
+}
+
+// runSearch handles the operation=search subprocess call per #457.
+// Reads the operator/agent query from the fetchRequest's Query
+// field, dispatches to bgg.Plugin.Search, and emits the
+// searchResponseDoc shape on stdout. Mirrors yaad-wikipedia's
+// runSearch one-for-one.
+//
+// Empty query → ok:false with an error_message; the daemon's
+// federation handler surfaces this on the per_plugin_status block
+// without failing the federated call.
+//
+// Upstream / transport errors → ok:false + error_message. A
+// successful empty result set → ok:true + empty candidates list.
+func runSearch(ctx context.Context, p *bgg.Plugin, req fetchRequest, stdout io.Writer) error {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		return json.NewEncoder(stdout).Encode(searchResponseDoc{
+			OK: false,
+			ErrorMessage: "request missing `query`",
+		})
+	}
+	candidates, err := p.Search(ctx, query, req.Limit)
+	if err != nil {
+		return json.NewEncoder(stdout).Encode(searchResponseDoc{
+			OK: false,
+			ErrorMessage: err.Error(),
+		})
+	}
+	return json.NewEncoder(stdout).Encode(searchResponseDoc{
+		OK: true,
+		Candidates: candidates,
+	})
 }
 
 // writeFetchResponse emits resp to stdout as NDJSON-shape per

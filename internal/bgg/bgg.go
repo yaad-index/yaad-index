@@ -877,6 +877,64 @@ func (p *Plugin) fetchByName(ctx context.Context, query string) (*FetchOutcome, 
 	}
 }
 
+// SearchResultCandidate is the per-result wire shape the plugin's
+// binary emits on the `--operation=search` path per #457. Mirrors
+// the plugins.SearchCandidate fields one-for-one — defined here so
+// the bgg package stays plugins-import-free (same rationale as
+// yaad-wikipedia's local copy).
+type SearchResultCandidate struct {
+	ID string `json:"id"`
+	Label string `json:"label"`
+	Summary string `json:"summary,omitempty"`
+}
+
+// Search is the public entry point for upstream-federated search
+// per #457. Runs BGG's free-text name search and returns the FULL
+// candidate list verbatim — unlike fetchByName, it does NOT
+// auto-resolve a single match, collapse exact-name hits, or strip
+// the daemon-derived `bgg-` canonical-id prefix. Those behaviors
+// belong to the ingest path, which RESOLVES a name to one entity;
+// federated search surfaces every match for the agent to pick.
+//
+// The query is trimmed and passed to BGG verbatim. Search types
+// match fetchByName (boardgame + boardgameexpansion). When limit
+// > 0 the result list is trimmed to that many candidates; limit
+// <= 0 returns whatever BGG returned.
+//
+// Each bggo.SearchResult maps to a candidate:
+//   - ID: the numeric BGG id as a string (re-feed via `bgg: <id>`).
+//   - Label: the BGG name, suffixed with ` (<year>)` when the
+//     year is known — mirrors fetchByName's disambiguation labels.
+//   - Summary: the BGG item type string (e.g. "boardgame" /
+//     "boardgameexpansion"). BGG's search API carries no
+//     description field, so the type is the cheap summary.
+func (p *Plugin) Search(ctx context.Context, query string, limit int) ([]SearchResultCandidate, error) {
+	query = strings.TrimSpace(query)
+	results, err := p.client.Search(ctx, bggo.SearchRequest{
+		Query: query,
+		Types: []bggo.ItemType{bggo.BoardGameType, bggo.BoardGameExpansionType},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%s: Search(%q): %w", PluginName, query, err)
+	}
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	out := make([]SearchResultCandidate, 0, len(results))
+	for _, r := range results {
+		label := r.Name
+		if r.YearPublished > 0 {
+			label = fmt.Sprintf("%s (%d)", r.Name, r.YearPublished)
+		}
+		out = append(out, SearchResultCandidate{
+			ID: strconv.FormatInt(r.ID, 10),
+			Label: label,
+			Summary: string(r.Type),
+		})
+	}
+	return out, nil
+}
+
 // normalizeNameForExactMatch lowercases + collapses runs of
 // whitespace to a single space + trims. Used by #329's
 // exact-name disambiguation preference so e.g.
