@@ -432,6 +432,11 @@ type Store interface {
 	// frontmatter, not a DB column, so the handler filters it on the
 	// vault entity it already reads.
 	ListGapCallableCandidates(ctx context.Context, afterID string, limit int, kind string) ([]Entity, error)
+	// ListGapCallableUnfilledCandidates is the gap-state-aware variant of
+	// ListGapCallableCandidates — same predicate as CountGapCallableCandidates
+	// (at least one unfilled, non-deferred gap). Used where the listed set
+	// must agree with the count (#439).
+	ListGapCallableUnfilledCandidates(ctx context.Context, afterID string, limit int, kind string) ([]Entity, error)
 	// CountGapCallableCandidates returns the count of entities the
 	// `/v1/needs-fill` listing would surface — the queue-depth
 	// surface for the response's `total` field per #338 with the
