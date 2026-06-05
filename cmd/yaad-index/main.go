@@ -1073,6 +1073,7 @@ type ReindexCmd struct {
 	ConfigPath string `name:"config" env:"YAAD_INDEX_CONFIG" default:"~/.config/yaad-index/config.yaml" help:"path to the yaad-index config file. vault.path is read from here unless --vault-path overrides."`
 	VaultPath string `name:"vault-path" env:"YAAD_INDEX_VAULT_PATH" help:"override vault root (otherwise read from config.vault.path). Must be absolute."`
 	Full bool `name:"full" help:"drop every entity, edge, and provenance row before rebuilding (default: incremental)."`
+	Check bool `name:"check" help:"report vault↔store divergences without rebuilding; exit non-zero if any are found (#455)."`
 }
 
 // Run executes the reindex CLI subcommand.
@@ -1130,15 +1131,55 @@ func (c *ReindexCmd) Run() error {
 		return fmt.Errorf("expand vault path %q: %w", vaultPath, err)
 	}
 
+	// --check and --full are mutually exclusive: --check is a
+	// read-only dry-run, --full a destructive rebuild. Refuse the
+	// nonsensical combination rather than silently picking one.
+	if c.Check && c.Full {
+		return errors.New("--check and --full are mutually exclusive (--check never rebuilds)")
+	}
+
 	// CLI-invoked reindex passes nil guard — gating depends on the
 	// merged plugin+config registry, which would require loading the
 	// plugin set just to run a manual reindex. The HTTP reindex
 	// handler (daemon path) does wire the guard since the registry is
 	// already loaded. Permissive CLI behavior matches the legacy
 	// shape.
-	reindexer, err := reindex.New(st, expanded, nil, logger)
+	//
+	// The operator's canonical_edge_types ARE threaded (via
+	// NewWithOptions) so the alias-kind derivation matches what a
+	// daemon reindex produced — without it #455's alias-mismatch check
+	// would read every typed alias as bare and report false positives.
+	var canonicalEdgeTypes []string
+	if cfg != nil {
+		canonicalEdgeTypes = cfg.CanonicalEdgeTypes
+	}
+	reindexer, err := reindex.NewWithOptions(st, expanded, nil, logger, canonicalEdgeTypes)
 	if err != nil {
 		return fmt.Errorf("init reindex: %w", err)
+	}
+
+	if c.Check {
+		report, cErr := reindexer.Check(context.Background())
+		if cErr != nil {
+			return fmt.Errorf("reindex --check: %w", cErr)
+		}
+		out, mErr := json.MarshalIndent(report, "", " ")
+		if mErr != nil {
+			return fmt.Errorf("marshal check report: %w", mErr)
+		}
+		if _, err := os.Stdout.Write(out); err != nil {
+			return fmt.Errorf("write check report: %w", err)
+		}
+		if _, err := os.Stdout.WriteString("\n"); err != nil {
+			return fmt.Errorf("write check report newline: %w", err)
+		}
+		// Non-zero exit on any divergence. Returning an error from Run
+		// makes Kong exit non-zero; the deferred st.Close() above still
+		// runs on return.
+		if report.Total() > 0 {
+			return fmt.Errorf("reindex --check: %d divergence(s) found", report.Total())
+		}
+		return nil
 	}
 
 	mode := reindex.Incremental
