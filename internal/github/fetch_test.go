@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -125,6 +126,85 @@ func TestFetchTarget_Issue_HappyPath(t *testing.T) {
 	assert.Empty(t, item.Reviewers, "issues have no reviewers")
 	assert.Empty(t, item.BaseBranch, "issues have no branches")
 	assert.Equal(t, []string{"enhancement"}, item.Labels)
+}
+
+// TestFetchTarget_LastCommentAt_GatedByCommentCount pins #451: the
+// approximated last_comment_at is populated only when the item actually
+// carries comments. A zero-comment issue/PR leaves it null so
+// "commented within the last N days" predicates don't false-positive on
+// the UpdatedAt proxy (which fires on any edit of a never-commented
+// item).
+func TestFetchTarget_LastCommentAt_GatedByCommentCount(t *testing.T) {
+	t.Parallel()
+
+	issueBody := func(number, comments int) string {
+		return fmt.Sprintf(`{
+			"number": %d, "state": "open", "title": "x",
+			"html_url": "https://github.com/acme/proj/issues/%d",
+			"created_at": "2026-05-01T10:00:00Z",
+			"updated_at": "2026-05-20T12:00:00Z",
+			"comments": %d,
+			"user": {"login": "u"}
+		}`, number, number, comments)
+	}
+
+	t.Run("zero comments yields nil last_comment_at", func(t *testing.T) {
+		t.Parallel()
+		fs := newFakeServer(t)
+		fs.serve("/repos/acme/proj/issues/1", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(issueBody(1, 0)))
+		})
+		srv := fs.start()
+		defer srv.Close()
+
+		item, err := FetchTarget(context.Background(),
+			FetchOptions{BaseURL: srv.URL, Token: "t"},
+			Target{Owner: "acme", Repo: "proj", Kind: ItemKindIssue, Number: 1})
+		require.NoError(t, err)
+		assert.Equal(t, 0, item.CommentCount)
+		assert.Nil(t, item.LastCommentAt, "zero-comment item must leave last_comment_at null")
+	})
+
+	t.Run("nonzero comments populates last_comment_at from updated_at", func(t *testing.T) {
+		t.Parallel()
+		fs := newFakeServer(t)
+		fs.serve("/repos/acme/proj/issues/2", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(issueBody(2, 3)))
+		})
+		srv := fs.start()
+		defer srv.Close()
+
+		item, err := FetchTarget(context.Background(),
+			FetchOptions{BaseURL: srv.URL, Token: "t"},
+			Target{Owner: "acme", Repo: "proj", Kind: ItemKindIssue, Number: 2})
+		require.NoError(t, err)
+		require.NotNil(t, item.LastCommentAt, "commented item must populate last_comment_at")
+		assert.Equal(t, item.UpdatedAt, *item.LastCommentAt, "approximated via updated_at")
+	})
+
+	t.Run("PR with only review_comments still counts as commented", func(t *testing.T) {
+		t.Parallel()
+		fs := newFakeServer(t)
+		fs.serve("/repos/acme/proj/pulls/3", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{
+				"number": 3, "state": "open", "title": "x",
+				"html_url": "https://github.com/acme/proj/pull/3",
+				"created_at": "2026-05-01T10:00:00Z",
+				"updated_at": "2026-05-20T12:00:00Z",
+				"comments": 0, "review_comments": 2,
+				"user": {"login": "u"}, "base": {"ref": "main"}, "head": {"ref": "f"}
+			}`))
+		})
+		srv := fs.start()
+		defer srv.Close()
+
+		item, err := FetchTarget(context.Background(),
+			FetchOptions{BaseURL: srv.URL, Token: "t"},
+			Target{Owner: "acme", Repo: "proj", Kind: ItemKindPR, Number: 3})
+		require.NoError(t, err)
+		assert.Equal(t, 2, item.CommentCount, "comments + review_comments")
+		require.NotNil(t, item.LastCommentAt, "review-comments-only PR is still commented")
+	})
 }
 
 func TestFetchTarget_PR404_ShorthandFallsThroughToIssue(t *testing.T) {
