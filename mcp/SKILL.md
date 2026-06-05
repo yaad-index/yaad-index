@@ -483,6 +483,8 @@ Manually fire a registered workflow. Returns the recorded Decision envelope `{ok
 
 Unknown workflow → 404. Empty input on an event-driven workflow → 422. The returned `fired` is false when the workflow's condition predicate rejected — Decision is still recorded.
 
+When authoring or reading a workflow pattern (`workflow_define`), the full CEL expression vocabulary — variable bindings, functions, and templating rules for `condition` / `subject` / action fields — is enumerated in [`docs/cel-surface.md`](../docs/cel-surface.md).
+
 ### `task_list(errored?)`
 
 List workflow-produced tasks (markdown files under `vault/tasks/`). Returns `{ok, tasks: [{id, workflow, subject?, errored?, dedup_key?, created_at}]}` from `GET /v1/tasks`. Sorted by id. Active tasks only — resolved + auto-archived tasks live under `tasks/_archive/` and aren't included. Optional `errored: true` filter returns only err-tasks per ADR-0024 §"Runtime errors"; `errored: false` returns only normal tasks; omitted returns both.
