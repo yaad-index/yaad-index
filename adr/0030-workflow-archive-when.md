@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed 2026-05-31.
+Accepted 2026-06-05 (proposed 2026-05-31).
 
 ## Depends on
 

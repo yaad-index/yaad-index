@@ -1,6 +1,6 @@
 # ADR-0013 — Canonical-kind owns gap contract; plugin emits edge-keyed data; index extracts edges
 
-**Status:** Proposed (2026-05-04)
+**Status:** Accepted (2026-06-05; proposed 2026-05-04)
 **Date:** 2026-05-04
 **Depends on:** [ADR-0001](./0001-fresh-rewrite-ai-first-remote-api.md), [ADR-0002](./0002-api-surface.md), [ADR-0005](./0005-plugin-lifecycle.md), [ADR-0008](./0008-vault-as-source-of-truth.md)
 

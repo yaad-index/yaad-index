@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed 2026-05-30. Amended 2026-06-03 (#361 — `operator_delegated` claim; see §3). Pre-release; no migration window beyond the deprecation marker on `/v1/entities/{id}/operator-fill`.
+Accepted 2026-06-05 (proposed 2026-05-30). Amended 2026-06-03 (#361 — `operator_delegated` claim; see §3). Pre-release; no migration window beyond the deprecation marker on `/v1/entities/{id}/operator-fill`.
 
 ## Depends on
 

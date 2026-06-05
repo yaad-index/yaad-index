@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-06-01). Implements #388. Amends the ADR-0012 anchor model: UGC
+Accepted (2026-06-05; proposed 2026-06-01). Implements #388. Amends the ADR-0012 anchor model: UGC
 markdown sections may now anchor to a canonical entity ID, not only to a
 `user-content:<slug>` ID.
 
