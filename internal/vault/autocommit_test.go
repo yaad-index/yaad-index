@@ -489,3 +489,69 @@ func TestGitCommitter_StagesEntitySubtree_MissingSidecarIsNoOp(t *testing.T) {
 	require.Equal(t, []string{"ingest: wikipedia:susanna-clarke", "init"}, gitLog(t, root))
 	require.Empty(t, gitStatusPorcelain(t, root))
 }
+
+// TestDeleteWithCommit_CommitsSidecarDeletion pins #444: deleting an
+// entity whose attachment sidecar was previously committed must leave
+// the working tree CLEAN — the `.md` and the `<kind>/<slug>/` subtree
+// deletions land in the same commit. DeleteWithCommit removes the
+// sidecar before the commit, and stagePathsFor adds the now-deleted-but-
+// tracked subtree to the pathspec so its tracked files' deletions stage.
+// Before the fix the sidecar deletion was left unstaged (dirty tree).
+func TestDeleteWithCommit_CommitsSidecarDeletion(t *testing.T) {
+	requireGit(t)
+	root := initGitVault(t)
+	committer, err := vault.NewGitCommitter(root, vault.GitCommitterOptions{Logger: newSilentLogger()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = committer.Close() })
+
+	w, err := vault.NewWriter(root, vault.WithCommitter(committer))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	// Seed: entity main file + sidecar attachment, committed together.
+	writeEntitySidecar(t, root, "wikipedia", "susanna-clarke", "raw.html", []byte("<html/>"))
+	require.NoError(t, w.WriteWithCommit(ctx, mkEntity("wikipedia:susanna-clarke", "wikipedia"),
+		"ingest: wikipedia:susanna-clarke", ""))
+	require.Empty(t, gitStatusPorcelain(t, root), "precondition: clean tree after ingest")
+
+	// Delete: both the .md and the sidecar subtree must be removed AND
+	// captured in one commit — no dangling unstaged deletion.
+	require.NoError(t, w.DeleteWithCommit(ctx, "wikipedia", "wikipedia:susanna-clarke",
+		"delete: wikipedia:susanna-clarke", ""))
+
+	require.Empty(t, gitStatusPorcelain(t, root),
+		"git status must be clean — the sidecar deletion must commit with the .md, not dangle")
+	require.Equal(t,
+		[]string{"delete: wikipedia:susanna-clarke", "ingest: wikipedia:susanna-clarke", "init"},
+		gitLog(t, root))
+
+	_, err = os.Stat(filepath.Join(root, "wikipedia", "susanna-clarke.md"))
+	require.True(t, os.IsNotExist(err))
+	_, err = os.Stat(filepath.Join(root, "wikipedia", "susanna-clarke"))
+	require.True(t, os.IsNotExist(err), "sidecar subtree must be gone on disk")
+}
+
+// TestDeleteWithCommit_NoSidecar_CleanTree pins that an attachment-less
+// entity deletes cleanly through the same path: the tracked-subtree probe
+// is a no-op (subtree never existed) and no `pathspec did not match any
+// files` failure occurs.
+func TestDeleteWithCommit_NoSidecar_CleanTree(t *testing.T) {
+	requireGit(t)
+	root := initGitVault(t)
+	committer, err := vault.NewGitCommitter(root, vault.GitCommitterOptions{Logger: newSilentLogger()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = committer.Close() })
+
+	w, err := vault.NewWriter(root, vault.WithCommitter(committer))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, w.WriteWithCommit(ctx, mkEntity("wikipedia:plain", "wikipedia"),
+		"ingest: wikipedia:plain", ""))
+	require.NoError(t, w.DeleteWithCommit(ctx, "wikipedia", "wikipedia:plain",
+		"delete: wikipedia:plain", ""))
+
+	require.Empty(t, gitStatusPorcelain(t, root))
+	require.Equal(t, []string{"delete: wikipedia:plain", "ingest: wikipedia:plain", "init"},
+		gitLog(t, root))
+}

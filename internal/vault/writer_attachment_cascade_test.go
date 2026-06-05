@@ -136,6 +136,47 @@ func TestDestroyArchivedWithCommit_NoSubdir_StillRemovesMD(t *testing.T) {
 	assert.True(t, os.IsNotExist(err))
 }
 
+// TestDeleteWithCommit_RemovesAttachmentSubdir pins #444: deleting an
+// active entity with attachments must also remove the `<kind>/<slug>/`
+// sidecar subtree, matching Destroy + archive-move. The .md-only delete
+// previously leaked the subdir.
+func TestDeleteWithCommit_RemovesAttachmentSubdir(t *testing.T) {
+	t.Parallel()
+	const id = "boardgame:cascade-delete-2024"
+	w, root, _ := seedActiveEntityWithAttachment(t, "boardgame", id, "thumb.jpg", "soon-gone")
+
+	require.NoError(t, w.DeleteWithCommit(context.Background(), "boardgame", id, "delete: "+id, ""))
+
+	// Both .md and subdir gone from the active layout.
+	_, err := os.Stat(filepath.Join(root, "boardgame", "cascade-delete-2024.md"))
+	assert.True(t, os.IsNotExist(err))
+	_, err = os.Stat(filepath.Join(root, "boardgame", "cascade-delete-2024"))
+	assert.True(t, os.IsNotExist(err), "active subdir must be gone after delete")
+}
+
+// TestDeleteWithCommit_NoSubdir_StillRemovesMD pins idempotence on the
+// missing-sidecar path: an entity without attachments deletes cleanly,
+// the absent subdir is a no-op.
+func TestDeleteWithCommit_NoSubdir_StillRemovesMD(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	w, err := NewWriter(root)
+	require.NoError(t, err)
+	const id = "boardgame:no-attach-delete-2024"
+	require.NoError(t, w.Write(&Entity{
+		ID:     id,
+		Kind:   "boardgame",
+		Source: []string{"fixture/default"},
+		Data:   map[string]any{"name": "Plain"},
+	}))
+
+	// No subdir to remove — delete must still succeed.
+	require.NoError(t, w.DeleteWithCommit(context.Background(), "boardgame", id, "delete: "+id, ""))
+
+	_, err = os.Stat(filepath.Join(root, "boardgame", "no-attach-delete-2024.md"))
+	assert.True(t, os.IsNotExist(err))
+}
+
 // Round-trip test: archived attachment is reachable via the
 // active-then-archive fallback in OpenAttachment, so an operator
 // inspecting an archived entity's attachment still gets the bytes.

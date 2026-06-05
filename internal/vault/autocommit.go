@@ -215,7 +215,7 @@ func (c *GitCommitter) commitSingle(ctx context.Context, relPath, message, autho
 	// `-- <paths...>` argument scopes the -A to just the entity's
 	// relPath + (per #314) its sibling subtree, so we don't sweep
 	// unrelated working-tree changes into the commit.
-	addArgs := append([]string{"add", "-A", "--"}, c.stagePathsFor(relPath)...)
+	addArgs := append([]string{"add", "-A", "--"}, c.stagePathsFor(ctx, relPath)...)
 	if err := c.runGit(ctx, addArgs...); err != nil {
 		return fmt.Errorf("git add %s: %w", relPath, err)
 	}
@@ -279,7 +279,7 @@ func (c *GitCommitter) commitBatch(ctx context.Context, pending []pendingWrite) 
 	addArgs := []string{"add", "-A", "--"}
 	seen := make(map[string]struct{}, len(pending)*2)
 	for _, p := range pending {
-		for _, candidate := range c.stagePathsFor(p.relPath) {
+		for _, candidate := range c.stagePathsFor(ctx, p.relPath) {
 			if _, dup := seen[candidate]; dup {
 				continue
 			}
@@ -385,20 +385,49 @@ func (c *GitCommitter) execGit(ctx context.Context, args ...string) error {
 // convention is `<kind>/<slug>.md` paired with `<kind>/<slug>/`,
 // and broadening the rule beyond that shape risks staging
 // unrelated working-tree paths.
-func (c *GitCommitter) stagePathsFor(relPath string) []string {
+func (c *GitCommitter) stagePathsFor(ctx context.Context, relPath string) []string {
 	paths := []string{relPath}
 	subtree := entitySubtreeFor(relPath)
 	if subtree == "" {
 		return paths
 	}
-	// Confirm the sibling subtree exists before staging; a missing
-	// subtree dir would trip the `pathspec did not match any files`
-	// failure mode `git add -A -- <missing>` produces.
-	info, err := os.Stat(filepath.Join(c.root, subtree))
-	if err != nil || !info.IsDir() {
-		return paths
+	// Stage the sibling subtree when it exists on disk — a write that
+	// landed attachments alongside the main file (#314).
+	if info, err := os.Stat(filepath.Join(c.root, subtree)); err == nil && info.IsDir() {
+		return append(paths, subtree)
 	}
-	return append(paths, subtree)
+	// The subtree is absent on disk. When the main file is ALSO absent
+	// this is a delete (DeleteWithCommit removed both before this commit,
+	// #444): the subtree may still be tracked in git, and those tracked
+	// files' deletions must be staged so the single commit captures the
+	// sidecar removal — otherwise the deletion is left unstaged and the
+	// working tree is dirty. Probe tracked-status only in this case: it
+	// keeps the common no-sidecar write path (main file present, subtree
+	// never existed) free of an extra git call, and skips the `pathspec
+	// did not match any files` failure a never-tracked subtree pathspec
+	// would trigger.
+	if _, err := os.Stat(filepath.Join(c.root, relPath)); os.IsNotExist(err) {
+		if c.subtreeTracked(ctx, subtree) {
+			return append(paths, subtree)
+		}
+	}
+	return paths
+}
+
+// subtreeTracked reports whether any file under the given subtree path
+// is tracked in the git index (i.e. was previously committed). Used by
+// stagePathsFor to decide whether a now-deleted entity subtree must be
+// added to the delete commit's pathspec. Best-effort: any error (git
+// missing, nothing tracked) reports false, falling back to staging just
+// the main file.
+func (c *GitCommitter) subtreeTracked(ctx context.Context, subtree string) bool {
+	var stdout bytes.Buffer
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", c.root}, "ls-files", "--", subtree)...)
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+	return stdout.Len() > 0
 }
 
 // entitySubtreeFor returns the entity-subtree path for an entity

@@ -604,7 +604,13 @@ func (w *Writer) DeleteWithCommit(ctx context.Context, kind, id, message, author
 		return err
 	}
 	relPath := filepath.Join(KindDir(kind), slug+".md")
-	return w.removeAtRelPath(ctx, relPath, "delete", message, author)
+	// ADR-0018 step 6 ownership cascade: the entity's attachment subdir
+	// lives at `<kind>/<slug>/` mirroring the .md path. removeAtRelPath
+	// removes it (before the commit) so the single auto-commit captures
+	// both deletions. DeleteWithCommit previously skipped the sidecar,
+	// leaking the subtree.
+	sidecarRel := filepath.Join(KindDir(kind), slug)
+	return w.removeAtRelPath(ctx, relPath, sidecarRel, "delete", message, author)
 }
 
 // DestroyArchivedWithCommit removes the entity's vault file from
@@ -629,7 +635,15 @@ func (w *Writer) DestroyArchivedWithCommit(ctx context.Context, kind, id, messag
 		return err
 	}
 	relPath := filepath.Join(ArchiveDir, KindDir(kind), slug+".md")
-	if err := w.removeAtRelPath(ctx, relPath, "destroy", message, author); err != nil {
+	// Pass "" for the sidecar: the archive layout (`_archive/<kind>/<slug>.md`,
+	// two path separators) is out of entitySubtreeFor's scope, so the
+	// committer's stagePathsFor cannot stage an archived sidecar's
+	// deletion. Removing it before the commit would therefore leave the
+	// deletion unstaged anyway. Keep the original post-commit RemoveAll
+	// below, where reindex reconciles the residual files — the
+	// active-delete sidecar-commit fix (#444) deliberately does not widen
+	// to the archive path.
+	if err := w.removeAtRelPath(ctx, relPath, "", "destroy", message, author); err != nil {
 		return err
 	}
 
@@ -648,14 +662,35 @@ func (w *Writer) DestroyArchivedWithCommit(ctx context.Context, kind, id, messag
 }
 
 // removeAtRelPath is the shared body for DeleteWithCommit +
-// DestroyArchivedWithCommit. Removes <root>/<relPath>; on success
-// + non-empty commit message + non-nil committer, hands the
-// notification to the auto-commit chain. Same best-effort + WARN-
-// on-error contract as the other Writer methods.
-func (w *Writer) removeAtRelPath(ctx context.Context, relPath, op, message, author string) error {
+// DestroyArchivedWithCommit. Removes <root>/<relPath>, then — when
+// sidecarRel is non-empty — the entity's attachment sidecar at
+// <root>/<sidecarRel>, and only THEN hands the notification to the
+// auto-commit chain, so the committer's `git add -A` captures the .md
+// and sidecar deletions in one commit. Removing the sidecar after
+// OnWrite would commit the .md delete while the subtree still exists,
+// then leave the sidecar deletion uncommitted/dirty.
+//
+// Only the active DeleteWithCommit path passes a sidecarRel: its
+// `<kind>/<slug>/` subtree is in the committer's stagePathsFor scope, so
+// the deletion is staged with the .md (#444). DestroyArchivedWithCommit
+// passes "" — its archive-layout subtree is out of stagePathsFor's
+// scope, so it removes the sidecar separately (post-commit, reindex-
+// reconciled). Sidecar removal is best-effort: non-existence is a no-op,
+// and failures log at WARN since the .md is already gone. Same
+// best-effort + WARN-on-error commit contract as the other Writer
+// methods.
+func (w *Writer) removeAtRelPath(ctx context.Context, relPath, sidecarRel, op, message, author string) error {
 	fullPath := filepath.Join(w.root, relPath)
 	if err := os.Remove(fullPath); err != nil {
 		return fmt.Errorf("remove vault file %s: %w", relPath, err)
+	}
+	if sidecarRel != "" {
+		if err := os.RemoveAll(filepath.Join(w.root, sidecarRel)); err != nil {
+			w.logger.Warn("attachment subdir cleanup failed (manifest entries are already orphaned)",
+				"rel_path", sidecarRel,
+				"op", op,
+				"err", err)
+		}
 	}
 	if w.committer == nil || message == "" {
 		return nil
