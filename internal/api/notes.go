@@ -15,6 +15,7 @@ import (
 	"github.com/yaad-index/yaad-index/internal/store"
 	"github.com/yaad-index/yaad-index/internal/vault"
 	"github.com/yaad-index/yaad-index/internal/workflow/actions"
+	"github.com/yaad-index/yaad-index/internal/writelocks"
 )
 
 // commentsRequest is the POST /v1/entities/{id}/notes body. The
@@ -127,7 +128,7 @@ type commentsResponse struct {
 // the vault file at `{ROOT}/ct/<kind>/<slug>.md` when the caller
 // holds operator authority. Without operator authority, or when the
 // id isn't canonical-label-shaped, the existing 404 paths apply.
-func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
+func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader, vaultWriter *vault.Writer, writeLocks *writelocks.Manager, canonicalKindReg map[string]config.CanonicalKindConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req commentsRequest
 		dec := json.NewDecoder(r.Body)
@@ -242,6 +243,17 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 		// 5-section schema — so tasks bypass the Entity model entirely.
 		// Non-task kinds fall through to the legacy `## Notes` table below.
 		if got.Kind == canonical.TaskKind {
+			// #441: the task-note append is a read-modify-write on the raw
+			// body (ReadRawByID -> AddNote -> WriteRawWithCommit); without
+			// the per-entity write lock two concurrent appends race and the
+			// slower write clobbers the faster. Acquire it here the same way
+			// edit/delete do (the legacy `## Notes` path below is unaffected).
+			release, lockOK := acquireWriteLock(w, r, writeLocks, id)
+			if !lockOK {
+				return
+			}
+			defer release()
+
 			rawBody, relPath, rerr := vaultReader.ReadRawByID(got.Kind, id)
 			if rerr != nil {
 				if vault.IsNotExist(rerr) {

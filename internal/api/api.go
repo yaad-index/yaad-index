@@ -166,7 +166,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	// /v1/operator-fill returns 410 gone per ADR-0029 §5.
 	mux.Handle("POST /v1/entities/{id}/fill", protect(http.HandlerFunc(handleEntityOperatorFill(logger, st, cfg.edgeWriter, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg, cfg.writeLocks, cfg.eventBus))))
 	mux.Handle("POST /v1/entities/{id}/operator-fill", protect(http.HandlerFunc(handleOperatorFillGone)))
-	mux.Handle("POST /v1/entities/{id}/notes", protect(http.HandlerFunc(handleNotes(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.canonicalKindReg))))
+	mux.Handle("POST /v1/entities/{id}/notes", protect(http.HandlerFunc(handleNotes(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks, cfg.canonicalKindReg))))
 	// #390 Cut 2: edit / delete a note by note_id (author-gated).
 	mux.Handle("PUT /v1/entities/{id}/notes/{note_id}", protect(http.HandlerFunc(handleEditNote(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
 	mux.Handle("DELETE /v1/entities/{id}/notes/{note_id}", protect(http.HandlerFunc(handleDeleteNote(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
