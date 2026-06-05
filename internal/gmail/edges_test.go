@@ -2,7 +2,47 @@ package gmail
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// TestAssembleEdges_FiltersSystemLabels pins #449: Gmail system labels
+// (the X-GM-LABELS `\`-prefixed special-use flags) must not produce
+// tagged_as edges — only operator-applied labels do.
+func TestAssembleEdges_FiltersSystemLabels(t *testing.T) {
+	t.Parallel()
+
+	t.Run("system labels only yields no tagged_as", func(t *testing.T) {
+		t.Parallel()
+		pm := &ParsedMessage{
+			MessageID: "msg-sys@example.com",
+			Labels:    []string{`\Inbox`, `\Unread`, `\Sent`, `\Important`, `\Starred`},
+		}
+		edges := AssembleEdges(pm, "yaad-ingested", "yaad-skip")
+		for _, e := range edges {
+			assert.NotEqualf(t, EdgeTypeTaggedAs, e.Type,
+				"system label leaked to tagged_as: %+v", e)
+		}
+	})
+
+	t.Run("operator label plus system labels tags only the operator label", func(t *testing.T) {
+		t.Parallel()
+		pm := &ParsedMessage{
+			MessageID: "msg-mix@example.com",
+			Labels:    []string{`\Inbox`, `\Important`, "Job Search/Active", `\Unread`},
+		}
+		edges := AssembleEdges(pm, "yaad-ingested", "yaad-skip")
+		var tagged []string
+		for _, e := range edges {
+			if e.Type == EdgeTypeTaggedAs {
+				tagged = append(tagged, e.Name)
+			}
+		}
+		require.Len(t, tagged, 1, "only the operator label produces a tagged_as edge")
+		assert.Equal(t, LabelSlug("Job Search/Active"), tagged[0])
+	})
+}
 
 func TestAssembleEdges_HappyPath(t *testing.T) {
 	t.Parallel()
