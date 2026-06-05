@@ -98,10 +98,18 @@ func TestBuildSearchPredicate(t *testing.T) {
 	cases := []struct {
 		name, ingested, skip, want string
 	}{
-		{"both populated", "yaad-ingested", "yaad-skip", "-label:yaad-ingested -label:yaad-skip"},
-		{"only ingested", "yaad-ingested", "", "-label:yaad-ingested"},
-		{"only skip", "", "yaad-skip", "-label:yaad-skip"},
+		{"both populated", "yaad-ingested", "yaad-skip", `-label:"yaad-ingested" -label:"yaad-skip"`},
+		{"only ingested", "yaad-ingested", "", `-label:"yaad-ingested"`},
+		{"only skip", "", "yaad-skip", `-label:"yaad-skip"`},
 		{"both empty (operator opted out)", "", "", ""},
+		// #450: a label with whitespace must stay one quoted phrase,
+		// not split into `-label:My` AND a bare `Label` term.
+		{"whitespace label is quoted", "My Label", "", `-label:"My Label"`},
+		{"nested (slash) label with space", "Job Search/Active 2026", "", `-label:"Job Search/Active 2026"`},
+		// Embedded quote / backslash are backslash-escaped inside the
+		// quoted value so they don't terminate the phrase.
+		{"quote in label is escaped", `a"b`, "", `-label:"a\"b"`},
+		{"backslash in label is escaped", `a\b`, "", `-label:"a\\b"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
