@@ -154,7 +154,7 @@ func prFromGoGithub(t Target, pr *gogithub.PullRequest) *Item {
 		Assignees:     usersToLogins(pr.Assignees),
 		Reviewers:     usersToLogins(pr.RequestedReviewers),
 		CommentCount:  pr.GetComments() + pr.GetReviewComments(),
-		LastCommentAt: nonZeroTimePtr(pr.GetUpdatedAt().Time),
+		LastCommentAt: lastCommentAtPtr(pr.GetComments()+pr.GetReviewComments(), pr.GetUpdatedAt().Time),
 		Labels:        labelsToNames(pr.Labels),
 	}
 	if pr.Base != nil {
@@ -183,7 +183,7 @@ func issueFromGoGithub(t Target, iss *gogithub.Issue) *Item {
 		Author:        userLogin(iss.User),
 		Assignees:     usersToLogins(iss.Assignees),
 		CommentCount:  iss.GetComments(),
-		LastCommentAt: nonZeroTimePtr(iss.GetUpdatedAt().Time),
+		LastCommentAt: lastCommentAtPtr(iss.GetComments(), iss.GetUpdatedAt().Time),
 		Labels:        issueLabelsToNames(iss.Labels),
 	}
 }
@@ -262,4 +262,18 @@ func nonZeroTimePtr(t time.Time) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+// lastCommentAtPtr returns the approximated last-comment time only when
+// the item actually carries comments. With zero comments the field is
+// null, so predicates like "commented within the last N days" don't
+// false-positive on the UpdatedAt proxy that fires on any edit
+// (label/assignee/state change) of a never-commented item (#451). For
+// commented items the approximation via UpdatedAt is unchanged — true
+// per-comment timestamps aren't on the list API; see Item.LastCommentAt.
+func lastCommentAtPtr(commentCount int, updatedAt time.Time) *time.Time {
+	if commentCount <= 0 {
+		return nil
+	}
+	return nonZeroTimePtr(updatedAt)
 }
