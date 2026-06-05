@@ -1,18 +1,17 @@
 name: ci
 
+# No paths-ignore: the branch ruleset requires the `lint`, `test`,
+# `coverage`, and `build` checks on every PR to main. Skipping CI on
+# docs-only changes (a former `paths-ignore` for docs/**, adr/**, *.md)
+# left those required checks unreported, so docs-only PRs were stuck in
+# a permanent BLOCKED merge state. Running the full suite on docs PRs is
+# the bounded cost of keeping the required checks satisfiable; the Go
+# steps pass trivially on an unchanged codebase.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - 'adr/**'
-      - '*.md'
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - 'adr/**'
-      - '*.md'
 
 permissions:
   contents: read
