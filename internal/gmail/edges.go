@@ -1,5 +1,7 @@
 package gmail
 
+import "strings"
+
 // Edge is one outgoing edge on a source-shape Gmail entity. Mirrors
 // the canonical-edge wire shape the daemon's source emission path
 // expects per ADR-0021: `{type, name, kind}` where the daemon
@@ -101,6 +103,16 @@ func AssembleEdges(pm *ParsedMessage, ingestedLabel, skipLabel string) []Edge {
 		if label == ingestedLabel || label == skipLabel {
 			continue
 		}
+		if isSystemLabel(label) {
+			// Gmail system labels (the X-GM-LABELS special-use flags
+			// `\Inbox`, `\Sent`, `\Unread`, `\Important`, `\Starred`,
+			// `\Draft`, `\Spam`, `\Trash`, …) are not semantic
+			// operator tags — emitting tagged_as edges for them
+			// pollutes the graph with non-semantic relationships
+			// (#449). Only the two control-plane labels were filtered
+			// before.
+			continue
+		}
 		out = append(out, Edge{
 			Type: EdgeTypeTaggedAs,
 			Name: LabelSlug(label),
@@ -109,4 +121,13 @@ func AssembleEdges(pm *ParsedMessage, ingestedLabel, skipLabel string) []Edge {
 	}
 
 	return out
+}
+
+// isSystemLabel reports whether a Gmail label is a system / special-use
+// flag rather than an operator-applied label. The X-GM-LABELS extension
+// prefixes system flags with a backslash (`\Inbox`, `\Sent`, `\Unread`,
+// `\Important`, `\Starred`, `\Draft`, `\Spam`, `\Trash`); operator
+// labels carry no such prefix.
+func isSystemLabel(label string) bool {
+	return strings.HasPrefix(label, `\`)
 }
