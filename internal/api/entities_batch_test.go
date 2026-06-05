@@ -184,7 +184,66 @@ func Test_BatchEntities_AcceptsWithEdgesParam(t *testing.T) {
 	h.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code,
-		"with_edges accepted, response unchanged in stub")
+		"with_edges accepted; the seeded entity has no edges so the list is empty")
+}
+
+// Test_BatchEntities_WithEdges_Expands pins #452: /v1/entities/batch
+// now honors with_edges, attaching each entity's edges (same wire shape
+// as single-GET) instead of silently discarding the field.
+func Test_BatchEntities_WithEdges_Expands(t *testing.T) {
+	t.Parallel()
+
+	h, st := newAPIWithStore(t)
+	ctx := context.Background()
+	// Two source entities (one with an edge, one without) + the edge
+	// target. Fictional slugs.
+	seedEntity(t, st, "boardgame:test-game-2099", "boardgame")
+	seedEntity(t, st, "boardgame:other-game-2099", "boardgame")
+	seedEntity(t, st, "person:designer-a", "person")
+	require.NoError(t, st.CreateEdge(ctx, &store.Edge{
+		Type: "designed_by", From: "boardgame:test-game-2099", To: "person:designer-a",
+	}))
+
+	post := func(t *testing.T, ids, withEdges []string) batchResponse {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/entities/batch",
+			batchRequestBody(t, ids, withEdges)))
+		require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+		var got batchResponse
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+		return got
+	}
+	byID := func(resp batchResponse) map[string]entity {
+		m := map[string]entity{}
+		for _, e := range resp.Entities {
+			m[e.ID] = e
+		}
+		return m
+	}
+
+	t.Run("with_edges expands per entity", func(t *testing.T) {
+		t.Parallel()
+		m := byID(post(t,
+			[]string{"boardgame:test-game-2099", "boardgame:other-game-2099"},
+			[]string{"*"}))
+		require.Len(t, m["boardgame:test-game-2099"].Edges, 1, "source entity carries its edge")
+		assert.Equal(t, "designed_by", m["boardgame:test-game-2099"].Edges[0].Type)
+		assert.Equal(t, "person:designer-a", m["boardgame:test-game-2099"].Edges[0].To)
+		assert.Empty(t, m["boardgame:other-game-2099"].Edges, "edge-less entity gets an empty list")
+	})
+
+	t.Run("default (omitted) returns no edges", func(t *testing.T) {
+		t.Parallel()
+		m := byID(post(t, []string{"boardgame:test-game-2099"}, nil))
+		assert.Empty(t, m["boardgame:test-game-2099"].Edges, "no with_edges → unchanged, no expansion")
+	})
+
+	t.Run("type filter excludes non-matching edges", func(t *testing.T) {
+		t.Parallel()
+		m := byID(post(t, []string{"boardgame:test-game-2099"}, []string{"is_about"}))
+		assert.Empty(t, m["boardgame:test-game-2099"].Edges, "filter on is_about excludes designed_by")
+	})
 }
 
 func Test_BatchEntities_EmptyIds(t *testing.T) {

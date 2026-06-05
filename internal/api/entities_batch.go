@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/yaad-index/yaad-index/internal/store"
 )
@@ -49,11 +50,11 @@ func handleEntitiesBatch(logger *slog.Logger, st store.Store) http.HandlerFunc {
 		}
 
 		// `with_edges` is the inline-edge-expansion list per ADR-0002
-		// (lines 144–150). Today the param is accepted (so callers
-		// exercising the documented surface still get a 200) but ignored
-		// — store.GetEntities returns entities with empty edge arrays.
-		// Real expansion lands with the edge-side cutover.
-		_ = req.WithEdges
+		// (lines 144–150), mirroring the single-GET sentinel/comma
+		// surface: a present field requests expansion, `*`/`all` (or an
+		// empty list) expands all edge types, otherwise the listed types
+		// filter the expansion. Absent → no expansion (#452).
+		expandEdges, edgeTypes := resolveBatchWithEdges(req.WithEdges)
 
 		// In-flight rule (ADR-0002 lines 167–169): an in-flight ingest leaves
 		// a placeholder entity with sparse `data`. Such placeholders MUST be
@@ -70,9 +71,44 @@ func handleEntitiesBatch(logger *slog.Logger, st store.Store) http.HandlerFunc {
 			return
 		}
 
+		// Inline-edge expansion: one GetEdgesForMany over the whole
+		// matched frontier (not N per-entity round-trips), grouped back
+		// onto each source id. Same wire shape as single-GET — each
+		// entity carries its edges + the ADR-0018 archived flag on each
+		// endpoint. A store error fails the request (matching single-GET).
+		var edgesByFrom map[string][]store.Edge
+		if expandEdges {
+			fromIDs := make([]string, len(matched))
+			for i := range matched {
+				fromIDs[i] = matched[i].ID
+			}
+			allEdges, err := st.GetEdgesForMany(r.Context(), fromIDs, edgeTypes)
+			if err != nil {
+				logger.ErrorContext(r.Context(), "store.GetEdgesForMany", "err", err,
+					"ids_len", len(fromIDs), "types", edgeTypes)
+				writeError(w, http.StatusInternalServerError, "internal_error",
+					"failed to expand edges")
+				return
+			}
+			edgesByFrom = make(map[string][]store.Edge, len(matched))
+			for _, e := range allEdges {
+				edgesByFrom[e.From] = append(edgesByFrom[e.From], e)
+			}
+		}
+
 		entities := make([]entity, 0, len(matched))
 		for i := range matched {
-			entities = append(entities, toAPIEntity(&matched[i]))
+			if expandEdges {
+				matched[i].Edges = edgeRefsFromStoreEdges(edgesByFrom[matched[i].ID])
+			}
+			out := toAPIEntity(&matched[i])
+			// ADR-0018 step 3: stamp the archived flag on each endpoint,
+			// same as single-GET. Per-entity (like single-GET); a lookup
+			// failure downgrades to no-flag without failing the row.
+			if expandEdges && len(out.Edges) > 0 {
+				stampEdgeArchivedFlags(r.Context(), logger, st, out.Edges)
+			}
+			entities = append(entities, out)
 		}
 		if missing == nil {
 			missing = []string{}
@@ -88,6 +124,30 @@ func handleEntitiesBatch(logger *slog.Logger, st store.Store) http.HandlerFunc {
 			logger.ErrorContext(r.Context(), "encode /v1/entities/batch response", "err", err)
 		}
 	}
+}
+
+// resolveBatchWithEdges interprets the batch request's `with_edges`
+// field, mirroring the single-GET sentinel/comma semantics (parseWithEdges).
+// A nil slice (field absent) means no expansion. A present slice requests
+// expansion; the `*` / `all` sentinels — or an empty/blank-only list —
+// collapse to "all edge types" (nil filter), otherwise the trimmed,
+// non-empty values are the concrete type filter. Returns
+// (expand, edgeTypes) so the handler branches identically to single-GET.
+func resolveBatchWithEdges(withEdges []string) (expand bool, edgeTypes []string) {
+	if withEdges == nil {
+		return false, nil
+	}
+	for _, t := range withEdges {
+		tt := strings.TrimSpace(t)
+		if tt == "" {
+			continue
+		}
+		if tt == "*" || tt == "all" {
+			return true, nil
+		}
+		edgeTypes = append(edgeTypes, tt)
+	}
+	return true, edgeTypes
 }
 
 // rejectGetOnBatch returns the canonical method-not-allowed envelope for any
