@@ -332,3 +332,41 @@ func TestPeekBytes_TruncatesWithAnnotation(t *testing.T) {
 	got := peekBytes(long, 100)
 	assert.Contains(t, got, "(400 more bytes)")
 }
+
+// okEnvelope renders a minimal ok=true source envelope for the given
+// name (the streaming tests' canonical wikipedia shape).
+func okEnvelope(name string) string {
+	return `{"ok":true,"structured":{"kind":"source","name":"` + name +
+		`","data":{"title":"` + name +
+		`"},"provenance":[{"source":"wikipedia:fetch","fetched_at":"2026-05-10T14:00:00Z","ok":true}]}}`
+}
+
+// TestStreamStdout_MidStreamOKFalseSkipsNotAborts pins #448: a source
+// envelope reporting ok=false AFTER a good envelope already streamed is
+// logged and skipped — it must NOT abort the stream. The remaining good
+// envelopes still deliver (ADR-0006 N-envelope write-as-you-go).
+func TestStreamStdout_MidStreamOKFalseSkipsNotAborts(t *testing.T) {
+	p, logBuf := streamingTestPlugin(t)
+
+	in := []byte(okEnvelope("Tehran") + "\n" + `{"ok":false}` + "\n" + okEnvelope("Shiraz") + "\n")
+
+	envs, onEnv := captureAll()
+	require.NoError(t, p.streamStdout(in, onEnv, nil), "mid-stream ok=false must not abort the stream")
+	require.Len(t, *envs, 2, "both good envelopes delivered; the ok=false one skipped")
+	assert.Equal(t, "wikipedia:tehran", (*envs)[0].Entity.ID)
+	assert.Equal(t, "wikipedia:shiraz", (*envs)[1].Entity.ID)
+	assert.Contains(t, logBuf.String(), "ok=false past the first", "skipped envelope is logged")
+}
+
+// TestStreamStdout_FirstEnvelopeOKFalseStillErrors pins the preserved
+// hard-failure contract: a first/only ok=false (no good envelope yet)
+// surfaces as an error rather than a silent empty stream.
+func TestStreamStdout_FirstEnvelopeOKFalseStillErrors(t *testing.T) {
+	p, _ := streamingTestPlugin(t)
+
+	envs, onEnv := captureAll()
+	err := p.streamStdout([]byte(`{"ok":false}`+"\n"), onEnv, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ok=false")
+	assert.Empty(t, *envs, "no envelope delivered on a first/only ok=false")
+}
