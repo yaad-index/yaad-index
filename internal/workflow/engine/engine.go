@@ -1171,10 +1171,13 @@ func workflowActive(wf *parser.Workflow) bool {
 func (e *Engine) evaluateAndRecord(ctx context.Context, reg *registeredWorkflow, entityID string, edge map[string]any, trigger map[string]any, chain []string) bool {
 	// #440: paused / draft workflows are inert — skip the whole pipeline
 	// (condition, actions, archive_when) so a disabled workflow can't
-	// mutate the vault on a matching event.
+	// mutate the vault on a matching event. Record a fresh non-fired
+	// decision so a manual Dispatch's findRecentDecision can't surface a
+	// stale prior active-fire decision for the same (workflow, entity).
 	if !workflowActive(reg.workflow) {
 		e.logger.Debug("workflow not active; skipping event evaluation",
 			"workflow", reg.workflow.Name, "status", reg.workflow.Status)
+		e.recordDecision(Decision{Workflow: reg.workflow.Name, EntityID: entityID, At: time.Now().UTC(), Fired: false})
 		return false
 	}
 	dec := Decision{
@@ -1893,9 +1896,12 @@ func (e *Engine) findRecentDecision(name, entityID string) Decision {
 func (e *Engine) runEvaluation(ctx context.Context, reg *registeredWorkflow, entityID string, entity, edge map[string]any) {
 	// #440: paused / draft workflows are inert on the manual-dispatch
 	// path too — a disabled workflow can't be fired by a manual trigger.
+	// Record a fresh non-fired decision so Dispatch's findRecentDecision
+	// returns this skip, not a stale Fired=true from a prior active run.
 	if !workflowActive(reg.workflow) {
 		e.logger.Debug("workflow not active; skipping dispatch evaluation",
 			"workflow", reg.workflow.Name, "status", reg.workflow.Status)
+		e.recordDecision(Decision{Workflow: reg.workflow.Name, EntityID: entityID, At: time.Now().UTC(), Fired: false})
 		return
 	}
 	dec := Decision{
