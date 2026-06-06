@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/yaad-index/yaad-index/compare/yaad-bgg-v0.4.0...yaad-bgg-v0.5.0) (2026-06-06)
+
+
+### Features
+
+* **bgg:** expose BGG name-search as operation:search ([#457](https://github.com/yaad-index/yaad-index/issues/457)) ([#484](https://github.com/yaad-index/yaad-index/issues/484)) ([98df4e0](https://github.com/yaad-index/yaad-index/commit/98df4e022da473e3cb31ca2dd836f6c80c7db604))
+
 ## [0.4.0](https://github.com/yaad-index/yaad-index/compare/yaad-bgg-v0.3.0...yaad-bgg-v0.4.0) (2026-05-31)
 
 
