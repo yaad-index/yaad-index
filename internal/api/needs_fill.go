@@ -1,4 +1,4 @@
-// Pull-based batch gap-call surface (per ADR-0013 §6 / yaad-index).
+// Pull-based batch gap-call surface (per ADR-0013 §6).
 //
 // Returns entities that are currently gap-callable — the AI has not yet
 // been called for the entity's current fetch-cycle (DB
@@ -55,7 +55,7 @@ const (
 
 // needsFillGapMeta carries the typed metadata for one gap per
 // ADR-0019 step 6 — the typed fill metadata the operator-fill
-// surface introduced for +. Each gap in the response
+// surface introduced. Each gap in the response
 // now surfaces its FillStrategy + Type (and optional shape fields)
 // alongside the existing name → prompt map. New field on the
 // `gap_metadata` key; legacy callers that only read `gaps` keep
@@ -67,8 +67,8 @@ type needsFillGapMeta struct {
 	MaxLength int `json:"max_length,omitempty"`
 	Values []string `json:"values,omitempty"`
 	// Kinds carries the canonical-kind allowlist for
-	// `type: canonical_type` gaps per yaad-index. Surfaced
-	// here (yaad-index) so the agent's UI sees the
+	// `type: canonical_type` gaps. Surfaced
+	// here so the agent's UI sees the
 	// resolution set at fill-prompt construction time. Wildcard
 	// `["*"]` round-trips verbatim; downstream callers expand
 	// against the operator's full canonical_kinds registry per
@@ -529,7 +529,7 @@ func parseNeedsFillStrategy(raw string) (string, bool) {
 // ve.GapState[field].Deferred=true. The operator can un-defer via
 // operator-fill {"defer": false} to bring them back.
 //
-// Per yaad-index #4 / ADR-0013 §1: the canonical-kind registry is
+// Per ADR-0013 §1: the canonical-kind registry is
 // the canonical source for AI-prompts. A gap whose kind isn't in
 // the registry OR whose name isn't in the registry's per-kind
 // Gaps map is dropped (no plugin-side prompt fallback). Operators

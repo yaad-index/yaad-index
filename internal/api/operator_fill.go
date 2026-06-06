@@ -93,7 +93,7 @@ func handleEntityOperatorFill(
 				"operator-fill requires vault.path configuration; gap_state lives in vault frontmatter")
 			return
 		}
-		// Per-entity write-lock (yaad-index #23 + ADR-0024).
+		// Per-entity write-lock (ADR-0024).
 		release, ok := acquireWriteLock(w, r, writeLocks, id)
 		if !ok {
 			return
@@ -144,7 +144,7 @@ func handleEntityOperatorFill(
 		// autoMaterialize is set when either the entity row OR the
 		// vault file is missing AND the id resolves to a canonical-
 		// label kind. The fill then auto-creates whichever piece is
-		// missing per ADR-0021's amendment (yaad-index phase D):
+		// missing per ADR-0021's amendment (phase D):
 		// - vault file at `<vault_root>/ct/<kind>/<slug>.md` (always
 		// on the auto-materialize path, since the vault file's
 		// absence is what triggers the path).
@@ -199,7 +199,7 @@ func handleEntityOperatorFill(
 					writeError(w, http.StatusInternalServerError, "internal_error", "failed to read vault file")
 					return
 				}
-				// DB row exists (thin label Per the prior design, phase B) but no
+				// DB row exists (thin label per phase B) but no
 				// vault file. Auto-materialize ONLY when the kind is
 				// in the canonical-kind registry. Source-shape
 				// entities with a missing vault file remain a 404 —
@@ -337,7 +337,7 @@ func handleEntityOperatorFill(
 				break
 			}
 		}
-		// ADR-0021 amendment ( phase D): canonical-label
+		// ADR-0021 amendment (phase D): canonical-label
 		// auto-materialize lands the vault file at
 		// `<vault_root>/ct/<kind>/<slug>.md` rather than the
 		// per-kind default. The autoMaterialize flag was set above
@@ -358,7 +358,7 @@ func handleEntityOperatorFill(
 		}
 
 		// Mirror data + gap_state to DB. Auto-materialize path
-		// ( phase D) creates the row if missing; the existing
+		// (phase D) creates the row if missing; the existing
 		// path updates Data + GapState in place. UpsertEntity is
 		// idempotent on either path.
 		if err := st.UpsertEntity(r.Context(), &store.Entity{
@@ -393,7 +393,7 @@ func handleEntityOperatorFill(
 			}
 		}
 
-		// Canonical_type edge create/replace per yaad-index.
+		// Canonical_type edge create/replace.
 		// Walks `ops` (not `applied` — applied is just field
 		// names) and for each canonical_type set, deletes prior
 		// edges of type=field originating from this source, then
@@ -408,7 +408,7 @@ func handleEntityOperatorFill(
 				"failed to materialize canonical_type edges")
 			return
 		}
-		// Dataview-paragraph append per yaad-index #119 — same
+		// Dataview-paragraph append — same
 		// shape as the agent-fill path. Operator-authored data
 		// lands on the target canonical entity; auto-materialize
 		// covers a target that has only a thin DB row.
@@ -694,7 +694,7 @@ func parseSingleOp(field string, raw json.RawMessage, spec config.GapSpec, opera
 			}
 		}
 	}
-	// Canonical_type list (per yaad-index). Validates each
+	// Canonical_type list. Validates each
 	// element's kind against the gap's resolution set, slugifies
 	// {name, kind} entries via slug.Slug, and accepts pre-formed
 	// labels as-is (operator-fill path only). Stored as a
@@ -866,9 +866,8 @@ func applyOperatorFillOps(ve *vault.Entity, ops []operatorFillOp, now time.Time,
 			// frontmatter records the ID list only; per-entry
 			// `data` flows through op.Value to
 			// applyCanonicalTypeEdges for dataview-paragraph
-			// recording on the target canonical entity per
-			// yaad-index #119. Scalar ops keep their natural
-			// Go shape.
+			// recording on the target canonical entity. Scalar
+			// ops keep their natural Go shape.
 			// #359: `summary` and `tags` are reserved vault frontmatter
 			// fields that live at the top level of the entity, not in
 			// `data:`. Route them to the struct fields so the markdown
@@ -1021,7 +1020,7 @@ func vaultGapStateToStore(in map[string]vault.GapStateEntry) map[string]store.Ga
 // parseCanonicalLabelID parses `<kind>:<slug>` into its parts AND
 // validates that the kind is in the operator's canonical-kind
 // registry. Used by the operator-fill auto-materialize path
-// ( phase D): when the DB row OR vault file is missing for a
+// (phase D): when the DB row OR vault file is missing for a
 // canonical-label entity, the daemon synthesizes the missing
 // pieces only when the id confirms canonical-kind shape; any
 // other id shape (source-namespace prefix, malformed id, kind not

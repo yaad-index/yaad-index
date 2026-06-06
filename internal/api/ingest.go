@@ -47,7 +47,7 @@ type ingestRequest struct {
 // canonical discriminator going forward) AND the legacy `status` field
 // (same value) so existing clients reading either field keep working.
 //
-// `state` is yaad-index inference, NOT plugin-emitted — the plugin's
+// `state` is daemon-inferred, NOT plugin-emitted — the plugin's
 // FetchResult populates Entity/Options/Gaps and the tracker labels
 // the response per ADR-0006.
 
@@ -156,7 +156,7 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 			return
 		}
 
-		// Routing-time validation per ADR-0022 §4 + yaad-index.
+		// Routing-time validation per ADR-0022 §4.
 		// Cheap shape-check that rejects inputs naming a registered
 		// plugin whose declared url_patterns / commands don't accept
 		// the input — saving subprocess wall-clock on the unhappy
@@ -164,7 +164,7 @@ func handleIngest(logger *slog.Logger, st store.Store, tracker *ingestTracker, r
 		// through to the existing first-match-wins registry walk
 		// below.
 		//
-		// Pre-PR- there was an http/https-only scheme check + a
+		// There was previously an http/https-only scheme check + a
 		// strict url.ParseRequestURI parse here; both rejected
 		// legitimate disambiguation re-invocations before the plugin
 		// matcher saw them. Routing-time validation is plugin-aware
@@ -417,8 +417,8 @@ type notationCacheHit struct {
 // now-ttl. Past TTL → fall through to plugin path. nil/zero =
 // no opinion (cache forever). Negative = infinite (cache forever).
 //
-// TTL is resolved at INGEST time (per the operator's clarification —
-// resolveCacheTTL walks {entry > plugin > global}, the resolved value
+// TTL is resolved at INGEST time (resolveCacheTTL walks
+// {entry > plugin > global}, the resolved value
 // is baked into vault frontmatter). The lookup path is just
 // `provenance[last].fetched_at + frontmatter.cache_ttl_seconds vs
 // now` — no three-level walk here.
@@ -457,8 +457,7 @@ func commandRequiresOperator(registry *plugins.Registry, inv plugins.Invocation)
 
 // Returns the cache hit (when fresh) or nil + a bool flagging whether
 // the miss was specifically a TTL fall-through (so the caller can
-// surface `re-ingest: ... [ttl_expired]` on the auto-commit message,
-// per yaad-index the source issue).
+// surface `re-ingest: ... [ttl_expired]` on the auto-commit message).
 func tryNotationCacheHit(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -513,12 +512,12 @@ func tryNotationCacheHit(
 		}
 	}
 
-	// TTL gate (per yaad-index). The vault entity's
-	// `cache_expires:` is the SOLE freshness signal post-PR-B.
+	// TTL gate. The vault entity's
+	// `cache_expires:` is the SOLE freshness signal.
 	// Legacy entries that carried only `cache_ttl_seconds:`
 	// no longer participate in the gate — they cache forever
 	// until force_refetch re-ingests and stamps cache_expires.
-	// The migration is operator-driven;'s `cache refetch`
+	// The migration is operator-driven; the `cache refetch`
 	// CLI bulk-applies it across the vault.
 	if vaultEntity != nil && vaultEntity.CacheExpires.Expired(time.Now()) {
 		logger.InfoContext(ctx,
@@ -531,7 +530,7 @@ func tryNotationCacheHit(
 	return &notationCacheHit{entity: got, vaultEntity: vaultEntity, openGaps: openGaps, matched: matched}, false
 }
 
-// (freshestPersistentFetch was removed in PR-B alongside the
+// (freshestPersistentFetch was removed alongside the
 // cache_ttl_seconds legacy fallback. The lookup-side freshness gate
 // is now `vault.CacheExpires.Expired(now)` — no provenance scan
 // needed. The CLI's freshestPersistentFetchVault — which mirrors
@@ -590,7 +589,7 @@ func respondFromCacheHit(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 		OK: true,
 	})
 
-	// Per ADR-0013 §4 + §5 / yaad-index: even when gaps remain
+	// Per ADR-0013 §4 + §5: even when gaps remain
 	// open, the gap-call-done flag suppresses the needs_fill payload
 	// for the rest of the current fetch-cycle. The AI couldn't satisfy
 	// the gap-set with the prior `clean_content`; re-prompting against
@@ -619,7 +618,7 @@ func respondFromCacheHit(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 		}
 		return
 	}
-	// Per yaad-index #4 / ADR-0013 §1: the canonical-kind registry
+	// Per ADR-0013 §1: the canonical-kind registry
 	// is the canonical source for AI-prompts. On the cache-hit
 	// path:
 	//
