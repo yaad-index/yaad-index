@@ -109,7 +109,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 		tracker = newIngestTracker(logger, st, cfg.edgeWriter, cfg.vaultWriter, cfg.vaultReader, cfg.canonicalGuard, cfg.cacheTTLSeconds, cfg.attachmentsDispatcher, cfg.writeLocks, cfg.eventBus, cfg.pluginInstances, cfg.canonicalEdgeTypes, canonicalKindKeys(cfg.canonicalKindReg))
 	}
 
-	// Per yaad-index a prior PR: the protect wrapper enforces Bearer-JWT
+	// The protect wrapper enforces Bearer-JWT
 	// auth on every protected route. When auth.required=false the
 	// AnonymousAuth bypass attaches a synthetic claim instead — handlers
 	// dereferencing ClaimFromContext continue to work either way.
@@ -244,8 +244,8 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 // so the production server runs RequireAuth unless the operator
 // explicitly opts out via `auth.required=false`.
 //
-// The (authRequired=true, authVerifier=nil) combination panics — the cold-reviewer's
-// a prior PR review note 2: silently falling to AnonymousAuth would mask a
+// The (authRequired=true, authVerifier=nil) combination panics:
+// silently falling to AnonymousAuth would mask a
 // bad test setup or a missing wire-up in main.go and ship an unauth'd
 // production server. A construction-time panic surfaces the misuse
 // where it can still be fixed.
@@ -414,11 +414,11 @@ func WithWriteLocks(m *writelocks.Manager) HandlerOption {
 
 // WithVaultIO wires a vault.Writer + vault.Reader into the ingest
 // tracker so successful ingests write a markdown file to the vault
-// before updating the DB (per ADR-0008 / a prior PR). Both arguments must
+// before updating the DB (per ADR-0008). Both arguments must
 // be non-nil — a nil writer with a non-nil reader (or vice versa)
 // panics on tracker construction. Tests that don't exercise the
 // vault path omit this option entirely; the tracker then falls back
-// to DB-only persistence (the pre-a prior PR behavior).
+// to DB-only persistence (the legacy DB-only behavior).
 func WithVaultIO(w *vault.Writer, r *vault.Reader) HandlerOption {
 	return func(c *handlerConfig) {
 		c.vaultWriter = w
@@ -427,8 +427,8 @@ func WithVaultIO(w *vault.Writer, r *vault.Reader) HandlerOption {
 }
 
 // WithCanonicalGuard wires the operator-config-derived canonical
-// kinds / edge types validator into the ingest path (per ADR-0008 /
-// a prior PR). When a plugin emits canonical-shape stubs alongside its
+// kinds / edge types validator into the ingest path (per ADR-0008).
+// When a plugin emits canonical-shape stubs alongside its
 // source-shape entity, yaad-index filters them through this guard;
 // only kinds in the operator's `canonical_kinds:` config materialize.
 //
@@ -441,8 +441,7 @@ func WithCanonicalGuard(g *config.CanonicalGuard) HandlerOption {
 }
 
 // WithCacheTTL bounds how long a notation cache hit is considered
-// fresh (per yaad-index the source issue a prior PR; reshaped under PR for
-// the three-level resolution chain). The argument is taken as the
+// fresh (the three-level resolution chain). The argument is taken as the
 // global-level input to resolveCacheTTL at ingest time — sentinel
 // rules apply (positive = N seconds, negative = infinite, zero =
 // no opinion / fall through to all-zero default).
@@ -468,12 +467,12 @@ func WithCacheTTL(ttl time.Duration) HandlerOption {
 }
 
 // WithFillInstruction wires the operator's `fill_instruction:` config
-// onto every needs_fill ingest response (per ADR-0013 §2 a prior PR). The
+// onto every needs_fill ingest response (per ADR-0013 §2). The
 // string is passed verbatim — no composition, no post-processing.
 // Empty / unset → no `instruction` field on the wire (omitempty).
 //
 // Per-kind `instruction:` override + canonical_vocabulary registry
-// land via WithCanonicalKindRegistry (a prior PR per ADR-0013).
+// land via WithCanonicalKindRegistry (per ADR-0013).
 func WithFillInstruction(text string) HandlerOption {
 	return func(c *handlerConfig) {
 		c.fillInstruction = text
@@ -527,7 +526,7 @@ func WithCanonicalKindResolvers(resolvers map[string][]string) HandlerOption {
 }
 
 // WithCanonicalKindRegistry wires the operator's `canonical_kinds:`
-// registry (per ADR-0013 §1 + §2 a prior PR) onto needs_fill responses:
+// registry (per ADR-0013 §1 + §2) onto needs_fill responses:
 //
 // - Per-kind `instruction:` overrides the global `fill_instruction`
 // for entities whose kind appears in the registry. Resolution
@@ -578,7 +577,7 @@ func WithCanonicalKindProvenance(prov config.RegistryProvenance) HandlerOption {
 // operator-fill.
 //
 // Empty / nil → UGC frontmatter-edge derivation is a no-op; the
-// dead config field from/a prior PR stays parseable but inert
+// dead config field stays parseable but inert
 // (mirrors current behavior on operators who haven't declared
 // any mappings).
 func WithUserContentFrontmatterEdges(m map[string]config.UserContentFrontmatterEdgeMapping) HandlerOption {
@@ -588,8 +587,8 @@ func WithUserContentFrontmatterEdges(m map[string]config.UserContentFrontmatterE
 }
 
 // WithAuthVerifier wires the auth.Verifier (constructed in main.go from
-// `<keys_dir>/public.pem`) onto the protected-route middleware (per
-// yaad-index a prior PR). When this option is omitted, protected routes
+// `<keys_dir>/public.pem`) onto the protected-route middleware.
+// When this option is omitted, protected routes
 // fall through to AnonymousAuth — useful for tests that don't exercise
 // the auth path. Production main.go always wires both this and
 // WithAuthRequired.
@@ -600,7 +599,7 @@ func WithAuthVerifier(v auth.Verifier) HandlerOption {
 }
 
 // WithAuthRequired toggles the Bearer-JWT enforcement on protected
-// routes (per yaad-index a prior PR). True → RequireAuth; false →
+// routes. True → RequireAuth; false →
 // AnonymousAuth bypass with a synthetic claim. Default false so tests
 // that don't construct a verifier continue working; production main.go
 // resolves the precedence chain (CLI > env > config > default-true)
@@ -657,8 +656,8 @@ func WithPluginInstanceConfigs(m map[string][]config.InstanceEntry) HandlerOptio
 	return func(c *handlerConfig) { c.pluginInstanceConfigs = m }
 }
 
-// WithJWKS publishes the verifier's public key on `GET /v1/jwks` per
-// yaad-index a prior PR. The slice is constructed at startup by
+// WithJWKS publishes the verifier's public key on `GET /v1/jwks`.
+// The slice is constructed at startup by
 // auth.LoadJWKS and cached for the server's lifetime — clients
 // (peer agents, future yaad-mcp) cache for one hour via the
 // `Cache-Control: public, max-age=3600` response header.

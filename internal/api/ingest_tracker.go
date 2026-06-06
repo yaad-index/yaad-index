@@ -74,7 +74,7 @@ type ingestRecord struct {
 	// Populated on ingestStateNeedsFill. gaps is a {field → description}
 	// map per ADR-0002 universal-state amendment — keys are the data
 	// field names the agent must fill, values are short descriptions
-	// the AI uses to produce the right value. Per ADR-0008 / a prior PR
+	// the AI uses to produce the right value. Per ADR-0008
 	// the entity ID is the durable callback handle for fill — there
 	// is no separate fill_token field on this record.
 	cleanContent string
@@ -458,13 +458,13 @@ func (t *ingestTracker) publishEntityEdgeAdded(ctx context.Context, e *store.Edg
 }
 
 // newIngestTracker constructs the in-flight tracker. writer + reader
-// are both either non-nil (vault wiring active per a prior PR) or both nil
+// are both either non-nil (vault wiring active) or both nil
 // (DB-only fallback for tests + dev binaries without a configured
 // vault). Mixing nil/non-nil is a programming error and panics — the
 // read-merge-write contract requires both halves.
 //
 // guard is the canonical-kinds / canonical-edge-types validator (per
-// ADR-0008 + a prior PR). A nil guard is allowed and treated as "no
+// ADR-0008). A nil guard is allowed and treated as "no
 // canonical layer enabled" — every canonical-shape entity / edge that
 // a plugin emits gets dropped with a debug log. Production main.go
 // constructs a guard from the keys of cfg.CanonicalKinds (the
@@ -708,8 +708,7 @@ func (t *ingestTracker) runSimulation(rec *ingestRecord, att ingestAttempt) {
 		//
 		// ErrNotFound here is anomalous (the row was just inserted
 		// by UpsertEntity above) — log it the same as any other
-		// failure rather than silently swallowing per the cold-reviewer's a prior PR
-		// review.
+		// failure rather than silently swallowing.
 		if err := t.store.ClearGapCallDone(ctx, att.entity.ID); err != nil {
 			t.logger.Warn("ingest simulator: ClearGapCallDone (best-effort)",
 				"err", err, "id", att.entity.ID)
@@ -815,7 +814,7 @@ func (t *ingestTracker) runPluginSimulation(ctx context.Context, rec *ingestReco
 			}
 			return t.persistSubsequentEnvelope(ctx, att, env, envelopeIndex)
 		},
-		nil, // onControl: nil → subprocess logs `_error`/`_summary` per a prior PR's behavior
+		nil, // onControl: nil → subprocess logs `_error`/`_summary`
 	)
 
 	if streamErr != nil {
@@ -1008,8 +1007,8 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 
 	provenance := result.Provenance
 	if len(provenance) == 0 {
-		// Synthesize when the plugin omits provenance (the cold-reviewer's PR
-		// contract): every entity must surface at least one
+		// Synthesize when the plugin omits provenance: every
+		// entity must surface at least one
 		// provenance entry naming its plugin.
 		now := clock.Now()
 		provenance = []store.ProvenanceEntry{{
@@ -1146,9 +1145,9 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 // and write the merged shape back atomically via vault.Writer.
 //
 // When the tracker has no vault wiring (writer/reader both nil — the
-// pre-a prior PR fallback for tests + dev binaries without vault.path),
+// the DB-only fallback for tests + dev binaries without vault.path),
 // this is a no-op. Callers (the simulator paths) treat the no-op as
-// success: the DB-only flow that predates a prior PR still works.
+// success: the legacy DB-only flow still works.
 //
 // **Concurrency note.** Read-merge-write is NOT atomic across
 // concurrent ingests of the same URL. Two simulators that both read
@@ -1161,8 +1160,7 @@ func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, 
 // the tracker (cheap, in-process), a filesystem-level advisory lock
 // (heavier but cross-process), or a single-writer goroutine fed by a
 // channel (simplest concurrency model). Picking among them is a
-// follow-up when concurrent re-ingest becomes load-bearing — flagged
-// in a prior PR's body and not gated by this PR.
+// follow-up when concurrent re-ingest becomes load-bearing.
 func (t *ingestTracker) writeIngestVaultFile(ctx context.Context, e *store.Entity, plugin string, instanceName string, gaps []string, cleanContent string, notations []string, aliases []string, newProv store.ProvenanceEntry, forceRefetch, ttlExpired bool, cacheExpires *vault.CacheExpires, attachmentManifest []vault.Attachment, canonicalEdges []*store.Edge) error {
 	if t.vaultWriter == nil {
 		return nil
@@ -1319,14 +1317,14 @@ func buildVaultEntity(e *store.Entity, source []string, gaps []string, cleanCont
 		Provenance: provenance,
 		Gaps: gaps,
 		CleanContent: cleanContent,
-		// Notations is the cache-key list per yaad-index the source issue
-		// a prior PR. Plugin emits the canonical set on FetchResult; we
+		// Notations is the cache-key list. Plugin emits the
+		// canonical set on FetchResult; we
 		// land it on every vault write so reindex can reconstitute
 		// the entity_notations DB table from the vault. Replace
 		// wholesale (no merging with existing) — the plugin's view
 		// is canonical for cache keys.
 		Notations: notations,
-		// Aliases (per yaad-index the source issue a prior PR). Plugin-emitted
+		// Aliases. Plugin-emitted
 		// list rides through to vault.Entity.Aliases; the Marshal
 		// step (synthesizeAliases) merges in ADR-0011's title-
 		// synthesized alias and dedupes. Same wholesale-replace
@@ -1523,7 +1521,7 @@ func (t *ingestTracker) persistCanonicalEdges(ctx context.Context, pending *even
 			t.logger.Debug("ingest: canonical edge dropped — edge type not in operator config",
 				"plugin", plugin, "type", e.Type, "from", e.From, "to", e.To)
 			// Bump the per-(plugin, edge_type) drop counter (per
-			// ADR-0013 §3 / yaad-index a prior PR). Counterpart of
+			// ADR-0013 §3). Counterpart of
 			// the kind drop above; surfaces on /v1/cv-status as
 			// `drift.edge_types_emitted_not_enabled[]`. Best-effort.
 			//
