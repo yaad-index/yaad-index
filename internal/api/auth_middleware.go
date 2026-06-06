@@ -12,10 +12,10 @@ import (
 	"github.com/yaad-index/yaad-index/internal/auth"
 )
 
-// Bearer-token authentication middleware (per yaad-index, a prior PR of
-// the auth series). RequireAuth extracts `Authorization: Bearer <token>`,
-// verifies via the auth.Verifier from a prior PR, attaches the parsed Claim to
-// the request context, and emits a canonical 401 envelope on any failure.
+// Bearer-token authentication middleware. RequireAuth extracts
+// `Authorization: Bearer <token>`, verifies via the auth.Verifier,
+// attaches the parsed Claim to the request context, and emits a
+// canonical 401 envelope on any failure.
 //
 // AnonymousAuth is the dev-mode bypass wired when `auth.required=false`:
 // it attaches a synthetic anonymous Claim and skips verification entirely.
@@ -99,13 +99,11 @@ func RequireAuth(logger *slog.Logger, verifier auth.Verifier) func(http.Handler)
 // passes through unconditionally.
 //
 // The synthetic claim's IssuedAt / ExpiresAt are deliberately the zero
-// time so handlers can detect dev-mode shape if they need to (a prior PR
-// will surface the agent identity on note writes).
+// time so handlers can detect dev-mode shape if they need to.
 //
-// A fresh *Claim is constructed per request — the cold-reviewer's a prior PR review
-// note 1: a prior PR may extend the Claim with per-request identity fields,
-// and a shared pointer would race or leak across requests once that
-// happens.
+// A fresh *Claim is constructed per request: a future change may
+// extend the Claim with per-request identity fields, and a shared
+// pointer would race or leak across requests once that happens.
 func AnonymousAuth() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -132,9 +130,9 @@ const (
 // IsAnonymousClaim reports whether the claim is the synthetic shape
 // stamped by AnonymousAuth in dev-mode (auth.required=false). Handlers
 // that derive enforcement from the claim's identity (e.g. notes
-// author validation per yaad-index) branch on this so dev-mode
-// preserves pre-auth behavior — there is no real identity to enforce
-// against in the bypass path.
+// author validation) branch on this so dev-mode preserves pre-auth
+// behavior — there is no real identity to enforce against in the
+// bypass path.
 //
 // Production RequireAuth never produces this shape: the verifier
 // rejects tokens whose `iss` is not "yaad-index", and signed tokens
@@ -145,8 +143,8 @@ func IsAnonymousClaim(c *auth.Claim) bool {
 
 // ClaimHasOperatorAuthority reports whether the claim represents an
 // identity authorized to take operator-attributed actions on behalf
-// of a real human operator. The pair-claim model (yaad-index):
-// every authenticated request carries (Subject, Operator). Two valid
+// of a real human operator. In the pair-claim model, every
+// authenticated request carries (Subject, Operator). Two valid
 // shapes hold operator authority:
 //
 // - Operator acting directly: Subject == Operator (the operator
@@ -159,9 +157,9 @@ func IsAnonymousClaim(c *auth.Claim) bool {
 // missing operator field). Anonymous dev-mode claims also fail the
 // gate — there's no real operator to attribute the action to.
 //
-// Replaces the brittle Subject==Operator check that existed at the
-// operator-fill + notes call sites legacy. Those endpoints used
-// to reject all agent-on-behalf-of-operator JWTs even though the
+// Replaces the brittle Subject==Operator check that the legacy
+// operator-fill + notes call sites used. Those endpoints used to
+// reject all agent-on-behalf-of-operator JWTs even though the
 // operator authority was structurally present on the pair-claim.
 func ClaimHasOperatorAuthority(c *auth.Claim) bool {
 	if c == nil {
@@ -175,7 +173,7 @@ func ClaimHasOperatorAuthority(c *auth.Claim) bool {
 
 // ClaimIsOperatorOnly reports whether the claim is the operator-only
 // shape required for CLI dispatch (command-shape input on
-// /v1/ingest, per yaad-index + ADR-0022 §6).
+// /v1/ingest, per ADR-0022 §6).
 //
 // Operator-only = Subject == Operator: the operator issued and
 // signed their own token, no agent intermediary. Pair-claim tokens
@@ -189,7 +187,7 @@ func ClaimHasOperatorAuthority(c *auth.Claim) bool {
 // tokens to invoke command-shape inputs that worked under
 // AnonymousAuth before).
 //
-// Replaces no prior check — this is the new gate introduces.
+// Replaces no prior check — this is a new gate.
 // Production /v1/ingest's command-shape dispatch path calls this;
 // URL-shape continues to gate on ClaimHasOperatorAuthority.
 func ClaimIsOperatorOnly(c *auth.Claim) bool {
