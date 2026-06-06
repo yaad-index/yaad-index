@@ -77,7 +77,7 @@ func registerTaskResolve(s *server.MCPServer, b *bridge) {
 				"Returns `{ok, id, errored, auto_archived, resolved_at}` "+
 				"verbatim from `POST /v1/tasks/{id}/resolve`. Idempotent. "+
 				"\n\n"+
-				"For resolution-tasks (#304 Cut C3 — `kind: resolution-"+
+				"For resolution-tasks (`kind: resolution-"+
 				"task` frontmatter), pass `option` to pick one of the "+
 				"recorded candidates: the daemon re-ingests via the "+
 				"resolver plugin's shorthand, lands a canonical-edge "+

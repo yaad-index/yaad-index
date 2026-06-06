@@ -67,8 +67,8 @@ func registerSetOperatorFill(s *server.MCPServer, b *bridge) {
 				"`/v1/entities/{id}/fill` with per-field operations. "+
 				"The caller's JWT determines the trigger-mode: "+
 				"Subject == Operator OR an `operator_delegated` "+
-				"claim (an agent-on-behalf-of-operator token, per "+
-				"#361) → operator-trigger (fills operator-strategy "+
+				"claim (an agent-on-behalf-of-operator token) → "+
+				"operator-trigger (fills operator-strategy "+
 				"gaps + ad-hoc writes); a bare agent token → "+
 				"agent-trigger (fills agent-strategy gaps). "+
 				"Per-field value shapes: scalar (number / boolean / "+
@@ -106,7 +106,7 @@ func registerFillField(s *server.MCPServer, b *bridge) {
 				"overwrite (requires `force=true` query param); "+
 				"ad-hoc property write (operator-trigger only). The "+
 				"trigger-mode follows the caller's JWT — Subject == "+
-				"Operator or an `operator_delegated` claim (#361) → "+
+				"Operator or an `operator_delegated` claim → "+
 				"operator-trigger. Per-field value "+
 				"shapes: scalar sets the field; explicit `null` "+
 				"clears it; `{defer: true}` marks the field "+
@@ -190,7 +190,7 @@ func registerNeedsFill(s *server.MCPServer, b *bridge) {
 				"haven't been gap-called for the current fetch-cycle. Returns "+
 				"`{ok, entities, next_cursor?, canonical_vocabulary?}` verbatim "+
 				"from `GET /v1/needs-fill`. `canonical_vocabulary` lives at the "+
-				"response root (per #275 — one copy per response, not one per "+
+				"response root (one copy per response, not one per "+
 				"entry) and is included by default. Each entry carries the "+
 				"per-gap-call payload (id, kind, gaps, gap_metadata, "+
 				"clean_content, instruction). Optional `limit` (server clamps; "+
@@ -213,13 +213,13 @@ func registerNeedsFill(s *server.MCPServer, b *bridge) {
 			mcp.Description("Comma-separated field names to strip from the response. Supported: `canonical_vocabulary`, `clean_content`. Default empty (include everything)."),
 		),
 		mcp.WithString("source",
-			mcp.Description("Filter the queue to gaps from a single source / plugin namespace (e.g. `gmail`, `wikipedia`) — useful when one source spikes and floods the queue (#385). Omit for all sources."),
+			mcp.Description("Filter the queue to gaps from a single source / plugin namespace (e.g. `gmail`, `wikipedia`) — useful when one source spikes and floods the queue. Omit for all sources."),
 		),
 		mcp.WithString("kind",
-			mcp.Description("Filter the queue to gaps on a single entity kind (e.g. `person`, `boardgame`) (#385). Composes (AND) with `source`. Omit for all kinds."),
+			mcp.Description("Filter the queue to gaps on a single entity kind (e.g. `person`, `boardgame`). Composes (AND) with `source`. Omit for all kinds."),
 		),
 		mcp.WithString("fill_strategy",
-			mcp.Description("Filter the queue to one audience's gaps: `agent` (agent-fillable) or `operator` (operator-fillable). Overrides the auth-derived audience so an operator can review the agent queue (and vice versa). Omit for the caller's default slice (#459)."),
+			mcp.Description("Filter the queue to one audience's gaps: `agent` (agent-fillable) or `operator` (operator-fillable). Overrides the auth-derived audience so an operator can review the agent queue (and vice versa). Omit for the caller's default slice."),
 		),
 	)
 	s.AddTool(tool, needsFillHandler(b))
