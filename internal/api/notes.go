@@ -92,8 +92,8 @@ type commentsResponse struct {
 // handleNotes implements POST /v1/entities/{id}/notes.
 //
 // Vault-first append (per ADR-0008): the new note is added to the
-// entity's body `## Notes` table (Per the prior design, — notes live in the
-// body, frontmatter just carries `note_count: N`); the DB row is
+// entity's body `## Notes` table (notes live in the body,
+// frontmatter just carries `note_count: N`); the DB row is
 // updated to mirror the new state. The vault file is the source of
 // truth; the DB is a derived index.
 //
@@ -122,8 +122,8 @@ type commentsResponse struct {
 // for notes because the canonical note list lives in vault
 // frontmatter. Returns 503 vault_required when WithVaultIO is
 // omitted.
-// canonicalKindReg widens the carve-out per yaad-index: notes
-// targeting a canonical-label thin row (`<kind>:<slug>` where `kind`
+// canonicalKindReg widens the carve-out: notes targeting a
+// canonical-label thin row (`<kind>:<slug>` where `kind`
 // is in the operator's canonical_kinds registry) auto-materialize
 // the vault file at `{ROOT}/ct/<kind>/<slug>.md` when the caller
 // holds operator authority. Without operator authority, or when the
@@ -211,14 +211,13 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 		}
 
 		// autoMaterialize covers the "thin DB row exists, vault file
-		// missing" case for canonical-label entities (per yaad-index
-		//). The note write then creates the vault file via
-		// WriteCanonicalLabelWithCommit. Per the operator's scope
-		// tightening, notes do NOT create the entity row from
-		// nothing — that path stays a 404 to prevent dangling
-		// notes on entities that don't exist. Operator-fill is the
-		// deliberate-create path; notes are casual and need an
-		// existing entity to attach to.
+		// missing" case for canonical-label entities. The note write
+		// then creates the vault file via
+		// WriteCanonicalLabelWithCommit. By design, notes do NOT
+		// create the entity row from nothing — that path stays a 404
+		// to prevent dangling notes on entities that don't exist.
+		// Operator-fill is the deliberate-create path; notes are
+		// casual and need an existing entity to attach to.
 		var autoMaterialize bool
 
 		got, err := st.GetEntity(r.Context(), id)
@@ -318,7 +317,7 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 					"failed to read vault file")
 				return
 			}
-			// DB row exists (thin label Per the prior design, phase B) but no
+			// DB row exists (thin label, phase B) but no
 			// vault file. Auto-materialize the canonical-label
 			// vault file when the caller holds operator authority
 			// AND the kind is in the canonical-kind registry.

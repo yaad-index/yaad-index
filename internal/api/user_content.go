@@ -1,18 +1,18 @@
-// User-content (UGC) read endpoints per yaad-index PR-B of 3.
+// User-content (UGC) read endpoints.
 //
-// PR-B scope: GET surface only. Writes (POST create, PUT section
-// replace, DELETE entity) ship in PR-C with the auth-author / operator-
-// override / If-Match concurrency contract.
+// This file covers the GET surface only. The write surface (POST
+// create, PUT section replace, DELETE entity) lives separately, with
+// the auth-author / operator-override / If-Match concurrency contract.
 //
 // The body of a user-content entity rides on Entity.CleanContent —
 // same field plugin-fetched bodies use, since the file-on-disk shape
 // (frontmatter + clean_content + standard `## Edges` / `## Notes`
 // sections) is uniform across entity sources. The UGC story diverges
-// at write time (PR-C: the agent supplies the body directly rather
-// than a plugin fetching it); on the read side both paths converge.
+// at write time (the agent supplies the body directly rather than a
+// plugin fetching it); on the read side both paths converge.
 //
-// Section parsing uses vault.ParseSections (ADR-0012 / yaad-index
-//'s containment model) — every ATX heading is one addressable
+// Section parsing uses vault.ParseSections (ADR-0012's containment
+// model) — every ATX heading is one addressable
 // section, deeper headings are textually contained in their parent's
 // body, pre-heading body is the implicit section 0.
 
@@ -479,9 +479,9 @@ func decodeSectionsCursor(s string) (int, bool) {
 // the WHOLE document body (CleanContent), not a per-section slice —
 // any edit anywhere in the entity invalidates pending edits, which
 // keeps the lost-update window tight at the cost of extra 412s when
-// two agents edit different sections simultaneously. v1 trade-off
-// Per the prior design,; per-section etag scheme is a future-PR option if write
-// concurrency becomes a real problem in practice.
+// two agents edit different sections simultaneously. v1 trade-off;
+// a per-section etag scheme is a future option if write concurrency
+// becomes a real problem in practice.
 func userContentEtag(body string) string {
 	sum := sha256.Sum256([]byte(body))
 	return `"` + hex.EncodeToString(sum[:8]) + `"`
@@ -489,9 +489,9 @@ func userContentEtag(body string) string {
 
 // vaultProvenanceToAPI mirrors the existing toAPIProvenance helper
 // from entities.go but operates on the vault-frontmatter shape
-// (vault.ProvenanceEntry) directly. Kept separate so PR-B doesn't
-// need to round-trip through store.Entity to render provenance on
-// the response.
+// (vault.ProvenanceEntry) directly. Kept separate so this read path
+// doesn't need to round-trip through store.Entity to render
+// provenance on the response.
 func vaultProvenanceToAPI(in []vault.ProvenanceEntry) []provenanceEntry {
 	if in == nil {
 		return []provenanceEntry{}
