@@ -45,7 +45,7 @@ const PluginName = "wikipedia"
 // verbatim — explicit "no build identity" signal rather than a
 // stale-looking semver fallback.
 //
-// Per yaad-index/yaad-index: the daemon's plugin-cache key
+// The daemon's plugin-cache key
 // strips the `+<hash>` suffix before comparing, so build-metadata
 // rebuilds at the same tag don't invalidate the cache. `unknown`
 // stays `unknown` after the strip — distinct from any real semver
@@ -71,13 +71,13 @@ const UniversalSourceKind = "source"
 // `entity_kinds[].default_ttl_days` in the --init capabilities
 // document. Predates yaad-index's three-level cache TTL
 // hierarchy; kept on the wire for backward compat with older
-// yaad-index builds. Modern yaad-index (post-) reads
+// yaad-index builds. Modern yaad-index reads
 // DefaultCacheTTLSeconds instead. Operators on the upgrade path
 // see consistent values until they fully migrate.
 const DefaultTTLDays = 7
 
-// DefaultCacheTTLSeconds is the post- plugin-level cache TTL
-// in seconds (per yaad-index/yaad-wikipedia). 31536000s = 365
+// DefaultCacheTTLSeconds is the plugin-level cache TTL
+// in seconds. 31536000s = 365
 // days. Wikipedia article cadence is slow enough that a yearly
 // default is the right hands-off contract. Operators wanting
 // fresher data override per-entry / per-plugin config via the
@@ -188,7 +188,7 @@ type Article struct {
 	// - `is_about` → [{Name: <stripTrailingParens(title)>, Kind: <kind>}]
 	//
 	// The `is_about` target Name is stripped of parens-disambig
-	// per's cross-plugin-dedup rationale: the
+	// for cross-plugin dedup: the
 	// canonical `person:martin-wallace` label needs to match BGG's
 	// `designed_by` edge target by slug, so both plugins must
 	// emit the same descriptive name (parens stripped) for the
@@ -199,7 +199,7 @@ type Article struct {
 	// to this article — canonical desktop URL, mobile subdomain URL,
 	// shorthand `wikipedia: <human-title>`, and the original input
 	// if it differs from the derived forms. yaad-index's
-	// orchestrator (per yaad-index the source issue a prior PR) writes these to
+	// orchestrator writes these to
 	// the entity_notations cache after Fetch so subsequent ingests
 	// of any equivalent form short-circuit on the cache without
 	// re-invoking this plugin.
@@ -210,7 +210,7 @@ type Article struct {
 	Notations []string
 
 	// Aliases is the alternative-label list emitted alongside the
-	// article (per yaad-index the source issue a prior PR). Today, populated
+	// article. Today, populated
 	// with the article's human-readable title from the REST summary
 	// — the same string the agent's natural Obsidian wikilink would
 	// type. Supplements ADR-0011's title-synthesized alias on the
@@ -530,14 +530,14 @@ func (p *Plugin) Fetch(ctx context.Context, input string) (*FetchOutcome, error)
 
 	// Per ADR-0021, plugins emit descriptive names + edge `{name,
 	// kind}` references; the daemon's slug.Slug owns slug
-	// derivation. Per (preserved rationale): the
-	// post-redirect title from the REST summary is the source of
+	// derivation. The post-redirect title from the REST summary is
+	// the source of
 	// truth, so multiple equivalent input URLs that resolve to the
 	// same article all converge on a single source-node ID at
 	// daemon-derive time. The plugin name here keeps Wikipedia's
 	// parens-disambig (round-trips to the article URL); the
-	// canonical-edge target name strips the parens (per
-	//, for cross-plugin dedup against e.g. BGG's
+	// canonical-edge target name strips the parens (for
+	// cross-plugin dedup against e.g. BGG's
 	// designed_by edge target).
 	article := &Article{
 		Name: summary.Title,
@@ -557,7 +557,7 @@ func (p *Plugin) Fetch(ctx context.Context, input string) (*FetchOutcome, error)
 			},
 		},
 		Notations: notationsFor(input, canonicalURL, summary.Lang, summary.Title, title),
-		// Aliases per yaad-index the source issue a prior PR — the article's
+		// Aliases — the article's
 		// human-readable title is the primary wikilink target.
 		// yaad-index merges this with its own ADR-0011-synthesized
 		// alias and dedupes; emitting it here is cheap-redundant
@@ -588,7 +588,7 @@ func (p *Plugin) Fetch(ctx context.Context, input string) (*FetchOutcome, error)
 	// lands. Only fires when the summary returned a non-empty
 	// wikibase_item (most articles have one).
 	//
-	// Stderr instrumentation per the source issue — three silent failure
+	// Stderr instrumentation — three silent failure
 	// modes (no wikibase_item, fetchKindByQID errored, no kind
 	// matched). Stderr surfaces in `docker logs` via yaad-index's
 	// subprocess wrapper, so each branch is observable without other
@@ -683,8 +683,8 @@ func (p *Plugin) fetchExtract(ctx context.Context, requestHost, escapedTitle str
 	return mediaWikiHeadingsToMarkdown(doc.Query.Pages[0].Extract), nil
 }
 
-// Search is the public entry point for upstream-federated search
-// per yaad-index #2. Wraps searchArticles + trims the result list
+// Search is the public entry point for upstream-federated search.
+// Wraps searchArticles + trims the result list
 // to the caller's limit. SearchCandidate output uses the article
 // title as the ID — operators can re-feed `wikipedia: <title>`
 // to /v1/ingest to fetch the full article.
@@ -771,7 +771,7 @@ func (p *Plugin) searchArticles(ctx context.Context, requestHost, query string) 
 
 // buildSearchAPIURL composes the action API search URL with the
 // query in a query-encoded `srsearch` parameter (path-shape /
-// query-shape rules differ per the bug the cold-reviewer caught on a prior PR; we
+// query-shape rules differ; we
 // use url.QueryEscape directly here since the input is already a
 // plain string, not a path-encoded title).
 //
@@ -898,8 +898,7 @@ func buildAPIURL(requestHost, apiHostOverride, escapedTitle string) string {
 // a query-string value, where the encoding rules differ — a literal
 // `+` in a path is interpreted as space in a query string. We
 // path-decode then query-encode so the round-trip matches what the
-// upstream API expects regardless of which characters the title has
-// (the cold-reviewer's catch on a prior PR).
+// upstream API expects regardless of which characters the title has.
 func buildActionAPIURL(requestHost, apiHostOverride, escapedTitle string) string {
 	decoded, err := url.PathUnescape(escapedTitle)
 	if err != nil {
@@ -956,8 +955,8 @@ type actionExtractResponse struct {
 }
 
 // notationsFor returns every input form yaad-wikipedia knows resolves
-// to a given article — for the orchestrator's entity_notations cache
-// (per yaad-index the source issue a prior PR). The list always includes the
+// to a given article — for the orchestrator's entity_notations cache.
+// The list always includes the
 // originating notation (in whatever shape the caller passed) so a
 // self-roundtrip with the same input registers a hit on the next
 // call. Duplicates are deduped while order is preserved (input

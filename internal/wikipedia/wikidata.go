@@ -31,8 +31,8 @@ import (
 //
 // Adding a Q-id = add a row here; the value lands in
 // KnownCanonicalKinds via the deduper. Kind-specific gap prompts
-// now live in the daemon's canonical-kind registry per yaad-index
-// #4 — the operator's `canonical_kinds:` config supplies the
+// now live in the daemon's canonical-kind registry — the
+// operator's `canonical_kinds:` config supplies the
 // per-gap Description. Universal gaps (summary + tags) ride
 // regardless of kind detection.
 var kindByQID = map[string]string{
@@ -189,7 +189,7 @@ func (p *Plugin) fetchKindByQID(ctx context.Context, qid string) (string, error)
 	// Other Wikidata properties on the same entity (P18 image filename,
 	// P569 birth-date time-object, P625 globe coordinates, etc.) carry
 	// foreign datavalue shapes that would crash a single-pass decode of
-	// the entire claims map (the source issue). Keeping the outer claims as
+	// the entire claims map. Keeping the outer claims as
 	// json.RawMessage isolates the strict struct to the one path
 	// fetchKindByQID actually walks.
 	var p31Claims []wikidataClaim
