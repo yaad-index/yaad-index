@@ -131,7 +131,7 @@ type frontmatter struct {
 // otherwise from `data.title`. Empty/nil set falls back to data.title
 // only — useful for tests and source-shape-only deployments.
 //
-// Per yaad-index the source issue a prior PR, plugin-emitted aliases on
+// Plugin-emitted aliases on
 // `e.Aliases` merge with the title-synthesized one — synthesized
 // first (deterministic), plugin entries appended in input order,
 // duplicates dropped. Empty plugin set leaves only the synthesized
@@ -248,7 +248,7 @@ func Unmarshal(b []byte) (*Entity, error) {
 	e.Notes = bodyNotes
 	// Dataview paragraphs live in the body's yaad:dataview marker
 	// region only — no frontmatter mirror (frontmatter `data` stays
-	// global per yaad-index #119).
+	// global per #119).
 	e.Dataview = bodyDataview
 
 	return e, nil
@@ -308,8 +308,8 @@ func synthesizeAliases(e *Entity, canonicalKinds []string) []string {
 
 // mergeAliases interleaves the ADR-0011 title-synthesized alias
 // list (`synth`, typically zero or one element in v1) with the
-// plugin-emitted aliases from `e.Aliases` (per yaad-index issue
-// a prior PR). Synthesized entries land first for deterministic
+// plugin-emitted aliases from `e.Aliases`. Synthesized entries
+// land first for deterministic
 // ordering; duplicate strings (case-sensitive exact match) are
 // dropped. nil/empty inputs yield nil — the frontmatter then
 // drops the field via omitempty.
@@ -539,7 +539,7 @@ func parseNoteMetadata(raw string) (field, kind, id string, lastEdited time.Time
 // (`<date> — <author>`) and body (raw text, with `<br><br>` decoded
 // back to `\n\n` and `\|` decoded back to `|`).
 //
-// Per yaad-index #8: the `## Notes` section is wrapped in the
+// Per #8: the `## Notes` section is wrapped in the
 // NotesStartMarker / NotesEndMarker pair on write. On read,
 // the parser enters "notes" mode on encountering the start
 // marker (regardless of whether a `## Notes` heading follows
@@ -573,7 +573,7 @@ func splitBody(b []byte) (cleanContent string, edges []Edge, notes []Note, datav
 	// parser read a heading row but the notes section ended
 	// before the body row landed (truncated hand-edit, ad-hoc paste,
 	// concurrent-write surface). Without the flush, the captured
-	// date + author would be silently dropped (the cold-reviewer's catch).
+	// date + author would be silently dropped.
 	// Empty Text on the appended Note is a clear "this note
 	// was authored mid-edit" signal that survives the parse — better
 	// than silent loss; consistent with the stated contract that
@@ -864,7 +864,7 @@ func writeEdgesSection(w *bytes.Buffer, edges []Edge) {
 // The frontmatter `note_count` field carries the count; the body
 // table is the source of truth.
 //
-// Per yaad-index #8: wraps the section in NotesStartMarker /
+// Per #8: wraps the section in NotesStartMarker /
 // NotesEndMarker so the read path can splice deterministically
 // + so a plugin body re-ingest doesn't touch this region.
 func writeNotesSection(w *bytes.Buffer, notes []Note) {
@@ -913,7 +913,7 @@ func writeNotesSection(w *bytes.Buffer, notes []Note) {
 }
 
 // writeDataviewSection renders the entity's dataview paragraphs
-// per yaad-index #119. Each paragraph becomes one line in the
+// per #119. Each paragraph becomes one line in the
 // marker-wrapped region:
 //
 //	<!-- yaad:dataview start -->
@@ -1008,10 +1008,9 @@ func parseDataviewLine(line string) map[string]string {
 // carry an explicit type annotation (`- [[entity:id]]` with no
 // `(type)` suffix). The untyped body form means "this entity is
 // referenced from here" without a stronger semantic; `mentions` is
-// the canonical name for that shape — chosen during a prior PR over
+// the canonical name for that shape — chosen over
 // "drop untyped" because dropping would lose information that
-// survives the frontmatter→body→frontmatter round trip in a prior PR's
-// design.
+// survives the frontmatter→body→frontmatter round trip.
 const DefaultBodyEdgeType = "mentions"
 
 // mergeEdges returns the union of frontmatter edges and body-parsed
@@ -1024,7 +1023,7 @@ const DefaultBodyEdgeType = "mentions"
 // downstream consumers (reindex → DB rows) never see a typeless
 // edge.
 //
-// This dedup-by-`to` + default-type rule resolves the cold-reviewer's a prior PR
+// This dedup-by-`to` + default-type rule resolves an earlier
 // review note: the previous (type, to) dedup let a typed frontmatter
 // edge `(designed, brass)` plus an untyped body wikilink `[[brass]]`
 // produce two distinct entries (`(designed, brass)` and

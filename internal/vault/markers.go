@@ -21,7 +21,7 @@ const (
 )
 
 // NotesStartMarker / NotesEndMarker delimit the agent-emitted
-// `## Notes` section per yaad-index #8 (ADR-0015 marker-pair
+// `## Notes` section per #8 (ADR-0015 marker-pair
 // pattern extended to notes). Distinct prefix (`yaad:notes`,
 // not `yaad:plugin`) so a plugin re-ingest that splices its body
 // region doesn't touch the notes region — notes are append-
@@ -46,7 +46,7 @@ const (
 )
 
 // DataviewStartMarker / DataviewEndMarker delimit the agent-
-// appended dataview paragraphs per yaad-index #119. Each
+// appended dataview paragraphs per #119. Each
 // paragraph is a single line of Obsidian dataview-inline
 // metadata (`key:: value  key:: value`) representing one
 // canonical-type fill event on the target canonical entity.
