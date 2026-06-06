@@ -11,8 +11,8 @@
 // map[FetchItem]interface{}` is the open-extension surface
 // upstream documented for exactly this case ("This map's values
 // should not be used directly, they must only be used by libraries
-// implementing extensions of the IMAP protocol"). Per
-// a prior PR review: shipping without a working X-GM-LABELS round-trip
+// implementing extensions of the IMAP protocol"). Shipping
+// without a working X-GM-LABELS round-trip
 // delivers a known-broken plugin since the label flow is the
 // load-bearing feature; v1 is the path that delivers it without
 // forking upstream.
@@ -354,7 +354,7 @@ func (c *realClient) FetchMessages(_ context.Context, uids []uint32) ([]FetchedM
 // typically one response carrying BODY[] (+ labels), one carrying
 // only labels (no BODY[] section). The naive 1-FetchedMessage-per-
 // msgCh-msg shape produced phantom empty-body entries that then
-// failed downstream ParseMessage with EOF (yaad-index #60).
+// failed downstream ParseMessage with EOF.
 //
 // Merge rules:
 //   - Body: first non-empty wins. Phantom responses with empty Body
