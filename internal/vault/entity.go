@@ -70,7 +70,7 @@ type Entity struct {
 	Edges []Edge
 	Notes []Note
 	// Dataview is the body-section list of agent-appended
-	// dataview-inline paragraphs per #119. Each
+	// dataview-inline paragraphs. Each
 	// paragraph is a `key → value` map representing one
 	// canonical-type fill event on this entity (the target).
 	// Append-only at the storage layer; dedup-on-append is
@@ -339,7 +339,7 @@ const (
 )
 
 // DataviewParagraph is one canonical-type fill event recorded on a
-// target canonical entity per #119. Each paragraph
+// target canonical entity. Each paragraph
 // renders as a single line in the body's yaad:dataview region:
 //
 //	role:: Staff Platform Engineer  salary:: 150k+  source_email:: gmail:...

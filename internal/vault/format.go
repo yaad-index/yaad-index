@@ -248,7 +248,7 @@ func Unmarshal(b []byte) (*Entity, error) {
 	e.Notes = bodyNotes
 	// Dataview paragraphs live in the body's yaad:dataview marker
 	// region only — no frontmatter mirror (frontmatter `data` stays
-	// global per #119).
+	// global).
 	e.Dataview = bodyDataview
 
 	return e, nil
@@ -539,7 +539,7 @@ func parseNoteMetadata(raw string) (field, kind, id string, lastEdited time.Time
 // (`<date> — <author>`) and body (raw text, with `<br><br>` decoded
 // back to `\n\n` and `\|` decoded back to `|`).
 //
-// Per #8: the `## Notes` section is wrapped in the
+// The `## Notes` section is wrapped in the
 // NotesStartMarker / NotesEndMarker pair on write. On read,
 // the parser enters "notes" mode on encountering the start
 // marker (regardless of whether a `## Notes` heading follows
@@ -864,7 +864,7 @@ func writeEdgesSection(w *bytes.Buffer, edges []Edge) {
 // The frontmatter `note_count` field carries the count; the body
 // table is the source of truth.
 //
-// Per #8: wraps the section in NotesStartMarker /
+// Wraps the section in NotesStartMarker /
 // NotesEndMarker so the read path can splice deterministically
 // + so a plugin body re-ingest doesn't touch this region.
 func writeNotesSection(w *bytes.Buffer, notes []Note) {
@@ -912,8 +912,8 @@ func writeNotesSection(w *bytes.Buffer, notes []Note) {
 	w.WriteByte('\n')
 }
 
-// writeDataviewSection renders the entity's dataview paragraphs
-// per #119. Each paragraph becomes one line in the
+// writeDataviewSection renders the entity's dataview paragraphs.
+// Each paragraph becomes one line in the
 // marker-wrapped region:
 //
 //	<!-- yaad:dataview start -->
