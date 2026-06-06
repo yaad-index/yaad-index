@@ -259,3 +259,52 @@ func TestListEdges_TotalEqualsLenWhenUnderLimit(t *testing.T) {
 		"total equals len(edges) when the limit doesn't truncate")
 	assert.Equal(t, 1, got.Total)
 }
+
+// TestListEdges_BothDirections_PerDirectionCap pins the per-direction
+// limit contract: direction=both caps EACH side at `limit` independently
+// (up to 2× limit combined), so a node with more than `limit` outbound
+// edges never starves its inbound edges. The prior behavior capped the
+// concatenated `[out…, in…]` slice at `limit` total, which silently
+// dropped every inbound edge once the outbound side alone hit the limit.
+func TestListEdges_BothDirections_PerDirectionCap(t *testing.T) {
+	t.Parallel()
+	h, st := newAPIWithStore(t)
+	const hub = "boardgame:test-game-2099"
+	seedEntity(t, st, hub, "boardgame")
+	// 3 outbound (hub designed_by designer-{a,b,c}) + 3 inbound
+	// (source-{a,b,c} is_about hub); both sides exceed limit=2.
+	for _, s := range []string{"a", "b", "c"} {
+		seedEntity(t, st, "person:designer-"+s, "person")
+		require.NoError(t, st.CreateEdge(context.Background(), &store.Edge{
+			Type: "designed_by", From: hub, To: "person:designer-" + s,
+		}))
+		seedEntity(t, st, "wikipedia-article:source-"+s, "wikipedia-article")
+		require.NoError(t, st.CreateEdge(context.Background(), &store.Edge{
+			Type: "is_about", From: "wikipedia-article:source-" + s, To: hub,
+		}))
+	}
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/edges?entity_id="+hub+"&direction=both&limit=2", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var got edgeListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	assert.True(t, got.OK)
+	// 2 per side, both sides present — NOT 2 total with inbound starved.
+	require.Len(t, got.Edges, 4, "direction=both caps each side at limit (2) → up to 2× limit")
+	var outbound, inbound int
+	for _, e := range got.Edges {
+		switch {
+		case e.FromID == hub:
+			outbound++
+		case e.ToID == hub:
+			inbound++
+		}
+	}
+	assert.Equal(t, 2, outbound, "outbound side capped at limit and present")
+	assert.Equal(t, 2, inbound, "inbound side capped at limit and present (not starved)")
+	assert.Equal(t, 6, got.Total, "total is the pre-cap matched count across both directions")
+}
