@@ -451,8 +451,8 @@ type Store interface {
 	// ListDroppedCanonicalEdges is the edge-type counterpart.
 	ListDroppedCanonicalEdges(ctx context.Context) ([]DroppedCanonicalEdgeCount, error)
 	// ClearDroppedCanonicalKinds wipes the per-(plugin, kind) drop
-	// counter table. Called by reindex.Run after a successful walk
-	// per #31: reindex is the operator's "consume drift
+	// counter table. Called by reindex.Run after a successful walk.
+	// Reindex is the operator's "consume drift
 	// signal" action, so post-reindex the drift surface zeroes and
 	// any new drops from subsequent ingest accrue fresh under their
 	// originating plugin's tag (preserving attribution that would
