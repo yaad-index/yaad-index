@@ -108,11 +108,47 @@ func evaluateFieldEquals(p *parser.ArchiveWhen, v EntityView) bool {
 		if !ok {
 			return false
 		}
-		if !reflect.DeepEqual(got, want) {
+		if !fieldValueEqual(got, want) {
 			return false
 		}
 	}
 	return true
+}
+
+// fieldValueEqual reports whether an entity data value equals a
+// configured field_equals value. Numeric values are compared by value:
+// entity data round-trips through the store's JSON column and decodes
+// numbers as float64, while the workflow config parses the same literal
+// from YAML as int — so a plain reflect.DeepEqual(float64(5), int(5))
+// would be false and field_equals would silently never match a numeric
+// field. Non-numeric values (strings, bools, nested) fall back to
+// reflect.DeepEqual.
+func fieldValueEqual(got, want any) bool {
+	if gf, ok := numericValue(got); ok {
+		if wf, ok := numericValue(want); ok {
+			return gf == wf
+		}
+		return false
+	}
+	return reflect.DeepEqual(got, want)
+}
+
+// numericValue widens the int / float kinds the YAML + JSON decoders
+// produce to float64 for cross-type value comparison. Non-numeric
+// values return ok=false.
+func numericValue(v any) (float64, bool) {
+	switch n := v.(type) {
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	default:
+		return 0, false
+	}
 }
 
 func evaluateAnyOf(p *parser.ArchiveWhen, v EntityView) bool {
