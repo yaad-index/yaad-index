@@ -425,7 +425,7 @@ Rename a UGC entity by **retitling** it: the new slug — and thus the new id `u
 
 ### `delete_user_content(id)`
 
-Hard-destroy a UGC entity. **Two-step state-machine: `archive_entity` first, then `delete_user_content`.** On an active entity the call returns `{ok: false, error: "must archive before delete", message: "POST /v1/entities/<id>/archive first; ..."}` — surfaced verbatim, not thrown, so the agent branches on `error`. On an archived UGC entity the call removes the `_archive/...` vault file and cascade-drops the store row; returns `{ok, id, deleted: true}`.
+Hard-destroy a UGC entity. **Two-step state-machine: `archive_entity` first, then `delete_user_content`.** On an active entity the call returns `{ok: false, error: "not_archived", message: "POST /v1/entities/<id>/archive first; ..."}` — surfaced verbatim, not thrown, so the agent branches on `error`. On an archived UGC entity the call removes the `_archive/...` vault file and cascade-drops the store row; returns `{ok, id, deleted: true}`.
 
 403 operator_mismatch (cross-operator destroy) still throws — and runs *before* the archive-first gate so an intruder can't probe other operators' archive state. Per #377 the gate keys on operator pair-claim equality, not author; any agent under the entity's operator can destroy. 404 on already-gone is a real failure (NOT silently ok).
 
@@ -433,7 +433,7 @@ Hard-destroy a UGC entity. **Two-step state-machine: `archive_entity` first, the
 
 Hard-destroy a generic yaad-index entity (any kind: `boardgame:`, `wikipedia:`, `person:`, etc. — NOT `user-content:`, that's `delete_user_content`). Same archive-first state-machine as `delete_user_content`: **call `archive_entity` first**, then this tool to permanently remove the archived entity. The two explicit calls *are* the safety property; there is no `?confirm=permanent` shortcut.
 
-On an active entity the daemon returns the structured `{ok: false, error: "must archive before delete", ...}` envelope — surfaced verbatim so the agent can branch on `error`. On an archived entity the call removes the `_archive/...` vault file (with a `destroy: <id> [<kind>] by <agent>` git commit) and cascade-drops the DB row + inbound/outbound edges + provenance. Returns `{ok, id, deleted: true}`. **Destructive and irreversible** at this point.
+On an active entity the daemon returns the structured `{ok: false, error: "not_archived", ...}` envelope — surfaced verbatim so the agent can branch on `error`. On an archived entity the call removes the `_archive/...` vault file (with a `destroy: <id> [<kind>] by <agent>` git commit) and cascade-drops the DB row + inbound/outbound edges + provenance. Returns `{ok, id, deleted: true}`. **Destructive and irreversible** at this point.
 
 Other non-2xx (401, 404 already-gone, 503 vault not configured) still throw YaadIndexError. Unlike `delete_user_content`, there's no 403 operator_mismatch path on the destroy itself: the surface is agent-callable-by-anyone (the WARN audit log + commit is the post-hoc accountability surface).
 

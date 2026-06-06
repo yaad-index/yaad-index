@@ -93,7 +93,7 @@ func TestEntityDelete_ConflictOnActive(t *testing.T) {
 	rec := ugcReq(t, h, http.MethodDelete, "/v1/entities/"+id, tok, nil, nil)
 	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
 	body := rec.Body.String()
-	assert.Contains(t, body, "must archive before delete", "wire error code")
+	assert.Contains(t, body, "not_archived", "wire error code")
 	assert.Contains(t, body, "/archive first", "hint points at archive path")
 
 	// Entity untouched: still in DB, still active.

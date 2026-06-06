@@ -128,7 +128,7 @@ func handleEntityDelete(logger *slog.Logger, st store.Store, vaultWriter *vault.
 		// no `?confirm=permanent` flag, no opt-in skip — the
 		// state-machine IS the safety property.
 		if got.ArchivedAt == nil {
-			writeError(w, http.StatusConflict, "must archive before delete",
+			writeError(w, http.StatusConflict, "not_archived",
 				fmt.Sprintf("POST /v1/entities/%s/archive first; DELETE only destroys archived entities (ADR-0018)", id))
 			return
 		}

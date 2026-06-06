@@ -1541,7 +1541,7 @@ func handleUserContentDelete(logger *slog.Logger, st store.Store, vaultReader *v
 			return
 		}
 		if row.ArchivedAt == nil {
-			writeError(w, http.StatusConflict, "must archive before delete",
+			writeError(w, http.StatusConflict, "not_archived",
 				fmt.Sprintf("POST /v1/entities/%s/archive first; DELETE only destroys archived entities (ADR-0018)", id))
 			return
 		}
