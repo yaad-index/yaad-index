@@ -356,7 +356,7 @@ func isLazyMaterializableKind(kind string) bool {
 }
 
 // listEdge is the wire shape for one entry on the GET /v1/edges
-// response per yaad-index. Distinct from the POST /v1/edges
+// response. Distinct from the POST /v1/edges
 // `edge` shape because:
 //
 // - GET surfaces from_id/to_id (the read-side audience needs both
@@ -400,7 +400,7 @@ const (
 )
 
 // handleListEdges implements GET /v1/edges?entity_id=X[&edge_types=...]
-// [&direction=out|in|both][&limit=N] per yaad-index.
+// [&direction=out|in|both][&limit=N].
 //
 // Surfaces single-hop edges that the existing per-entity expansion
 // (?with_edges=) couldn't reach: inbound queries (direction=in),

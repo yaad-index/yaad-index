@@ -1,14 +1,10 @@
 // canonical_edges.go centralises the daemon-side machinery for the
 // ADR-0021 canonical-label edge model: thin-row materialization,
 // `{name, kind}` / pre-formed-label parsing, and the post-write
-// edge create/replace step. All three fill paths (operator-fill
-// Per the prior design, agent-fill Per the prior design, UGC frontmatter-edges Per the prior design,)
-// import these helpers — the contract was set by and reused
-// verbatim by the others, so the helpers live in one place.
-//
-// The "(per yaad-index)" / "" provenance notes
-// stay because that's where the contract was set; the file split
-// is a structural reorg, not a contract change.
+// edge create/replace step. All three fill paths (operator-fill,
+// agent-fill, UGC frontmatter-edges) import these helpers — the
+// contract was set once and reused verbatim by the others, so the
+// helpers live in one place.
 package api
 
 import (
@@ -30,8 +26,8 @@ import (
 )
 
 // applyCanonicalTypeEdges runs the post-write edge create/replace
-// step for canonical_type gap fills per yaad-index. Each
-// canonical_type op produces a deterministic set of edges from
+// step for canonical_type gap fills. Each canonical_type op
+// produces a deterministic set of edges from
 // the source entity to one canonical label per fill entry; the
 // edge type is the gap-name (e.g. `subjects → boardgame:brass-…`,
 // `subjects → person:martin-…`).
@@ -170,7 +166,7 @@ func applyCanonicalTypeEdges(
 // canonicalLabelEntry. Frontmatter `data[<field>]` stores label
 // IDs only — the per-entry `Data` payload lands as a dataview
 // paragraph on the target canonical entity, not in the source
-// entity's frontmatter, per yaad-index #119.
+// entity's frontmatter.
 func canonicalLabelEntryIDs(v any) []string {
 	entries, ok := v.([]canonicalLabelEntry)
 	if !ok {
@@ -185,7 +181,7 @@ func canonicalLabelEntryIDs(v any) []string {
 
 // appendDataviewParagraphs records each canonical_type entry's
 // `data` map as a dataview-inline paragraph on the target
-// canonical entity's body per yaad-index #119. Iterates the api-
+// canonical entity's body. Iterates the api-
 // internal operatorFillOp slice and delegates the per-entry
 // vault read-merge-write to canonical.AppendDataviewParagraph
 // so the same auto-materialize + dedup logic serves the agent /
@@ -268,8 +264,8 @@ func splitCanonicalLabelID(id string) (kind, slug string, ok bool) {
 	return canonical.SplitLabelID(id)
 }
 
-// parseCanonicalLabelList decodes a `canonical_type` gap fill per
-// yaad-index. Two element shapes coexist:
+// parseCanonicalLabelList decodes a `canonical_type` gap fill.
+// Two element shapes coexist:
 //
 // - Object `{"name": "Brass Pittsburgh", "kind": "boardgame"}` —
 // daemon slugifies via `slug.Slug(name)` to produce the
@@ -450,8 +446,8 @@ func parseCanonicalLabelEntry(
 
 // canonicalRef is the wire shape for one entry in the object form
 // of a canonical_type fill: `{"name": "...", "kind": "...",
-// "data": {...}}`. The `data` field per yaad-index #119 is the
-// optional free-form metadata map appended as a dataview-inline
+// "data": {...}}`. The `data` field is the optional free-form
+// metadata map appended as a dataview-inline
 // paragraph on the target canonical entity's body.
 // DisallowUnknownFields rejects extra keys so typo-driven fills
 // don't silently land malformed values.
@@ -464,8 +460,8 @@ type canonicalRef struct {
 // canonicalLabelEntry is the per-element output of
 // parseCanonicalLabelList. The ID is the resolved canonical-
 // label id (`<kind>:<slug>`); Data is the optional free-form
-// payload to record as a dataview paragraph on the target
-// per yaad-index #119. Pre-formed-label string entries
+// payload to record as a dataview paragraph on the target.
+// Pre-formed-label string entries
 // (operator-fill / UGC paths) always emit empty Data — only
 // the object form `{name, kind, data}` carries it.
 //

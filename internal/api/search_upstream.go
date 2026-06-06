@@ -1,5 +1,4 @@
-// POST /v1/search/upstream — plugin-federated search per
-// yaad-index #2.
+// POST /v1/search/upstream — plugin-federated search.
 //
 // Local search (DB-only) lives at GET /v1/search; this endpoint
 // fans the operator/agent query out across plugins that have
@@ -43,8 +42,7 @@ const (
 	upstreamMaxPerPluginTimeout = 30 * time.Second
 )
 
-// searchUpstreamRequest is the POST /v1/search/upstream wire shape
-// per yaad-index #2.
+// searchUpstreamRequest is the POST /v1/search/upstream wire shape.
 type searchUpstreamRequest struct {
 	// Query is the operator/agent search string. Whitespace-
 	// trimmed; empty rejects with 400.
@@ -99,8 +97,8 @@ type searchUpstreamResponse struct {
 	TimeoutSec int                          `json:"per_plugin_timeout_seconds"`
 }
 
-// handleSearchUpstream implements POST /v1/search/upstream per
-// yaad-index #2. Dispatches in parallel across opted-in plugins
+// handleSearchUpstream implements POST /v1/search/upstream.
+// Dispatches in parallel across opted-in plugins
 // with per-plugin timeout; merges results in plugin-declaration
 // order; surfaces per-plugin status so callers can debug.
 func handleSearchUpstream(logger *slog.Logger, registry pluginRegistry) http.HandlerFunc {
@@ -223,8 +221,7 @@ func resolveUpstreamTargets(registry pluginRegistry, allowlist []string) ([]plug
 // federateSearch fans the query out across targets in parallel
 // (one goroutine per plugin) with a per-plugin timeout context.
 // Returns the merged candidate list (plugin-declaration order;
-// no relevance sort in v1 per yaad-index #2 scoping) + per-plugin
-// status block.
+// no relevance sort in v1) + per-plugin status block.
 //
 // Partial-results semantic: timeouts + errors mark the plugin's
 // status block but don't fail the call. All-failed federations

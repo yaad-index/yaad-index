@@ -105,7 +105,7 @@ type kindsResponse struct {
 // handleKinds aggregates entity / edge kinds across every registered
 // plugin's capabilities and emits the union, deduped by name with
 // source_plugins unioned across plugins emitting the same kind. Empty
-// registry → empty arrays + ok=true (per the source issue's acceptance).
+// registry → empty arrays + ok=true.
 //
 // Sort order is alphabetical by name on both arrays so successive
 // calls produce byte-identical responses with a stable plugin set.

@@ -14,10 +14,10 @@ import (
 	"github.com/yaad-index/yaad-index/internal/vault"
 )
 
-// Wire shape locked by ADR-0002 §"GET /v1/entities/{id}/context" (per
-// yaad-index the source issue). The handler returns the root entity plus a
-// flattened neighbor list, each neighbor carrying the edge that
-// introduced it + the BFS depth at which it was first reached.
+// Wire shape locked by ADR-0002 §"GET /v1/entities/{id}/context".
+// The handler returns the root entity plus a flattened neighbor
+// list, each neighbor carrying the edge that introduced it + the
+// BFS depth at which it was first reached.
 
 // contextEdge is the wire shape for the edge that introduced a
 // context neighbor — the full triple `{type, from, to}`. Distinct
@@ -42,7 +42,7 @@ type contextResponse struct {
 	Truncated bool `json:"truncated"`
 }
 
-// Bounds enforced server-side per ADR-0002 ( amendment).
+// Bounds enforced server-side per ADR-0002 (amendment).
 const (
 	contextMaxDepth = 3
 	contextDefaultMaxResults = 200
@@ -178,7 +178,7 @@ func parseEdgeTypesFilter(raw string) []string {
 }
 
 // writeFieldError emits a 400 invalid_argument with a `field` carrier
-// per the ADR-0002 amendment for — the agent gets a structured
+// per the ADR-0002 amendment — the agent gets a structured
 // hint at which query parameter failed validation.
 func writeFieldError(w http.ResponseWriter, field, message string) {
 	w.Header().Set("Content-Type", "application/json")

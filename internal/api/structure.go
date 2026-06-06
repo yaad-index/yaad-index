@@ -1,4 +1,4 @@
-// Introspection endpoint per ADR-0013 §7 / yaad-index.
+// Introspection endpoint per ADR-0013 §7.
 //
 // `GET /v1/structure` returns yaad-index's structural signature: the
 // canonical-kind registry (with gaps + per-kind instructions),

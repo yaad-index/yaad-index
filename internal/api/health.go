@@ -46,7 +46,7 @@ func handleHealth(logger *slog.Logger) http.HandlerFunc {
 }
 
 // readBuildVersion picks the operator-visible build identifier with
-// the precedence (per the source issue):
+// this precedence:
 //
 // 1. `buildinfo.Version` if the Makefile injected one via `-ldflags -X`.
 // This is the primary path: `make build` stamps `<git-describe>+

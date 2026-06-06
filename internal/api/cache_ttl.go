@@ -1,4 +1,4 @@
-// Cache TTL resolution per yaad-index (three-level hierarchy).
+// Cache TTL resolution (three-level hierarchy).
 //
 // resolveCacheTTL walks levels {entry-input > plugin-Capabilities >
 // global-config} and returns the first non-zero value found. Each
@@ -15,8 +15,8 @@
 // behavior where the global config alone determined freshness and
 // `0` meant "infinite").
 //
-// Resolution runs ONCE at ingest time per the operator's 2026-05-06
-// clarification: the resolved value is baked into vault frontmatter
+// Resolution runs ONCE at ingest time: the resolved value is baked
+// into vault frontmatter
 // (`cache_ttl_seconds:`); the lookup path just compares
 // `provenance[last].fetched_at + frontmatter.CacheTTLSeconds` vs
 // now without re-walking. Operator hand-edits to the frontmatter
@@ -35,7 +35,7 @@ import (
 
 // resolveCacheExpires runs the three-level resolution chain (entry,
 // plugin, global) and translates the resulting duration into the
-// absolute-date `cache_expires:` stamp per yaad-index.
+// absolute-date `cache_expires:` stamp.
 //
 // `fetchedAt` is the new ingest's freshest provenance.fetched_at —
 // the anchor for the absolute expiry date. The returned pointer is:
@@ -46,10 +46,10 @@ import (
 // literal "never" sentinel in frontmatter).
 // - {Time: fetchedAt + ttl} — positive TTL; caller stamps the
 // absolute date string. Time is rendered via clock.In so the
-// ISO output carries the operator-TZ offset .
+// ISO output carries the operator-TZ offset.
 //
-// resolveCacheTTL's sentinel rules are unchanged from; this
-// helper just wraps it with the date-translation step needs.
+// resolveCacheTTL's sentinel rules are unchanged; this helper just
+// wraps it with the date-translation step.
 func resolveCacheExpires(entry *int, plugin, global int, fetchedAt time.Time) *vault.CacheExpires {
 	ttl := resolveCacheTTL(entry, plugin, global)
 	switch {

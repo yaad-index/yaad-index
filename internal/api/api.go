@@ -118,7 +118,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	// without protect() and stay accessible without a token by design —
 	// system metadata, not vault data. Every other route (data reads +
 	// data writes + reindex) goes through protect(). The split is
-	// documented in adr/0002-api-surface.md Per the prior design,.
+	// documented in adr/0002-api-surface.md.
 	protect := buildAuthMiddleware(logger, cfg)
 
 	// Public — no auth.
@@ -171,8 +171,7 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("PUT /v1/entities/{id}/notes/{note_id}", protect(http.HandlerFunc(handleEditNote(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
 	mux.Handle("DELETE /v1/entities/{id}/notes/{note_id}", protect(http.HandlerFunc(handleDeleteNote(logger, st, cfg.vaultReader, cfg.vaultWriter, cfg.writeLocks))))
 
-	// User-content (UGC) read + write surface per yaad-index
-	// (PR-B added the GETs; PR-C added the writes).
+	// User-content (UGC) read + write surface.
 	mux.Handle("GET /v1/user-content/{id}", protect(http.HandlerFunc(handleUserContentRead(logger, st, cfg.vaultReader))))
 	mux.Handle("GET /v1/user-content/{id}/sections", protect(http.HandlerFunc(handleUserContentSectionsList(logger, st, cfg.vaultReader, cfg.canonicalKindReg))))
 	mux.Handle("GET /v1/user-content/{id}/sections/{sec}", protect(http.HandlerFunc(handleUserContentSection(logger, st, cfg.vaultReader, cfg.canonicalKindReg))))
@@ -321,7 +320,7 @@ type handlerConfig struct {
 	// or the lone instance's name without running the glob walk).
 	pluginInstanceConfigs map[string][]config.InstanceEntry
 	// writeLocks is the per-artifact daemon write-lock manager
-	// (yaad-index #23 + ADR-0024). Acquired before any vault
+	// (ADR-0024). Acquired before any vault
 	// mutation surface (ingest, fill, archive/restore, delete, UGC
 	// section, UGC frontmatter); skipped for additive surfaces
 	// (notes, edges). NewHandlerWithRegistry constructs a fresh
@@ -402,8 +401,8 @@ func WithReindexHandler(h http.Handler) HandlerOption {
 	return func(c *handlerConfig) { c.reindexHandler = h }
 }
 
-// WithWriteLocks wires an externally-constructed write-lock Manager
-// (per yaad-index #23). When unset, NewHandlerWithRegistry
+// WithWriteLocks wires an externally-constructed write-lock Manager.
+// When unset, NewHandlerWithRegistry
 // constructs a fresh empty Manager so tests + dev binaries don't
 // have to wire one. Production main.go wires a single Manager
 // shared across the daemon so all write handlers consult the same
@@ -446,7 +445,7 @@ func WithCanonicalGuard(g *config.CanonicalGuard) HandlerOption {
 // rules apply (positive = N seconds, negative = infinite, zero =
 // no opinion / fall through to all-zero default).
 //
-// Per the prior design, the lookup-side TTL check reads from the entity's vault
+// The lookup-side TTL check reads from the entity's vault
 // frontmatter (`cache_ttl_seconds:`), NOT from this option — the
 // global value participates only at ingest-time resolution. The
 // API surface is preserved for backward compat with existing tests
@@ -458,7 +457,7 @@ func WithCanonicalGuard(g *config.CanonicalGuard) HandlerOption {
 func WithCacheTTL(ttl time.Duration) HandlerOption {
 	return func(c *handlerConfig) {
 		// Preserve sign so negative durations round-trip as negative
-		// int seconds (= "infinite" sentinel post-). Round-trip
+		// int seconds (= "infinite" sentinel). Round-trip
 		// via .Seconds() loses no precision because every operator-
 		// settable TTL is a whole-second value (cache_ttl_seconds:
 		// is an integer-only YAML int).
@@ -481,7 +480,7 @@ func WithFillInstruction(text string) HandlerOption {
 
 // WithCanonicalEdgeTypes surfaces the operator's
 // `canonical_edge_types` list onto introspection endpoints (per
-// yaad-index / ADR-0013 §7). The list is read-only on the
+// ADR-0013 §7). The list is read-only on the
 // handler side — the same caller-must-not-mutate contract as the
 // registry map. Empty / nil → empty list on the wire.
 func WithCanonicalEdgeTypes(edgeTypes []string) HandlerOption {
@@ -567,13 +566,12 @@ func WithCanonicalKindProvenance(prov config.RegistryProvenance) HandlerOption {
 }
 
 // WithUserContentFrontmatterEdges wires the operator's
-// `user_content_frontmatter_edges:` config block per yaad-index
-// (re-implementation of on the ADR-0021 contract). When
-// set, the UGC create handler walks each declared
-// frontmatter-field name on the request body's `data` map and
-// derives canonical-label edges from the values via the shared
+// `user_content_frontmatter_edges:` config block, which reuses the
+// ADR-0021 contract. When set, the UGC create handler walks each
+// declared frontmatter-field name on the request body's `data` map
+// and derives canonical-label edges from the values via the shared
 // applyCanonicalTypeEdges helper. UGC is operator-authored, so
-// pre-formed canonical-label strings are accepted same as on
+// pre-formed canonical-label strings are accepted the same as
 // operator-fill.
 //
 // Empty / nil → UGC frontmatter-edge derivation is a no-op; the

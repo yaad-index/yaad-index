@@ -104,8 +104,7 @@ func handleEntity(logger *slog.Logger, st store.Store, vaultReader *vault.Reader
 
 		// `with_edges` per ADR-0002 §"GET /v1/entities/{id}":
 		// comma-separated edge types to expand inline. Two
-		// equivalent shapes carry the "expand all types" intent
-		// (per yaad-index):
+		// equivalent shapes carry the "expand all types" intent:
 		//
 		// - **Presence-based**: `?with_edges` or `?with_edges=`
 		// (key present, value empty) → expand all edge types.
@@ -240,8 +239,8 @@ func filterNotesByKind(out entity, want string) entity {
 // whitespace, and drops empty entries. The output drives GetEdgesFor's
 // type filter — len == 0 means "no filter, return all edges".
 //
-// Per yaad-index the explicit "all types" sentinels `*` and
-// `all` collapse to the no-filter shape. Either spelling is
+// The explicit "all types" sentinels `*` and `all` collapse to the
+// no-filter shape. Either spelling is
 // accepted; `*` is the canonical form. Mixing a sentinel with
 // concrete edge types in the same value (e.g. `?with_edges=*,
 // is_about`) treats it as "all types" — the broader of the two
