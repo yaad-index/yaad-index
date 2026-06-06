@@ -22,8 +22,7 @@ type entityDeleteResponse struct {
 	Deleted bool `json:"deleted"`
 }
 
-// handleEntityDelete implements DELETE /v1/entities/{id} per
-// yaad-index.
+// handleEntityDelete implements DELETE /v1/entities/{id}.
 //
 // **Destructive.** The entity's vault file is removed (with auto-
 // commit producing the audit trail); the DB row + its inbound +
@@ -38,8 +37,8 @@ type entityDeleteResponse struct {
 // after-the-fact visibility.
 // - The auto-commit chain (vault.Writer.DeleteWithCommit's
 // Committer hook) produces a git commit recording the delete
-// event. THAT commit is the durable provenance trail —
-// yaad-index spec'd "provenance entry on every delete";
+// event. THAT commit is the durable provenance trail — the spec
+// requires a provenance entry on every delete, and
 // since the entity is being cascade-deleted, a per-entity
 // provenance row would itself be deleted. The audit-commit
 // message survives in git history regardless.
@@ -65,7 +64,7 @@ func handleEntityDelete(logger *slog.Logger, st store.Store, vaultWriter *vault.
 				"DELETE /v1/entities/{id} requires vault.path configuration; the entity body lives in vault files")
 			return
 		}
-		// Per-entity write-lock (yaad-index #23 + ADR-0024). Block-
+		// Per-entity write-lock (ADR-0024). Block-
 		// on-conflict against any other writer holding this entity
 		// (ingest, fill, archive/restore). 409 with the active
 		// holder; operator retries.
@@ -103,7 +102,7 @@ func handleEntityDelete(logger *slog.Logger, st store.Store, vaultWriter *vault.
 			return
 		}
 
-		// #377 nava-catch: UGC entities reach this generic destroy
+		// #377: UGC entities reach this generic destroy
 		// route via DELETE /v1/entities/{id} just as they reach the
 		// UGC-specific DELETE /v1/user-content/{id}. The UGC-specific
 		// path gates on canEditUserContent BEFORE any lifecycle-state
@@ -138,7 +137,7 @@ func handleEntityDelete(logger *slog.Logger, st store.Store, vaultWriter *vault.
 			author = claim.Subject
 		}
 
-		// Pre-destroy audit log Per the prior design, + ADR-0018 step 4. WARN
+		// Pre-destroy audit log per ADR-0018 step 4. WARN
 		// level so the destructive op surfaces above the default
 		// INFO threshold — operators tailing logs see destroys
 		// immediately even when log_level is at its default.

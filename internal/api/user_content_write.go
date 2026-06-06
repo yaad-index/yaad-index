@@ -1,4 +1,4 @@
-// User-content (UGC) write endpoints per yaad-index PR-C of 3.
+// User-content (UGC) write endpoints.
 //
 // Endpoints:
 //
@@ -8,8 +8,8 @@
 //
 // Auth contract (mirrors note author validation):
 //
-// - All endpoints require Bearer JWT (via the protect() middleware
-// from yaad-index). Dev-mode AnonymousAuth bypasses identity-
+// - All endpoints require Bearer JWT (via the protect() middleware).
+// Dev-mode AnonymousAuth bypasses identity-
 // derived enforcement so existing tests + non-auth deploys keep
 // working — the synthetic anon claim returns from IsAnonymousClaim
 // and short-circuits the author/operator check.
@@ -64,8 +64,7 @@ import (
 //
 // `data` is optional UGC frontmatter. Fields declared in the
 // operator's `user_content_frontmatter_edges:` config trigger
-// canonical-edge derivation per yaad-index (re-implementation
-// of on the ADR-0021 contract). Each declared field's value
+// canonical-edge derivation under the ADR-0021 contract. Each declared field's value
 // is a `{name, kind}` object (or list of), or a pre-formed
 // `<kind>:<slug>` canonical-label string (or list of) — UGC is
 // operator-authored, so pre-formed labels are accepted just like
@@ -101,7 +100,7 @@ type userContentSectionReplaceRequest struct {
 }
 
 // userContentFrontmatterEditRequest is the PUT
-// /v1/user-content/{id}/frontmatter body per yaad-index.
+// /v1/user-content/{id}/frontmatter body.
 //
 // `data` is the replacement frontmatter map: per-field semantics
 // match POST /v1/user-content's `data` field — operator-config-
@@ -195,7 +194,7 @@ func handleUserContentCreate(
 		}
 		id := userContentIDPrefix + slug
 
-		// Per-entity write-lock (yaad-index #23 + ADR-0024). The
+		// Per-entity write-lock (ADR-0024). The
 		// slug is operator-supplied via the title; a concurrent
 		// create on the same slug surfaces as a write conflict
 		// rather than racing on os.Rename. Lock acquired after
@@ -293,7 +292,7 @@ func handleUserContentCreate(
 		// transactional from the agent's perspective. UGC is
 		// operator-authored content (the operator IS the writer),
 		// so pre-formed canonical-label strings are accepted same
-		// as operator-fill Per the prior design,.
+		// as operator-fill.
 		operatorAllKinds := make([]string, 0, len(canonicalKindReg))
 		for k := range canonicalKindReg {
 			operatorAllKinds = append(operatorAllKinds, k)
@@ -418,8 +417,8 @@ func handleUserContentCreate(
 			})
 		}
 
-		// Frontmatter-edge derivation per yaad-index (re-impl
-		// of on the ADR-0021 contract). Walks the parsed
+		// Frontmatter-edge derivation under the ADR-0021 contract.
+		// Walks the parsed
 		// canonical-label ops and creates edges from the UGC
 		// entity to each label. Re-uses the shared
 		// applyCanonicalTypeEdges helper (extracted to
@@ -430,7 +429,7 @@ func handleUserContentCreate(
 		//
 		// This is create-side only. Re-edit (PUT-shape endpoint
 		// that re-derives edges on existing UGC) is deferred to
-		// a follow-up issue per yaad's scope direction.
+		// a follow-up issue.
 		if len(ucEdgeOps) > 0 {
 			ucGaps := userContentEdgeGapsFromMappings(frontmatterEdges)
 			// Phase 2.2.C wires the bus + SourceOperator
@@ -522,7 +521,7 @@ func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultR
 			stampSectionBodyOwner(ve, claim)
 		}
 
-		// If-Match concurrency gate — required on PUT Per the prior design,. Compare
+		// If-Match concurrency gate — required on PUT. Compare
 		// the current body's etag against the supplied one; mismatch =
 		// 412 so the agent re-GETs and retries with the fresh content.
 		ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
@@ -1203,10 +1202,10 @@ type userContentSectionDeleteResponse struct {
 }
 
 // handleUserContentFrontmatterEdit implements PUT
-// /v1/user-content/{id}/frontmatter per yaad-index. Replaces
+// /v1/user-content/{id}/frontmatter. Replaces
 // the entity's `data` map (full replacement, not patch) and
 // re-derives canonical-label edges via the shared
-// applyCanonicalTypeEdges helper from — the helper's
+// applyCanonicalTypeEdges helper — the helper's
 // DeleteEdgesByTypeFrom + CreateEdge cycle gives idempotent
 // re-edit semantics: re-edit-with-same-values produces the same
 // edges, re-edit-with-changed-values replaces cleanly, edge
@@ -1244,8 +1243,8 @@ func handleUserContentFrontmatterEdit(
 				"user-content endpoints require vault.path configuration; the body lives in vault files")
 			return
 		}
-		// Whole-entity write-lock for frontmatter edits (yaad-index
-		// #23 + ADR-0024). Section-scoped key isn't applicable —
+		// Whole-entity write-lock for frontmatter edits
+		// (ADR-0024). Section-scoped key isn't applicable —
 		// frontmatter spans the whole file. Keyed on entity ID;
 		// section writers using `<id>#<idx>` don't collide here,
 		// which matches the documented v1 trade-off in
@@ -1291,8 +1290,7 @@ func handleUserContentFrontmatterEdit(
 		// failures reject the whole edit before any vault/db
 		// write. UGC is operator-authored content (the operator
 		// IS the writer), so pre-formed canonical-label strings
-		// are accepted same as on operator-fill per
-		// yaad-index.
+		// are accepted the same as operator-fill.
 		operatorAllKinds := make([]string, 0, len(canonicalKindReg))
 		for k := range canonicalKindReg {
 			operatorAllKinds = append(operatorAllKinds, k)
@@ -1305,7 +1303,7 @@ func handleUserContentFrontmatterEdit(
 			return
 		}
 
-		// Build the new Data map Per the prior design,. Identity-bearing
+		// Build the new Data map. Identity-bearing
 		// fields (id, title, author, operator) carry forward
 		// from the existing entity — title is set-once, author/
 		// operator stamp the create-time identity. Everything
@@ -1381,7 +1379,7 @@ func handleUserContentFrontmatterEdit(
 			return
 		}
 
-		// Edge re-derivation Per the prior design, /. applyCanonicalTypeEdges'
+		// Edge re-derivation. applyCanonicalTypeEdges'
 		// DeleteEdgesByTypeFrom step wipes the prior fill's edges
 		// for each declared edge_type before CreateEdge lands the
 		// new fill. Idempotent semantics: re-edit-with-same-values
@@ -1492,7 +1490,7 @@ func handleUserContentDelete(logger *slog.Logger, st store.Store, vaultReader *v
 				"user-content endpoints require vault.path configuration; the body lives in vault files")
 			return
 		}
-		// Whole-entity write-lock (yaad-index #23 + ADR-0024).
+		// Whole-entity write-lock (ADR-0024).
 		release, ok := acquireWriteLock(w, r, writeLocks, id)
 		if !ok {
 			return
@@ -1587,8 +1585,8 @@ func handleUserContentDelete(logger *slog.Logger, st store.Store, vaultReader *v
 // generic entity-lifecycle handlers (handleEntityArchive +
 // handleEntityDelete) gate against the same rule via
 // canEditByOperator directly, sourcing from the store row so they
-// don't need a vault reader (#377 nava-catch: the prior PR rev
-// gated only UGC-specific routes; generic routes were a bypass).
+// don't need a vault reader (#377: gating only
+// UGC-specific routes left generic routes as a bypass).
 func canEditUserContent(claim *auth.Claim, ve *vault.Entity) bool {
 	operator, _ := ve.Data["operator"].(string)
 	return canEditByOperator(claim, operator)
@@ -1675,8 +1673,8 @@ func stampSectionBodyOwner(ve *vault.Entity, claim *auth.Claim) {
 // parseUserContentFrontmatterEdges walks the operator-config-
 // declared frontmatter-edge mappings and parses each declared
 // field's value from the request's `data` map into a list of
-// canonical-label ids. Mirrors the canonical_type fill parsing
-// from /: dual shape (object form + pre-formed-label
+// canonical-label ids. Mirrors the canonical_type fill parsing:
+// dual shape (object form + pre-formed-label
 // string), `allowPreformedLabels=true` since UGC is operator-
 // authored.
 //

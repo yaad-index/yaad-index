@@ -76,7 +76,7 @@ func handleEntityArchiveTransition(logger *slog.Logger, st store.Store, vaultWri
 				fmt.Sprintf("POST /v1/entities/{id}/%s requires vault.path configuration; the entity body lives in vault files", op))
 			return
 		}
-		// Per-entity write-lock (yaad-index #23 + ADR-0024).
+		// Per-entity write-lock (ADR-0024).
 		release, ok := acquireWriteLock(w, r, writeLocks, id)
 		if !ok {
 			return
@@ -107,7 +107,7 @@ func handleEntityArchiveTransition(logger *slog.Logger, st store.Store, vaultWri
 			return
 		}
 
-		// #377 nava-catch: UGC entities reach archive + restore via
+		// #377: UGC entities reach archive + restore via
 		// this generic /v1/entities/{id}/(archive|restore) route in
 		// addition to the UGC-specific delete path (which uses the
 		// archive route directly). Without this gate a cross-operator

@@ -47,8 +47,7 @@ const (
 // the tracker's mutex; the goroutine closes transition exactly once,
 // after the writes. Readers acquire the mutex to take a snapshot.
 //
-// Per yaad-index (the operator's "extend tracker" decision over a
-// separate jobs package): records may be SHARED across concurrent
+// Records may be SHARED across concurrent
 // /v1/ingest calls when their invocationKey collides. The first
 // arrival creates the record + spawns the simulator goroutine
 // (the runner). Later arrivals receive the SAME record pointer
@@ -62,7 +61,7 @@ type ingestRecord struct {
 	entityID string
 	transition chan struct{}
 
-	// invocationKey is the dedup key Per the prior design, populated for plugin-
+	// invocationKey is the dedup key, populated for plugin-
 	// path attempts only. Shape: `<plugin>:<rawURL>` (URL-shape).
 	// When non-empty, the tracker's byInvocationKey index points at
 	// this record while it's in-flight; clearing on terminal-state
@@ -163,7 +162,7 @@ type ingestAttempt struct {
 	simulation ingestSimulation
 
 	// forceRefetch + ttlExpired flow into the auto-commit message
-	// (per yaad-index the source issue) so a `re-ingest:` commit can carry
+	// so a `re-ingest:` commit can carry
 	// the cause: `[force_refetch=true]` or `[ttl_expired]`. Default
 	// false on both → the plain `ingest:` / `re-ingest:` shape (a
 	// re-ingest with no flagged cause is a normal cache-bypass refresh).
@@ -184,7 +183,7 @@ type ingestTracker struct {
 	mu sync.Mutex
 	records map[string]*ingestRecord
 	// byInvocationKey indexes the in-flight runner record for each
-	// plugin invocation key . The first ingest with a
+	// plugin invocation key. The first ingest with a
 	// given key inserts here + spawns the simulator goroutine; later
 	// ingests with the same key receive the same record pointer
 	// (subscriber path) and wait on its transition channel. Cleared
@@ -199,7 +198,7 @@ type ingestTracker struct {
 	guard *config.CanonicalGuard
 	logger *slog.Logger
 	// globalCacheTTLSeconds is the operator's
-	// `cache_ttl_seconds` config in seconds (per yaad-index).
+	// `cache_ttl_seconds` config in seconds.
 	// Used as the global-level input to resolveCacheTTL at ingest
 	// time. Sentinel rules: 0 = no opinion, positive = N seconds,
 	// negative = infinite. Lookup-side reads TTL from vault
@@ -213,8 +212,8 @@ type ingestTracker struct {
 	// production main.go wires a Dispatcher rooted at the
 	// operator-configured plugin_staging_dir.
 	attachmentsDispatcher *attachments.Dispatcher
-	// writeLocks is the per-artifact daemon write-lock manager (per
-	// yaad-index #23). persistEnvelope acquires the entity-ID lock
+	// writeLocks is the per-artifact daemon write-lock manager.
+	// persistEnvelope acquires the entity-ID lock
 	// before any vault.Writer call; conflict on acquire means a
 	// cross-surface writer (operator-fill, archive, etc.) is in
 	// flight against the same entity and the ingest fails with a
@@ -698,7 +697,7 @@ func (t *ingestTracker) runSimulation(rec *ingestRecord, att ingestAttempt) {
 			t.markFailed(rec, "internal_error", "failed to record provenance")
 			return
 		}
-		// Per ADR-0013 §4 / yaad-index: a fresh fetch rolls the
+		// Per ADR-0013 §4: a fresh fetch rolls the
 		// entity into a new fetch-cycle. Clear any prior gap-call-done
 		// flag so the next ingest cache-hit will re-issue the
 		// needs_fill payload. Best-effort: a clear failure logs but
@@ -715,8 +714,8 @@ func (t *ingestTracker) runSimulation(rec *ingestRecord, att ingestAttempt) {
 		}
 	}
 
-	// needs_fill no longer issues a fill token (per ADR-0008 + PR
-	//): the entity ID itself is the durable callback handle.
+	// needs_fill no longer issues a fill token (per ADR-0008): the
+	// entity ID itself is the durable callback handle.
 	// The simulator just records the gap set; the agent calls
 	// POST /v1/entities/{id}/fill with the same id as the durable
 	// callback.
@@ -780,7 +779,7 @@ func (t *ingestTracker) markNotFound(rec *ingestRecord, message string) {
 // or ingestStateComplete. Plugin errors transition the record to
 // ingestStateFailed with `fetch_failed` + the plugin name.
 func (t *ingestTracker) runPluginSimulation(ctx context.Context, rec *ingestRecord, att ingestAttempt) {
-	// ADR-0023 N-envelope wiring Per the prior design,. Plugin.Stream yields zero
+	// ADR-0023 N-envelope wiring. Plugin.Stream yields zero
 	// or more source envelopes; the tracker writes each as it arrives
 	// (write-as-you-go), with the FIRST envelope determining the
 	// API-surface state {disambiguation, notFound, needsFill,
@@ -972,7 +971,7 @@ func (t *ingestTracker) persistSubsequentEnvelope(ctx context.Context, att inges
 // error (the caller decides whether to mark the tracker record
 // failed or just abort the stream).
 func (t *ingestTracker) persistEnvelope(ctx context.Context, att ingestAttempt, result *plugins.FetchResult) error {
-	// Per-artifact write-lock (per yaad-index #23 + ADR-0024).
+	// Per-artifact write-lock (ADR-0024).
 	// Block-on-conflict against any cross-surface writer holding
 	// the same entity ID (operator-fill, archive, delete, etc.).
 	// The dedup-by-invocationKey path in beginAttempt already
@@ -1263,7 +1262,7 @@ func mergePluginBodyForVault(existing *vault.Entity, cleanContent string) (strin
 // canonicalEdges is the plugin's resolved canonical-label edge set
 // (`<source-id> -[<type>]-> <kind>:<slug>`). When non-nil, it
 // REPLACES any prior edges on the existing vault file — plugin
-// emission is canonical for source-shape edges . When
+// emission is canonical for source-shape edges. When
 // nil (e.g. fixture path or a plugin emission with no edges), the
 // prior vault file's edges are preserved unchanged so a non-edge
 // plugin's re-ingest doesn't wipe an edge set written by an
@@ -1343,13 +1342,13 @@ func buildVaultEntity(e *store.Entity, source []string, gaps []string, cleanCont
 		// Edges: prior vault edges survive when this ingest emits
 		// none. When the plugin DID emit canonical edges, the block
 		// below replaces them wholesale (plugin is canonical for
-		// source-shape edges Per the prior design,).
+		// source-shape edges).
 		merged.Edges = existing.Edges
 	}
 
 	// Plugin-emitted canonical-label edges land on vault.Entity.Edges
 	// so reindex can reconstitute the DB edge graph from the vault
-	// alone (Per the prior design, + ADR-0008's source-of-truth invariant). Replace
+	// alone (ADR-0008's source-of-truth invariant). Replace
 	// wholesale when the plugin emitted any — the plugin's view is
 	// canonical, same shape as Notations + Aliases.
 	if canonicalEdges != nil {
@@ -1363,14 +1362,13 @@ func buildVaultEntity(e *store.Entity, source []string, gaps []string, cleanCont
 		merged.Edges = out
 	}
 
-	// Per yaad-index: stamp the resolved absolute-date cache
-	// expiry into vault frontmatter (replaces's duration-
+	// Stamp the resolved absolute-date cache
+	// expiry into vault frontmatter (replaces the duration-
 	// based `cache_ttl_seconds:`). nil cacheExpires leaves the
 	// field absent (no opinion at any resolution level → cache
 	// forever, preserves legacy contract).
 	//
-	// Per the operator's 2026-05-06 clarification (still in force after
-	// the format change): re-resolve on every ingest. Operator-
+	// Re-resolve on every ingest. Operator-
 	// edited `cache_expires:` in vault frontmatter does NOT
 	// persist across re-ingests; this stamp always reflects the
 	// live resolution against the current entry/plugin/global
