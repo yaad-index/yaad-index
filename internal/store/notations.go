@@ -7,8 +7,8 @@ import (
 	"fmt"
 )
 
-// GetNotation looks up the entity slug a given notation resolves to
-// (per the source issue a prior PR). Returns ErrNotFound when the notation isn't
+// GetNotation looks up the entity slug a given notation resolves to.
+// Returns ErrNotFound when the notation isn't
 // in the table — same sentinel as GetEntity so handler code can use
 // errors.Is uniformly.
 func (s *sqliteStore) GetNotation(ctx context.Context, notation string) (Notation, error) {
@@ -86,7 +86,7 @@ func (s *sqliteStore) DeleteNotationsForEntity(ctx context.Context, entityID str
 // ReplaceNotations overwrites an entity's notation rows with the
 // given list. Wraps the DELETE + INSERTs in a single transaction:
 // either every input row replaces the prior set, or the prior set
-// stays intact (rollback on any failure). Used by reindex (a prior PR) to
+// stays intact (rollback on any failure). Used by reindex to
 // re-derive entity_notations from canonical vault frontmatter,
 // mirroring ReplaceProvenance's contract per ADR-0009.
 //

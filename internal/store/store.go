@@ -19,7 +19,7 @@ import (
 // PRs wire the param plumbing).
 //
 // GapCallDoneAt tracks whether the AI has been gap-called for the
-// entity's current fetch-cycle (per ADR-0013 §4 + §5 / yaad-index).
+// entity's current fetch-cycle (per ADR-0013 §4 + §5).
 // Set on a successful fill (any 2xx response from
 // `POST /v1/entities/{id}/fill`, full or partial); cleared by an
 // upstream refetch (`force_refetch=true` or TTL-driven). nil when
@@ -184,7 +184,7 @@ type FetchAttachmentRef struct {
 
 // DroppedCanonicalKindCount records how many times a plugin's
 // emitted canonical-kind stub was dropped at the orchestrator's
-// config-filter (per ADR-0013 §3 / yaad-index). The count
+// config-filter (per ADR-0013 §3). The count
 // accumulates across the daemon's lifetime; it persists in the
 // `dropped_canonical_kinds` table so a restart doesn't reset the
 // drift signal. `/v1/cv-status` reads this for the
@@ -222,8 +222,8 @@ type Hit struct {
 	Score float64
 }
 
-// ContextNeighbor is one entry in a context-traversal result (per
-// yaad-index the source issue / `GET /v1/entities/{id}/context`). Carries the
+// ContextNeighbor is one entry in a context-traversal result
+// (`GET /v1/entities/{id}/context`). Carries the
 // edge that introduced the neighbor, the neighbor entity itself, and
 // the BFS depth at which it was first reached. Entities are visited
 // at most once across a traversal — back-edges that would re-introduce
@@ -265,9 +265,9 @@ type CachedPluginCapabilities struct {
 
 // Notation maps an input form (URL, `<plugin>: <id>` shorthand,
 // future input shapes) to the canonical entity slug it resolves to.
-// The orchestrator will use this in a prior PR to short-circuit the plugin
+// The orchestrator uses this to short-circuit the plugin
 // Fetch when an inbound URL/shorthand is already known. Vault
-// frontmatter persists the same list per entity (a prior PR) so reindex
+// frontmatter persists the same list per entity so reindex
 // can re-derive the table.
 //
 // - Notation — exact input string the caller passed.
@@ -428,13 +428,13 @@ type Store interface {
 	// when the entity doesn't exist.
 	ClearGapCallDone(ctx context.Context, entityID string) error
 	// IncDroppedCanonicalKind bumps the per-(plugin, kind) drop
-	// counter (per ADR-0013 §3 / yaad-index a prior PR). Called by
+	// counter (per ADR-0013 §3). Called by
 	// the ingest orchestrator at the moment a plugin-emitted
 	// canonical stub is filtered out by the operator's
 	// `canonical_kinds:` config — the same site that fires the
 	// existing startup WARN. Idempotent at the row level: the
 	// first call inserts with count=1; subsequent calls increment
-	// and refresh `last_seen_at`. `/v1/cv-status` (a prior PR) reads
+	// and refresh `last_seen_at`. `/v1/cv-status` reads
 	// these via ListDroppedCanonicalKinds.
 	IncDroppedCanonicalKind(ctx context.Context, plugin, kind string) error
 	// IncDroppedCanonicalEdge is the edge-type counterpart —
@@ -444,7 +444,7 @@ type Store interface {
 	IncDroppedCanonicalEdge(ctx context.Context, plugin, edgeType string) error
 	// ListDroppedCanonicalKinds returns every (plugin, kind) row
 	// in the counter table, ordered by (plugin, kind) for
-	// deterministic output. Used by `/v1/cv-status` (a prior PR) to
+	// deterministic output. Used by `/v1/cv-status` to
 	// surface the drift signal — `would_materialize_count` per
 	// row maps to the persisted Count.
 	ListDroppedCanonicalKinds(ctx context.Context) ([]DroppedCanonicalKindCount, error)
@@ -452,7 +452,7 @@ type Store interface {
 	ListDroppedCanonicalEdges(ctx context.Context) ([]DroppedCanonicalEdgeCount, error)
 	// ClearDroppedCanonicalKinds wipes the per-(plugin, kind) drop
 	// counter table. Called by reindex.Run after a successful walk
-	// per yaad-index #31: reindex is the operator's "consume drift
+	// per #31: reindex is the operator's "consume drift
 	// signal" action, so post-reindex the drift surface zeroes and
 	// any new drops from subsequent ingest accrue fresh under their
 	// originating plugin's tag (preserving attribution that would
@@ -462,7 +462,7 @@ type Store interface {
 	ClearDroppedCanonicalEdges(ctx context.Context) error
 
 	// ListGapCallableCandidates returns entities whose gap-call-done
-	// flag is NULL (per ADR-0013 §4 + §6 / yaad-index),
+	// flag is NULL (per ADR-0013 §4 + §6),
 	// ordered by `id ASC` for deterministic pagination. afterID,
 	// when non-empty, filters to ids strictly greater (cursor
 	// resume). limit caps the returned slice. The "actually has
@@ -515,12 +515,12 @@ type Store interface {
 	CountGapCallableCandidates(ctx context.Context, kind string) (int, error)
 	GetEdgesFor(ctx context.Context, entityID string, types []string) ([]Edge, error)
 	// GetEdgesTo is the inbound mirror of GetEdgesFor — edges whose
-	// to_id matches the supplied id. Per yaad-index; the new
+	// to_id matches the supplied id. The new
 	// GET /v1/edges?direction=in path reads through this helper.
 	GetEdgesTo(ctx context.Context, entityID string, types []string) ([]Edge, error)
 	// GetEdgesForMany is GetEdgesFor over a frontier of source ids in
-	// a single SQL query. Used by the BFS context traversal (per
-	// yaad-index the source issue) so a depth-3 walk doesn't fan out into
+	// a single SQL query. Used by the BFS context traversal so a
+	// depth-3 walk doesn't fan out into
 	// N round-trips on each frontier. Empty fromIDs → empty result
 	// (not an error). Empty types → no type filter.
 	GetEdgesForMany(ctx context.Context, fromIDs []string, types []string) ([]Edge, error)
@@ -558,7 +558,7 @@ type Store interface {
 
 	// DeleteEdgesByTypeFrom removes every edge of the given type
 	// originating at fromID. Used by the canonical_type fill path
-	// (yaad-index) to implement idempotent re-fill semantics:
+	// to implement idempotent re-fill semantics:
 	// before creating new edges from a re-filled canonical_type
 	// gap, the prior fill's edges are deleted so the post-fill
 	// edge set is exactly the new fill's labels. Returns the
@@ -566,7 +566,7 @@ type Store interface {
 	DeleteEdgesByTypeFrom(ctx context.Context, fromID, edgeType string) (int64, error)
 
 	// GetContextNeighbors walks outbound edges from rootID up to
-	// maxDepth hops in BFS order (per yaad-index the source issue). The
+	// maxDepth hops in BFS order. The
 	// returned root is the canonical store.Entity for rootID;
 	// neighbors are flattened (depth-major; arbitrary within a
 	// depth) and capped at maxResults — when capped, truncated is
@@ -619,8 +619,8 @@ type Store interface {
 	// LastReindexAt returns the most recent reindex timestamp —
 	// `MAX(last_indexed_at)` across the reindex_files table. The
 	// second return is `false` when no reindex has ever run (the
-	// table is empty). Used by `/v1/cv-status` per ADR-0013 §3 /
-	// yaad-index a prior PR to surface "when was the last full
+	// table is empty). Used by `/v1/cv-status` per ADR-0013 §3
+	// to surface "when was the last full
 	// re-derive?" alongside the drift counters.
 	LastReindexAt(ctx context.Context) (time.Time, bool, error)
 	ListReindexFiles(ctx context.Context) ([]ReindexFile, error)
@@ -643,9 +643,9 @@ type Store interface {
 	RenameEntity(ctx context.Context, oldID, newID string, newData map[string]any) error
 	WipeDerivedState(ctx context.Context) error
 
-	// Notation lookup (per the source issue a prior PR). entity_notations is
+	// Notation lookup. entity_notations is
 	// the input-form → entity-slug index used by the lookup-first
-	// ingest path (a prior PR) and reindex (a prior PR). Methods are operator-
+	// ingest path and reindex. Methods are operator-
 	// adjacent — invoked from the ingest handler and the reindex
 	// helper, not from agent-facing surfaces.
 	//

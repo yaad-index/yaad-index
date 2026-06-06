@@ -1,5 +1,5 @@
 // Per-(plugin, kind/edge_type) drop counters — the durable signal
-// behind `/v1/cv-status` (per ADR-0013 §3 / yaad-index a prior PR).
+// behind `/v1/cv-status` (per ADR-0013 §3).
 // The orchestrator increments these at the existing config-filter
 // drop site (the startup-WARN site) so operators see an aggregate
 // count of "you would have materialized N more entities" rather
@@ -160,7 +160,7 @@ func (s *sqliteStore) ListDroppedCanonicalKinds(ctx context.Context) ([]DroppedC
 
 // ClearDroppedCanonicalKinds wipes every row from the
 // dropped_canonical_kinds table. Called by reindex.Run after a
-// successful walk per yaad-index #31 — reindex is the operator's
+// successful walk per #31 — reindex is the operator's
 // "consume drift signal" action, so post-reindex drift resets to
 // zero and any new drops from subsequent ingest accumulate under
 // the originating plugin's tag (preserving attribution that would
@@ -179,7 +179,7 @@ func (s *sqliteStore) ClearDroppedCanonicalKinds(ctx context.Context) error {
 }
 
 // ClearDroppedCanonicalEdges is the edge-type counterpart to
-// ClearDroppedCanonicalKinds (yaad-index #31).
+// ClearDroppedCanonicalKinds (#31).
 func (s *sqliteStore) ClearDroppedCanonicalEdges(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM dropped_canonical_edges`); err != nil {
 		return fmt.Errorf("clear dropped canonical edges: %w", err)

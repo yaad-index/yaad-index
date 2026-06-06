@@ -10,7 +10,7 @@ import (
 
 // LastReindexAt returns MAX(last_indexed_at) across the
 // reindex_files table — the most-recent moment any file was
-// re-derived (per ADR-0013 §3 / yaad-index a prior PR). The second
+// re-derived (per ADR-0013 §3). The second
 // return is false when the table is empty (no reindex has ever
 // run); the caller surfaces that as `null` on the cv-status wire.
 func (s *sqliteStore) LastReindexAt(ctx context.Context) (time.Time, bool, error) {
@@ -186,7 +186,7 @@ func (s *sqliteStore) DeleteEntityCascade(ctx context.Context, id string) error 
 // it in the "Wiped" list above. When the new table is NOT derived
 // (e.g. a future auth/session table), add it to "Excluded" — silence
 // in the doc means a future editor has to read the slice to know the
-// wipe set, which is exactly the gap the cold-reviewer flagged on a prior PR.
+// wipe set.
 func (s *sqliteStore) WipeDerivedState(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
