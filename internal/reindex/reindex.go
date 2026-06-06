@@ -430,7 +430,7 @@ func (r *Reindexer) Run(ctx context.Context, mode Mode) (Summary, error) {
 		return summary, fmt.Errorf("walk %s: %w", r.vaultRoot, walkErr)
 	}
 
-	// yaad-index #31: clear the per-(plugin, kind/edge_type) drop
+	// Clear the per-(plugin, kind/edge_type) drop
 	// counters now that the reindex pass has completed successfully.
 	// Reindex is the operator's "consume drift signal" action — post-
 	// reindex /v1/cv-status reads as zero drift; the next ingest's
@@ -612,7 +612,7 @@ func (r *Reindexer) upsertEntity(ctx context.Context, e *vault.Entity) error {
 			"source", e.ID, "err", err)
 	}
 	canonical.EmitDayRefs(ctx, r.store, r.edgeWriter, e.ID, e.Data, nil, r.logger)
-	// Notations cache (per yaad-index the source issue a prior PR). The vault is
+	// Notations cache. The vault is
 	// the canonical source for the entity_notations table — reindex
 	// reconciles the DB to the vault frontmatter `notations:` list,
 	// dropping orphaned rows the vault no longer carries. Same
