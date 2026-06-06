@@ -79,8 +79,8 @@ type entity struct {
 	// rule as edgeRef.Archived.
 	Archived bool `json:"archived,omitempty"`
 
-	// Single-hop body fields per yaad-index the source issue a prior PR
-	// addendum. The vault is the source of truth (ADR-0008) for
+	// Single-hop body fields. The vault is the source of truth
+	// (ADR-0008) for
 	// these — the handler vault-reads when WithVaultIO is wired and
 	// merges the frontmatter values onto the wire entity. omitempty
 	// across the board so DB-only deployments don't surface
@@ -148,8 +148,8 @@ func handleEntity(logger *slog.Logger, st store.Store, vaultReader *vault.Reader
 			got.Edges = edgeRefsFromStoreEdges(edges)
 		}
 
-		// Vault-merge for the single-hop body fields (per yaad-index
-		// the source issue a prior PR addendum). When WithVaultIO is wired, read
+		// Vault-merge for the single-hop body fields. When
+		// WithVaultIO is wired, read
 		// the vault frontmatter and overlay clean_content, summary,
 		// tags, gaps, aliases, plugin, notations, notes onto the
 		// wire entity. A vault read failure downgrades to the DB-only
@@ -343,8 +343,8 @@ func toAPIEntity(e *store.Entity) entity {
 
 // mergeVaultEntity overlays vault-only fields (CleanContent, Summary,
 // Tags, Gaps, Aliases, Plugin, Notations, Notes) onto a wire
-// entity. Per yaad-index the source issue a prior PR addendum: GetEntity (and
-// the cache-hit ingest path) should be a single hop — the agent
+// entity. GetEntity (and the cache-hit ingest path) should be a
+// single hop — the agent
 // gets the body + gap state without re-fetching through the plugin.
 //
 // The vault is the source of truth (ADR-0008) for these fields;

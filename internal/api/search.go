@@ -33,11 +33,11 @@ type searchResponse struct {
 
 // handleSearch implements GET /v1/search.
 //
-// Snippet semantics (per ADR-0008 / a prior PR): the snippet field on each
+// Snippet semantics (per ADR-0008): the snippet field on each
 // hit is the entity's agent-filled `summary` (read from `data["summary"]`,
-// which a prior PR's vault-first fill mirrors into the DB row). Substring
-// extraction from arbitrary data fields — the per-kind SnippetFields
-// chain that lived here pre-a prior PR — is gone; snippet is now a property
+// which the vault-first fill mirrors into the DB row). Substring
+// extraction from arbitrary data fields — the legacy per-kind
+// SnippetFields chain — is gone; snippet is now a property
 // of the entity, not a query-time computation. Entities that haven't
 // been agent-filled return empty snippet, and that's the correct
 // semantics: the agent flow + plugin starter-summary emission close the

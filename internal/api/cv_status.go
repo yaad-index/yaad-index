@@ -1,12 +1,12 @@
-// Canonical-vocabulary drift status endpoint (per ADR-0013 §3 /
-// yaad-index a prior PR). Surfaces:
+// Canonical-vocabulary drift status endpoint (per ADR-0013 §3).
+// Surfaces:
 //
 // - `config_hash`: deterministic SHA over canonical_kinds +
-// canonical_edge_types (a prior PR's `config.ConfigHash`).
+// canonical_edge_types (`config.ConfigHash`).
 // - `drift.kinds_emitted_not_enabled[]`: per-(plugin, kind)
 // counter of canonical entity stubs the plugin emitted but
 // the operator's config dropped at the orchestrator filter.
-// Sourced from a prior PR's `dropped_canonical_kinds` table.
+// Sourced from the `dropped_canonical_kinds` table.
 // - `drift.edge_types_emitted_not_enabled[]`: same axis for
 // canonical edge types.
 // - `kinds_enabled_not_emitted[]` / `edge_types_enabled_not_emitted[]`:
@@ -17,7 +17,7 @@
 // null when no reindex has ever run.
 // - `reindex_hint`: static guidance string per the spec.
 //
-// Pairs with `/v1/structure` (a prior PR) on the introspection axis:
+// Pairs with `/v1/structure` on the introspection axis:
 // structure says "what's configured / what's loaded?", cv-status
 // says "given that, what's drifting?".
 
@@ -112,7 +112,7 @@ func handleCVStatus(
 		// `make([]T, 0, ...)` rather than nil slices so empty
 		// drift sections serialize as `[]` on the wire (not
 		// `null`). Same parity contract as `/v1/needs-fill`'s
-		// edge_types fix from yaad-index a prior PR.
+		// edge_types fix.
 		out := cvStatusResponse{
 			OK: true,
 			ConfigHash: hash,

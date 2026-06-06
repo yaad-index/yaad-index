@@ -53,7 +53,7 @@ type commentsRequest struct {
 // Matches the vault.Note frontmatter shape; Date is RFC3339 UTC so
 // clients can do their own timezone rendering.
 //
-// Operator (added a prior PR) names the human resource owner from the
+// Operator names the human resource owner from the
 // pair-claim. Empty for legacy notes (vault entries written before
 // had no operator stamp). Always populated on new notes.
 type noteEntry struct {
@@ -111,14 +111,14 @@ type commentsResponse struct {
 // client never supplies it.
 //
 // Input normalization: `text` is `strings.TrimSpace`-d before storage
-// to address the cold-reviewer's a prior PR review note about the vault parser
-// trimming leading whitespace from body note blocks. After this
+// to handle the vault parser trimming leading whitespace from body
+// note blocks. After this
 // trim, the API → vault → reindex round-trip is lossless for non-
 // whitespace text content; pure-whitespace inputs surface as 400
 // invalid_argument.
 //
-// Asymmetry with a prior PR ingest: like the fill endpoint (a prior PR),
-// notes require vault wiring — there's no "DB-only fallback"
+// Asymmetry with ingest: like the fill endpoint, notes require
+// vault wiring — there's no "DB-only fallback"
 // for notes because the canonical note list lives in vault
 // frontmatter. Returns 503 vault_required when WithVaultIO is
 // omitted.
@@ -162,7 +162,7 @@ func handleNotes(logger *slog.Logger, st store.Store, vaultReader *vault.Reader,
 			return
 		}
 
-		// Per yaad-index a prior PR: enforce author == JWT subject.
+		// Enforce author == JWT subject.
 		// Empty author → fill from claim (client-convenience). Non-
 		// empty author that disagrees with the claim → 403. The
 		// claim is always present at this point: RequireAuth lands a
