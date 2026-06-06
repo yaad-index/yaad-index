@@ -62,7 +62,7 @@ func handleHealth(logger *slog.Logger) http.HandlerFunc {
 //
 // Defense in depth: the prefix check on `buildinfo.Version` rejects
 // not just the bare "unknown" sentinel but ANY value starting with it
-// (e.g. the "unknown+unknown" the cold-reviewer caught on a prior PR when both git
+// (e.g. the "unknown+unknown" emitted when both git
 // fallbacks fired). The Makefile is fixed to degrade to the bare
 // sentinel in those cases, but the prefix guard makes layer-2
 // resilience explicit so a future Makefile regression can't silently

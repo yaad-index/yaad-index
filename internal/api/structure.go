@@ -111,9 +111,9 @@ func buildStructureResponse(
 
 	// `make([]string, 0, ...)` rather than `append(nil, ...)` so an
 	// empty edgeTypes input serializes as `[]` on the wire, not
-	// `null`. ADR-0002 specifies the field as an array; the cold-reviewer's
-	// a prior PR catch on the prior shape that emitted null when the
-	// operator had no canonical_edge_types configured.
+	// `null`. ADR-0002 specifies the field as an array; the prior shape
+	// emitted null when the operator had no canonical_edge_types
+	// configured.
 	edges := make([]string, 0, len(edgeTypes))
 	edges = append(edges, edgeTypes...)
 	sort.Strings(edges)
