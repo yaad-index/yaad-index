@@ -70,7 +70,7 @@ type GapSpec struct {
 	MaxLength int `yaml:"max_length,omitempty" json:"max_length,omitempty"`
 	Values []string `yaml:"values,omitempty" json:"values,omitempty"`
 	// Kinds restricts the canonical kinds a `type: canonical_type`
-	// gap accepts at fill time per yaad-index. Two shapes:
+	// gap accepts at fill time. Two shapes:
 	//
 	// - `["person", "boardgame"]` — explicit kind allowlist; only
 	// fills whose elements declare one of these kinds pass.
@@ -154,7 +154,7 @@ func (k *kindsYAML) UnmarshalYAML(value *yaml.Node) error {
 }
 
 // CanonicalTypeName is the GapSpec.Type sentinel for the
-// canonical_type gap shape per yaad-index: a list-valued
+// canonical_type gap shape: a list-valued
 // gap whose elements are canonical entity references. The
 // daemon validates fills against the gap's `kinds` allowlist
 // (or the operator's full canonical_kinds registry when

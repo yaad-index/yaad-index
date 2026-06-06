@@ -92,16 +92,16 @@ type Config struct {
 	// default; the system ships zero-canonical and the operator
 	// names what they want.
 	//
-	// Per ADR-0013 §3 a prior PR: the registry is parsed + validated at
+	// Per ADR-0013 §3: the registry is parsed + validated at
 	// Load time and held in the Config struct. Wiring into the
-	// `canonical_vocabulary` field on `needs_fill` responses lands
-	// in a prior PR; this PR carries parsing + validation only.
+	// `canonical_vocabulary` field on `needs_fill` responses lives
+	// in the handler layer; this struct carries parsing + validation.
 	//
 	// Adding a kind requires a server restart (or POST /v1/reindex)
 	// and re-ingest from sources where the now-enabled canonical
 	// kind would have materialized; past ingests don't backfill.
 	//
-	// **Schema migration (yaad-index, 2026-05-04):** the
+	// **Schema migration:** the
 	// previous list-of-strings shape (`canonical_kinds: [person,
 	// city]`) no longer parses. Operators migrate by giving each
 	// enabled kind its per-kind config block (gaps + instruction);
@@ -138,7 +138,7 @@ type Config struct {
 	CanonicalEdgeTypes []string `yaml:"canonical_edge_types"`
 
 	// UserContentFrontmatterEdges declares the operator-side mapping
-	// from UGC frontmatter field → canonical edge per yaad-index
+	// from UGC frontmatter field → canonical edge
 	// (ADR-0008 / ADR-0011 / ADR-0017 parity). Mirrors the
 	// plugin-side `FrontmatterEdges` Capabilities declaration: the
 	// daemon walks UGC `data.<field>` at create/edit time, slugifies
@@ -177,7 +177,7 @@ type Config struct {
 	// Timezone is the operator-configured IANA TZ identifier
 	// applied uniformly to every timestamp the binary renders
 	// (vault frontmatter, provenance, logs, CLI output, plugin-
-	// emitted fetched_at after PR-D) per yaad-index.
+	// emitted fetched_at).
 	// Examples: "America/Los_Angeles", "Asia/Tokyo", "America/New_York".
 	//
 	// Empty / missing → "UTC" (preserves legacy behavior). yaad-
@@ -188,10 +188,10 @@ type Config struct {
 	// Validate parses via time.LoadLocation; a malformed identifier
 	// fails server start with the location's parse error.
 	//
-	// PR-A scope: config + binary boot plumbing only. Subsequent
-	// PRs ( PR-B/C/D) switch the .UTC() / .In(time.UTC) call
-	// sites in vault writer / provenance / logs / CLI / plugin SDK
-	// over to clock.Now() / clock.In() helpers from internal/clock.
+	// Config + binary boot plumbing live here; the .UTC() /
+	// .In(time.UTC) call sites in vault writer / provenance / logs /
+	// CLI / plugin SDK use clock.Now() / clock.In() helpers from
+	// internal/clock.
 	Timezone string `yaml:"timezone"`
 
 	// Workflow bundles per-workflow-engine knobs. v1.x carries
@@ -212,8 +212,8 @@ type Config struct {
 	LogLevel string `yaml:"log_level"`
 
 	// CacheTTLSeconds is the operator's global TTL contribution to
-	// the three-level resolution chain (per yaad-index;
-	// originally introduced in a prior PR as a global-only knob).
+	// the three-level resolution chain (originally a global-only
+	// knob).
 	// At ingest time, resolveCacheTTL walks {per-fetch
 	// FetchResult.CacheTTLSeconds > plugin Capabilities.CacheTTLSeconds
 	// > this global config} and stamps the first non-zero result into
@@ -234,11 +234,11 @@ type Config struct {
 	// to TTL).
 	CacheTTLSeconds int `yaml:"cache_ttl_seconds"`
 
-	// Auth carries the operational JWT-auth configuration (per
-	// yaad-index a prior PR of the auth series). Operational
+	// Auth carries the operational JWT-auth configuration.
+	// Operational
 	// config — sibling of port / log_level / vault.path — NOT
-	// vault-readable. Per the operator (2026-05-05): "the key should not
-	// be in vault. Then an agent can trick index to return it."
+	// vault-readable. The private key must not live in the vault —
+	// an agent could otherwise trick the index into returning it.
 	//
 	// The path precedence chain is locked: CLI flag >
 	// `YAAD_INDEX_KEYS_DIR` env > `auth.keys_dir` config field.
@@ -255,7 +255,7 @@ type Config struct {
 	// descendant of this dir, so a malicious plugin can't write
 	// outside the intended staging surface.
 	//
-	// Resolution chain at server boot (per yaad-index #33), highest
+	// Resolution chain at server boot, highest
 	// priority first:
 	//
 	//  1. This yaml field, when set to a non-empty value.
@@ -272,9 +272,8 @@ type Config struct {
 	// names an existing directory. Empty is permitted at parse —
 	// the cmd/yaad-index boot resolves the chain before constructing
 	// the attachments dispatcher. Plugins receive the resolved path
-	// via the `YAAD_PLUGIN_STAGING_DIR` env (PR-B of the ADR-0014
-	// daemon series; same plumbing as `YAAD_TIMEZONE` from
-	// PR-D).
+	// via the `YAAD_PLUGIN_STAGING_DIR` env (part of the ADR-0014
+	// daemon series; same plumbing as `YAAD_TIMEZONE`).
 	PluginStagingDir string `yaml:"plugin_staging_dir"`
 
 	// PluginDataRoot is the operator-configured base directory
@@ -321,7 +320,7 @@ type Config struct {
 }
 
 // UserContentFrontmatterEdgeMapping is one entry in
-// Config.UserContentFrontmatterEdges (per yaad-index). Mirrors
+// Config.UserContentFrontmatterEdges. Mirrors
 // the plugin-side `plugins.FrontmatterEdgeMapping` shape — same
 // `{edge_type, target_kind}` pair — so the daemon can call the
 // shared `appendFrontmatterDerivedCanonicals` helper with operator-
@@ -334,8 +333,7 @@ type UserContentFrontmatterEdgeMapping struct {
 	TargetKind string `yaml:"target_kind"`
 }
 
-// AuthEntry is the `auth:` block of the config document (per
-// yaad-index a prior PR, extended by a prior PR).
+// AuthEntry is the `auth:` block of the config document.
 //
 // - KeysDir is the directory holding `private.pem` + `public.pem`.
 // Empty / unset → the CLI / env layer resolves the default
@@ -344,8 +342,8 @@ type UserContentFrontmatterEdgeMapping struct {
 // subcommand uses when `--ttl` isn't passed. Empty / unset →
 // the CLI defaults to `2160h` (90 days). Values use Go's
 // `time.ParseDuration` syntax: `ns`/`us`/`ms`/`s`/`m`/`h` only
-// (no `d` suffix per the operator 2026-05-05).
-// - Required (added a prior PR) is the master switch on the HTTP
+// (no `d` suffix).
+// - Required is the master switch on the HTTP
 // middleware. Tri-state on the YAML side so the precedence
 // chain (CLI > env > config > default-true) can distinguish
 // "operator left it unset" from "operator explicitly false."
@@ -424,8 +422,8 @@ type WorkflowEntry struct {
 type VaultEntry struct {
 	Path string `yaml:"path"`
 
-	// AutoCommit controls vault-write → git-commit (per yaad-index
-	// the source issue). The vault becomes its own audit log: every
+	// AutoCommit controls vault-write → git-commit. The vault
+	// becomes its own audit log: every
 	// successful Writer.Write produces a git commit summarizing
 	// the operation. Tri-state via *bool:
 	// - nil → auto-detect: enabled iff `<vault>/.git/` exists.
@@ -712,7 +710,7 @@ func (c *Config) Validate() error {
 	if _, err := ParseLogLevel(c.LogLevel); err != nil {
 		return err
 	}
-	// Timezone validation per yaad-index: empty defaults to
+	// Timezone validation: empty defaults to
 	// UTC (matches legacy behavior); non-empty must parse via
 	// time.LoadLocation. Operator catches misspellings / bad IANA
 	// identifiers at server start rather than seeing every
@@ -722,7 +720,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("timezone: load %q: %w", c.Timezone, err)
 		}
 	}
-	// Negative cache_ttl_seconds is now valid (per yaad-index) —
+	// Negative cache_ttl_seconds is now valid —
 	// it expresses "infinite" at the global level under the three-
 	// level sentinel resolution chain (positive=N seconds, 0=no
 	// opinion fall through, negative=infinite). Legacy deployments
@@ -764,7 +762,7 @@ func (c *Config) Validate() error {
 }
 
 // validateUserContentFrontmatterEdges enforces the per-mapping
-// shape rules per yaad-index: each mapping must name a
+// shape rules: each mapping must name a
 // non-empty edge_type and target_kind. CanonicalGuard's enabled-
 // kinds + edge-types gate runs at edge-creation time (same shape
 // as the plugin path); the parse-time check here only catches
