@@ -431,7 +431,7 @@ log_level: info
  push failures log but don't fail the underlying write).
  `committer_name` / `committer_email` set the git committer
  identity; the per-write author is the calling agent (e.g.
- `agent:bob`). Reindex is intentionally NOT in the operation set —
+ `agent:<name>`). Reindex is intentionally NOT in the operation set —
  reindex is read-only on the vault per ADR-0008. Commit failures
  log but don't fail the surrounding vault write; the file is the
  source of truth, the audit commit is best-effort.
