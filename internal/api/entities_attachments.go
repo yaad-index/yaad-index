@@ -22,7 +22,7 @@ import (
 // - Reads the entity .md (active path with archive fallback) and
 // finds the manifest entry matching `name`.
 // - Validates the manifest's `Path` (no `..` escape, no absolute
-// paths) — the cold-reviewer's a prior PR carry-over.
+// paths).
 // - Joins onto the entity dir and opens the file.
 //
 // Wire shapes:

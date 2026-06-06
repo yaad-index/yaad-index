@@ -300,7 +300,7 @@ func handleUserContentSection(logger *slog.Logger, st store.Store, vaultReader *
 // The logger is required so the helper can stamp the underlying err
 // before returning a 500 envelope — without it (the original shape)
 // the operator saw the 500 status code with no breadcrumb explaining
-// which call failed (the cold-reviewer's review on a prior PR).
+// which call failed.
 func loadUserContentVaultEntity(logger *slog.Logger, r *http.Request, st store.Store, vaultReader *vault.Reader, id string) (*vault.Entity, int, string, string) {
 	if !strings.HasPrefix(id, userContentIDPrefix) {
 		return nil, http.StatusBadRequest, "invalid_argument",

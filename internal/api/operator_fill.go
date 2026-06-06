@@ -304,9 +304,9 @@ func handleEntityOperatorFill(
 		// ve.Gaps, and ve.GapState. Returns ordered field-name list
 		// for the commit message. kindCfg.Gaps is threaded through
 		// so opClear can re-insert known-gap fields back into
-		// ve.Gaps (a prior PR cold-reviewer carry-over: clearing a previously-set
-		// field shouldn't permanently remove it from the open-gap
-		// list — the operator should be able to re-fill it).
+		// ve.Gaps (clearing a previously-set field shouldn't
+		// permanently remove it from the open-gap list — the operator
+		// should be able to re-fill it).
 		fillNow := clock.Now()
 		applied := applyOperatorFillOps(ve, ops, fillNow, effectiveGaps)
 
@@ -845,8 +845,8 @@ func parseAndValidateScalar(field string, raw json.RawMessage, spec config.GapSp
 // uses it to re-insert known-gap fields into ve.Gaps when the
 // caller clears a previously-set value. Without this, a
 // `set→clear` sequence would permanently remove the field from
-// the open-gap list (a prior PR cold-reviewer carry-over: the operator should
-// be able to re-fill the field after clearing it).
+// the open-gap list (the operator should be able to re-fill the
+// field after clearing it).
 func applyOperatorFillOps(ve *vault.Entity, ops []operatorFillOp, now time.Time, kindGaps map[string]config.GapSpec) []string {
 	if ve.Data == nil {
 		ve.Data = map[string]any{}
