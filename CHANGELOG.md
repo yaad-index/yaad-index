@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.19.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.18.0...yaad-index-v0.19.0) (2026-06-06)
+
+
+### Features
+
+* **api,mcp:** needs_fill fill_strategy audience filter ([#459](https://github.com/yaad-index/yaad-index/issues/459)) ([#487](https://github.com/yaad-index/yaad-index/issues/487)) ([6077d16](https://github.com/yaad-index/yaad-index/commit/6077d1657299538accb5a9700d4a58f55a66da7b))
+* **api,store:** add tags filter to /v1/search (+ MCP list_entities) ([#479](https://github.com/yaad-index/yaad-index/issues/479)) ([3cb3307](https://github.com/yaad-index/yaad-index/commit/3cb33079966c4a18d33fd4643c2c22f468949c0c)), closes [#453](https://github.com/yaad-index/yaad-index/issues/453)
+* **api:** wire with_edges on /v1/entities/batch ([#478](https://github.com/yaad-index/yaad-index/issues/478)) ([3eeb662](https://github.com/yaad-index/yaad-index/commit/3eeb662c62eb0522f79654d5feceea23db550796)), closes [#452](https://github.com/yaad-index/yaad-index/issues/452)
+* **bgg:** expose BGG name-search as operation:search ([#457](https://github.com/yaad-index/yaad-index/issues/457)) ([#484](https://github.com/yaad-index/yaad-index/issues/484)) ([98df4e0](https://github.com/yaad-index/yaad-index/commit/98df4e022da473e3cb31ca2dd836f6c80c7db604))
+* **gmail:** in_reply_to thread edges + intentional nested-forward handling ([#458](https://github.com/yaad-index/yaad-index/issues/458)) ([#486](https://github.com/yaad-index/yaad-index/issues/486)) ([f1ca515](https://github.com/yaad-index/yaad-index/commit/f1ca515e6842b04f8e10aec2492be6858331b0a2))
+* **mcp:** thread source/kind filters into needs_fill tool ([#385](https://github.com/yaad-index/yaad-index/issues/385)) ([e85201f](https://github.com/yaad-index/yaad-index/commit/e85201fcbb6d64ee5db6a94d819e6b2ef517c181))
+* **workflow:** CEL additives — graph.try_get, plugin_dispatch.args templating, trigger values ([#483](https://github.com/yaad-index/yaad-index/issues/483)) ([889d75a](https://github.com/yaad-index/yaad-index/commit/889d75abd34aae074d344bf7038939a2fa355a94)), closes [#456](https://github.com/yaad-index/yaad-index/issues/456)
+
+
+### Bug Fixes
+
+* **api:** /v1/edges direction=both caps each side independently (no inbound starvation) ([#498](https://github.com/yaad-index/yaad-index/issues/498)) ([4532fb3](https://github.com/yaad-index/yaad-index/commit/4532fb3004a603107e2b12b2b8d2b433409e2b12))
+* **api:** acquire the write lock on the task-note append path ([#441](https://github.com/yaad-index/yaad-index/issues/441)) ([#465](https://github.com/yaad-index/yaad-index/issues/465)) ([8a05ba3](https://github.com/yaad-index/yaad-index/commit/8a05ba34394de59dbde83c7c95bf38b9e8ba72ae))
+* **api:** detect already-filled reserved fields on re-fill (deterministic 409) ([#469](https://github.com/yaad-index/yaad-index/issues/469)) ([b3c20b9](https://github.com/yaad-index/yaad-index/commit/b3c20b9144a589ccabbad78776d147171c607255)), closes [#468](https://github.com/yaad-index/yaad-index/issues/468)
+* **api:** make needs-fill total honor the ?source= filter ([#439](https://github.com/yaad-index/yaad-index/issues/439)) ([#463](https://github.com/yaad-index/yaad-index/issues/463)) ([163bc74](https://github.com/yaad-index/yaad-index/commit/163bc74d83a217b3726e7becb4b072266250da28))
+* **api:** mirror UGC tags + derived data to the DB data column ([#438](https://github.com/yaad-index/yaad-index/issues/438)) ([#462](https://github.com/yaad-index/yaad-index/issues/462)) ([58df366](https://github.com/yaad-index/yaad-index/commit/58df36639c2dd29dfef98ec5d05d5182abd0f6ba))
+* **api:** rename delete error code to snake_case not_archived ([#501](https://github.com/yaad-index/yaad-index/issues/501)) ([d599fd0](https://github.com/yaad-index/yaad-index/commit/d599fd044e1efd8dc2c5af2cebab510015d071c2))
+* **api:** strip provenance leak from user-content error message ([#511](https://github.com/yaad-index/yaad-index/issues/511)) ([b40720b](https://github.com/yaad-index/yaad-index/commit/b40720b9256840536aa32dd7ccb8abf6e27e0363))
+* **attachments:** bound attachment size to guard against unbounded writes ([#499](https://github.com/yaad-index/yaad-index/issues/499)) ([b715efe](https://github.com/yaad-index/yaad-index/commit/b715efe1bed4113322676591b8cf21c1faa66318))
+* **canonical:** mirror typed aliases with their derived Kind, not bare ([#471](https://github.com/yaad-index/yaad-index/issues/471)) ([63f3c8f](https://github.com/yaad-index/yaad-index/commit/63f3c8fdb5208ee3657261389835516ff33d1a87)), closes [#445](https://github.com/yaad-index/yaad-index/issues/445)
+* **github:** null last_comment_at on items with zero comments ([#477](https://github.com/yaad-index/yaad-index/issues/477)) ([fda8484](https://github.com/yaad-index/yaad-index/commit/fda8484435f1cf36b66a69028e570a1c7952064b)), closes [#451](https://github.com/yaad-index/yaad-index/issues/451)
+* **gmail:** don't emit tagged_as edges for Gmail system labels ([#475](https://github.com/yaad-index/yaad-index/issues/475)) ([1eede82](https://github.com/yaad-index/yaad-index/commit/1eede82eb1f932b5301864a5745843261ef5c268)), closes [#449](https://github.com/yaad-index/yaad-index/issues/449)
+* **gmail:** quote label values in the X-GM-RAW search predicate ([#476](https://github.com/yaad-index/yaad-index/issues/476)) ([f1f3105](https://github.com/yaad-index/yaad-index/commit/f1f31052a94b3ae3498c13e892c54cec8f161462)), closes [#450](https://github.com/yaad-index/yaad-index/issues/450)
+* **plugins:** don't abort the stream on a mid-stream ok=false envelope ([#474](https://github.com/yaad-index/yaad-index/issues/474)) ([ba97ad9](https://github.com/yaad-index/yaad-index/commit/ba97ad9c7df42219cf01421865d61e0494a749e1)), closes [#448](https://github.com/yaad-index/yaad-index/issues/448)
+* **reindex:** prune stale day-ref edges before re-emitting on reindex ([#472](https://github.com/yaad-index/yaad-index/issues/472)) ([c55e978](https://github.com/yaad-index/yaad-index/commit/c55e9783998f3ebafa85122f31bb46970c47c2f4)), closes [#446](https://github.com/yaad-index/yaad-index/issues/446)
+* **reindex:** re-derive survivor edges stripped by a cascade delete ([#473](https://github.com/yaad-index/yaad-index/issues/473)) ([5b0761a](https://github.com/yaad-index/yaad-index/commit/5b0761acfed66590bdb4fae6ec24fdb45e762cc5)), closes [#447](https://github.com/yaad-index/yaad-index/issues/447)
+* **vault:** align attachment read probe with ReadByID's full layout set ([#466](https://github.com/yaad-index/yaad-index/issues/466)) ([cfe6133](https://github.com/yaad-index/yaad-index/commit/cfe6133b2c070fe14d586b644823dbb3c67cb0d1)), closes [#443](https://github.com/yaad-index/yaad-index/issues/443)
+* **vault:** cascade attachment sidecar removal in DeleteWithCommit ([#467](https://github.com/yaad-index/yaad-index/issues/467)) ([abc4366](https://github.com/yaad-index/yaad-index/commit/abc4366f8e9d60aed8cc53d7fa602a962a7fc9a3)), closes [#444](https://github.com/yaad-index/yaad-index/issues/444)
+* **workflow:** gate firing of paused/draft workflows ([#440](https://github.com/yaad-index/yaad-index/issues/440)) ([#464](https://github.com/yaad-index/yaad-index/issues/464)) ([a813f6c](https://github.com/yaad-index/yaad-index/commit/a813f6c1c14f74d03c6af17f21c13386bb6c6361))
+
 ## [0.18.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.17.0...yaad-index-v0.18.0) (2026-06-04)
 
 
