@@ -528,7 +528,7 @@ func handleUserContentSectionReplace(logger *slog.Logger, st store.Store, vaultR
 		ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
 		if ifMatch == "" {
 			writeError(w, http.StatusPreconditionRequired, "precondition_required",
-				"If-Match header is required on user-content section edits (per yaad-index)")
+				"If-Match header is required on user-content section edits")
 			return
 		}
 		current := userContentEtag(ve.CleanContent)
@@ -738,7 +738,7 @@ func handleUserContentSectionAdd(logger *slog.Logger, st store.Store, vaultReade
 		ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
 		if ifMatch == "" {
 			writeError(w, http.StatusPreconditionRequired, "precondition_required",
-				"If-Match header is required on user-content section edits (per yaad-index)")
+				"If-Match header is required on user-content section edits")
 			return
 		}
 		current := userContentEtag(ve.CleanContent)
@@ -927,7 +927,7 @@ func handleUserContentSectionRenameHeading(logger *slog.Logger, st store.Store, 
 		ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
 		if ifMatch == "" {
 			writeError(w, http.StatusPreconditionRequired, "precondition_required",
-				"If-Match header is required on user-content section edits (per yaad-index)")
+				"If-Match header is required on user-content section edits")
 			return
 		}
 		current := userContentEtag(ve.CleanContent)
@@ -1104,7 +1104,7 @@ func handleUserContentSectionDelete(logger *slog.Logger, st store.Store, vaultRe
 		ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
 		if ifMatch == "" {
 			writeError(w, http.StatusPreconditionRequired, "precondition_required",
-				"If-Match header is required on user-content section edits (per yaad-index)")
+				"If-Match header is required on user-content section edits")
 			return
 		}
 		current := userContentEtag(ve.CleanContent)
