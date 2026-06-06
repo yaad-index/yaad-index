@@ -68,7 +68,14 @@ func (s *sqliteStore) RenameEntity(ctx context.Context, oldID, newID string, new
 	// silent mis-resolution. We refuse rather than complete (and rather
 	// than steal the alias). The API surfaces this as 409 before reaching
 	// here; this is the defensive backstop for direct callers + the
-	// check-to-tx race. Cross-kind ownership is harmless (the resolver is
+	// check-to-tx race. Note the step-0 check is itself only a
+	// check-to-commit window, not a lock: under the deferred transaction
+	// it reads before this tx takes a write lock, so an alias write
+	// committed by another connection between this read and step 1's first
+	// write is not re-detected. The window is narrow (step 1 writes
+	// immediately) and the API-side pre-check is the primary defense;
+	// ADR-0033 (§Consequences) records this as a known, bounded
+	// limitation. Cross-kind ownership is harmless (the resolver is
 	// kind-scoped), so the kind match is part of the condition.
 	if bareOld := bareSlugOf(oldID); bareOld != "" {
 		var owner string
