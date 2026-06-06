@@ -1,5 +1,5 @@
 // Deterministic hash over the canonical-vocabulary subset of the
-// config (per ADR-0013 §3 / yaad-index a prior PR). Surfaced as the
+// config (per ADR-0013 §3). Surfaced as the
 // `config_hash` field on `/v1/cv-status` so operator tooling can
 // detect when the canonical_kinds / canonical_edge_types config
 // changed between calls — agents and CI can poll, diff the hash,
@@ -22,7 +22,7 @@ import (
 )
 
 // ConfigHash produces the canonical-vocabulary config hash
-// surfaced by `/v1/cv-status` (per ADR-0013 §3 / yaad-index).
+// surfaced by `/v1/cv-status` (per ADR-0013 §3).
 //
 // SHA-256 over a canonical JSON serialization of:
 //
@@ -31,8 +31,8 @@ import (
 // across calls).
 // - canonical_edge_types slice — caller-sorted before hashing
 // so an operator reorder of the YAML list does NOT bump the
-// hash. Matches `/v1/structure`'s `version` contract from
-// a prior PR (yaad-index) so the two observability surfaces
+// hash. Matches `/v1/structure`'s `version` contract so
+// the two observability surfaces
 // agree on what counts as a config change. The orchestrator
 // already treats edge_types as a set (dedupe-via-map at
 // lookup time), so the YAML order has no semantic load — the
@@ -49,10 +49,10 @@ import (
 // Returns `(string, error)` rather than a single sentinel-encoded
 // string so a Marshal failure surfaces explicitly rather than
 // hiding inside an error-shaped hex string that callers might
-// `len`-check past (the cold-reviewer's a prior PR catch). In practice Marshal
+// `len`-check past. In practice Marshal
 // never fails on the canonForm shape — every field is plain
 // `string`, `map[string]string`, or `[]string` — so the error
-// path is defense-in-depth; a prior PR's handler propagates it as a
+// path is defense-in-depth; the handler propagates it as a
 // 500 internal_error.
 func ConfigHash(canonicalKinds map[string]CanonicalKindConfig, canonicalEdgeTypes []string) (string, error) {
 	type canonForm struct {
@@ -77,7 +77,7 @@ func ConfigHash(canonicalKinds map[string]CanonicalKindConfig, canonicalEdgeType
 	// Sort a defensive copy so the caller's slice ordering is
 	// preserved upstream; only the hashed view sees the canonical
 	// (sorted) order. Matches `/v1/structure`'s pre-hash sort
-	// (yaad's a prior PR review note + a prior PR contract).
+	// contract.
 	sortedEdges := make([]string, len(canonicalEdgeTypes))
 	copy(sortedEdges, canonicalEdgeTypes)
 	sort.Strings(sortedEdges)
