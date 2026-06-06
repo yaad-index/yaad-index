@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed 2026-05-10. Response-shape clause (the "Response shape: multi-envelope for command-shape" subsection under Decision §1) superseded by ADR-0023 (NDJSON streaming, one envelope per line, applied uniformly to URL-shape and command-shape responses). Commands field, `!` invocation sigil, in-memory job system, routing-time validation, and CLI surface remain in force.
+Accepted 2026-06-06 (proposed 2026-05-10). Response-shape clause (the "Response shape: multi-envelope for command-shape" subsection under Decision §1) superseded by ADR-0023 (NDJSON streaming, one envelope per line, applied uniformly to URL-shape and command-shape responses). Commands field, `!` invocation sigil, in-memory job system, routing-time validation, and CLI surface remain in force.
 
 Amended 2026-05-22: per-command `operator_only` flag on `CommandSpec` replaces the blanket-operator-only-on-command-shape rule. The original §5.3 wording is preserved below as the *CLI-side* contract (cron + manual operator invocations) and the *daemon-side* ingest gate is now per-command, defaulting to agent-callable. §1 was extended to document the long-form CommandSpec wire shape; §5.3 was rewritten to reflect the per-command rule.
 

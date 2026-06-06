@@ -1,6 +1,6 @@
 # ADR-0015 — Plugin body ownership: marker-pair contract for plugin-emitted markdown body content
 
-**Status:** Proposed (2026-05-06; amended 2026-06-01 — §Note identity for #390)
+**Status:** Accepted 2026-06-06 (proposed 2026-05-06; amended 2026-06-01 — §Note identity for #390)
 **Date:** 2026-05-06
 **Depends on:** [ADR-0008](./0008-vault-as-source-of-truth.md), [ADR-0012](./0012-user-generated-content.md), [ADR-0014](./0014-plugin-attachment-contract.md)
 
