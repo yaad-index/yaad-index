@@ -160,9 +160,9 @@ Hidden temp files (`.foo.md.tmp-*`) are skipped by the reindex walker via the le
 
 Some `data:` keys are owned by yaad-index, not plugins (per AGENTS.md "Reserved data keys"):
 
-- `summary` — derived from `vault.Entity.Summary` (a prior PR)
-- `tags` — derived from `vault.Entity.Tags` (a prior PR)
-- `comments_text` — `\n`-joined projection of note threads, FTS-only (a prior PR)
+- `summary` — derived from `vault.Entity.Summary`
+- `tags` — derived from `vault.Entity.Tags`
+- `comments_text` — `\n`-joined projection of note threads, FTS-only
 
 Plugin attempts to emit these as plugin-extracted fields get clobbered by the vault → DB projection (`internal/api/fill.go::vaultEntityDataForDB`) on every re-ingest + fill cycle. Treat them as reserved.
 
@@ -235,7 +235,7 @@ For each parsed file (`Reindexer.upsertEntity` + `Reindexer.applyVaultEdges` in 
 
 After the walk completes (success OR with non-fatal errors), the walker calls `store.ClearDroppedCanonicalKinds` + `store.ClearDroppedCanonicalEdges`. The drift counters reflect drops observed during THIS pass; they don't accumulate across reindex runs. Live ingest / fill drops continue to increment between passes; the next reindex refreshes them against the canonical vault. `/v1/cv-status` reads from these tables — agents polling drift state see a clean per-pass snapshot rather than a monotonic accumulator. Failures here surface in `summary.Errors` but don't fail the reindex itself.
 
-**Reindex is non-destructive on the vault.** It derives DB rows from the vault, never the other way around. A vault file with stale or expired content stays as it is; reindex faithfully reflects whatever the frontmatter says. Past-TTL gates the lookup path only (see [`docs/plugin-flow.md`](plugin-flow.md) §2b); the next ingest of a stale entity goes through the plugin, which re-writes the vault. There is no automatic vault purge anywhere — cache cleanup is operator-triggered (planned CLI in). Future reindex evolutions MUST preserve this invariant.
+**Reindex is non-destructive on the vault.** It derives DB rows from the vault, never the other way around. A vault file with stale or expired content stays as it is; reindex faithfully reflects whatever the frontmatter says. Past-TTL gates the lookup path only (see [`docs/plugin-flow.md`](plugin-flow.md) §2b); the next ingest of a stale entity goes through the plugin, which re-writes the vault. There is no automatic vault purge anywhere — cache cleanup is operator-triggered (planned CLI). Future reindex evolutions MUST preserve this invariant.
 
 The live ingest / fill paths still call `AppendProvenance` (not `ReplaceProvenance`) so the DB stays current between reindex passes; ADR-0010's row-level UNIQUE indexes (`idx_prov_unique_fetch` + `idx_prov_unique_fill`) make duplicate inserts silent no-ops, so concurrent reindex `Replace` + live `Append` for the same entity can't produce a duplicate row.
 
@@ -266,7 +266,7 @@ Returned by `Reindexer.Run`; HTTP encodes directly, CLI prints line-by-line. Per
 
 **ADRs that govern this surface:** [ADR-0008](../adr/0008-vault-as-source-of-truth.md) (vault-canonical, reindex re-derives from frontmatter), [ADR-0009](../adr/0009-provenance-reconciliation.md) (provenance reconciliation — pattern reused for notations), [ADR-0010](../adr/0010-row-level-idempotency-for-derived-tables.md) (UNIQUE constraints + ON CONFLICT DO NOTHING).
 **Cross-link:** [`docs/plugin-flow.md`](plugin-flow.md) §2a (notation cache architecture), §2b (TTL semantics).
-**PRs that evolved it:** (vault → DB derivation) (reindex helpers) (`derivedTables` slice + note) (FK note tightening) (`log_level` config flowing through reindex CLI's logger) (`store.ReplaceProvenance`) (reindex calls `ReplaceProvenance`) (provenance UNIQUE indexes), + (entity_notations schema + reindex re-derive).
+**How it evolved:** vault → DB derivation, reindex helpers, the `derivedTables` slice + note, FK note tightening, `log_level` config flowing through the reindex CLI's logger, `store.ReplaceProvenance` (and reindex calling it), provenance UNIQUE indexes, and the entity_notations schema + reindex re-derive.
 
 ## 3. WipeDerivedState
 
@@ -278,7 +278,7 @@ Returned by `Reindexer.Run`; HTTP encodes directly, CLI prints line-by-line. Per
 |--------------------|----------------------------------------------------------------------------------------------------|
 | `entities` | `id`, `kind`, `data`, `created_at`, `updated_at` → re-derived from each `*.md` frontmatter |
 | `edges` | typed relationships → re-derived from frontmatter `edges:` list |
-| `entity_notations` | input-form → entity_id lookup cache . Re-derived from frontmatter `notations:` list via `Reindexer.upsertEntity`'s `store.ReplaceNotations` call (a prior PR). Vault wins — orphan rows dropped. Implicitly wiped on `--full` reindex via the FK cascade (`entity_id REFERENCES entities(id) ON DELETE CASCADE`); when `entities` empties, `entity_notations` empties with it. Not in the explicit `derivedTables` slice for the same reason `provenance` was added there only after — the cascade is correct, but a future migration that drops the FK would silently leak orphan rows; if that lands, add explicit DELETE. |
+| `entity_notations` | input-form → entity_id lookup cache. Re-derived from frontmatter `notations:` list via `Reindexer.upsertEntity`'s `store.ReplaceNotations` call. Vault wins — orphan rows dropped. Implicitly wiped on `--full` reindex via the FK cascade (`entity_id REFERENCES entities(id) ON DELETE CASCADE`); when `entities` empties, `entity_notations` empties with it. Not in the explicit `derivedTables` slice for the same reason `provenance` was added there only later — the cascade is correct, but a future migration that drops the FK would silently leak orphan rows; if that lands, add explicit DELETE. |
 | `entity_aliases` | alias → entity_id navigation/search index per ADR-0011 §"Generalization (#3)". Re-derived from frontmatter `aliases:` list via `Reindexer.upsertEntity`'s `store.ReplaceAliases` call. Vault wins — orphan rows dropped. Same FK-cascade wipe shape as `entity_notations`. `alias_kind` is derived at write time from `canonical_edge_types:` (typed iff prefix is registered, bare otherwise). |
 | `provenance` | fetch / fill audit rows → re-derived from frontmatter `provenance:` list per ADR-0009. Reindex's `Reindexer.upsertEntity` calls `store.ReplaceProvenance` after every parsed file, so wipe-and-reindex restores the full DB-side table. Row-level UNIQUE indexes from ADR-0010 keep AppendProvenance idempotent against concurrent reindex Replace. |
 | `reindex_files` | per-file `(mtime, content_hash, last_indexed_at)` bookkeeping → self-rebuilds on the next walk |
@@ -299,7 +299,7 @@ Preserved across the wipe — NOT vault-derived:
 
 The current `derivedTables` slice is alphabetical (`edges, entities, provenance, reindex_files`) and FK-safe **by coincidence** — `edges` (the only FK child in the set) sorts before `entities` (the parent), which is what the FK requires. Future tables that introduce new parent/child relationships MUST verify deletion order explicitly; alphabetical might break child-first.
 
-The slice's inline note names this constraint (per PRs +) so future editors don't repeat the wrong-claim shape the cold-reviewer flagged on a prior PR.
+The slice's inline note names this constraint so future editors don't repeat the wrong-claim shape that was flagged earlier.
 
 ### Adding a new table
 
@@ -310,10 +310,10 @@ When a future PR adds a new derived table:
 3. Verify FK chain: if the new table has FKs to or from `entities` / `edges` / `provenance` / `reindex_files`, confirm the alphabetical order keeps child-before-parent. If not, reorder explicitly + update the slice's inline note.
 4. Add migration that creates the table + any FKs.
 
-Non-derived tables (e.g. a future auth/session table): add to **Excluded tables** instead. Silence in this doc means a future editor has to read the slice to know the wipe set, which is the gap a prior PR closed.
+Non-derived tables (e.g. a future auth/session table): add to **Excluded tables** instead. Silence in this doc means a future editor has to read the slice to know the wipe set, which is the gap this doc closes.
 
 **ADRs that govern this surface:** [ADR-0008](../adr/0008-vault-as-source-of-truth.md) (DB is derived, vault is canonical).
-**PRs that evolved it:** (`derivedTables` slice + initial note) (FK note tightening — corrected the "no FK" claim).
+**How it evolved:** the `derivedTables` slice + initial note, then FK note tightening that corrected the "no FK" claim.
 
 ## 4. DB upsert invariants
 

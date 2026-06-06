@@ -40,10 +40,10 @@ agent / operator
  │ (CLI: yaad-index reindex
  ▼ or HTTP: POST /v1/reindex)
  GET /v1/entities/{id}
- GET /v1/entities/{id}/context?depth=N (Per the prior design,; multi-hop stitch)
- GET /v1/needs-fill (Per the prior design,; batch gap-call queue)
- GET /v1/structure (Per the prior design,; CV registry + plugins + version)
- GET /v1/cv-status (Per the prior design,; canonical-vocab drift)
+ GET /v1/entities/{id}/context?depth=N (multi-hop stitch)
+ GET /v1/needs-fill (batch gap-call queue)
+ GET /v1/structure (CV registry + plugins + version)
+ GET /v1/cv-status (canonical-vocab drift)
  GET /v1/search
 ```
 
@@ -174,10 +174,9 @@ governs.
  default `both`) routes which audience sees the gap. Operator-fill
  via `POST /v1/entities/{id}/operator-fill`. Storage in entity
  `data` for values + parallel `gap_state:` block for write-source +
- defer metadata. Closes the operator-database reframe from the
- 2026-05-08 concerns meeting; addresses the cold-reviewer's "would you miss it
- = no" by making yaad-index hold operator-truth, not just external-
- source-truth.
+ defer metadata. Closes the operator-database reframe; addresses the "would you
+ miss it = no" concern by making yaad-index hold operator-truth, not
+ just external-source-truth.
 - [ADR-0020 — Search with gap-field predicates](adr/0020-search-gap-predicates.md). Extends
  `GET /v1/search` with repeated `where=` predicates over
  `data.<field>` paths (operator-filled values from ADR-0019
@@ -360,7 +359,7 @@ plugins:
 
 vault:
  path: /home/operator/notes/vault
- # Auto-commit on write (per yaad-index the source issue); all fields optional.
+ # Auto-commit on write; all fields optional.
  # auto_commit: true # nil → auto-detect via .git/
  # auto_commit_debounce_seconds: 0 # 0 = per-operation; >0 = batch window
  # auto_push: false # opt-in `git push` after each commit
@@ -390,9 +389,9 @@ canonical_edge_types:
 
 log_level: info
 
-# Pair-claim JWT auth scaffold (per yaad-index a prior PR; a prior PR
-# wires the HTTP middleware; a prior PR enforces author validation on
-# notes; a prior PR serves /v1/jwks). Operational config — keys_dir lives
+# Pair-claim JWT auth scaffold: the HTTP middleware extracts the
+# bearer token, author validation on notes is enforced, and /v1/jwks
+# is served. Operational config — keys_dir lives
 # outside the vault by design (vault-readable means agent-readable,
 # which the operator explicitly vetoed). All three fields optional; defaults
 # are `required: true`, `keys_dir: /etc/yaad-index/keys`,
@@ -403,7 +402,7 @@ log_level: info
 # required: true # set to false for dev-mode bypass (NOT for prod)
 
 # Operator-supplied directive injected on every needs_fill response
-# (per ADR-0013 §2 a prior PR). Empty / unset → field omitted on the wire.
+# (per ADR-0013 §2). Empty / unset → field omitted on the wire.
 # fill_instruction: |
 # Extract canonical companions only when the article's text clearly
 # supports them. Skip-if-absent on every gap.
@@ -419,8 +418,8 @@ log_level: info
  503 `vault_required` (or are unregistered, in reindex's case).
 - **`vault.auto_commit`** + auto-commit fields — when the vault root
  is a git working tree, yaad-index records every successful write
- as a git commit summarizing the operation (per yaad-index issue
-). The vault becomes its own audit log. Tri-state on
+ as a git commit summarizing the operation. The vault becomes its
+ own audit log. Tri-state on
  `auto_commit`: nil (default) auto-detects `.git/`; `true` requires
  it (Validate fails fast otherwise); `false` opts out regardless.
  Templates: `ingest: <id>`, `re-ingest: <id> [force_refetch=true|ttl_expired]`,
@@ -447,7 +446,7 @@ log_level: info
  yaad-index logs a warn line at startup for each emission the
  operator hasn't enabled (so the discoverability gap is visible
  rather than silent).
- - **Schema migration (yaad-index, 2026-05-04).** The
+ - **Schema migration.** The
  `canonical_kinds:` shape changed from a string-list (`[person,
  city]`) to a map of per-kind config blocks. **The old shape no
  longer parses.** Each enabled kind now declares its own gap-set
@@ -471,10 +470,9 @@ log_level: info
  migrate by giving each enabled kind its own per-kind config
  block. The map keys are the enabled-kinds set (semantically
  equivalent to the old list).
- - a prior PR (yaad-index) carries parsing + validation only; the
- `gaps` + `instruction` fields are stored in the Config struct
- but not yet wired through to the `canonical_vocabulary` field
- on `needs_fill` responses. Wiring lands in a prior PR.
+ - Parsing + validation store the `gaps` + `instruction` fields in
+ the Config struct; they are then wired through to the
+ `canonical_vocabulary` field on `needs_fill` responses.
 - **`log_level`** — slog handler threshold; one of `debug`, `info`
  (default), `warn`, `error`. Empty / missing → info, matching the
  legacy hardcoded value. An unknown string fails server start
@@ -489,7 +487,7 @@ log_level: info
  field (per [ADR-0013](adr/0013-canonical-kind-owns-gap-contract.md) §2). The agent's AI reads this
  string as a stable directive on how to approach gap filling
  without per-call API surface changes. Resolution order at
- response-build time (per ADR-0013 §2 a prior PR, yaad-index):
+ response-build time (per ADR-0013 §2):
  per-kind `canonical_kinds.<kind>.instruction:` wins → global
  `fill_instruction:` next → both unset omits the field. Source-
  shape entities (kind not in the registry) only see the global
@@ -499,13 +497,13 @@ log_level: info
  responses).
 - **`canonical_vocabulary` on the wire** — every `needs_fill`
  response also surfaces the operator's full `canonical_kinds:`
- registry verbatim under `canonical_vocabulary` (per ADR-0013 §2
- a prior PR, yaad-index). Empty / nil registry → field omitted.
+ registry verbatim under `canonical_vocabulary` (per ADR-0013 §2).
+ Empty / nil registry → field omitted.
  Operator-config-only — plugins never control these contents
  (prompt-injection guardrail per ADR-0013 §2). Agents read this
  alongside the resolved `instruction` when deciding whether to
  extract canonical companions from `clean_content`.
-- **Gap-call lifecycle (ADR-0013 §4 + §5, yaad-index).**
+- **Gap-call lifecycle (ADR-0013 §4 + §5).**
  The `needs_fill` payload (gap-call) is bounded to **one per
  fetch-cycle**:
  - Set on a successful fill: any 2xx response from
@@ -530,8 +528,7 @@ log_level: info
  tracking** is permitted; that would defeat the regen
  invariant.
 - **`auth.keys_dir`** + **`auth.default_ttl`** — pair-claim JWT auth
- scaffold (per [yaad-index](https://github.com/yaad-index/yaad-index/issues/178)
- a prior PR of the auth series). Operational, NOT vault-readable: the
+ scaffold. Operational, NOT vault-readable: the
  private key MUST live outside the vault root; agents must not
  be able to trick the index into returning it. Default keys_dir
  is `/etc/yaad-index/keys/` (sibling of `config.yaml`); default
@@ -548,22 +545,22 @@ log_level: info
  yaad-index keygen --keys-dir /etc/yaad-index/keys
 
  # 2. Issue a token for an operator/agent pair.
- yaad-index issue-token --operator alice --agent the cold-reviewer --ttl 24h
+ yaad-index issue-token --operator <operator> --agent <agent> --ttl 24h
  # → prints the signed JWT on stdout; pipe into a secrets store.
  ```
 
- a prior PR ships the building blocks (keygen, sign, verify, CLI
- surface). a prior PR wires the HTTP middleware that extracts
+ The building blocks (keygen, sign, verify, CLI surface) are in
+ place. The HTTP middleware extracts
  `Authorization: Bearer <token>` and attaches the parsed claim
- to the request context. a prior PR enforces that
+ to the request context. It enforces that
  `POST /v1/entities/{id}/notes` `author` matches the JWT's
- `sub`. a prior PR serves `GET /v1/jwks` (RFC 7517) so peer
+ `sub`. `GET /v1/jwks` (RFC 7517) is served so peer
  agents can verify yaad-index-issued tokens without out-of-band
  key sharing — the route is public, `Cache-Control: public, max-age=3600`,
  single-key v1, registered only when public.pem is readable
  (dev-mode without keys leaves it unregistered).
 
-- **`auth.required`** (added a prior PR) — master switch on the HTTP
+- **`auth.required`** — master switch on the HTTP
  middleware. Default `true`: every protected route demands a valid
  Bearer JWT. Set to `false` (or pass `--auth-required=false` /
  `YAAD_INDEX_AUTH_REQUIRED=false`) for dev-mode bypass; the server
@@ -577,7 +574,7 @@ log_level: info
  system metadata, no vault data.
 
 - **`cache_ttl_seconds`** — bounds the lookup-first ingest cache
- freshness window in seconds . Empty / missing /
+ freshness window in seconds. Empty / missing /
  `0` disables the TTL (cache hits forever once registered —
  legacy behavior). `>0` makes a cache hit valid only when the
  entity's freshest non-cache-shaped `provenance.fetched_at` is
@@ -595,9 +592,9 @@ as reserved.
 
 | Key | Source | Introduced |
 |-----------------|------------------------------|------------|
-| `summary` | `vault.Entity.Summary` | a prior PR (snippet from summary) |
-| `tags` | `vault.Entity.Tags` | a prior PR (fill vault-first) |
-| `comments_text` | `\n`-joined `vault.Entity.Notes[].Text` (FTS-only — full structured notes live in `vault.Entity.Notes`) | a prior PR (notes endpoint) |
+| `summary` | `vault.Entity.Summary` | snippet from summary |
+| `tags` | `vault.Entity.Tags` | fill vault-first |
+| `comments_text` | `\n`-joined `vault.Entity.Notes[].Text` (FTS-only — full structured notes live in `vault.Entity.Notes`) | notes endpoint |
 
 (See `internal/api/fill.go::vaultEntityDataForDB` for the projection
 function. Plugins emitting `summary` / `tags` / `comments_text` as
@@ -651,8 +648,7 @@ Agent fill cycle (`POST /v1/entities/{id}/fill`):
 4. Partial fills are first-class: an agent can submit a subset of
  gaps; remaining gaps stay open for a future call.
 
-Multi-hop context stitch (`GET /v1/entities/{id}/context?depth=N`,
-per yaad-index the source issue):
+Multi-hop context stitch (`GET /v1/entities/{id}/context?depth=N`):
 
 1. BFS-walk outbound edges from the path id up to `depth` hops
  (server cap 3; `depth=4+` is rejected with `400 invalid_argument`).
@@ -712,7 +708,7 @@ make install-hooks # one-time pre-commit hook setup
 Always run `make check` before pushing. CI runs the same chain split
 into separate `test` / `lint` / `build` / `coverage` jobs (see
 `.github/workflows/ci.yml`). `make build` produces `./yaad-index`
-in CWD (Per the prior design, fix).
+in CWD.
 
 Local end-to-end smoke for the plugin loop:
 
@@ -771,8 +767,7 @@ agent-reachable):
  without, all rows go. The cache is keyed on `(plugin_name, version)`;
  bumping a plugin's version triggers a normal cache miss on next
  start, so manual clearing is only needed when a plugin's
- capabilities move without a version bump (rare). See the source issue for
- the cache design.
+ capabilities move without a version bump (rare).
 
 ## Conventions
 
@@ -913,7 +908,7 @@ module, see e.g. yaad-wikipedia):
  entry** — the orchestrator's lookup-first probe matches on
  exact-string equality, so the input form must be present at
  index 0 for a self-roundtrip to register on the next call. See
- / [`docs/plugin-flow.md`](docs/plugin-flow.md) §2a.
+ [`docs/plugin-flow.md`](docs/plugin-flow.md) §2a.
 - **`aliases`** is the alternative-label list for Obsidian wikilink
  resolution + agent reverse-lookup. Two shapes coexist in the flat
  list: bare strings (`"Susanna Clarke"`) render as wikilink targets;
@@ -921,10 +916,10 @@ module, see e.g. yaad-wikipedia):
  carry a typed reverse-lookup hint that agents filter on.
  Multi-valued; order doesn't matter (yaad-index merges with the
  ADR-0011 title-synthesized alias and dedupes at vault-write
- time). See / [`docs/plugin-flow.md`](docs/plugin-flow.md) §4.
+ time). See [`docs/plugin-flow.md`](docs/plugin-flow.md) §4.
 - **`supports_search`** in the `--init` capabilities document
  declares that the plugin opts in to the upstream-search dispatch
- surface (`POST /v1/search/upstream`, planned in a prior PR). When
+ surface (`POST /v1/search/upstream`, planned). When
  yaad-index fans a query out across registered plugins, only those
  with `supports_search: true` are invoked. Default false; explicit
  opt-in. Plugins not opting in are silently skipped on fan-out
