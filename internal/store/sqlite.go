@@ -329,8 +329,8 @@ func (s *sqliteStore) ClearGapCallDone(ctx context.Context, entityID string) err
 }
 
 // ListGapCallableCandidates is the DB-side filter for the
-// `GET /v1/needs-fill` paginated endpoint (per ADR-0013 §6 /
-// yaad-index). Returns entities whose `gap_call_done_at` is
+// `GET /v1/needs-fill` paginated endpoint (per ADR-0013 §6).
+// Returns entities whose `gap_call_done_at` is
 // NULL — the lifecycle's "AI has not yet been gap-called this
 // fetch-cycle" condition (per ADR-0013 §4). The handler layer
 // vault-reads each result to confirm there are actually unfilled
@@ -736,7 +736,7 @@ func (s *sqliteStore) loadEntityProvenance(ctx context.Context, entityID string)
 			// thinks no prior attachments existed and re-fetches
 			// every URI" — same fail-soft posture as ADR §4 and the
 			// dispatcher's vault-read-error path. Log at WARN, treat
-			// as no-prior, continue (the cold-reviewer's a prior PR review note).
+			// as no-prior, continue.
 			refs, err := unmarshalFetchAttachments(fetchAttJSON.String)
 			if err != nil {
 				slog.Default().Warn("decode fetch_attachments column failed; treating as no-prior",
@@ -899,7 +899,7 @@ func (s *sqliteStore) GetEdgesFor(ctx context.Context, fromID string, types []st
 // in the set are returned. Stable ordering (created_at ASC, type
 // ASC, from_id ASC) parallels the outbound query.
 //
-// Per yaad-index: the existing /v1/entities/{id}?with_edges=
+// The existing /v1/entities/{id}?with_edges=
 // surface only emits outbound; this helper is the substrate for
 // the new GET /v1/edges?direction=in path.
 func (s *sqliteStore) GetEdgesTo(ctx context.Context, toID string, types []string) ([]Edge, error) {
@@ -1160,7 +1160,7 @@ func nullableString(v sql.NullString) any {
 
 // DeleteEdgesByTypeFrom removes every edge of the given type
 // originating at fromID. Used by the canonical_type fill path
-// (yaad-index) to implement idempotent re-fill semantics:
+// to implement idempotent re-fill semantics:
 // before creating new edges from a re-filled canonical_type
 // gap, the prior fill's edges are deleted so the post-fill
 // edge set is exactly the new fill's labels. No edge appending,

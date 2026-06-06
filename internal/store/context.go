@@ -81,7 +81,7 @@ func (s *sqliteStore) GetEdgesForMany(ctx context.Context, fromIDs []string, typ
 }
 
 // GetContextNeighbors implements the BFS-with-cycle-detection traversal
-// behind `GET /v1/entities/{id}/context` (per yaad-index the source issue).
+// behind `GET /v1/entities/{id}/context`.
 //
 // Algorithm:
 //
@@ -150,7 +150,7 @@ func (s *sqliteStore) GetContextNeighbors(
 				// Multiple edges into the same neighbor at this depth: keep
 				// the first one as the "introducing" edge. Future iterations
 				// could surface multi-edge metadata; v1 keeps the wire shape
-				// simple per the issue spec.
+				// simple.
 				continue
 			}
 			seenInLevel[e.To] = struct{}{}
