@@ -9,10 +9,10 @@
 // trail is operator+agent for every action; revocation can target an
 // individual agent without rotating the operator-side trust.
 //
-// Out of scope for this package: HTTP middleware that consumes these
-// helpers, note author validation, the `/v1/jwks` public-key
-// endpoint. This package lands the building blocks; the wire-side
-// integration follows.
+// Scope boundary: this package owns signing, verification, and key
+// helpers. The HTTP middleware that consumes them, note-author
+// validation, and the `/v1/jwks` public-key endpoint live in
+// internal/api.
 //
 // Security note: the private key MUST live alongside operational
 // config (default `/etc/yaad-index/keys/`), never inside the vault.
