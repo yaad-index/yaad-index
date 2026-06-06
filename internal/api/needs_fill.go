@@ -2,7 +2,7 @@
 //
 // Returns entities that are currently gap-callable — the AI has not yet
 // been called for the entity's current fetch-cycle (DB
-// `gap_call_done_at IS NULL` per a prior PR) AND the entity carries unfilled
+// `gap_call_done_at IS NULL`) AND the entity carries unfilled
 // gaps in vault frontmatter. Each entry on the response carries the
 // full needs_fill payload used by the cache-hit ingest envelope:
 // resolved `instruction` (per-kind override → global → omit per
@@ -103,9 +103,8 @@ type needsFillEntry struct {
 	GapMetadata map[string]needsFillGapMeta `json:"gap_metadata,omitempty"`
 	// clean_content + clean_content_truncated are always present on
 	// the wire — same as `ingestNeedsFillResponse` — so a single
-	// agent-side decoder can read both surfaces with one shape. Alice2's
-	// a prior PR review caught the omitempty + missing-truncated drift;
-	// fold-in restores parity. clean_content_truncated is hardcoded
+	// agent-side decoder can read both surfaces with one shape.
+	// clean_content_truncated is hardcoded
 	// to false here exactly as `respondFromCacheHit` does — the
 	// cache-hit path doesn't have plugin-side truncation context to
 	// surface, and neither do we (the same vault file feeds both).
@@ -227,8 +226,8 @@ func handleNeedsFill(
 		// Short-circuit before the DB query so a DB-only deploy
 		// returns an honest empty result on every call instead of
 		// looping through pages of empty bodies with non-empty
-		// next_cursor (the cold-reviewer's a prior PR catch on the prior shape that
-		// advanced lastConsidered without emitting entries).
+		// next_cursor (the legacy shape advanced lastConsidered
+		// without emitting entries).
 		if vaultReader == nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -615,13 +614,12 @@ func buildNeedsFillEntry(
 	}
 	// `reg` is shared by reference here, same as ingest.go's
 	// cache-hit emit. The mutation contract on
-	// `WithCanonicalKindRegistry` (added in a prior PR: "Caller must
-	// not mutate the map after passing it") covers the map-level
+	// `WithCanonicalKindRegistry` ("Caller must not mutate the map
+	// after passing it") covers the map-level
 	// reference, not just the per-entry struct — operators set
 	// canonical_kinds at startup and the handler retains the
 	// reference. Defensive-copy is a future option if the contract
-	// ever has to relax (e.g., config hot-reload). The cold-reviewer's a prior PR
-	// review note pre-emptively confirmed this is non-regression.
+	// ever has to relax (e.g., config hot-reload).
 	return needsFillEntry{
 		ID:                    id,
 		Kind:                  kind,
