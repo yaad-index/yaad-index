@@ -95,8 +95,8 @@ type Plugin interface {
 	// the kinds handler treats that as "no kinds contributed."
 	Capabilities() Capabilities
 
-	// Search dispatches an upstream query against the plugin per
-	// yaad-index #2's POST /v1/search/upstream federation surface.
+	// Search dispatches an upstream query against the plugin via
+	// the POST /v1/search/upstream federation surface.
 	// Returns a candidate list the daemon merges with results from
 	// other opted-in plugins (Capabilities.SupportsSearch=true).
 	//
@@ -123,7 +123,7 @@ type Plugin interface {
 }
 
 // SearchCandidate is one entry returned by a plugin's Search
-// implementation per yaad-index #2. Surfaces verbatim on the
+// implementation. Surfaces verbatim on the
 // federated /v1/search/upstream response (daemon adds the
 // `plugin` attribution field at merge time).
 type SearchCandidate struct {
@@ -161,7 +161,7 @@ type Capabilities struct {
 
 	// CanonicalKindsEmitted names the canonical-shape entity kinds
 	// this plugin MAY emit alongside its source-shape entities (per
-	// ADR-0008 + the cold-reviewer's a prior PR review note 2). Plugins declare these
+	// ADR-0008). Plugins declare these
 	// at --init time so yaad-index startup can warn operators when
 	// a plugin proposes a canonical kind that isn't enabled in the
 	// operator's `canonical_kinds:` config — surfacing the
@@ -208,14 +208,13 @@ type Capabilities struct {
 	ResolvesCanonicalKinds []string `json:"resolves_canonical_kinds,omitempty"`
 
 	// SupportsSearch declares that the plugin opts in to the
-	// upstream-search dispatch surface (per yaad-index the source issue
-	// a prior PR). When `POST /v1/search/upstream` fans a query out
-	// across registered plugins (a prior PR), only plugins with this
+	// upstream-search dispatch surface. When `POST /v1/search/upstream`
+	// fans a query out across registered plugins, only plugins with this
 	// flag set are invoked. Plugins not opting in are silently
 	// skipped — the operator's local-search surface (`/v1/search`)
 	// continues to work for them.
 	//
-	// Default false — explicit opt-in. Plugins predating issue
+	// Default false — explicit opt-in. Older plugins
 	// emit no `supports_search` field and decode as false
 	// (Go zero value), preserving current behavior.
 	SupportsSearch bool `json:"supports_search,omitempty"`
@@ -240,7 +239,7 @@ type Capabilities struct {
 	CanonicalKindsExtras map[string]CanonicalKindExtras `json:"canonical_kinds_extras,omitempty"`
 
 	// CacheTTLSeconds is the plugin-level TTL declaration in the
-	// three-level resolution chain (per yaad-index). Used when
+	// three-level resolution chain. Used when
 	// no per-entry override exists in the entity's frontmatter and
 	// the operator's global `cache_ttl_seconds` config is also 0.
 	// Sentinel rules — identical at every level:
@@ -257,7 +256,7 @@ type Capabilities struct {
 	// back to the documented default (no TTL stamped → cache hit
 	// forever). See internal/api/cache_ttl.go::resolveCacheTTL.
 	//
-	// Plugins predating emit no `cache_ttl_seconds` field and
+	// Older plugins emit no `cache_ttl_seconds` field and
 	// decode as 0 (Go zero value), preserving the legacy behavior
 	// where the global config alone determined freshness.
 	CacheTTLSeconds int `json:"cache_ttl_seconds,omitempty"`
@@ -488,7 +487,7 @@ type CanonicalKindExtras struct {
 //
 // ADR-0019 step 3 extends the JSON wire shape with the typed-gap
 // fields the operator-config side already accepts (per ADR-0019
-// step 2 / yaad-index):
+// step 2):
 //
 // - FillStrategy: "agent" | "operator" | "both" (default "both")
 // - Range: [min, max] for type=int
@@ -507,7 +506,7 @@ type GapSpec struct {
 	MaxLength int `json:"max_length,omitempty"`
 	Values []string `json:"values,omitempty"`
 	// Kinds is the canonical-kind allowlist for the
-	// `type: "canonical_type"` gap shape per yaad-index.
+	// `type: "canonical_type"` gap shape.
 	// Two wire shapes (resolved by UnmarshalJSON):
 	//
 	// - Bare string `"*"`: wildcard — any canonical kind in the
@@ -537,7 +536,7 @@ type gapSpecJSON struct {
 }
 
 // UnmarshalJSON accepts the bare-string shorthand AND the typed
-// long form. Mirrors config.GapSpec.UnmarshalYAML (yaad-index)
+// long form. Mirrors config.GapSpec.UnmarshalYAML
 // so a plugin's Capabilities document and the operator's YAML
 // config decode through the same value-shape rules.
 //
@@ -585,8 +584,8 @@ func (g *GapSpec) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// decodeKindsJSON resolves the polymorphic `kinds:` field per
-// yaad-index: scalar `"*"` decodes to []string{"*"}; list
+// decodeKindsJSON resolves the polymorphic `kinds:` field:
+// scalar `"*"` decodes to []string{"*"}; list
 // `["person", "boardgame"]` decodes verbatim. Absent / null
 // returns nil; any other shape rejects loudly so plugin
 // capability typos surface at server start.
@@ -625,7 +624,7 @@ var validGapFillStrategies = map[string]struct{}{
 }
 
 // Validate enforces the ADR-0019 typed-gap rules for plugin-side
-// declarations. Mirrors config.GapSpec.Validate (yaad-index)
+// declarations. Mirrors config.GapSpec.Validate
 // so a plugin's Capabilities document fails the same shape rules
 // as an operator yaml that declared the same gap.
 //
@@ -859,7 +858,7 @@ type FetchResult struct {
 	// populates this field; plugins do not write it directly.
 	//
 	// CanonicalEntities (top-level legacy stubs per ADR-0008) was
-	// removed in once both in-fleet plugins ( yaad-bgg,
+	// removed once both in-fleet plugins (yaad-bgg,
 	// yaad-wikipedia) migrated to the source-shape edges
 	// block. The thin-row materialize path covers the entity-row
 	// side that legacy CanonicalEntities used to carry.
@@ -868,8 +867,8 @@ type FetchResult struct {
 	// Notations is the list of every input form the plugin knows
 	// resolves to this entity — canonical URL, shorthand
 	// `<plugin>: <id>`, with/without underscore in the title,
-	// mobile subdomain URL, etc. The orchestrator (per yaad-index
-	// the source issue a prior PR) writes these to the `entity_notations`
+	// mobile subdomain URL, etc. The orchestrator writes these
+	// to the `entity_notations`
 	// lookup table after a successful Fetch so subsequent ingests
 	// of any equivalent form short-circuit on the cache without
 	// re-invoking the plugin.
@@ -881,12 +880,12 @@ type FetchResult struct {
 	//
 	// Empty / nil is permitted (plugin opts out of the cache
 	// pre-registration; ingests still work via Match→Fetch on
-	// every call). Existing plugins predating the source issue emit no
+	// every call). Older plugins emit no
 	// `notations` field on the wire and surface here as nil.
 	Notations []string
 
 	// Aliases is the list of alternative labels the plugin knows
-	// for this entity (per yaad-index the source issue). Used by Obsidian
+	// for this entity. Used by Obsidian
 	// wikilink resolution + agent reverse-lookup.
 	//
 	// Two shapes coexist in the same flat slice:
@@ -903,7 +902,7 @@ type FetchResult struct {
 	// preserves a deterministic merged order (synthesized first,
 	// then plugin-emitted in input order).
 	//
-	// Empty / nil is permitted — plugins predating the source issue emit
+	// Empty / nil is permitted — older plugins emit
 	// no `aliases` field and the only alias on the resulting vault
 	// file is the ADR-0011 title-synthesized one (current
 	// behavior). Adopting plugin-emitted aliases is one slice
@@ -911,7 +910,7 @@ type FetchResult struct {
 	Aliases []string
 
 	// CacheTTLSeconds is an OPTIONAL per-fetch override for this
-	// entity's cache-freshness contract (per yaad-index). Pointer
+	// entity's cache-freshness contract. Pointer
 	// shape distinguishes absent (nil = no override; resolver falls
 	// through to plugin-level / global-level) from explicit-zero
 	// (*=0 = same as nil; explicit "no opinion") from a positive or
@@ -927,7 +926,7 @@ type FetchResult struct {
 	// vault frontmatter (`cache_ttl_seconds:`) and re-derives via
 	// reindex per ADR-0008.
 	//
-	// Plugins predating leave this nil and the resolver walks
+	// Older plugins leave this nil and the resolver walks
 	// straight to plugin-level / global-level — preserves current
 	// behavior.
 	CacheTTLSeconds *int
@@ -1035,7 +1034,7 @@ func (r *Registry) Lookup(rawURL string) (Plugin, bool) {
 
 // LookupByName returns the registered plugin whose Name() equals
 // name, or (nil, false) if no plugin with that name is registered.
-// Used by routing-time validation (yaad-index) to target a
+// Used by routing-time validation to target a
 // specific plugin's url_patterns / commands list when the input
 // carries a `<plugin>:` namespace prefix.
 func (r *Registry) LookupByName(name string) (Plugin, bool) {
