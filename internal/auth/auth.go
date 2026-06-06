@@ -1,24 +1,23 @@
-// Package auth scaffolds yaad-index's pair-claim JWT authentication
-// (per yaad-index a prior PR of the auth series). RS256 signing /
-// verification + RS256 keypair generation + helpers used by the
-// `yaad-index keygen` and `yaad-index issue-token` CLI subcommands.
+// Package auth scaffolds yaad-index's pair-claim JWT authentication.
+// RS256 signing / verification + RS256 keypair generation + helpers
+// used by the `yaad-index keygen` and `yaad-index issue-token` CLI
+// subcommands.
 //
-// Pair-claim model (designed with the operator 2026-05-05): every token
-// carries a `sub` (the agent — the actor that called the API)
-// AND an `operator` (the human — the resource owner). The OAuth
-// resource-owner / client split. Audit trail is operator+agent
-// for every action; revocation can target an individual agent
-// without rotating the operator-side trust.
+// Pair-claim model: every token carries a `sub` (the agent — the
+// actor that called the API) AND an `operator` (the human — the
+// resource owner). The OAuth resource-owner / client split. Audit
+// trail is operator+agent for every action; revocation can target an
+// individual agent without rotating the operator-side trust.
 //
-// **Out of scope for a prior PR**: HTTP middleware that consumes these
-// helpers (a prior PR =), note author validation (a prior PR =),
-// `/v1/jwks` public-key endpoint (a prior PR =). This package
-// lands the building blocks; the wire-side integration follows.
+// Scope boundary: this package owns signing, verification, and key
+// helpers. The HTTP middleware that consumes them, note-author
+// validation, and the `/v1/jwks` public-key endpoint live in
+// internal/api.
 //
-// **Security note**: the private key MUST live alongside
-// operational config (default `/etc/yaad-index/keys/`), never
-// inside the vault. Per The operator: "the key should not be in vault.
-// Then an agent can trick index to return it and then it is bad."
+// Security note: the private key MUST live alongside operational
+// config (default `/etc/yaad-index/keys/`), never inside the vault.
+// If the key lived in the vault, an agent could trick the index into
+// returning it, which would be a serious compromise.
 
 package auth
 
@@ -61,9 +60,9 @@ const (
 // this to a flag on `yaad-index keygen`.
 const rsaKeySize = 2048
 
-// Claim is the pair-claim payload (per yaad-index). A
-// signed JWT carries this verbatim; verification returns it
-// after signature + issuer + expiry checks pass.
+// Claim is the pair-claim payload. A signed JWT carries this
+// verbatim; verification returns it after signature + issuer + expiry
+// checks pass.
 type Claim struct {
 	Subject string // agent (e.g. "bob")
 	Operator string // human (e.g. "alice")
@@ -83,10 +82,10 @@ type Claim struct {
 }
 
 // IsOperatorOnly reports whether this claim represents an operator
-// acting directly (not via an agent). Per yaad-index, CLI
-// dispatch endpoints (command-shape input on /v1/ingest) require
-// operator-only authority — the operator's command-issue surface
-// is too privileged to delegate to an agent.
+// acting directly (not via an agent). CLI dispatch endpoints
+// (command-shape input on /v1/ingest) require operator-only
+// authority — the operator's command-issue surface is too privileged
+// to delegate to an agent.
 //
 // "Operator-only" here means Subject == Operator: both halves of
 // the pair-claim name the same identity, signaling the operator
@@ -105,9 +104,11 @@ type Claim struct {
 // Returns false on:
 // - nil receiver
 // - empty Subject or Operator
-// - Subject != Operator (agent-on-behalf pair-claim)
-// - anonymous claims (caller branches on those separately
-// via api.IsAnonymousClaim)
+// - Subject != Operator (agent-on-behalf pair-claim) — anonymous
+// claims fall here too, since their Subject (`anonymous`) differs
+// from Operator (`none`); there is no anonymous-specific branch in
+// this function. The dedicated anonymous gate lives upstream in
+// api.ClaimIsOperatorOnly, which short-circuits before reaching here.
 func (c *Claim) IsOperatorOnly() bool {
 	if c == nil {
 		return false

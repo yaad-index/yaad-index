@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 )
 
-// JSON Web Key Set support per yaad-index (a prior PR of the auth
-// series). Serves the verifier's public key to peer agents so they
-// can verify yaad-index-issued tokens without out-of-band key sharing.
+// JSON Web Key Set support. Serves the verifier's public key to peer
+// agents so they can verify yaad-index-issued tokens without
+// out-of-band key sharing.
 //
 // Single-key v1: LoadJWKS always returns a one-entry slice. The
 // `keys` array shape (per RFC 7517) is forward-compatible with key
@@ -36,7 +36,7 @@ type JWK struct {
 // LoadJWKS reads public.pem from keysDir and returns the JWKS shape
 // suitable for /v1/jwks. Single-key v1: the returned slice always
 // contains exactly one JWK and the `kid` field matches the constant
-// a prior PR stamps on issued tokens (`yaad-index-default`).
+// stamped on issued tokens (`yaad-index-default`).
 //
 // Caller-side caching is expected — main.go calls LoadJWKS once at
 // startup and passes the slice to api.WithJWKS. The handler does not
