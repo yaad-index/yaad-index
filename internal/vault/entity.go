@@ -4,7 +4,7 @@
 // derived index regenerable via reindex. This package provides the
 // serialization layer (Entity ↔ markdown file) and the atomic-write Writer
 // + parsing Reader. It does not own the runtime ingest path or the reindex
-// CLI — those land in a prior PR and a prior PR respectively.
+// CLI — those are owned elsewhere.
 //
 // The frontmatter schema is locked by ADR-0008's "Frontmatter schema (v1)"
 // table; the body shape (clean_content + `## Edges` + `## Notes`) is
@@ -32,7 +32,7 @@ import (
 
 // Entity is the in-memory shape of a vault file. Mirrors store.Entity
 // today but extends it with the v1 frontmatter fields (Plugin, Summary,
-// Tags, Notes, Gaps) — separate type until a prior PR converges the two
+// Tags, Notes, Gaps) — separate type until a later change converges the two
 // shapes at the ingest boundary.
 //
 // Required for serialization: ID, Kind, Plugin. Everything else is allowed
@@ -70,7 +70,7 @@ type Entity struct {
 	Edges []Edge
 	Notes []Note
 	// Dataview is the body-section list of agent-appended
-	// dataview-inline paragraphs per yaad-index #119. Each
+	// dataview-inline paragraphs per #119. Each
 	// paragraph is a `key → value` map representing one
 	// canonical-type fill event on this entity (the target).
 	// Append-only at the storage layer; dedup-on-append is
@@ -83,8 +83,7 @@ type Entity struct {
 	// alternative labels Obsidian wikilinks resolve through, plus
 	// the agent-facing reverse-lookup hint set.
 	//
-	// Two contributing sources, merged by Marshal at write time
-	// (per yaad-index the source issue a prior PR):
+	// Two contributing sources, merged by Marshal at write time:
 	//
 	// 1. ADR-0011 title-synthesized — a single entry derived from
 	// `data.title` (source-shape entities) or `data.name`
@@ -110,7 +109,7 @@ type Entity struct {
 	// the next ingest re-writes the file.
 	Aliases []string
 
-	// Notations is the cache-key list per yaad-index the source issue a prior PR.
+	// Notations is the cache-key list.
 	// Mirrors the entity_notations DB table — every input form
 	// (canonical URL, shorthand `<plugin>: <id>`, mobile-subdomain
 	// URL, etc.) the plugin knows resolves to this entity. The vault
@@ -135,19 +134,19 @@ type Entity struct {
 	// upstream returned) is the agent's "clean" (what to read).
 	CleanContent string
 
-	// CacheExpires is the absolute-date cache freshness stamp per
-	// yaad-index (replaces's CacheTTLSeconds). Resolved
+	// CacheExpires is the absolute-date cache freshness stamp
+	// (replaces CacheTTLSeconds). Resolved
 	// at ingest time as `fetched_at + resolveCacheTTL(...)` and
 	// baked into vault frontmatter. Lookup is just `now <
 	// CacheExpires.Time` (or true on Never sentinel).
 	//
 	// nil pointer → no opinion at any resolution level (cache
 	// forever; preserves legacy behavior). Non-nil with
-	// Never=true → infinite (replaces's *=-1 sentinel).
+	// Never=true → infinite (replaces the *=-1 sentinel).
 	// Non-nil with Time set → finite expiry.
 	//
-	// Stamped in operator-TZ via clock.Now()-derived fetched_at
-	// per yaad-index. Hand-edits to the frontmatter date
+	// Stamped in operator-TZ via clock.Now()-derived fetched_at.
+	// Hand-edits to the frontmatter date
 	// survive a single read but get overwritten on the next
 	// ingest — same write-only-by-orchestrator contract as
 	// CacheTTLSeconds had.
@@ -284,7 +283,7 @@ type Edge struct {
 // `## Notes` section as a dated block. Append-only in v1 (edit/delete
 // is a follow-up per ADR-0008's open questions).
 //
-// Per yaad-index a prior PR (auth pair-claim model): Author is the agent
+// Per the auth pair-claim model: Author is the agent
 // that posted the note (mapped to JWT `sub`); Operator is the human
 // resource owner (JWT `operator`). Both fields are optional on parse —
 // legacy vault files omit Operator, and the parser leaves it empty
@@ -340,7 +339,7 @@ const (
 )
 
 // DataviewParagraph is one canonical-type fill event recorded on a
-// target canonical entity per yaad-index #119. Each paragraph
+// target canonical entity per #119. Each paragraph
 // renders as a single line in the body's yaad:dataview region:
 //
 //	role:: Staff Platform Engineer  salary:: 150k+  source_email:: gmail:...

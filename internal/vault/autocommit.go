@@ -1,4 +1,4 @@
-// Auto-commit-on-write per yaad-index the source issue.
+// Auto-commit-on-write.
 //
 // When the vault root is a git working tree, vault.Writer can hand
 // every successful atomic write to a Committer that records it as a
@@ -343,8 +343,8 @@ func (c *GitCommitter) runGit(ctx context.Context, args ...string) error {
 
 func (c *GitCommitter) execGit(ctx context.Context, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", c.root}, args...)...)
-	// TZ env propagates the operator-configured timezone (yaad-index
-	// PR-C) into git's commit timestamp rendering. Default
+	// TZ env propagates the operator-configured timezone into
+	// git's commit timestamp rendering. Default
 	// time.UTC.String() = "UTC"; named locations like
 	// "Europe/Berlin" resolve via /usr/share/zoneinfo. Per ADR-
 	// 0008 audit-log commits then carry operator-TZ in the commit

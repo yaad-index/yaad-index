@@ -49,7 +49,7 @@ func NewReader(vaultRoot string) (*Reader, error) {
 // three layouts:
 //
 // - active source-shape: `<root>/<kind>/<slug>.md`
-// - canonical-label (per ADR-0021 amendment / yaad-index
+// - canonical-label (per ADR-0021 amendment,
 // phase D): `<root>/ct/<kind>/<slug>.md`
 // - archived (per ADR-0018 step 2): `<root>/_archive/<kind>/<slug>.md`
 //
@@ -202,7 +202,7 @@ func (r *Reader) pathFor(kind, id string) (string, error) {
 
 // canonicalLabelPathFor mirrors pathFor for the
 // `ct/<kind>/<slug>.md` layout introduced by ADR-0021's
-// amendment (yaad-index phase D): operator-fill auto-
+// amendment (phase D): operator-fill auto-
 // materialize against a canonical-label entity writes to this
 // path rather than the per-kind default. Used by ReadByID's
 // chained fallback so subsequent reads find the file regardless
@@ -390,7 +390,7 @@ func validateAttachmentName(name string) error {
 }
 
 // validateAttachmentPath rejects manifest Path fields that escape
-// the entity subdir. The cold-reviewer's a prior PR carry-over: a manifest poisoned
+// the entity subdir. A manifest poisoned
 // with `../../etc/passwd` must reject, not silently round-trip
 // through to the filesystem layer.
 func validateAttachmentPath(path string) error {
@@ -405,7 +405,7 @@ func validateAttachmentPath(path string) error {
 		// Resolves to the entity directory itself — not an escape,
 		// but os.Open on a directory + http.ServeContent's seek
 		// would fail at runtime. Reject upfront so the agent gets a
-		// clean 400 instead of a confusing 500. (the cold-reviewer flag, a prior PR.)
+		// clean 400 instead of a confusing 500.
 		return fmt.Errorf("%w: manifest path resolves to entity dir, not a file", ErrInvalidAttachmentName)
 	}
 	if clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "..\\") {

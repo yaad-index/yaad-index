@@ -1,5 +1,5 @@
-// CacheExpires is the absolute-date cache freshness stamp per
-// yaad-index. Replaces's `cache_ttl_seconds:` (duration-
+// CacheExpires is the absolute-date cache freshness stamp.
+// Replaces the `cache_ttl_seconds:` (duration-
 // based, opaque to a human reading the vault file) with an
 // absolute date that's glanceable: "good until 2027-05-03" beats
 // "31536000 seconds after a timestamp I have to find."
@@ -7,9 +7,9 @@
 // Wire shape (vault frontmatter):
 //
 // cache_expires: 2027-05-03T08:00:00+02:00 # full ISO with operator-TZ offset
-// cache_expires: never # infinite (replaces's *=-1 sentinel)
+// cache_expires: never # infinite (replaces the *=-1 sentinel)
 //
-// Field absent → no opinion (replaces's nil/zero sentinel).
+// Field absent → no opinion (replaces the nil/zero sentinel).
 //
 // Kept as a separate type (rather than *time.Time) to encode the
 // "never" sentinel without leaking the magic-time-value pattern
@@ -29,8 +29,8 @@ import (
 // at marshal when CacheExpires.Never is set.
 const neverSentinel = "never"
 
-// CacheExpires is the cache-freshness stamp on a vault entity per
-// yaad-index. Two shapes:
+// CacheExpires is the cache-freshness stamp on a vault entity.
+// Two shapes:
 //
 // - Never == true: entity never expires (always cache hit).
 // - Never == false, !Time.IsZero(): entity expires AT the
@@ -73,8 +73,8 @@ func (c *CacheExpires) Expired(now time.Time) bool {
 
 // MarshalYAML emits the "never" sentinel or an RFC3339-formatted
 // time string. Time values keep their *time.Location, so a stamp
-// with operator-TZ Location prints with that offset (per yaad-
-// index PR-B's clock.Now() flow).
+// with operator-TZ Location prints with that offset (the
+// Location originates in the clock.Now() flow).
 func (c *CacheExpires) MarshalYAML() (any, error) {
 	if c == nil {
 		return nil, nil
