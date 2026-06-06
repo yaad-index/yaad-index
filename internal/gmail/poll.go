@@ -61,7 +61,7 @@ type IngestEnvelope struct {
 	// applied at the wire-emission layer (main.go), not here.
 	Edges []Edge
 	// HTMLBody is the text/html alternative body extracted from the
-	// MIME tree per yaad-index #12. Empty when the message has no
+	// MIME tree. Empty when the message has no
 	// HTML alternative. The wire layer stages this under
 	// attach.StagingDir()/<message-id>/body.html and emits a
 	// `role: html-body` ADR-0014 attachment when non-empty.
