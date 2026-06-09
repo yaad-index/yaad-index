@@ -43,15 +43,18 @@ const (
 	// limits so DBs full of non-fillable thin labels don't force an
 	// extra DB round-trip per page of vault-filtered emptiness.
 	needsFillCandidateBatch = 200
-	// needsFillMaxCandidateScan bounds the total DB rows the handler
-	// examines per HTTP call. When the agent's `limit` is small and
-	// the DB has long runs of non-fillable rows, the handler keeps
-	// fetching batches until it fills the page OR scans this many
-	// rows. The cap makes each response bounded — a 325-entity DB
-	// resolves to one round-trip end-to-end; a 100k DB caps at this
-	// many rows per call, with the cursor advancing the rest.
-	needsFillMaxCandidateScan = 1000
 )
+
+// needsFillMaxCandidateScan bounds the total DB rows the handler examines
+// per HTTP call. When the agent's `limit` is small and the DB has long
+// runs of non-fillable rows, the handler keeps fetching batches until it
+// fills the page OR scans this many rows. The cap makes each response
+// bounded — a 325-entity DB resolves to one round-trip end-to-end; a 100k
+// DB caps at this many rows per call, with the cursor advancing the rest.
+//
+// A var (not a const) so tests can lower it to exercise the scan-bound
+// without seeding thousands of rows.
+var needsFillMaxCandidateScan = 1000
 
 // needsFillGapMeta carries the typed metadata for one gap per
 // ADR-0019 step 6 — the typed fill metadata the operator-fill
@@ -300,9 +303,19 @@ func handleNeedsFill(
 			if remaining := needsFillMaxCandidateScan - scanned; remaining < batch {
 				batch = remaining
 			}
-			candidates, err := st.ListGapCallableCandidates(r.Context(), lastConsidered, batch, kindFilter)
+			// #523: use the surfaceable candidate query rather than the bare
+			// `gap_call_done_at IS NULL` set. Without it, runs of
+			// never-surfacing rows — pure-pointer canonical stubs (no vault
+			// file) and entities whose gaps are all filled — consume the
+			// per-request scan bound before the loop reaches the entities
+			// that actually carry unfilled gaps, so the live queue reads
+			// empty even though fillable entities exist further down the id
+			// order. This query keeps NULL-gap_state config-gap rows (which
+			// the list surfaces but the count omits), so it does not regress
+			// the deliberate #439 list-vs-count divergence.
+			candidates, err := st.ListGapCallableSurfaceableCandidates(r.Context(), lastConsidered, batch, kindFilter)
 			if err != nil {
-				logger.ErrorContext(r.Context(), "store.ListGapCallableCandidates",
+				logger.ErrorContext(r.Context(), "store.ListGapCallableSurfaceableCandidates",
 					"err", err, "after_id", lastConsidered, "batch", batch)
 				writeError(w, http.StatusInternalServerError, "internal_error",
 					"failed to enumerate gap-callable entities")

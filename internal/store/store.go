@@ -482,6 +482,15 @@ type Store interface {
 	// (at least one unfilled, non-deferred gap). Used where the listed set
 	// must agree with the count (#439).
 	ListGapCallableUnfilledCandidates(ctx context.Context, afterID string, limit int, kind string) ([]Entity, error)
+	// ListGapCallableSurfaceableCandidates is the needs-fill page query
+	// (#523): it drops rows that can never surface — pure-pointer stubs
+	// (nil-data rows, `data` = JSON "null", no vault file) and all-filled
+	// rows — so they don't consume the handler's per-request scan bound
+	// before the real candidates. It KEEPS NULL-gap_state rows (config-gap
+	// entities the list still surfaces but the count omits), so it is the
+	// superset the page wants: callable AND not-a-stub AND (no-gap_state OR
+	// has-unfilled-gap).
+	ListGapCallableSurfaceableCandidates(ctx context.Context, afterID string, limit int, kind string) ([]Entity, error)
 	// CountGapCallableCandidates returns the count of entities the
 	// `/v1/needs-fill` listing would surface — the queue-depth
 	// surface for the response's `total` field per #338 with the
