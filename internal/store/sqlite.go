@@ -340,8 +340,18 @@ func (s *sqliteStore) ClearGapCallDone(ctx context.Context, entityID string) err
 // when non-empty, restricts to ids strictly greater (cursor
 // resume); empty afterID returns the first page. `limit` caps the
 // row count; callers clamp / default at the handler boundary.
+// gapCandidateMode selects the extra predicate listGapCallableCandidates
+// applies on top of the base `gap_call_done_at IS NULL` filter.
+type gapCandidateMode int
+
+const (
+	gapCandAll         gapCandidateMode = iota // no extra predicate
+	gapCandUnfilled                            // gap-state-aware: has an unfilled non-deferred gap
+	gapCandSurfaceable                         // could surface on needs-fill (not a pure-pointer stub, not all-filled)
+)
+
 func (s *sqliteStore) ListGapCallableCandidates(ctx context.Context, afterID string, limit int, kind string) ([]Entity, error) {
-	return s.listGapCallableCandidates(ctx, afterID, limit, kind, false)
+	return s.listGapCallableCandidates(ctx, afterID, limit, kind, gapCandAll)
 }
 
 // ListGapCallableUnfilledCandidates is the gap-state-aware companion to
@@ -351,10 +361,23 @@ func (s *sqliteStore) ListGapCallableCandidates(ctx context.Context, afterID str
 // agree with that count so all-filled / deferred rows can't inflate it
 // (e.g. the source-filtered needs-fill total, #439).
 func (s *sqliteStore) ListGapCallableUnfilledCandidates(ctx context.Context, afterID string, limit int, kind string) ([]Entity, error) {
-	return s.listGapCallableCandidates(ctx, afterID, limit, kind, true)
+	return s.listGapCallableCandidates(ctx, afterID, limit, kind, gapCandUnfilled)
 }
 
-func (s *sqliteStore) listGapCallableCandidates(ctx context.Context, afterID string, limit int, kind string, requireUnfilledGaps bool) ([]Entity, error) {
+// ListGapCallableSurfaceableCandidates is the needs-fill page query (#523):
+// it drops rows that can never surface so they don't consume the handler's
+// per-request scan bound before the real candidates are reached —
+// pure-pointer canonical stubs (no vault file; nil-data rows whose `data`
+// column is the JSON literal "null") and entities whose gaps are all
+// filled / deferred. Unlike ListGapCallableUnfilledCandidates it KEEPS
+// rows with a NULL gap_state — config-declared gaps that never got a
+// gap_state entry, which the list deliberately surfaces even though the
+// count omits them (the #439 list-vs-count divergence is intentional).
+func (s *sqliteStore) ListGapCallableSurfaceableCandidates(ctx context.Context, afterID string, limit int, kind string) ([]Entity, error) {
+	return s.listGapCallableCandidates(ctx, afterID, limit, kind, gapCandSurfaceable)
+}
+
+func (s *sqliteStore) listGapCallableCandidates(ctx context.Context, afterID string, limit int, kind string, mode gapCandidateMode) ([]Entity, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
@@ -363,18 +386,29 @@ func (s *sqliteStore) listGapCallableCandidates(ctx context.Context, afterID str
 		FROM entities
 		WHERE gap_call_done_at IS NULL
 	`
-	// Mirror CountGapCallableCandidates' gap-state predicate when the
-	// caller needs the list to agree with the count (#439): only rows with
-	// at least one unfilled, non-deferred gap.
-	if requireUnfilledGaps {
-		query += `
-		  AND gap_state IS NOT NULL
-		  AND length(gap_state) > 2
-		  AND EXISTS (
+	const unfilledGapExists = `EXISTS (
 		    SELECT 1 FROM json_each(gap_state)
 		    WHERE json_extract(value, '$.filled_at') IS NULL
 		      AND COALESCE(json_extract(value, '$.deferred'), 0) = 0
 		  )`
+	switch mode {
+	case gapCandUnfilled:
+		// Mirror CountGapCallableCandidates' predicate (#439): only rows
+		// with at least one unfilled, non-deferred gap.
+		query += `
+		  AND gap_state IS NOT NULL
+		  AND length(gap_state) > 2
+		  AND ` + unfilledGapExists
+	case gapCandSurfaceable:
+		// #523: drop never-surfacing rows from the page scan so the bound
+		// isn't spent before the real candidates. `data != 'null'` sheds
+		// pure-pointer stubs (nil-data rows); the gap_state clause keeps a
+		// NULL gap_state (config-gap rows the list still surfaces) + rows
+		// with an unfilled gap, and sheds all-filled rows. A NULL gap_state
+		// short-circuits the OR, so json_each is never run on NULL.
+		query += `
+		  AND data != 'null'
+		  AND (gap_state IS NULL OR ` + unfilledGapExists + `)`
 	}
 	args := make([]any, 0, 3)
 	if kind != "" {
