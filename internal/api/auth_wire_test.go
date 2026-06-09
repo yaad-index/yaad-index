@@ -110,6 +110,7 @@ var protectedRoutes = []struct {
 	{http.MethodGet, "/v1/search?q=x", ""},
 	{http.MethodPost, "/v1/ingest", `{"url":"http://x"}`},
 	{http.MethodGet, "/v1/needs-fill", ""},
+	{http.MethodGet, "/v1/needs-fill/diagnostics", ""},
 	{http.MethodPost, "/v1/entities/some-id/fill", `{}`},
 	{http.MethodPost, "/v1/entities/some-id/notes", `{"author":"bob","body":"hi"}`},
 }
