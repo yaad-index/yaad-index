@@ -267,8 +267,8 @@ func runInit(stdout io.Writer) error {
 		// them automatically; the agent surfaces them out-of-band and
 		// writes the operator's confirmed value via the unified fill
 		// endpoint POST /v1/entities/{id}/fill. Per yaad-index
-		// ADR-0029 §3 (#521) a bare agent token may perform that
-		// write — fill_strategy governs the value's source, not
+		// ADR-0029 §3 a bare agent token may perform that write —
+		// fill_strategy governs the value's source, not
 		// write-permission.
 		//
 		// The daemon's Layer 1.5 BuiltinKindGaps (per yaad-index
