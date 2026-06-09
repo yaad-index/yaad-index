@@ -14,7 +14,7 @@ flowchart LR
     Decode["agent decodes:<br/>gaps + gap_metadata<br/>(type, fill_strategy,<br/>kinds, data_schema)"]
     Strat{"fill_strategy"}
     Agent["agent calls fill(id, fields)<br/>(POST /v1/entities/{id}/fill)"]
-    Op["operator calls<br/>set_operator_fill(id, fields)<br/>(POST /v1/entities/{id}/operator-fill)"]
+    Op["operator-sourced value:<br/>set_operator_fill / fill_field(id, fields)<br/>(POST /v1/entities/{id}/fill)"]
     Apply["daemon applies fill:<br/>frontmatter data merge<br/>+ gap removed from gaps[]<br/>+ gap_state entry stamped"]
     Edge["canonical_type only:<br/>edge to canonical-label target<br/>+ per-entry data → dataview paragraph"]
     Bus[("event bus<br/>fill.completed per gap")]
@@ -229,7 +229,7 @@ fill_field("boardgame:caverna", {
 
 Maps to `POST /v1/entities/{id}/fill` — the unified endpoint per [ADR-0029](../adr/0029-unified-fill-surface.md). Same flow as `fill` with three case-routing branches per submitted field:
 
-- **Open gap** — the strategy gate fires on the request's *trigger-mode* crossed against the gap's `fill_strategy`. The trigger-mode is **operator** when the caller's JWT has `Subject == Operator` **or** carries the `operator_delegated` claim (an agent token the operator confirmed via the agent skill UI — minted with `issue-token --on-behalf-of-operator`, per #361); otherwise it is **agent**. Operator-trigger requests fill operator-strategy gaps; agent-trigger requests fill agent-strategy gaps. Either-strategy gaps are open to both.
+- **Open gap** — the strategy gate is **one-directional** (per the [ADR-0029](../adr/0029-unified-fill-surface.md) §3 #521 amendment). The trigger-mode is **operator** when the caller's JWT has `Subject == Operator` **or** carries the `operator_delegated` claim (an agent token the operator confirmed via the agent skill UI — minted with `issue-token --on-behalf-of-operator`, per #361); otherwise it is **agent**. An **operator-strategy** gap accepts a write under *either* trigger-mode — `fill_strategy: operator` annotates the value's source (operator input, surfaced out-of-band and written by the agent on the operator's confirmed behalf), not who may execute the write. An **agent-strategy** gap rejects operator-trigger writes with `400 agent_only_field`. Either-strategy gaps are open to both. `operator_only_field` is no longer emitted.
 - **Overwrite** — a field with an existing value (gap previously closed) rejects with `409 already_filled` unless `?force=true` is set.
 - **Ad-hoc** — a brand-new field (no spec, no value, no current gap) accepts the write only under operator-trigger; agent-trigger ad-hoc writes reject with `400 unknown_field`.
 

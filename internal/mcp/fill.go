@@ -68,9 +68,14 @@ func registerSetOperatorFill(s *server.MCPServer, b *bridge) {
 				"The caller's JWT determines the trigger-mode: "+
 				"Subject == Operator OR an `operator_delegated` "+
 				"claim (an agent-on-behalf-of-operator token) → "+
-				"operator-trigger (fills operator-strategy "+
-				"gaps + ad-hoc writes); a bare agent token → "+
-				"agent-trigger (fills agent-strategy gaps). "+
+				"operator-trigger; a bare agent token → "+
+				"agent-trigger. The strategy gate is one-directional "+
+				"(#521): operator-strategy gaps accept agent-trigger "+
+				"writes (the agent writes the operator's confirmed "+
+				"value; provenance stamps the agent), while "+
+				"agent-strategy gaps reject operator-trigger writes "+
+				"(`agent_only_field`). operator-trigger additionally "+
+				"authorizes ad-hoc writes + defer. "+
 				"Per-field value shapes: scalar (number / boolean / "+
 				"string / list) sets the field; explicit `null` "+
 				"clears it; `{defer: true}` marks the field deferred "+
@@ -102,12 +107,16 @@ func registerFillField(s *server.MCPServer, b *bridge) {
 			"Unified fill endpoint per ADR-0029. POSTs to "+
 				"`/v1/entities/{id}/fill` with per-field operations. "+
 				"Routes per-field through three cases: open gap "+
-				"(strategy gate per the caller's trigger-mode); "+
-				"overwrite (requires `force=true` query param); "+
-				"ad-hoc property write (operator-trigger only). The "+
-				"trigger-mode follows the caller's JWT — Subject == "+
-				"Operator or an `operator_delegated` claim → "+
-				"operator-trigger. Per-field value "+
+				"(one-directional strategy gate per #521: "+
+				"operator-strategy gaps accept agent-trigger writes, "+
+				"agent-strategy gaps reject operator-trigger writes "+
+				"with `agent_only_field`); overwrite (requires "+
+				"`force=true` query param); ad-hoc property write "+
+				"(operator-trigger only). The trigger-mode follows "+
+				"the caller's JWT — Subject == Operator or an "+
+				"`operator_delegated` claim → operator-trigger "+
+				"(which now matters only for the ad-hoc / defer "+
+				"paths). Per-field value "+
 				"shapes: scalar sets the field; explicit `null` "+
 				"clears it; `{defer: true}` marks the field "+
 				"deferred; `{defer: false}` un-defers.",
