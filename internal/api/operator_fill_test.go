@@ -324,11 +324,13 @@ func TestOperatorFill_AgentOnlyField(t *testing.T) {
 // JWT (Subject is an agent, Operator names a real human) that carries
 // OperatorDelegated — the shape the agent skill UI produces once the
 // operator confirms — classifies as operator-trigger and fills an
-// operator-strategy gap (`rating`). ADR-0029's trigger-mode gate had
-// regressed this to a 400 operator_only_field; #361 restores it via the
-// explicit delegation flag (not a bare pair-claim — see the negative
-// test below). The audit trail stamps the agent (commit author) and the
-// operator (frontmatter operator field) separately.
+// operator-strategy gap (`rating`). Post-#521 a bare agent token also
+// fills operator-strategy gaps (see
+// TestOperatorFill_AgentBareToken_FillsOperatorStrategy); this test keeps
+// the delegated-token path green, since OperatorDelegated still promotes
+// to operator-trigger for the ad-hoc / defer paths. The audit trail
+// stamps the agent (commit author) and the operator (frontmatter
+// operator field) separately.
 func TestOperatorFill_AgentOnBehalfOfOperatorAccepted(t *testing.T) {
 	t.Parallel()
 	h, st, root, signer := newOperatorFillFixture(t)
@@ -342,12 +344,16 @@ func TestOperatorFill_AgentOnBehalfOfOperatorAccepted(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), `"rating":9`)
 }
 
-// TestOperatorFill_AgentOnBehalfNotDelegated_Rejected pins the #361
-// boundary: a bare pair-claim token (Subject != Operator, no delegation)
-// stays agent-trigger and is rejected on an operator-strategy gap. Only
-// the explicit OperatorDelegated flag promotes a pair-claim to
-// operator-trigger — a plain agent token can't self-elevate.
-func TestOperatorFill_AgentOnBehalfNotDelegated_Rejected(t *testing.T) {
+// TestOperatorFill_AgentBareToken_FillsOperatorStrategy pins the
+// ADR-0029 §3 amendment (#521): a bare pair-claim token (Subject !=
+// Operator, no delegation) classifies as agent-trigger and now
+// SUCCESSFULLY fills an operator-strategy gap. Before #521 this rejected
+// with 400 operator_only_field; that gate conflated source-governance
+// with write-permission. The OperatorDelegated flag (#361) is no longer
+// required for this write direction — it survives only to authorize
+// ad-hoc writes / defer, which stay operator-trigger-only (covered by
+// TestUnifiedFill_AdHoc_AgentTriggerRejected).
+func TestOperatorFill_AgentBareToken_FillsOperatorStrategy(t *testing.T) {
 	t.Parallel()
 	h, st, root, signer := newOperatorFillFixture(t)
 	const id = "boardgame:agent-not-delegated"
@@ -356,8 +362,8 @@ func TestOperatorFill_AgentOnBehalfNotDelegated_Rejected(t *testing.T) {
 
 	rec := ugcReq(t, h, http.MethodPost, "/v1/entities/"+id+"/fill", bareTok,
 		map[string]any{"rating": 9}, nil)
-	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
-	assert.Contains(t, rec.Body.String(), "operator_only_field")
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), `"rating":9`)
 }
 
 // Per #317 the operator-authority gate has been dropped. The
@@ -741,15 +747,17 @@ func TestUnifiedFill_OpenGap_OperatorTrigger_AppliesAndCloses(t *testing.T) {
 		"rating gap closed after operator-trigger fill")
 }
 
-// TestUnifiedFill_OpenGap_AgentTrigger_RejectsOperatorStrategy
-// pins ADR-0029 §3: agent-trigger fills against operator-strategy
-// gaps reject with operator_only_field — the new strategy gate
-// fires off the request's trigger-mode (claim subject vs operator),
-// not the URL.
-func TestUnifiedFill_OpenGap_AgentTrigger_RejectsOperatorStrategy(t *testing.T) {
+// TestUnifiedFill_OpenGap_AgentTrigger_FillsOperatorStrategy
+// pins the ADR-0029 §3 amendment (#521): an agent-trigger fill against
+// an operator-strategy gap is ACCEPTED. fill_strategy is the source
+// annotation, not a write barrier — the agent writes on the operator's
+// confirmed behalf and provenance stamps the agent's subject.
+// (Previously this rejected with 400 operator_only_field; that gate
+// conflated source-governance with write-permission.)
+func TestUnifiedFill_OpenGap_AgentTrigger_FillsOperatorStrategy(t *testing.T) {
 	t.Parallel()
 	h, st, root, signer := newOperatorFillFixture(t)
-	// Agent token: subject != operator.
+	// Agent token: subject != operator, not delegated.
 	tok := mintToken(t, signer, "alice", "agent-1")
 	const id = "boardgame:unified-open-agent"
 	seedBoardgameForFill(t, st, root, id)
@@ -757,9 +765,13 @@ func TestUnifiedFill_OpenGap_AgentTrigger_RejectsOperatorStrategy(t *testing.T) 
 	rec := ugcReq(t, h, http.MethodPost,
 		"/v1/entities/"+id+"/fill", tok,
 		map[string]any{"rating": 8}, nil)
-	require.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
-	assert.Contains(t, rec.Body.String(), "operator_only_field",
-		"agent-trigger fill against operator-strategy gap must reject")
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), `"rating":8`)
+
+	var got operatorFillResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	assert.NotContains(t, got.Gaps, "rating",
+		"rating gap closed after agent-trigger fill of operator-strategy field")
 }
 
 // TestUnifiedFill_Overwrite_RequiresForce pins ADR-0029 §2 Case 2:

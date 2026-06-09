@@ -259,14 +259,17 @@ func runInit(stdout io.Writer) error {
 		// Per yaad-index ADR-0019 step 8: declare the five
 		// operator-strategy gaps the boardgame canonical kind needs.
 		// Field VALUES live under entity `data`; the daemon's typed
-		// operator-fill endpoint validates writes against these
-		// declarations (type, range, fill_strategy).
+		// fill endpoint validates writes against these declarations
+		// (type, range, fill_strategy).
 		//
-		// All five carry FillStrategy="operator" — the agent-fill
-		// path won't attempt them (no clean_content signal); the
-		// operator-fill endpoint accepts them when the operator (or
-		// an agent-on-behalf-of-operator) writes via /v1/entities/
-		// {id}/operator-fill.
+		// All five carry FillStrategy="operator" — the value's source
+		// is operator input, so no clean_content ingest signal fills
+		// them automatically; the agent surfaces them out-of-band and
+		// writes the operator's confirmed value via the unified fill
+		// endpoint POST /v1/entities/{id}/fill. Per yaad-index
+		// ADR-0029 §3 a bare agent token may perform that write —
+		// fill_strategy governs the value's source, not
+		// write-permission.
 		//
 		// The daemon's Layer 1.5 BuiltinKindGaps (per yaad-index
 		//) already carries the same five for boardgame; this

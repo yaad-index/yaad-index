@@ -535,9 +535,12 @@ type opError struct {
 // parseOperatorFillOps routes each request field through one of three
 // branches per ADR-0029 §2:
 //
-//   - Open gap — field appears in currentGaps. Strategy gate fires
-//     per the gap's fill_strategy + the request's triggerMode;
-//     parseSingleOp validates against the gap's typed spec.
+//   - Open gap — field appears in currentGaps. The strategy gate is
+//     one-directional (#521 / ADR-0029 §3 amendment): an agent-strategy
+//     gap rejects operator-trigger writes (agent_only_field), but an
+//     operator-strategy gap accepts agent-trigger writes (fill_strategy
+//     is a source annotation, not a write barrier). parseSingleOp
+//     validates against the gap's typed spec.
 //   - Overwrite — field has a value in currentData but is not in
 //     currentGaps. Requires force=true; else 409 already_filled. When
 //     the field also appears in gaps (closed gap with retained spec),
@@ -572,18 +575,21 @@ func parseOperatorFillOps(
 		switch {
 		case isOpen:
 			// Open-gap branch: strategy gate per spec + triggerMode.
+			// The gate is asymmetric (#521 / ADR-0029 §3 amendment).
+			// fill_strategy is the SOURCE annotation, not a write barrier —
+			// agents are the primary API callers and write on the operator's
+			// confirmed behalf (handler doc above). So an operator-strategy
+			// gap accepts an agent-trigger write: the value still comes from
+			// operator input out-of-band, and provenance stamps the filling
+			// agent's subject for the audit trail. Only the agent-strategy
+			// direction stays a barrier — an operator-trigger write to an
+			// agent-strategy gap is the operator doing the agent's derivation
+			// work, which the "operator steers, agent does" model rejects.
 			if spec.FillStrategy == "agent" && triggerMode != "agent" {
 				return nil, &opError{
 					status: http.StatusBadRequest,
 					code: "agent_only_field",
 					message: fmt.Sprintf("field %q has fill_strategy=agent; operator-trigger fill rejected", field),
-				}
-			}
-			if spec.FillStrategy == "operator" && triggerMode != "operator" {
-				return nil, &opError{
-					status: http.StatusBadRequest,
-					code: "operator_only_field",
-					message: fmt.Sprintf("field %q has fill_strategy=operator; agent-trigger fill rejected", field),
 				}
 			}
 		case hasValue:

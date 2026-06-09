@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted 2026-06-05 (proposed 2026-05-30). Amended 2026-06-03 (#361 — `operator_delegated` claim; see §3). Pre-release; no migration window beyond the deprecation marker on `/v1/entities/{id}/operator-fill`.
+Accepted 2026-06-05 (proposed 2026-05-30). Amended 2026-06-03 (#361 — `operator_delegated` claim; see §3). Amended 2026-06-09 (#521 — strategy gate is one-directional: operator-strategy gaps accept agent-trigger writes; see §3). Pre-release; no migration window beyond the deprecation marker on `/v1/entities/{id}/operator-fill`.
 
 ## Depends on
 
@@ -56,7 +56,7 @@ The caller's identity claim distinguishes two trigger-modes:
 - **operator-trigger** — the subject claim equals the operator claim (the operator acting through their own token), **or** the token carries an explicit `operator_delegated` claim (see the #361 amendment below); maps to "operator-strategy gaps fillable".
 - **agent-trigger** — every other authenticated request (agent acting autonomously); maps to "agent-strategy gaps fillable".
 
-A gap with `fill_strategy: either` is fillable under both trigger-modes. The gate fires when the request's trigger-mode doesn't match the gap's allowed set, with the same `400 agent_only_field` / `400 operator_only_field` error codes ADR-0019 defined — only the URL changes.
+A gap with `fill_strategy: either` is fillable under both trigger-modes. The gate fires when the request's trigger-mode doesn't match the gap's allowed set, with the same `400 agent_only_field` / `400 operator_only_field` error codes ADR-0019 defined — only the URL changes. (The `operator_only_field` direction was subsequently removed — see the #521 amendment below; the gate is now one-directional.)
 
 Ad-hoc writes (no registered gap) require operator-trigger. Agent-trigger ad-hoc writes reject with `400 unknown_field` since there is no gap to authorize the path.
 
@@ -67,6 +67,19 @@ The original classification keyed operator-trigger solely on `subject == operato
 A pair-claim token may now carry an explicit boolean `operator_delegated` claim. When present and true on a non-anonymous claim, the request classifies as **operator-trigger** even though `subject != operator`. The flag is minted out-of-band by the operator's authority surface (the `yaad-index issue-token --on-behalf-of-operator` CLI), so an agent cannot self-elevate by setting it — a bare agent token without the claim stays agent-trigger.
 
 The claim is additive and back-compatible: tokens issued before this amendment omit it entirely, so they parse back as `operator_delegated = false` and classify exactly as before. No token rotation or re-issue is required.
+
+#### Amendment (#521): strategy gate is one-directional
+
+The original §3 gate fired symmetrically: an agent-trigger write to an `operator`-strategy gap rejected with `400 operator_only_field`, exactly as an operator-trigger write to an `agent`-strategy gap rejects with `400 agent_only_field`. The #361 amendment above was introduced specifically to route around the operator-direction of that gate — an operator confirming an operator-strategy fill through the agent skill UI had to mint an `operator_delegated` token for every such fill.
+
+That symmetry was wrong. It conflated **source-governance** (where the value comes from) with **write-permission** (who may execute the write). The system's model is *operator-steers, agent-does*: agents are the primary API callers and execute every write; the operator provides direction out-of-band. `fill_strategy: operator` means "the value originates from operator input" — the agent surfaces the question to the operator (e.g. via a Discord ask), the operator answers, and the agent writes the confirmed value here. Requiring a per-fill delegated token to express that inverts the model and makes operator-strategy gaps effectively unfillable in the standard agent-driven workflow. The handler's own doc comment already stated the intent: "this endpoint is a write-permission boundary, not a source-governance gate."
+
+The gate is therefore now **one-directional**:
+
+- **operator-strategy gap + agent-trigger write → accepted.** `fill_strategy: operator` is a source annotation (a hint that the agent should surface the field to the operator before filling), not a write barrier. Provenance stamps the filling agent's subject, which is the audit trail.
+- **agent-strategy gap + operator-trigger write → still rejected** with `400 agent_only_field`. This direction stays a barrier: an operator filling an agent-strategy gap is the operator doing the agent's derivation work, which the *operator-steers, agent-does* model rejects. #521 is one-directional by design; expanding to this direction would be a separate revision.
+
+`operator_only_field` is no longer emitted. The `operator_delegated` claim (#361) is retained and unchanged — it still promotes a pair-claim to operator-trigger for the paths that remain operator-trigger-only (ad-hoc writes per §3, `defer` per §4). The claim's plumbing is untouched; only the operator-strategy open-gap write no longer depends on it.
 
 ### 4. `defer` absorbed into the unified endpoint
 
@@ -114,7 +127,7 @@ The workflow-engine `set_property` action is a separate surface (workflow-intern
 ### Negative
 
 - Existing clients of `/v1/operator-fill` get a `410 gone` immediately on the cut. The MCP layer's `set_operator_fill` tool keeps working via the alias in §7, so the operator-visible surface stays connected. External direct-HTTP callers (none known) must update URL.
-- The trigger-mode gate now lives in the unified endpoint's handler rather than being implicit in the URL. The handler MUST read the caller's claim correctly — a misclassified trigger-mode could allow an agent-trigger write to land against an operator-strategy gap (the failure mode the old split structurally prevented). Tests pin the gate's behavior on both directions.
+- The trigger-mode gate now lives in the unified endpoint's handler rather than being implicit in the URL. The handler MUST read the caller's claim correctly for the direction that still gates — a misclassified trigger-mode could let an operator-trigger write land against an agent-strategy gap. (Per the #521 amendment, an agent-trigger write against an operator-strategy gap is now intentionally accepted, so that direction is no longer a failure mode.) Tests pin the gate's behavior on both directions.
 - The `force=true` parameter adds a small risk surface: a caller passing `force=true` unconditionally clobbers existing values without seeing the `409 already_filled` warning. Mitigated by defaulting `force=false` and naming the parameter explicitly.
 
 ### Migration
