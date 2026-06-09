@@ -159,6 +159,9 @@ func NewHandlerWithRegistry(logger *slog.Logger, st store.Store, registry *plugi
 	mux.Handle("POST /v1/search/upstream", protect(http.HandlerFunc(handleSearchUpstream(logger, registry))))
 	mux.Handle("POST /v1/ingest", protect(http.HandlerFunc(handleIngest(logger, st, tracker, registry, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg, cfg.pluginInstanceConfigs))))
 	mux.Handle("GET /v1/needs-fill", protect(http.HandlerFunc(handleNeedsFill(logger, st, cfg.vaultReader, cfg.fillInstruction, cfg.canonicalKindReg))))
+	// #523 read-only diagnostic: classify why open-gap entities do/don't
+	// surface (audience filter, deferral, vault divergence).
+	mux.Handle("GET /v1/needs-fill/diagnostics", protect(http.HandlerFunc(handleNeedsFillDiagnostics(logger, st, cfg.vaultReader, cfg.canonicalKindReg))))
 	// #355 unified fill: POST /v1/entities/{id}/fill is the single
 	// endpoint per ADR-0029. handleEntityOperatorFill is the unified
 	// handler — the rename to handleUnifiedFill is deferred to keep
