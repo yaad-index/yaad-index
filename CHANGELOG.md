@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.20.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.19.0...yaad-index-v0.20.0) (2026-06-12)
+
+
+### Features
+
+* needs-fill diagnostics endpoint to pin [#523](https://github.com/yaad-index/yaad-index/issues/523) cause ([#524](https://github.com/yaad-index/yaad-index/issues/524)) ([966d16b](https://github.com/yaad-index/yaad-index/commit/966d16b2777d0de5bb488051ba177bcbf839dcdd))
+
+
+### Bug Fixes
+
+* needs-fill surfaceable query so the scan bound reaches real candidates ([#526](https://github.com/yaad-index/yaad-index/issues/526)) ([2640adb](https://github.com/yaad-index/yaad-index/commit/2640adbfc5c86b03d13a0e78cd6c998023054074))
+* workflow engine processes events with a non-cancelled context ([#527](https://github.com/yaad-index/yaad-index/issues/527)) ([2985ac9](https://github.com/yaad-index/yaad-index/commit/2985ac9cca688f7b118c6120b28b476c97f3230c))
+
 ## [0.19.0](https://github.com/yaad-index/yaad-index/compare/yaad-index-v0.18.0...yaad-index-v0.19.0) (2026-06-06)
 
 
