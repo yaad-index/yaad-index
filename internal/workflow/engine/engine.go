@@ -518,7 +518,18 @@ func (e *Engine) enqueueEvent(ctx context.Context, ev eventbus.Event) {
 	case <-e.shutdownCh:
 		// Engine is shutting down; drop the event.
 		return
-	case e.queue <- queuedEvent{ctx: ctx, event: ev}:
+	case e.queue <- queuedEvent{ctx: context.WithoutCancel(ctx), event: ev}:
+		// context.WithoutCancel: the worker drains + processes this event
+		// asynchronously, but the publisher's ctx is the originating HTTP
+		// request's context (e.g. a /v1/entities/{id}/fill call). That
+		// request returns — cancelling its context — before the worker
+		// dequeues, so processing with the raw ctx fails every downstream
+		// resolve / task-spawn write with context.Canceled and silently
+		// drops the workflow (the "fill_field doesn't spawn the task even
+		// though the condition matches" bug). WithoutCancel keeps the
+		// context's values
+		// (workflow chain, etc.) but detaches it from the request's
+		// cancellation, so the async work runs to completion.
 	}
 }
 
